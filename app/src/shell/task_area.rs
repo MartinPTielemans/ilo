@@ -120,16 +120,13 @@ fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
 }
 
 /// The card split for standing on a page with the conversation beside it: the page's part on its
-/// left, and the conversation's panel at its right.
+/// right, and the conversation's panel at its left, between the sidebar and the page.
 fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
     let wide = px(BESIDE.min(f32::from(card.size.width) / 2.));
+    let panel = Bounds::new(card.origin, size(wide, card.size.height));
     let page = Bounds::new(
-        card.origin,
+        point(panel.right() + px(BESIDE_GAP), card.top()),
         size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
-    );
-    let panel = Bounds::new(
-        point(card.right() - wide, card.top()),
-        size(wide, card.size.height),
     );
     (page, panel)
 }

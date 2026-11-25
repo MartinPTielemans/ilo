@@ -12,7 +12,7 @@ use gpui::{
     div, point, px, size,
 };
 
-use super::{Zoom, pushed, watched};
+use super::{Zoom, pushed, split, watched};
 use crate::agents::Status;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::tokens::shell::conversation::ilo::ARM;
@@ -2503,4 +2503,39 @@ fn the_hidden_sidebar_comes_out_over_a_tasks_view(cx: &mut TestAppContext) {
             assert_eq!(shell.task_shown(), shown, "{case}: the task's view went");
         });
     }
+}
+
+/// Standing on a page, the conversation is a panel between the sidebar and the page: at the card's
+/// left, the page its own shape after a gap to its right, out to the card's right edge, and the
+/// panel never more than half a narrow card.
+#[test]
+fn the_panel_stands_between_the_sidebar_and_the_page() {
+    use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP};
+    let card = Bounds::new(point(px(240.), px(8.)), size(px(1000.), px(700.)));
+    let (page, panel) = split(card);
+    assert_eq!(
+        panel.origin, card.origin,
+        "the panel isn't at the card's left"
+    );
+    assert_eq!(panel.size.width, px(BESIDE));
+    assert_eq!(panel.size.height, card.size.height);
+    assert_eq!(
+        page.left(),
+        panel.right() + px(BESIDE_GAP),
+        "the page isn't right of the panel"
+    );
+    assert_eq!(
+        page.right(),
+        card.right(),
+        "the page doesn't reach the card's right"
+    );
+    assert_eq!(page.size.height, card.size.height);
+    let narrow = Bounds::new(card.origin, size(px(BESIDE), px(700.)));
+    let (page, panel) = split(narrow);
+    assert_eq!(
+        panel.size.width,
+        px(BESIDE / 2.),
+        "the panel is over half a narrow card"
+    );
+    assert_eq!(page.right(), narrow.right());
 }
