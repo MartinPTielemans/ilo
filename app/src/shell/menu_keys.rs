@@ -18,7 +18,6 @@ impl Shell {
         self.menu_control
             && self.library.is_none()
             && !self.page_fullscreen
-            && !self.top_bar
             && self.little().is_none()
             && self.onboarding.is_none()
     }

@@ -451,14 +451,6 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/mouse-pointer-2.svg"),
     ),
     (
-        "icons/nav-back.svg",
-        include_bytes!("../../assets/icons/nav-back.svg"),
-    ),
-    (
-        "icons/nav-forward.svg",
-        include_bytes!("../../assets/icons/nav-forward.svg"),
-    ),
-    (
         "icons/nav-menu.svg",
         include_bytes!("../../assets/icons/nav-menu.svg"),
     ),
@@ -467,20 +459,12 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-plus.svg"),
     ),
     (
-        "icons/nav-reload.svg",
-        include_bytes!("../../assets/icons/nav-reload.svg"),
-    ),
-    (
         "icons/nav-sidebar.svg",
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
         "icons/nav-sidebar-right.svg",
         include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
-    ),
-    (
-        "icons/nav-stop.svg",
-        include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
     (
         "icons/network.svg",
@@ -505,10 +489,6 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-right.svg",
         include_bytes!("../../assets/icons/panel-right.svg"),
-    ),
-    (
-        "icons/panel-top.svg",
-        include_bytes!("../../assets/icons/panel-top.svg"),
     ),
     (
         "icons/paw-print.svg",
