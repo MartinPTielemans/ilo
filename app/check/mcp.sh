@@ -1411,6 +1411,38 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   esac
   closed=$(call close_tab "{\"tab\":$linked}")
   case "$closed" in "Closed tab $linked."*) ;; *) fail "closing the link's tab answered: $closed" ;; esac
+  # A click whose page puts the stopped one in its own place has nothing behind it, so the tab
+  # closes. The click went, and hears so as a result, in the words that has: an error would have
+  # the agent click again. Its tab is the page's only one, so no other page is behind it either.
+  went="The click went through. Its page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the click."
+  printf '%s' "<!doctype html><title>Leaving page</title>
+<a href=\"#\" onclick=\"location.replace('http://$plain/split-a.html'); return false\">Leave page</a>" > "$out/site/replace-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/replace-plain.html\"}")
+  replaced=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" link "Leave page")
+  [ -n "$replaced" ] && [ -n "$ref" ] ||
+    fail "open_tab of the page that puts http://$plain in its own place answered: $opened"
+  count_stopped
+  clicked=$(call click "{\"tab\":$replaced,\"ref\":\"$ref\"}")
+  [ "$clicked" = "$went" ] ||
+    fail "a click that went, whose page put http://$plain in its own place and whose tab closed, answered: $clicked"
+  await_log "browser: tab $replaced error -20\$" \
+    "the page a click put in its own place, http://$plain/split-a.html, wasn't stopped before http: $(grep "^browser: loaded $replaced " "$log" | tail -1)"
+  one_stopped "a click whose page put it in its own place"
+  await_log "^browser: tab $replaced closed\$" \
+    "the agent's tab $replaced, with no page behind the one that never opened, stayed open: $(grep "^browser: page $replaced " "$log" | tail -1)"
+  # An open whose page does the same as it loads, while the open still waits for it: not opened,
+  # in the words that has, and its tab closes.
+  printf '%s' "<!doctype html><title>Gone page</title>
+<script>location.replace('http://$plain/split-a.html')</script>" > "$out/site/goes-plain.html"
+  count_stopped
+  answer=$(call open_tab "{\"url\":\"localhost:$port/goes-plain.html\"}")
+  [ "$answer" = "error: Not opened: the page went on to a site with no secure connection, which ilo doesn't open for a task." ] ||
+    fail "open_tab of a page that went on to http://$plain by itself as it loaded answered: $answer"
+  one_stopped "an open whose page went on to it by itself"
+  gone=$(sed -n "s/.*browser: tab \([0-9]*\) not secure, not opened: an agent's tab\$/\1/p" "$log" | tail -1)
+  await_log "^browser: tab $gone closed\$" \
+    "the tab open_tab made for the page that went on to http://$plain by itself stayed open"
   beside=$(split_tab b)
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
