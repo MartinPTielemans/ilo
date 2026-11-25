@@ -195,7 +195,7 @@ fn the_tab_closing_ends_an_upload(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_pages_refused_file_dialog_is_logged_as_the_pages(cx: &mut TestAppContext) {
     let (agents, _, _) = connected(cx);
-    let why = "Agents can't use system file dialogs, so ilo told the page it was cancelled.";
+    let why = "Agents can't use system file dialogs, so the page was told it was cancelled.";
     agents.update(cx, |agents, cx| {
         agents.checked("claude-code", 20, "file_dialog file_input", why, None, cx);
         agents.checked(

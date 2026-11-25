@@ -96,7 +96,7 @@ fn a_page_with_no_host_is_a_page_in_every_sentence() {
 /// under, and its row says the one sentence and nothing of why under it.
 #[test]
 fn a_cancelled_file_dialog_is_the_file_pickers_sentence() {
-    let why = "Agents can't use system file dialogs, so ilo told the page it was cancelled.";
+    let why = "Agents can't use system file dialogs, so the page was told it was cancelled.";
     let picker = format!("{PRODUCT} stopped example.com from opening a file picker");
     for action in [
         "file_dialog file_input",
