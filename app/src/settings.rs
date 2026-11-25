@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod new_thread;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -200,8 +201,9 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' Notify.
-    Notify,
+    /// Threads › A new thread starts with: its Access and its Model.
+    NewThreadAccess,
+    NewThreadModel,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -221,7 +223,8 @@ impl Popup {
                 format!("{} options", browser::settings_rows::assistant_name(cli)).into()
             }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
-            Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
+            Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadModel => browser::agents::task::MODEL.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -3887,6 +3890,10 @@ impl Settings {
         };
         let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
+        // Where a new thread starts, while threads are on, as the drawing has it under the switch.
+        if on {
+            threads.extend(self.new_thread(agents, cx));
+        }
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));

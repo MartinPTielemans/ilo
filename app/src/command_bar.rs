@@ -284,6 +284,103 @@ pub fn model_words(agent: &TaskAgent, id: &str) -> String {
     }
 }
 
+/// The assistant a thread starts on: the one `picked` names, while it isn't at its limit, else the
+/// first ready.
+pub fn starts_on<'a>(
+    agents: &'a TaskAgents,
+    picked: Option<&(SharedString, String)>,
+) -> Option<&'a TaskAgent> {
+    let picked = picked.map(|(id, _)| id);
+    let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
+    let first = ready.clone().next();
+    ready.find(|agent| Some(&agent.id) == picked).or(first)
+}
+
+/// The level menu, as each level it offers and its items: the levels, `current` checked, and the
+/// line every level holds to. Settings' `A new thread starts with` opens it too, without Full
+/// access (`full`), which is set for one thread and never where one starts.
+pub fn level_choices(current: Tier, full: bool) -> (Vec<Tier>, Vec<MenuEntry>) {
+    let tiers: Vec<Tier> = (Tier::ALL.into_iter())
+        .filter(|&tier| full || tier != Tier::Full)
+        .collect();
+    let mut items: Vec<MenuEntry> = (tiers.iter())
+        .map(|&tier| MenuEntry {
+            checked: tier == current,
+            ..MenuEntry::named(tier.label(), true)
+        })
+        .collect();
+    items.push(MenuEntry::line());
+    items.push(MenuEntry::named(NEVER_GETS, false));
+    (tiers, items)
+}
+
+/// The model menu, as its items and what each picks: each assistant by its own name, then the
+/// models it offers, its default first and the one a thread starts on (`picked`, else Settings')
+/// checked; one at its limit says when it resets, and one not signed in has Sign In, which starts
+/// its own sign-in as Settings' does; then Settings › Agents while `to_settings`. Each assistant's
+/// heading is its name as Settings' page has it. Over them all a field narrows them as the user
+/// types: an assistant with no model matching goes, heading and all, as Sign In does, and Settings
+/// stays whatever is typed; a pick is still one of these rows. The composer and Settings'
+/// `A new thread starts with` both open it.
+pub fn model_choices(
+    agents: &TaskAgents,
+    picked: Option<&(SharedString, String)>,
+    to_settings: bool,
+) -> (Vec<MenuEntry>, Vec<ModelPick>) {
+    let (on, chosen) = match starts_on(agents, picked) {
+        Some(agent) => (Some(agent.id.clone()), Some(next_model(picked, agent))),
+        None => (None, None),
+    };
+    let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
+    let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
+    // Settings' name for the assistant, so the two never say it differently.
+    let label = |id: &SharedString, name: &SharedString| -> SharedString {
+        match crate::agents::runner::Cli::from_id(id) {
+            Some(cli) => crate::settings_rows::assistant_name(cli).into(),
+            None => name.clone(),
+        }
+    };
+    for agent in &agents.agents {
+        items.push(heading(label(&agent.id, &agent.name)));
+        picks.push(ModelPick::Nothing);
+        let at_limit = agent
+            .resets
+            .clone()
+            .map(|resets| format!("Limit resets {resets}"));
+        let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
+        let default = agent.default_model.as_deref();
+        let (ids, entries) = crate::agents::task::model_menu(
+            checked.unwrap_or("\0"),
+            DEFAULT_ROW,
+            default,
+            agent.models.clone(),
+        );
+        for ((id, _), entry) in ids.into_iter().zip(entries) {
+            let entry = MenuEntry {
+                enabled: at_limit.is_none(),
+                detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
+                over: false,
+                ..entry
+            };
+            items.push(entry);
+            picks.push(ModelPick::Model(agent.id.clone(), id));
+        }
+    }
+    for (id, name) in &agents.signed_out {
+        items.push(heading(label(id, name)));
+        picks.push(ModelPick::Nothing);
+        items.push(MenuEntry::named(SIGN_IN, true).offer().out());
+        picks.push(ModelPick::SignIn(id.clone()));
+    }
+    if to_settings {
+        items.push(MenuEntry::line());
+        picks.push(ModelPick::Nothing);
+        items.push(MenuEntry::named(SETTINGS, true).kept().out());
+        picks.push(ModelPick::Settings);
+    }
+    (items, picks)
+}
+
 /// Whether the composer's model pick is for the assistant `id`.
 fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
     ask.and_then(|ask| ask.model.as_ref())
@@ -307,8 +404,8 @@ fn drawn_at(at: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
 }
 
 /// A pick on the composer's model menu.
-#[derive(Clone, Debug)]
-enum ModelPick {
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModelPick {
     /// A header or a line, which is never chosen.
     Nothing,
     /// A model of an assistant, by the assistant's id and the model's, empty for its default.
@@ -2362,11 +2459,8 @@ impl CommandBar {
     /// The assistant the composer starts its thread on: the one picked on its model menu while
     /// it's signed in and not at its limit, else the first that is.
     fn composer_assistant(&self) -> Option<&TaskAgent> {
-        let agents = self.task_agents.as_ref()?;
-        let picked = (self.ask.as_ref()).and_then(|ask| ask.model.as_ref().map(|(id, _)| id));
-        let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
-        let first = ready.clone().next();
-        ready.find(|agent| Some(&agent.id) == picked).or(first)
+        let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
+        starts_on(self.task_agents.as_ref()?, picked)
     }
 
     /// The model the composer's thread starts on, by id, empty for its assistant's own default:
@@ -2509,27 +2603,16 @@ impl CommandBar {
         })
     }
 
-    /// The level trigger's menu, under it: the three levels, the one the thread starts at
-    /// checked, each with its line, and the line every level holds to. A pick holds for this
-    /// thread and is offered next time; Full access is never offered again by itself.
+    /// The level trigger's menu, under it: `level_choices`, Full access among them. A pick holds
+    /// for this thread and is offered next time; Full access is never offered again by itself.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
-        let current = ask.tier;
-        let mut items: Vec<MenuEntry> = (Tier::ALL.into_iter())
-            .map(|tier| MenuEntry {
-                checked: tier == current,
-                ..MenuEntry::named(tier.label(), true)
-            })
-            .collect();
-        items.push(MenuEntry::line());
-        items.push(MenuEntry::named(NEVER_GETS, false));
+        let (tiers, items) = level_choices(ask.tier, true);
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-                let tier = closed
-                    .chosen()
-                    .and_then(|item| Tier::ALL.get(item).copied());
+                let tier = closed.chosen().and_then(|item| tiers.get(item).copied());
                 let closed = |bar: &mut Self, cx: &mut Context<Self>| {
                     bar.menu_closed(cx);
                     tier.map(|tier| bar.pick_tier(tier, cx));
@@ -2548,64 +2631,11 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// The model trigger's menu, under it: each assistant by its own name, then the models it
-    /// offers, its default first and the one the thread starts on checked; one at its limit says
-    /// when it resets, and one not signed in has Sign In, which starts its own sign-in as
-    /// Settings' does; then Settings › Agents. Each assistant's heading is its name as Settings'
-    /// page has it. Over them all a field narrows them as the user types: an assistant with no
-    /// model matching goes, heading and all, as Sign In does, and Settings stays whatever is
-    /// typed; a pick is still one of these rows.
+    /// The model trigger's menu, under it: `model_choices`, Settings › Agents last.
     fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agents = self.task_agents.clone().unwrap_or_default();
-        let (on, chosen) = match self.composer_assistant() {
-            Some(agent) => (Some(agent.id.clone()), self.composer_model()),
-            None => (None, None),
-        };
-        let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
-        let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
-        // Settings' name for the assistant, so the two never say it differently.
-        let label = |id: &SharedString, name: &SharedString| -> SharedString {
-            match crate::agents::runner::Cli::from_id(id) {
-                Some(cli) => crate::settings_rows::assistant_name(cli).into(),
-                None => name.clone(),
-            }
-        };
-        for agent in &agents.agents {
-            items.push(heading(label(&agent.id, &agent.name)));
-            picks.push(ModelPick::Nothing);
-            let at_limit = agent
-                .resets
-                .clone()
-                .map(|resets| format!("Limit resets {resets}"));
-            let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
-            let default = agent.default_model.as_deref();
-            let (ids, entries) = crate::agents::task::model_menu(
-                checked.unwrap_or("\0"),
-                DEFAULT_ROW,
-                default,
-                agent.models.clone(),
-            );
-            for ((id, _), entry) in ids.into_iter().zip(entries) {
-                let entry = MenuEntry {
-                    enabled: at_limit.is_none(),
-                    detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
-                    over: false,
-                    ..entry
-                };
-                items.push(entry);
-                picks.push(ModelPick::Model(agent.id.clone(), id));
-            }
-        }
-        for (id, name) in &agents.signed_out {
-            items.push(heading(label(id, name)));
-            picks.push(ModelPick::Nothing);
-            items.push(MenuEntry::named(SIGN_IN, true).offer().out());
-            picks.push(ModelPick::SignIn(id.clone()));
-        }
-        items.push(MenuEntry::line());
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept().out());
-        picks.push(ModelPick::Settings);
+        let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
+        let (items, picks) = model_choices(&agents, picked, true);
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {

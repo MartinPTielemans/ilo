@@ -5168,3 +5168,62 @@ fn the_open_is_timed_as_its_drawn_frame_comes_on_screen(cx: &mut TestAppContext)
         "timing the first frame asked for a frame"
     );
 }
+
+/// What a menu says, row by row, for comparing two menus: each row's title, its marks and where
+/// it leads.
+fn said(items: &[MenuEntry]) -> Vec<(String, bool, bool, bool, bool)> {
+    (items.iter())
+        .map(|item| {
+            let title = item.title.to_string();
+            (title, item.checked, item.enabled, item.header, item.out)
+        })
+        .collect()
+}
+
+/// Settings' Access opens the composer's level menu, the same rows but Full access, which is
+/// never where a thread starts; each row still picks its own level.
+#[test]
+fn settings_access_is_the_composers_level_menu() {
+    for current in [Tier::Look, Tier::default()] {
+        let (all, composer) = level_choices(current, true);
+        let (offered, settings) = level_choices(current, false);
+        assert!(!offered.contains(&Tier::Full));
+        let full = all.iter().position(|&tier| tier == Tier::Full).unwrap();
+        let mut expected = said(&composer);
+        expected.remove(full);
+        assert_eq!(said(&settings), expected);
+        for (at, tier) in offered.iter().enumerate() {
+            assert_eq!(settings[at].title.as_ref(), tier.label());
+        }
+    }
+}
+
+/// Settings' Model opens the composer's model menu, the same rows, checks and Sign In, but the
+/// way to Settings it's already in; and both check the model a thread starts on.
+#[test]
+fn settings_model_is_the_composers_model_menu() {
+    let mut offered = agents(&[("claude", None), ("codex", None)]).unwrap();
+    offered.signed_out = vec![("gemini".into(), "Gemini".into())];
+    let picked: (SharedString, String) = ("claude".into(), "sonnet".into());
+    for picked in [None, Some(&picked)] {
+        let (composer, composer_picks) = model_choices(&offered, picked, true);
+        let (settings, settings_picks) = model_choices(&offered, picked, false);
+        let kept = settings.len();
+        assert_eq!(said(&settings), said(&composer[..kept]));
+        assert_eq!(settings_picks, composer_picks[..kept]);
+        assert_eq!(
+            composer_picks[kept..],
+            [ModelPick::Nothing, ModelPick::Settings]
+        );
+        assert!(settings_picks.contains(&ModelPick::SignIn("gemini".into())));
+        let checked: Vec<&ModelPick> = (settings.iter().zip(&settings_picks))
+            .filter(|(item, _)| item.checked)
+            .map(|(_, pick)| pick)
+            .collect();
+        let starts = match picked {
+            Some(_) => ModelPick::Model("claude".into(), "sonnet".into()),
+            None => ModelPick::Model("claude".into(), "haiku".into()),
+        };
+        assert_eq!(checked, [&starts]);
+    }
+}
