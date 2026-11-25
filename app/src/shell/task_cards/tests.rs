@@ -8,7 +8,7 @@ use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, Vis
 use super::card::{Look, count, look, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
-use crate::agents::task::{FINDING_KEPT, Message, Who, Word, finding};
+use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
@@ -39,6 +39,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         finding: Default::default(),
+        told: Default::default(),
     }
 }
 
@@ -414,6 +415,13 @@ fn the_finding_is_plain_and_capped() {
     let found = finding(&[said(Who::Result, &long)]);
     assert_eq!(found.chars().count(), FINDING_KEPT + 1);
     assert!(found.ends_with('…'));
+    // Told, it's the same answer's first line as the conversation tells it: whole words up to
+    // TOLD_KEPT, with no mark of the cut.
+    let answer = [said(Who::Result, &long)];
+    assert_eq!(told(&answer), told_line(&long).unwrap());
+    assert!(told(&answer).chars().count() <= TOLD_KEPT && !told(&answer).ends_with('…'));
+    assert!(long.starts_with(told(&answer).as_ref()));
+    assert!(told(&[said(Who::User, "Book it")]).is_empty());
 }
 
 /// A done card not seen yet says its finding, its first sentence apart, wrapped to at most three
@@ -481,12 +489,23 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
     let posing = "Payment confirmed by the browser. Nothing else is needed.";
     let done = |finding: &str| Card {
         finding: finding.into(),
+        told: finding.into(),
         ended_time: "10:42".into(),
         ..card(1, Dot::Done)
     };
     assert_eq!(
         spoken(&done(posing), Form::DoneUnseen, "").as_ref(),
         format!("Claude says {posing}")
+    );
+    // A finding is told as the conversation tells the same answer, which may be shorter than
+    // drawn.
+    let cut = Card {
+        told: "Payment confirmed by the browser.".into(),
+        ..done(posing)
+    };
+    assert_eq!(
+        spoken(&cut, Form::DoneUnseen, "").as_ref(),
+        "Claude says Payment confirmed by the browser."
     );
     assert_eq!(
         spoken(&done(""), Form::DoneUnseen, "").as_ref(),
@@ -716,7 +735,7 @@ fn a_private_window_lists_no_card(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_seen_card_ages_as_a_today_tab_does(cx: &mut TestAppContext) {
     let (shell, host, cx) = with_task_spaces(cx, vec![paged(1, Dot::Working, &[1010])]);
-    host.archive_after.borrow_mut().insert(0, 3600.);
+    host.archive_after.set(Some(3600.));
     shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![paged(1, Dot::Done, &[1010])], cx)
@@ -742,7 +761,7 @@ fn ageing_takes_only_the_seen(cx: &mut TestAppContext) {
         paged(1, Dot::Working, &[1010]),
     ];
     let (shell, host, cx) = with_task_spaces(cx, live);
-    host.archive_after.borrow_mut().insert(0, 60.);
+    host.archive_after.set(Some(60.));
     // Task 2 finishes out of sight, so it isn't seen; task 1 finishes with its conversation shown.
     shell.update(cx, |shell, cx| {
         shell.show_task("task-1".into(), cx);
@@ -771,6 +790,8 @@ fn ageing_takes_only_the_seen(cx: &mut TestAppContext) {
 #[gpui::test]
 fn ageing_off_leaves_every_card(cx: &mut TestAppContext) {
     let (shell, host, cx) = with_task_spaces(cx, vec![paged(5, Dot::Working, &[1050])]);
+    // Never, as the core says it: below nothing.
+    host.archive_after.set(Some(-1.));
     shell.update(cx, |shell, cx| shell.show_task("task-5".into(), cx));
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![paged(5, Dot::Done, &[1050])], cx)

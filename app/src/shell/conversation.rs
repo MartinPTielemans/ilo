@@ -27,16 +27,18 @@ use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
     browser::{Browser, Page},
+    menus::{MenuAction, MenuEntry},
     picture::{PagePicture, next_request},
     row_spring,
     task_cards::PageWord,
 };
 use crate::agents::Status;
+use crate::agents::files::words as files_words;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
-    TraceStep, first_line,
+    TraceStep, told_line,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -99,6 +101,13 @@ pub(super) fn page_chip_keyed(
     key: Option<String>,
     key_color: Hsla,
 ) -> gpui::Stateful<gpui::Div> {
+    chip_ground(palette, id)
+        .child(words.into())
+        .children(key.map(|key| div().text_color(key_color).child(key)))
+}
+
+/// A page chip's ground, with nothing on it yet.
+fn chip_ground(palette: super::Palette, id: impl Into<ElementId>) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
@@ -115,8 +124,6 @@ pub(super) fn page_chip_keyed(
         .text_size(px(text::BODY))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))
-        .child(words.into())
-        .children(key.map(|key| div().text_color(key_color).child(key)))
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
@@ -245,6 +252,8 @@ pub struct TalkView {
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the folder's chip under the reply field was drawn.
+    folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the user was typing in the reply field as the last frame drew, the field having
     /// the keyboard and words in it: a page ilo opens by itself mustn't cover those.
     typing: bool,
@@ -453,6 +462,7 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    folder_drawn: Rc::default(),
                     typing: false,
                     take_over_drawn: Rc::default(),
                     hand_back_drawn: Rc::default(),
@@ -775,7 +785,7 @@ impl TalkView {
                     Line::Said(text) => Some(text),
                     _ => None,
                 })?;
-                Some(words::says(&shown.name, &first_line(said)?))
+                Some(words::says(&shown.name, &told_line(said)?))
             });
             if let Some(first) = answer {
                 self.tell(first.into());
@@ -2312,7 +2322,8 @@ impl TalkView {
     }
 
     /// The composer's row under the reply field: the task's access on a chip,
-    /// which opens its menu (#4094), and Stop at the row's end.
+    /// which opens its menu (#4094), the folder the task holds on the next (#4101), and Stop at
+    /// the row's end. A reply never carries files or a folder, so there's no way to add one here.
     fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let palette = look.palette;
         let tier = self
@@ -2346,8 +2357,52 @@ impl TalkView {
             .flex()
             .items_center()
             .child(chip)
+            .children(self.folder_chip(look, cx))
             .child(div().flex_1())
             .children(self.stop(look, cx))
+    }
+
+    /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
+    /// on without it at once.
+    fn folder_chip(
+        &self,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let palette = look.palette;
+        let name = self.shown.as_ref()?.folder.clone()?;
+        let drawn = self.folder_drawn.clone();
+        let chip = chip_ground(palette, "conversation-folder")
+            .ml(px(CHIP_GAP))
+            .gap(px(PAGE_CHIP_GAP))
+            .child(
+                svg()
+                    .flex_none()
+                    .path("icons/folder.svg")
+                    .size(px(PAGE_CHIP_FAVICON))
+                    .text_color(palette.text(TITLE)),
+            )
+            .child(clip(&name, QUOTED_CHARS as usize))
+            .relative()
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
+            .on_click(cx.listener(|view, _, window, cx| {
+                let at = window.mouse_position();
+                let agent = view.agent.clone();
+                let revoke: MenuAction = Box::new(move |shell, cx| {
+                    shell.browser.task(agent, TaskAction::RevokeFolder, cx)
+                });
+                let items = vec![(MenuEntry::new(files_words::REVOKE, true), revoke)];
+                (view.shell)
+                    .update(cx, |shell, cx| shell.show_menu(items, at, None, cx))
+                    .ok();
+            }));
+        Some(chip)
     }
 
     /// One of ilo's own lines: its glyph and mark, its words with the name it took from a page
@@ -2404,6 +2459,8 @@ impl TalkView {
             IloKind::StartedWithout { .. } => "icons/file.svg",
             IloKind::LeftRunning { .. } => "icons/circle-alert.svg",
             IloKind::EndedLeft => "icons/check.svg",
+            IloKind::Revoked { .. } | IloKind::FolderGone { .. } => "icons/folder.svg",
+            IloKind::NotCopied { .. } => "icons/file.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone
@@ -3237,6 +3294,7 @@ impl Render for TalkView {
             self.scroll.scroll_to_bottom();
         }
         self.level_drawn.set(None);
+        self.folder_drawn.set(None);
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         let busy = self.motion.settle(now);

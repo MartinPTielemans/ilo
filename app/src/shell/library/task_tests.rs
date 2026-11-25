@@ -65,6 +65,7 @@ fn card() -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         finding: Default::default(),
+        told: Default::default(),
     }
 }
 

@@ -55,10 +55,12 @@ pub(super) fn first_sentence(text: &str) -> usize {
 }
 
 /// What a card's second line says to the screen reader: as drawn, but a finding, the assistant's
-/// words, comes after Z24's mark, so it's never heard as the browser's.
+/// words, comes after Z24's mark, so it's never heard as the browser's, and as the conversation
+/// tells the same answer: cut at a whole word, as nothing marks a cut in speech.
 pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
     let line = second_line(card, form, site);
     match form == Form::DoneUnseen && !card.finding.is_empty() {
+        true if !card.told.is_empty() => words::says(&card.name, &card.told).into(),
         true => words::says(&card.name, &line).into(),
         false => line,
     }

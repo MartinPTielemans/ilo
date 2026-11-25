@@ -243,6 +243,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         visited: Vec::new(),
         ended_time: Default::default(),
         finding: Default::default(),
+        told: Default::default(),
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
@@ -425,6 +426,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        folder: None,
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);

@@ -11,7 +11,7 @@ use super::tests::{card, conversation, ilo_words, shown, stopped_at_order, watch
 use super::{TalkView, words};
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Conversation, Dot, Line, Word};
+use crate::agents::task::{Card, Conversation, Dot, Line, TITLE_KEPT, TOLD_KEPT, Word, first_line};
 use crate::agents::tier::{Tier, Why};
 use crate::needs_you::{self, Notify};
 use crate::product::PRODUCT;
@@ -339,6 +339,71 @@ fn the_answer_is_told_once_as_its_first_line(cx: &mut TestAppContext) {
     assert_eq!(
         tellings(&shell, cx),
         (Some((0, "Claude says Two seats at 9:05".into())), None)
+    );
+}
+
+/// A long first line is told further than a card's line shows it, up to TOLD_KEPT characters and
+/// no further than the last word that ends within them: speech has no mark for a cut.
+#[gpui::test]
+fn a_long_answer_is_told_to_a_words_end(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    talk(&shell, conversation(2), cx);
+
+    let first = "The 9:05 to Lyon has two seats left in second class, the 9:35 has none, and \
+        the 10:05 is the first one after that with a table for four, so I held the 9:05.";
+    assert!(first.chars().count() > TOLD_KEPT);
+    let answered = Conversation {
+        stoppable: false,
+        ..with(
+            2,
+            vec![Line::Said(
+                format!("**{first}**\n\nShall I book it?").into(),
+            )],
+        )
+    };
+    send(&shell, vec![at(Dot::Done)], cx);
+    talk(&shell, answered, cx);
+
+    let told = told(&shell, cx);
+    let [told] = told.as_slice() else {
+        panic!("told {told:?}");
+    };
+    let said = told
+        .strip_prefix("Claude says ")
+        .expect("the app's mark first");
+    assert!(said.chars().count() <= TOLD_KEPT);
+    assert!(said.chars().count() > TITLE_KEPT);
+    // Whole words of the line, from its start, and the next one wouldn't have fit.
+    let rest = first.strip_prefix(said).expect("the line's own start");
+    assert!(rest.starts_with(' '));
+    let next = rest.split_whitespace().next().expect("a word left untold");
+    assert!(said.chars().count() + 1 + next.chars().count() > TOLD_KEPT);
+
+    // The card's line of the same answer keeps a title's width.
+    let line = first_line(&format!("**{first}**")).expect("a line");
+    assert_eq!(line.chars().count(), TITLE_KEPT + 1);
+    assert!(line.ends_with('…'));
+}
+
+/// A first line of one word longer than that is cut where the telling ends.
+#[gpui::test]
+fn a_long_word_is_told_cut(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    talk(&shell, conversation(2), cx);
+
+    let answered = Conversation {
+        stoppable: false,
+        ..with(2, vec![Line::Said("a".repeat(TOLD_KEPT + 30).into())])
+    };
+    send(&shell, vec![at(Dot::Done)], cx);
+    talk(&shell, answered, cx);
+    assert_eq!(
+        told(&shell, cx),
+        [format!("Claude says {}", "a".repeat(TOLD_KEPT))]
     );
 }
 

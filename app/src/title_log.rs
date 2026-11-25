@@ -3,10 +3,13 @@
 //! title and its page apart, in either order, so a title that comes before the tab's page is held
 //! until the page says what the tab is: never written first and corrected after. A renamed tab
 //! keeps its name when it leaves a Board for a page, so the titles it had as a Board stay out of
-//! the log there too. A page's own titles, a renamed one's among them, are written as they are.
+//! the log there too. A page's own titles, a renamed one's among them, are written as they are,
+//! but for a sign-in's page's, which can be its address while it loads (#4100).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+
+use crate::agents::sign_in::logged;
 
 /// What a line says in place of a Board's title.
 pub const A_BOARD: &str = "(a Board)";
@@ -61,7 +64,7 @@ pub fn page(tab: u64, url: &str) {
         each.said(&held)
     });
     if let Some(title) = said {
-        write(format!("browser: title {tab} {title}"));
+        write(format!("browser: title {tab} {}", logged(tab, &title)));
     }
 }
 
@@ -76,7 +79,7 @@ pub fn title(tab: u64, title: &str) {
         each.said(title)
     });
     if let Some(title) = said {
-        write(format!("browser: title {tab} {title}"));
+        write(format!("browser: title {tab} {}", logged(tab, &title)));
     }
 }
 
@@ -88,7 +91,7 @@ pub fn window(tab: u64, title: &str) {
         tab => TABS.with_borrow_mut(|tabs| tabs.entry(tab).or_default().said(title)),
     };
     if let Some(title) = said {
-        write(format!("browser: window title {title}"));
+        write(format!("browser: window title {}", logged(tab, &title)));
     }
 }
 

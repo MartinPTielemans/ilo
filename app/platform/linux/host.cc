@@ -297,6 +297,7 @@ void host_watch_fd(int fd, void (*ready)(void)) {
 // The core shows the browser window as it opens it, in front or for a saved window behind,
 // since the window is Chromium's. host_show_window_behind is frames.rs's, which stacks it.
 void host_show_window(void* ui_view) {}
+void host_hold_window(void* ui_view) {}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
@@ -341,13 +342,6 @@ bool host_pointer(double*, double*) {
 void host_watch_finished_launching(void (*finished)(void)) {
   finished();
 }
-
-// No dock dot. The docks that badge a launcher, KDE's, Dash to Dock and Plank among them, read the
-// Unity LauncherEntry API, which gives it a count, progress or urgency but no colour, so the
-// Space's has nothing to show in.
-void host_dock_dot_launch(const char* profile_dir) {}
-
-void host_dock_dot(bool colored, uint32_t color) {}
 
 // host_cascaded is frames.rs's too.
 

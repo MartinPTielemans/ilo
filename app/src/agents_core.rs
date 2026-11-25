@@ -501,6 +501,7 @@ pub fn start(cx: &mut App) {
     cx.set_global(GlobalAgents(made.clone()));
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
+        crate::broom_host::agents_changed(cx);
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);

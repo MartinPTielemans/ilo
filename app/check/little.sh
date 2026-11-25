@@ -434,12 +434,12 @@ if [ "$(uname)" = Darwin ] || windows; then
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+  if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
     send clickkey $(drawn "toolbar General")
     expect '^browser: settings tab General$' "a click on General didn't show its section"
     settings_drew General
   fi
-  # Little ilo is under General's own rows: in_sight scrolls it up, from this show's frame.
+  # Its button is General's last group: in_sight scrolls it up, from this show's frame.
   in_sight "switch little in the menu bar" '^browser: settings drew General$' ||
     fail "Settings didn't draw Show in the $place's switch"
   send clickkey $at
@@ -822,7 +822,7 @@ send window 1
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
   send clickkey $(drawn "toolbar General")
   settings_drew General
 fi

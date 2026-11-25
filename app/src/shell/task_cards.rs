@@ -691,8 +691,11 @@ impl Shell {
             let Some(&seen) = list.seen_at.get(&card.agent) else {
                 continue;
             };
-            let profile = (self.spaces.iter()).find(|space| space.id == card.home);
-            let Some(after) = profile.and_then(|space| self.browser.archive_after(space.profile))
+            // Its Space's profile's time, as a Today tab's; the core's Never is below nothing.
+            let home = (self.spaces.iter()).find(|space| space.id == card.home);
+            let Some(after) = (home.and_then(|space| self.browser.archive_after(space.id)))
+                .map(|(after, _)| after)
+                .filter(|after| *after >= 0.)
             else {
                 continue;
             };

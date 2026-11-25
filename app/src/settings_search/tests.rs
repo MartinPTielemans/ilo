@@ -13,6 +13,7 @@ use crate::settings_rows::{frame, text as row_text};
 fn rows() -> Vec<Entry> {
     let row = |section, under: Option<&str>, name: &str, line: Option<&str>| Entry {
         section,
+        group: None,
         under: under.map(|under| SharedString::from(under.to_string())),
         name: name.to_string().into(),
         line: line.map(|line| SharedString::from(line.to_string())),
@@ -177,6 +178,27 @@ fn a_line_finds_its_row_when_no_name_does() {
     assert_eq!(names("work video"), ["Mini Player"]);
     assert!(names("zzz").is_empty());
     assert!(names("  ").is_empty());
+}
+
+/// A group's heading finds the rows under it when no row is named by its words, and a name still
+/// finds its row alone (spec-settings.md › S15: labels, second lines and group headings).
+#[test]
+fn a_heading_finds_its_groups_rows_when_no_name_does() {
+    let headed = |name: &str, group: &str| Entry {
+        section: Section::General,
+        group: Some(group.to_string().into()),
+        under: None,
+        name: name.to_string().into(),
+        line: None,
+        keys: None,
+    };
+    let rows = [
+        headed("Reopen your windows and tabs", "Opening and quitting"),
+        headed("Ask before quitting", "Opening and quitting"),
+        headed("Search engine", "Search and downloads"),
+    ];
+    assert_eq!(find("opening", &rows), [0, 1]);
+    assert_eq!(find("quitting", &rows), [1]);
 }
 
 /// Settings in small: the column's field, and under it either the section's page or what the

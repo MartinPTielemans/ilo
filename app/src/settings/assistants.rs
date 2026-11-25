@@ -10,11 +10,14 @@ impl Settings {
     /// sign-in and has the mark that picks it.
     pub(super) fn assistants(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        // Each assistant's Model, under its row.
-        let models = Cli::ALL.map(|cli| self.model_row(agents, cli, cx));
+        // Each assistant's Model, under its row once it's signed in.
+        let providers = agents.read(cx).providers();
+        let models: Vec<Option<(gpui::Div, f32)>> = (providers.iter())
+            .map(|&(cli, _, signed_in)| signed_in.then(|| self.model_row(agents, cli, cx)))
+            .collect();
         let model = agents.read(cx);
         let marked = model.default_task_agent();
-        let assistants = Cli::ALL.map(|cli| {
+        let assistants = providers.into_iter().map(|(cli, shown, _)| {
             let act = {
                 let (settings, agents) = (cx.weak_entity(), agents.clone());
                 move |act: Act, window: &mut Window, cx: &mut App| {
@@ -42,15 +45,19 @@ impl Settings {
             let row = assistant_row(
                 look,
                 cli,
-                &model.assistant_row(cli),
+                &shown,
                 marked == Some(cli),
                 self.a11y,
                 self.menu_at(Popup::Assistant(cli)),
+                // check.sh clicks it here to run tasks with this assistant.
+                self.drawn(format!("assistant mark {}", cli.id())),
                 Rc::new(act),
             );
             (row, ROW_X)
         });
-        let assistants = (assistants.into_iter().zip(models)).flat_map(|(row, model)| [row, model]);
+        let assistants: Vec<_> = assistants.collect();
+        let assistants = (assistants.into_iter().zip(models))
+            .flat_map(|(row, model)| std::iter::once(row).chain(model));
         // Another app is Apps that connect's, two groups down, so it's not here as well.
         group_lined(look, assistants)
     }
