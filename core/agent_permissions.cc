@@ -8,6 +8,7 @@
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/agent_space_page.h"
+#include "browser_core/cast_dialog.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -297,10 +298,19 @@ bool TakesDownloadQuestion(download::DownloadItem* download,
   return false;
 }
 
+bool NoCast(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kCast, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kCast, contents);
+  return true;
+}
+
 void CloseTabDialogs(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kClientCertificate, RuleTabOf(contents))) {
     return;
   }
+  CastDialog::CloseFor(contents);
   if (auto* dialogs = web_modal::WebContentsModalDialogManager::FromWebContents(contents)) {
     dialogs->CloseAllDialogs();
   }

@@ -54,6 +54,8 @@ enum class Kind {
   kPrint,
   // The chooser for a certificate of the user's, which a server asks for as a load starts.
   kClientCertificate,
+  // The list of the user's devices to cast to, which a page asks for as much as the user does.
+  kCast,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock

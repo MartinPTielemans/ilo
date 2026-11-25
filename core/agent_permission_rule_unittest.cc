@@ -30,12 +30,13 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
   }
 }
 
-// The user holding the tab changes three answers: their own copy writes the clipboard, and a print
-// and the choice of a certificate are theirs to make.
+// The user holding the tab changes these answers: their own copy writes the clipboard, and a
+// print, the choice of a certificate and of a device to cast to are theirs to make.
 TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
-    if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate) {
+    if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
+        kind == Kind::kCast) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -135,6 +136,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsRefusedAPrint) {
 // page's.
 TEST(AgentPermissionRule, AHeldTabPrints) {
   EXPECT_FALSE(Refuses(Kind::kPrint, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabIsShownTheDevicesToCastTo) {
+  EXPECT_FALSE(Refuses(Kind::kCast, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoDevicesToCastTo) {
+  EXPECT_TRUE(Refuses(Kind::kCast, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kCast), "cast");
+}
+
+// While the user holds the tab its page casts as one of theirs, by their command or its own ask.
+TEST(AgentPermissionRule, AHeldTabIsShownTheDevicesToCastTo) {
+  EXPECT_FALSE(Refuses(Kind::kCast, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {

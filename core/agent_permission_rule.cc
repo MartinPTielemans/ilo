@@ -12,6 +12,7 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
       return agent_space_rule::Refuses(agent_space_rule::Ask::kCopy, tab);
     case Kind::kPrint:
     case Kind::kClientCertificate:
+    case Kind::kCast:
       return tab.agents && !tab.held;
     default:
       return tab.agents;
@@ -82,6 +83,8 @@ const char* CodeWord(Kind kind) {
       return "print";
     case Kind::kClientCertificate:
       return "client_certificate";
+    case Kind::kCast:
+      return "cast";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";

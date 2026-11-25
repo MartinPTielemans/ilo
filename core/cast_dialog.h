@@ -32,6 +32,8 @@ class CastDialog : public media_router::MediaRouterDialogController,
   // See bc_tab_cast and the calls after it.
   static void Open(bc_id tab);
   static void Close();
+  // Closes the list if it is |contents|'s, as where the user's hold of an agent's tab ends.
+  static void CloseFor(content::WebContents* contents);
   static void To(bc_id tab, const char* id);
 
   CastDialog(const CastDialog&) = delete;
@@ -40,6 +42,10 @@ class CastDialog : public media_router::MediaRouterDialogController,
 
   // media_router::MediaRouterDialogController:
   bool IsShowingMediaRouterDialog() const override;
+  bool ShowMediaRouterDialogForPresentation(
+      std::unique_ptr<media_router::StartPresentationContext> context) override;
+  bool ShowMediaRouterDialog(
+      media_router::MediaRouterDialogActivationLocation activation_location) override;
 
  private:
   friend class content::WebContentsUserData<CastDialog>;

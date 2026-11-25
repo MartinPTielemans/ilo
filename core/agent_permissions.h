@@ -83,10 +83,16 @@ bool TakesDownloadQuestion(download::DownloadItem* download,
                            DownloadConfirmationReason reason,
                            DownloadTargetDeterminerDelegate::ConfirmationCallback* callback);
 
+// Whether the page in |contents| is refused the list of the user's devices to cast to, asked
+// before the list is made and before the tab is brought to the front for it: a page in an agent's
+// Space the user doesn't hold, whoever asked, the page or a command. Notes the refusal.
+bool NoCast(content::WebContents* contents);
+
 // Closes what Chrome drew over the page in |contents| as a tab's dialog, a certificate chooser
-// among them, if the page is in an agent's Space the user doesn't hold, as Chrome closes them
-// when a page is left: where the user's hold of a tab ends and where a tab of theirs becomes an
-// agent's. What a hold let the user be asked ends with it, as cancelled.
+// among them, and the list of devices to cast it to, if the page is in an agent's Space the user
+// doesn't hold, as Chrome closes them when a page is left: where the user's hold of a tab ends and
+// where a tab of theirs becomes an agent's. What a hold let the user be asked ends with it, as
+// cancelled.
 void CloseTabDialogs(content::WebContents* contents);
 
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
