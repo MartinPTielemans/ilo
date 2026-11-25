@@ -46,6 +46,8 @@ impl Settings {
                 marked == Some(cli),
                 self.a11y,
                 self.menu_at(Popup::Assistant(cli)),
+                // check.sh clicks it here to run tasks with this assistant.
+                self.drawn(format!("assistant mark {}", cli.id())),
                 Rc::new(act),
             );
             (row, ROW_X)

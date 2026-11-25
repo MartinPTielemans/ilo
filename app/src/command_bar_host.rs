@@ -202,9 +202,13 @@ impl command_bar::Host for Bar {
             models: agents.task_models(agent.cli),
             resets: agent.resets,
         });
+        let signed_out = (agents.signed_out_agents().into_iter())
+            .map(|cli| (cli.id().into(), cli.name().into()))
+            .collect();
         Some(command_bar::TaskAgents {
             agents: listed.collect(),
             known: agents.task_agents_known(),
+            signed_out,
         })
     }
 
@@ -279,6 +283,8 @@ impl command_bar::Host for Bar {
         agent: &str,
         asked: &str,
         page: Option<(SharedString, SharedString)>,
+        tier: browser::agents::tier::Tier,
+        model: Option<String>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -327,8 +333,16 @@ impl command_bar::Host for Bar {
             shell.bar_starting();
         });
         agents_core::update(move |agents, cx| {
-            let tier = browser::agents::tier::Tier::default();
-            let started = agents.start_task(cli, &asked, page, home, tier, cx);
+            let start = browser::agents::task::Start {
+                tier,
+                model: model.clone(),
+                pages: Vec::new(),
+                only_added: false,
+            };
+            let started = agents.start_task(cli, &asked, page, home, start, cx);
+            if started.is_some() {
+                agents.remember_composer(home, tier, model.map(|model| (cli, model)));
+            }
             // Its conversation takes the page's place as its card comes, which takes the slot; one
             // that didn't start leaves the slot empty and the page as it was.
             update_window_in(window, cx, |shell, _| {
@@ -342,6 +356,30 @@ impl command_bar::Host for Bar {
 
     fn set_up_agents(&self, cx: &mut App) {
         settings::show_agents(cx);
+    }
+
+    fn composer_last(
+        &self,
+        cx: &App,
+    ) -> (
+        browser::agents::tier::Tier,
+        Option<(SharedString, String)>,
+    ) {
+        let space = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let space = (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space());
+        let Some(agents) = browser::agents::global(cx) else {
+            return Default::default();
+        };
+        let last = agents.read(cx).composer_last(space);
+        let model = last.model.map(|(cli, model)| (cli.id().into(), model));
+        (last.tier, model)
+    }
+
+    fn sign_in(&self, agent: &str, _: &mut App) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        agents_core::update(move |agents, cx| agents.sign_in(cli, cx));
     }
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {

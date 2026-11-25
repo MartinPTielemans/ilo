@@ -1357,6 +1357,18 @@ impl Agents {
             .collect()
     }
 
+    /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
+    pub fn signed_out_agents(&self) -> Vec<Cli> {
+        if !self.tasks_on() {
+            return Vec::new();
+        }
+        (Cli::ALL.into_iter())
+            .filter(|cli| {
+                (self.tasks.found.get(cli)).is_some_and(|found| found.ready == Ready::SignedOut)
+            })
+            .collect()
+    }
+
     /// Whether the browser has learned which CLIs are ready, in this run or a run before.
     pub fn task_agents_known(&self) -> bool {
         !self.tasks.found.is_empty()
