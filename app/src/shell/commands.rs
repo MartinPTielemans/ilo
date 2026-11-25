@@ -15,8 +15,8 @@ use crate::usage::{self, Usage};
 
 use super::command_names::{
     CONVERT_HORIZONTAL, CONVERT_VERTICAL, DEVELOPER_MODE_OFF, DEVELOPER_MODE_ON, DONT_STAY_ON_TOP,
-    ENTER_FULL_SCREEN, EXIT_FULL_SCREEN, HIDE_SIDEBAR, HIDE_TOP_BAR, PIN_TAB, SHOW_TOP_BAR,
-    SIDEBAR_TO_LEFT, SIDEBAR_TO_RIGHT, STAY_ON_TOP, TOGGLE_SIDEBAR, UNPIN_TAB,
+    ENTER_FULL_SCREEN, EXIT_FULL_SCREEN, HIDE_SIDEBAR, PIN_TAB, SIDEBAR_TO_LEFT, SIDEBAR_TO_RIGHT,
+    STAY_ON_TOP, TOGGLE_SIDEBAR, UNPIN_TAB,
 };
 use super::{
     COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
@@ -182,8 +182,6 @@ pub enum Command {
     /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
     /// The command bar's alone, with no key (#2375).
     MoveSidebar,
-    /// Turns Top bar on or off, Settings' Top bar, in every window (#3160).
-    ToggleTopBar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -403,8 +401,6 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // keeps it. Off the Mac it would be Alt+D, Chrome's, so it has none there.
     ("ctrl-d", Command::ToggleDeveloperMode, false),
     ("cmd-s", Command::ToggleSidebar, false),
-    // Unreserved as ⌘S is, so a page that keeps it, as vscode.dev's Run and Debug, still gets it.
-    ("shift-cmd-d", Command::ToggleTopBar, false),
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
@@ -452,14 +448,6 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-8", Command::SelectSpace(7), false),
     ("ctrl-9", Command::SelectSpace(8), false),
 ];
-
-/// Top bar's item in a menu and its row in the command bar, by whether it's on.
-pub(super) fn top_bar_title(on: bool) -> &'static str {
-    match on {
-        true => HIDE_TOP_BAR,
-        false => SHOW_TOP_BAR,
-    }
-}
 
 /// What turns Developer Mode the other way, for a page in it or not.
 pub(super) fn developer_mode_title(on: bool) -> &'static str {
@@ -648,16 +636,6 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         SIDEBAR_TO_LEFT,
         Command::MoveSidebar,
         &["side", "position", "left", "right"],
-    ),
-    (
-        SHOW_TOP_BAR,
-        Command::ToggleTopBar,
-        &["toolbar", "address bar", "url bar"],
-    ),
-    (
-        HIDE_TOP_BAR,
-        Command::ToggleTopBar,
-        &["toolbar", "address bar", "url bar"],
     ),
     (
         trace::RECORD,
@@ -1179,7 +1157,6 @@ impl Command {
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
             Command::MoveSidebar => "move-sidebar",
-            Command::ToggleTopBar => "toggle-top-bar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1470,6 +1447,12 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // And a command of the user's after a close a page hasn't answered is no answer to it,
+        // so the view kept for its refusal goes. The same close again keeps it (#4202).
+        let closes = matches!(command, Command::CloseWindow | Command::Quit);
+        if users_own(from) && !closes {
+            self.forget_closing(cx);
+        }
         // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
         self.edit_url_waits = None;
         // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
@@ -1579,6 +1562,7 @@ impl Shell {
             Command::CloseWindow => {
                 // As ⌘W does, from a window of Chrome's it closes that one.
                 if !self.browser.close_other_window(cx) {
+                    self.about_to_close(cx);
                     self.browser.close_window(cx);
                 }
                 return;
@@ -1688,7 +1672,6 @@ impl Shell {
                     .browser
                     .keep_sidebar_right(!super::sidebar_right(cx), cx);
             }
-            Command::ToggleTopBar => return self.browser.keep_top_bar(!self.top_bar, cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1733,11 +1716,12 @@ impl Shell {
             }
             Command::Quit => {
                 // A task's view stands while Quit asks, so Cancel leaves the window as it was
-                // (#4202). Once the quit is decided the area goes, and the core shows the user's
-                // Space again, which the session then keeps for the window.
+                // (#4202). Once the quit is decided it's as the window's close: the core shows the
+                // user's Space again, which the session then keeps for the window, and a page that
+                // refuses brings the view back.
                 let shell = cx.weak_entity();
                 let going = std::rc::Rc::new(move |cx: &mut App| {
-                    shell.update(cx, |shell, cx| shell.leave_task_area(cx)).ok();
+                    shell.update(cx, |shell, cx| shell.about_to_close(cx)).ok();
                 });
                 return self.browser.quit(going, cx);
             }
@@ -2118,7 +2102,7 @@ impl Shell {
     }
 
     /// `tabs`, those shown most recently first, then the rest in their order.
-    fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
+    pub(super) fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
         let recent = self.recent.iter().copied().filter(|tab| tabs.contains(tab));
         let mut order: Vec<u64> = recent.collect();
         for tab in tabs {
@@ -2362,7 +2346,6 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
-            | Command::ToggleTopBar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2443,7 +2426,6 @@ impl Shell {
                 };
                 (name == to).then_some(name)
             }
-            Command::ToggleTopBar => (name == top_bar_title(self.top_bar)).then_some(name),
             _ => Some(name),
         }
     }
@@ -2534,6 +2516,14 @@ impl Shell {
 pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     let pinned = space.pinned.iter().filter(|&&row| !space.is_folder(row));
     pinned.chain(&space.today).copied()
+}
+
+/// Whether a command from `from` is the user's own act in this window. Every key, menu, click and
+/// gesture is, and so is Chrome's Downloads after the user stopped a quit for them. No agent's path
+/// runs a command. What isn't: another launch asking the window in front for a new one, the bar ilo
+/// opens by itself as the onboarding ends and in a new window, and the preview's start.
+fn users_own(from: &str) -> bool {
+    !matches!(from, "launch" | "onboarding" | "new window" | "preview")
 }
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab

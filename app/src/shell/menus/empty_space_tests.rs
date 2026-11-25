@@ -9,9 +9,7 @@ use gpui::{
     VisualTestContext, point, px,
 };
 
-use crate::shell::{
-    DIVIDER_HEIGHT, Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, recorder::Recorder,
-};
+use crate::shell::{Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, TODAY_GAP, recorder::Recorder};
 
 /// A window on Spaces 1 and 2, showing 1. Space 1 has pinned tab 10 and Today tab 11, and Space 2
 /// has `second`'s Today tabs.
@@ -90,8 +88,6 @@ fn space_one_menu(menu: &[String]) -> bool {
         "New Tab",
         "New Folder…",
         "—",
-        "Show Top Bar",
-        "—",
         "Change Space Icon…",
         "Rename Space…",
         "Edit Theme Color…",
@@ -149,7 +145,7 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
 
     // The line over Today leads with Today's own commands, then the same menu (#2344).
     let (x, top) = at_slot(&shell, cx, Slot::Divider, 30.);
-    let menus = right_click(cx, &host, (x, top + DIVIDER_HEIGHT / 2.));
+    let menus = right_click(cx, &host, (x, top + TODAY_GAP / 2.));
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
         menus[0][..3],
@@ -164,6 +160,16 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
     assert!(
         (entries.iter()).all(|entry| entry.parent.is_none_or(|parent| parent >= profile)),
         "the Set Profile submenu moved"
+    );
+
+    // The line itself is the New Tab line's, after its label, and shows the same menu.
+    let (x, top) = at_slot(&shell, cx, Slot::NewTab, 140.);
+    let menus = right_click(cx, &host, (x, top + ROW_PITCH / 2.));
+    assert_eq!(menus.len(), 1, "{menus:?}");
+    assert_eq!(
+        menus[0][..3],
+        ["Sort Today Tabs by Site", "Clear Today", "—"],
+        "the line after New Tab: {menus:?}"
     );
 }
 
@@ -184,15 +190,8 @@ fn an_empty_spaces_empty_space_shows_its_menu(cx: &mut TestAppContext) {
     let menus = right_click(cx, &host, (100., new_tab_row + ROW_PITCH + 20.));
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     // Delete Space is on: Space 1 is left.
     assert!(
@@ -234,15 +233,8 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, beside);
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     assert_eq!(new_tab(cx, &host), [2], "New Tab went to the Space beside");
 
@@ -279,15 +271,8 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, first);
     assert_eq!(menus.len(), 1, "a right-click mid-slide: {menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     assert!(
         new_tab(cx, &host).is_empty(),

@@ -4,13 +4,11 @@
 //! where one is in the list: the log is no record of the user's Boards.
 
 use super::*;
-use crate::tokens::menu::{MAX_WIDTH, OVERLAP};
+use crate::tokens::menu::{MAX_WIDTH, OVERLAP, SUBMENU_REST};
 
 /// The most Boards the submenu lists, the last changed first, so it fits any page: an eleventh is
 /// reached by opening it.
 pub(super) const LISTED: usize = 10;
-/// The safe triangle ends after the pointer rests this long in it, as menu.rs's does.
-const SAFE_TIMEOUT: Duration = Duration::from_millis(300);
 /// A Board takes no more while this many captures wait to land on it, which they do when it opens.
 /// It's the core's `board::kMaxArrived` (core/board_store.h), which refuses the next one.
 pub(super) const MOST_WAITING: usize = 100;
@@ -255,7 +253,9 @@ impl Capture {
         if from.is_some_and(|from| session.safe(from, at)) {
             let moves = session.moves;
             cx.spawn(async move |capture, cx| {
-                cx.background_executor().timer(SAFE_TIMEOUT).await;
+                cx.background_executor()
+                    .timer(Duration::from_secs_f32(SUBMENU_REST))
+                    .await;
                 capture
                     .update(cx, |capture, cx| {
                         let rested = (capture.session.as_ref())

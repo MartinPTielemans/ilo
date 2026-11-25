@@ -876,21 +876,29 @@ drag() {
   moves=$count
 }
 drag 115 24 moves "the header"
-drag 138 24 stays "the back button"
+drag 158 24 stays "the back button"
 drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
 # On Windows the frame keeps the top 8 points, Windows' resize border (platform/windows/host.cc's
-# FrameHit), as Windows' windows resize by theirs, and the card's margin under it moves the window:
-# design/tokens.toml's card-inset is 10.
+# FrameHit), as Windows' windows resize by theirs. The card starts where that ends, as
+# design/tokens.toml's card-inset is 8, so no margin over the card is left to move the window by
+# there.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
+else
+  # Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the
+  # screen's top, its quick-maximize zone, as it does under a hand.
+  drag 600 6 moves "the card's top margin"
 fi
-# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
-# top, its quick-maximize zone, as it does under a hand.
-drag 600 9 moves "the card's top margin"
-drag $((width - 8)) 300 moves "the card's right margin"
+# Down the margin, not across it: the press is 4 from the window's edge and a move starts 4 from
+# its press (DRAG_START), so 5 to the right would end past the edge, where the Mac's driver posts
+# nothing (#4076).
+send drag $((width - 4)) 300 $((width - 4)) 305
+count=$(grep -c '^browser: window move$' "$log" || true)
+[ "$count" -gt "$moves" ] || fail "a drag on the card's right margin didn't move the window"
+moves=$count
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
 # its windows tile or float, so there's no zoom to see.
@@ -920,7 +928,7 @@ expect '^browser: command bar shown$' "a double-click on the empty sidebar didn'
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
-# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 10 in from
+# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 8 in from
 # every side, as the window's buttons go. ⌘S and the sidebar button bring both back.
 # toggle <from> <hidden|shown> <what>: waits for the sidebar to finish moving after the command.
 toggle() {
@@ -1191,7 +1199,7 @@ reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
-# Settings › Tabs & Sidebar's edge switch off (#1636): the pointer moving along the edge of the
+# Settings › Tabs & Spaces' edge switch off (#1636): the pointer moving along the edge of the
 # window with its sidebar hidden brings nothing out, and ⌘S still shows it. On again after.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
@@ -1201,8 +1209,8 @@ send clickkey $(drawn "toolbar General")
 send clickkey $(drawn "toolbar About")
 settings_drew About
 ../tools/window-screenshot.sh "$pid" "$out/settings-about.png" || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-settings_drew "Tabs & Sidebar"
+send clickkey $(drawn "toolbar Tabs & Spaces")
+settings_drew "Tabs & Spaces"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
@@ -1223,17 +1231,17 @@ sleep 1
 send key s cmd
 toggle ui shown "⌘S with the edge off"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't show Tabs & Spaces again"
+settings_drew "Tabs & Spaces"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
-# Sidebar position is Appearance's (#4092).
-send clickkey $(drawn "toolbar Appearance")
-expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
-settings_drew Appearance
+# Sidebar position is Window's (#4092).
+send clickkey $(drawn "toolbar Window")
+expect '^browser: settings tab Window$' "a click on Window didn't show its section"
+settings_drew Window
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1252,8 +1260,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Appearance$' "Settings… didn't show Appearance again"
-settings_drew Appearance
+expect '^browser: settings shown Window$' "Settings… didn't show Window again"
+settings_drew Window
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"

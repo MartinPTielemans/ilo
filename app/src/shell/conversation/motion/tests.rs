@@ -44,17 +44,19 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         name: "Claude".into(),
         title: "Museums in Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
-        progress: "".into(),
         asked: "what's on at maat".into(),
         page: None,
         lines,
         tabs: Vec::new(),
         on: None,
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
+        folder: None,
     }
 }
 
@@ -101,8 +103,8 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     let answer = "Two shows.\n\nBoth close at six.".into();
     let new = Conversation {
         about: "Claude · Haiku · Done 13:31".into(),
-        progress: "".into(),
         stoppable: false,
+        live: Default::default(),
         ..conversation(vec![
             Line::You("what's on".into()),
             trace(false, 2),

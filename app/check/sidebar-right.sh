@@ -1,6 +1,6 @@
 # check.sh runs this at 660.
 # The sidebar on the window's right (#2375), on the Mac, where AppKit draws the window's buttons:
-# a click on Right's drawing in Settings › Tabs & Sidebar › Sidebar position (#2407) moves it to
+# a click on Right's drawing in Settings › Window › Sidebar position (#2407) moves it to
 # the right while the app runs, and AppKit's buttons follow at once, close 20 points from the
 # right edge as it is from the left, through a resize, the sidebar hidden and revealed from the
 # right edge, and full screen. From a second Space, one long swipe right stops on the first, never
@@ -91,11 +91,11 @@ side_buttons "at launch, left" left
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-# Sidebar position is Appearance's (#4092).
-if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Appearance" ]; then
-  send clickkey $(drawn "toolbar Appearance")
-  expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its tab"
-  settings_drew Appearance
+# Sidebar position is Window's (#4092).
+if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Window" ]; then
+  send clickkey $(drawn "toolbar Window")
+  expect '^browser: settings tab Window$' "a click on Window didn't show its tab"
+  settings_drew Window
 fi
 # Sidebar position is two drawings of the window (#2407): a click on Right's picks it. The picker
 # is at the pane's foot, under the card's edge where the screen is short, as on the Mac's check

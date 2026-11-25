@@ -1,7 +1,7 @@
 # check.sh runs this at 300.
 # VoiceOver reads ilo's own tree: the sidebar's Space name is a heading, and the tab shown a
 # selected tab named by its page's title in the Today tab group, after New Tab. ⌘T's bar has the
-# keyboard in a text field called "Search or Enter URL", lists its suggestions with the first
+# keyboard in a text field called "Search or enter address", lists its suggestions with the first
 # selected, and ↓ selects the next; ⇧F10 opens its field's menu on the first item. A tab's menu is
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
 # ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
@@ -129,7 +129,7 @@ else
     expect '^browser: command bar suggestions "docs"' "the command bar didn't suggest for \"docs\""
     bar="$out/access-bar.txt"
     read_tree '"Suggestions"' > "$bar"
-    grep -q " $field \"Search or Enter URL\" value=docs" "$bar" ||
+    grep -q " $field \"Search or enter address\" value=docs" "$bar" ||
       fail "the command bar's field isn't a text field with what was typed: $bar"
     rows=$(under '"Suggestions"' "$bar")
     [ "$(echo "$rows" | grep -c " $suggestion")" -ge 2 ] ||
@@ -252,9 +252,9 @@ else
       rule_read=read
     fi
     sync="$out/access-settings-sync.txt"
-    send clickkey $(drawn "toolbar Sync")
-    expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
-    settings_drew Sync
+    send clickkey $(drawn "toolbar Sync & Import")
+    expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
+    settings_drew 'Sync & Import'
     await '^browser: settings sync \(sign-in\|sign-out\|cancel\) at ' ||
       fail "Sync drew none of Sign In, Sign Out and Cancel"
     if grep -q '^browser: settings sync sign-in at ' "$log"; then
@@ -267,10 +267,8 @@ else
       grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
     fi
     import="$out/access-settings-import.txt"
-    send clickkey $(drawn "toolbar Import & Export")
-    expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-    settings_drew 'Import & Export'
-    expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+    # Import is on Sync & Import too, under Sync's rows, and draws its list as the page shows.
+    expect '^browser: import drawn list$' "Settings › Sync & Import didn't draw the import's list"
     read_tree '"Import a Bookmarks File…"' > "$import"
     for name in "Import a Bookmarks File…" "Import a Passwords File…"; do
       grep -q " $button \"$name\"" "$import" || fail "the import's $name isn't a button: $import"

@@ -51,6 +51,7 @@ actions!(
 
 use crate::settings_column::Section;
 use crate::settings_search;
+use crate::tokens::command_bar::CHIP_GAP as ADDED_GAP;
 use crate::tokens::command_bar::HEIGHT;
 use crate::tokens::command_bar::LINE;
 use crate::tokens::command_bar::LINE_INSET;
@@ -61,6 +62,7 @@ use crate::tokens::command_bar::LIST_X;
 use crate::tokens::command_bar::ROW_HEIGHT;
 pub use crate::tokens::command_bar::WIDTH;
 const ROWS_SHOWN: usize = 5;
+use crate::product;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 use crate::tokens::command_bar::FIELD_ABOVE;
 pub use crate::tokens::command_bar::FIELD_RADIUS;
@@ -79,7 +81,9 @@ use crate::tokens::command_bar::PLATE_RADIUS;
 pub use crate::tokens::command_bar::RADIUS;
 use crate::tokens::command_bar::ROW_END;
 use crate::tokens::command_bar::TITLE_X;
-use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X};
+use crate::tokens::command_bar::{
+    FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X, MARK,
+};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
@@ -105,8 +109,12 @@ use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
+use crate::tokens::command_bar::{
+    FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT, FOOT_TEXT,
+};
 use crate::tokens::text;
-pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
+/// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
+pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -140,9 +148,13 @@ fn hint_key(key: &str, off_the_mac: bool) -> String {
     shell::key_name(key, off_the_mac)
 }
 
-/// What the hint says ⇥ does where it would make what's typed a task: one word, as the composer's
-/// switch says it, whoever the ask runs on (#4140).
-const ASK_WORDS: &str = "Ask";
+/// The row that grows the bar into the composer with what's typed, second once something is
+/// typed, and the kind at its end (the words table's Z2b).
+const NEW_THREAD: &str = "New Thread";
+const THREAD_KIND: &str = "Thread";
+/// The composer's foot: what ⇥ does at its left, and what ↩ does at its right (Z8).
+const BACK_TO_SEARCH: &str = "Back to Search";
+const OPENS_AS: &str = "Opens as a thread in its own tab";
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -220,6 +232,8 @@ pub enum TaskRow {
     },
     /// No agent is ready: Settings › Agents.
     SetUp,
+    /// New Thread: grows the bar into the composer with what's typed.
+    Thread,
 }
 
 impl TaskRow {
@@ -231,13 +245,13 @@ impl TaskRow {
                 ..
             } => Some(format!("Limit resets {resets}").into()),
             TaskRow::Agent { model, .. } => model.clone(),
-            TaskRow::SetUp => None,
+            TaskRow::SetUp | TaskRow::Thread => None,
         }
     }
 }
 
 /// An agent ⌘T's ask lists (Agent task).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaskAgent {
     pub id: SharedString,
     pub name: SharedString,
@@ -245,6 +259,14 @@ pub struct TaskAgent {
     pub glyph: &'static str,
     /// The model it runs tasks on, by name, or None for its own default.
     pub model: Option<SharedString>,
+    /// That model by id, empty for its own default: Settings' Model row.
+    pub model_id: String,
+    /// Its Model menu's first row, `{assistant}'s default`, and which model that is where it said.
+    pub default_row: SharedString,
+    pub default_model: Option<SharedString>,
+    /// The models it offers after its default, as id and name: the one list Settings' Model row
+    /// is built from.
+    pub models: Vec<(String, String)>,
     /// When its plan's limit resets, if it's at it.
     pub resets: Option<SharedString>,
 }
@@ -300,6 +322,8 @@ enum Icon {
     Glyph(&'static str),
     /// A Space's mark, as Move to Space's menu shows it.
     Swatch(crate::menu::Swatch),
+    /// The product's mark, in the text's colour.
+    Mark,
     None,
 }
 
@@ -316,6 +340,11 @@ impl Suggestion {
                 ..
             })
         )
+    }
+
+    /// Whether it's New Thread, which grows the bar into the composer rather than going.
+    fn starts_thread(&self) -> bool {
+        self.task == Some(TaskRow::Thread)
     }
 
     /// A command's, a sum's or a setting's row, rather than a page's or a search's.
@@ -345,6 +374,7 @@ impl Suggestion {
             // Its CLI's terminal: an agent is named in words, never by its maker's logo or colour.
             Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
             Some(TaskRow::SetUp) => return Icon::Glyph("icons/settings.svg"),
+            Some(TaskRow::Thread) => return Icon::Mark,
             None => {}
         }
         if let Some((section, _)) = &self.setting {
@@ -406,7 +436,6 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
         Command::MoveSidebar => "icons/panel-right.svg",
-        Command::ToggleTopBar => "icons/panel-top.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
         Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
@@ -558,6 +587,10 @@ pub trait Host {
     /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
     /// the background, which `task_agents_changed` reports.
     fn asking(&self, shown: bool, cx: &mut App);
+    /// The page's switch went to Ask: as ⌘T's ask does as it first shows in a run, the browser
+    /// learns again which agents are ready, in the background, which `agents_changed` then gives
+    /// the page's bar.
+    fn look_for_agents(&self, cx: &mut App);
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
@@ -677,6 +710,29 @@ pub enum InPlaceKey {
     Flip,
     Escape,
     Run,
+    /// ⌫ at the start of Ask's field, with a chip after the mode: the last chip goes, as ⌘T's
+    /// ask takes its page's chip off first.
+    DropChip,
+    /// A click on the files' or the folder's chip in Ask's field, by its place in `given`.
+    Given(usize),
+}
+
+/// A chip after the pages in Ask's field at rest: the files attached to the next task, named by
+/// their count, or the folder granted to it, by its name.
+#[derive(Clone, PartialEq)]
+pub enum Given {
+    Files(SharedString),
+    Folder(SharedString),
+}
+
+impl std::fmt::Debug for Given {
+    /// Its kind alone: a folder's name is never logged (#3656), as `Names` keeps it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Files(_) => "Files",
+            Self::Folder(_) => "Folder",
+        })
+    }
 }
 
 impl gpui::EventEmitter<InPlaceKey> for CommandBar {}
@@ -728,6 +784,11 @@ pub struct CommandBar {
     ask: Option<Ask>,
     /// The rows' favicons by page, asked for as they first show. None until one comes.
     favicons: HashMap<String, Option<Arc<Image>>>,
+    /// At rest in Ask, the pages the page added for the task, each address with its title, which
+    /// the field draws as chips before the input, as an ask over a page draws its page.
+    added: Vec<(SharedString, SharedString)>,
+    /// And after them, the files and the folder it gave the task.
+    given: Vec<Given>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     /// The Spaces a Spaces menu lists.
@@ -916,11 +977,8 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        TextInput::new(PLACEHOLDER_TEXT, cx)
-            .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
-            .caret_color(palette::current(cx).accent)
-            .selection_color(palette::current(cx).selection())
-            .paste_and_go()
+        // Its colours are the bar's to give each time it draws.
+        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
@@ -965,6 +1023,8 @@ fn new_bar(
             task_agents: None,
             ask: None,
             favicons: HashMap::new(),
+            added: Vec::new(),
+            given: Vec::new(),
             tabs: Vec::new(),
             spaces: Vec::new(),
             shown: Vec::new(),
@@ -1338,6 +1398,29 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
             }
         })
         .ok();
+}
+
+/// A chip before the input: a mode's or a page's, with the page's favicon, in `fill`.
+fn mode_chip(
+    fill: impl Into<gpui::Fill>,
+    label: Hsla,
+    favicon: Option<AnyElement>,
+    name: SharedString,
+) -> gpui::Div {
+    div()
+        .flex_none()
+        .max_w(px(CHIP_MAX))
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(px(CHIP_RADIUS))
+        .bg(fill)
+        .text_color(label)
+        .text_size(px(text::BODY))
+        .children(favicon)
+        .child(div().min_w_0().truncate().child(name))
 }
 
 /// Where the centred panel's top is, down a browser window `height` tall.
@@ -2040,6 +2123,10 @@ impl CommandBar {
         if self.surface == Surface::InPlace {
             return cx.emit(InPlaceKey::Flip);
         }
+        // In the composer ⇥ goes back to the search, with what's typed.
+        if self.leave_ask(window, cx) {
+            return;
+        }
         let empty = self.input.read(cx).text().is_empty();
         if empty && self.site.is_none() && self.commands.is_none() && self.lists_commands() {
             return self.enter_commands("", window, cx);
@@ -2087,6 +2174,10 @@ impl CommandBar {
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).selection() != (0..0) {
             return;
+        }
+        if self.on_ask && !(self.added.is_empty() && self.given.is_empty()) {
+            cx.emit(InPlaceKey::DropChip);
+            return cx.stop_propagation();
         }
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
             log!("browser: command bar ask without its page");
@@ -2585,6 +2676,7 @@ impl CommandBar {
         if self.tipped.is_some() && tipped(&self.rows) != tipped(&rows) {
             self.end_tip(cx);
         }
+        let rows = self.with_thread_row(rows, cx);
         // The page selected stays selected as more suggestions come for what was asked, and when
         // it's taken out, the row that takes its place is, as in Chrome.
         let selected = self
@@ -2595,7 +2687,10 @@ impl CommandBar {
             Some(old) => rows
                 .iter()
                 .position(|row| {
-                    row.url == old.url && row.command == old.command && row.setting == old.setting
+                    row.url == old.url
+                        && row.command == old.command
+                        && row.setting == old.setting
+                        && row.task == old.task
                 })
                 .unwrap_or(self.selected.min(rows.len().saturating_sub(1))),
             None => 0,
@@ -2604,11 +2699,18 @@ impl CommandBar {
         self.suggested = text;
         let rows = self.rows.len();
         if self.surface == Surface::Window {
-            self.host.set_height(if self.over_field {
-                field_height(rows)
+            let foot = if self.ask.is_some() {
+                LINE + FOOT_HEIGHT
             } else {
-                height(rows)
-            });
+                0.
+            };
+            self.host.set_height(
+                foot + if self.over_field {
+                    field_height(rows)
+                } else {
+                    height(rows)
+                },
+            );
         }
         self.scroll.scroll_to_item(self.selected);
         for row in self.rows.iter().filter(|row| row.icon() == Icon::Favicon) {
@@ -2619,6 +2721,21 @@ impl CommandBar {
         }
         self.update_completion(window, cx);
         cx.notify();
+    }
+
+    /// `rows` with New Thread second, where ⇥ would grow the bar into the composer with what's
+    /// typed. The first row stays the page or search for it, which ↩ takes.
+    fn with_thread_row(&self, mut rows: Vec<Suggestion>, cx: &App) -> Vec<Suggestion> {
+        rows.retain(|row| !row.starts_thread());
+        if self.surface == Surface::Window && !rows.is_empty() && self.offers_ask(cx) {
+            let thread = Suggestion {
+                text: NEW_THREAD.into(),
+                task: Some(TaskRow::Thread),
+                ..Suggestion::default()
+            };
+            rows.insert(1, thread);
+        }
+        rows
     }
 
     /// The row ↩ takes, once there are rows for what's typed. A completion comes from the first
@@ -2643,7 +2760,7 @@ impl CommandBar {
         typed.trim().to_string()
     }
 
-    fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
+    fn go(&mut self, _: &Go, window: &mut Window, cx: &mut Context<Self>) {
         // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
         // take it before the bar: one that passes it on doesn't make the bar go with half a word.
         if !dismissal::submits([&self.input], cx) {
@@ -2676,6 +2793,10 @@ impl CommandBar {
                 self.host.focus_page();
             }
             return;
+        }
+        // New Thread grows the bar into the composer: ↩ on the first row never starts one.
+        if self.chosen().is_some_and(Suggestion::starts_thread) {
+            return self.enter_ask(window, cx);
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
@@ -3214,9 +3335,11 @@ impl CommandBar {
             log!("browser: command bar leaves site search as it opened");
             return self.as_opened(window, cx);
         }
-        if self.leave_commands(window, cx) || self.leave_ask(window, cx) {
+        if self.leave_commands(window, cx) {
             return;
         }
+        // The composer closes as the bar does, its words with it (P3).
+        self.end_ask(cx);
         match self.surface {
             Surface::Window => self.close(close),
             Surface::InPlace => cx.emit(InPlaceKey::Escape),
@@ -3229,7 +3352,8 @@ impl CommandBar {
             Icon::Favicon => self.favicon(&row.url, size, color),
             Icon::Glyph(path) => glyph(path, size, color),
             Icon::Swatch(swatch) => swatch.dot(behind).into_any_element(),
-            Icon::None => return None,
+            // Drawn in the text's colour where a row has it (`row`).
+            Icon::Mark | Icon::None => return None,
         })
     }
 
@@ -3275,6 +3399,10 @@ impl CommandBar {
         if !self.page.is_empty() && self.asked == self.page {
             return self.favicon(&self.page, size, color);
         }
+        // The composer's slot is the product's mark.
+        if self.ask.is_some() {
+            return product::mark(size, &palette::current(cx)).into_any_element();
+        }
         // A Spaces menu searches, whichever Space is selected.
         let row = self
             .chosen()
@@ -3314,28 +3442,10 @@ impl CommandBar {
             .filter(|row| self.site.is_none() && !row.keyword.is_empty());
         let (said, key) = match site {
             Some(row) => (format!("Search {}", row.site), "Tab".to_string()),
-            None if self.ask.is_some() => {
-                ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
-            }
-            None if self.offers_ask(cx) => {
-                (ASK_WORDS.to_string(), hint_key("tab", shell::OFF_THE_MAC))
-            }
             None => return None,
         };
         let palette = palette::current(cx);
-        // A key's chip, its rim saying it's a key and not a word: "Tab" by "Switch to Tab" reads
-        // as a tab otherwise.
-        let key = div()
-            .h(px(ICON_BOX))
-            .px(px(HINT_KEY_X))
-            .flex()
-            .items_center()
-            .rounded(px(CHIP_RADIUS))
-            .bg(palette.plate(CHIP))
-            .border_1()
-            .border_color(palette.plate(HINT_KEY_RIM))
-            .text_color(palette.on_overlay(TITLE))
-            .child(key);
+        let key = key_chip(key, &palette);
         Some(
             div()
                 .flex_none()
@@ -3347,6 +3457,44 @@ impl CommandBar {
                 .child(div().text_color(palette.on_overlay(DIM)).child(said))
                 .child(key),
         )
+    }
+
+    /// The composer's foot: ⇥ and Back to Search, which a click does too, then what ↩ does.
+    fn foot(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let palette = palette::current(cx);
+        let words = |said: &'static str| {
+            div()
+                .flex_none()
+                .text_size(px(FOOT_TEXT))
+                .line_height(px(FOOT_LINE))
+                .text_color(palette.on_overlay(DIM))
+                .child(said)
+        };
+        let back = div()
+            .id("back-to-search")
+            .when(self.a11y, |back| {
+                back.role(Role::Button).aria_label(BACK_TO_SEARCH)
+            })
+            .flex()
+            .items_center()
+            .gap(px(FOOT_GAP))
+            .on_click(cx.listener(|bar, _, window, cx| {
+                bar.leave_ask(window, cx);
+            }))
+            .child(key_chip(hint_key("tab", shell::OFF_THE_MAC), &palette))
+            .child(words(BACK_TO_SEARCH));
+        div()
+            .h(px(FOOT_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .pl(px(FOOT_LEFT))
+            .pr(px(FOOT_RIGHT))
+            .gap(px(FOOT_GAP))
+            .child(back)
+            .child(div().flex_1())
+            .child(words(OPENS_AS))
+            .child(key_chip(hint_key("enter", shell::OFF_THE_MAC), &palette))
     }
 
     /// What VoiceOver reads for a row: what it says, then what ↩ does on it when that isn't to
@@ -3379,6 +3527,7 @@ impl CommandBar {
 
     fn row(&self, index: usize, row: &Suggestion, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = index == self.selected;
+        let thread = row.starts_thread();
         let end = self.end(row);
         // The selected row keeps its accent under the pointer.
         let hovered = !selected && self.hovered == Some(index);
@@ -3417,7 +3566,11 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .when_some(tile, |icon, tile| icon.bg(tile))
-            .children(self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)));
+            .children(match row.icon() {
+                // The product's mark is the text's colour, selected or not, a little over an icon.
+                Icon::Mark => Some(product::mark(MARK, &palette).into_any_element()),
+                _ => self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)),
+            });
         // A key's chip: the accent's label with the accent on it on the selected row.
         let chip = |text: SharedString| {
             let (fill, text_color) = match selected {
@@ -3460,7 +3613,10 @@ impl CommandBar {
             // Arc keeps the plate under the pointer as the keys move the selection.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
             .on_hover(cx.listener(move |bar, hovered: &bool, _, cx| bar.hover(index, *hovered, cx)))
-            .on_click(cx.listener(move |bar, _, _, cx| bar.take(index, By::Pointer, cx)))
+            .on_click(cx.listener(move |bar, _, window, cx| match thread {
+                true => bar.enter_ask(window, cx),
+                false => bar.take(index, By::Pointer, cx),
+            }))
             .child(icon)
             .child(
                 div()
@@ -3525,6 +3681,19 @@ impl CommandBar {
                         .child(row.computer.clone()),
                 )
             })
+            // New Thread ends with its kind and ⇥, which grows the bar as a click does.
+            .when(thread, |line| {
+                let tint = if selected { label } else { dim };
+                line.child(div().flex_1())
+                    .child(
+                        div()
+                            .flex_none()
+                            .mr(px(HINT_KEY_GAP))
+                            .text_color(tint)
+                            .child(THREAD_KIND),
+                    )
+                    .child(chip(hint_key("tab", shell::OFF_THE_MAC).into()))
+            })
             // An agent's row ends with its model, or when its limit resets if it's at it.
             .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {
                 line.child(div().flex_1())
@@ -3556,6 +3725,23 @@ impl CommandBar {
 }
 
 /// The glyph at `path`, `size` square, in `color`.
+/// A key's chip, its rim saying it's a key and not a word: "Tab" by "Switch to Tab" reads as a tab
+/// otherwise.
+fn key_chip(key: String, palette: &palette::Palette) -> gpui::Div {
+    div()
+        .h(px(ICON_BOX))
+        .flex_none()
+        .px(px(HINT_KEY_X))
+        .flex()
+        .items_center()
+        .rounded(px(CHIP_RADIUS))
+        .bg(palette.plate(CHIP))
+        .border_1()
+        .border_color(palette.plate(HINT_KEY_RIM))
+        .text_color(palette.on_overlay(TITLE))
+        .child(key)
+}
+
 fn glyph(path: &'static str, size: f32, color: Hsla) -> AnyElement {
     svg()
         .path(path)
@@ -3624,22 +3810,49 @@ impl CommandBar {
             true => self.accent(&palette),
             false => (palette.plate(CHIP), palette.ink.into()),
         };
-        Some(
-            div()
-                .flex_none()
-                .max_w(px(CHIP_MAX))
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .px(px(6.))
-                .py(px(2.))
-                .rounded(px(CHIP_RADIUS))
-                .bg(fill)
-                .text_color(label)
-                .text_size(px(text::BODY))
-                .children(favicon)
-                .child(div().min_w_0().truncate().child(name)),
-        )
+        Some(mode_chip(fill, label, favicon, name))
+    }
+
+    /// At rest in Ask, a chip for each page added, as `mode_chip` draws an ask's page.
+    fn added_chips(&self, palette: &palette::Palette) -> Vec<gpui::Div> {
+        if !self.on_ask {
+            return Vec::new();
+        }
+        (self.added.iter())
+            .map(|(url, title)| {
+                let name = match title.is_empty() {
+                    true => SharedString::from(crate::agents::site(url)),
+                    false => title.clone(),
+                };
+                let favicon = self.favicon(url, CHIP_FAVICON, palette.ink.into());
+                mode_chip(palette.plate(CHIP), palette.ink.into(), Some(favicon), name)
+                    .flex_shrink(1.)
+                    .mr(px(ADDED_GAP))
+            })
+            .collect()
+    }
+
+    /// At rest in Ask, after the pages, the files' chip and the folder's, each opening its menu.
+    fn given_chips(&self, palette: &palette::Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.on_ask {
+            return Vec::new();
+        }
+        let ink: Hsla = palette.ink.into();
+        (self.given.iter().enumerate())
+            .map(|(at, given)| {
+                let (path, name) = match given {
+                    Given::Files(name) => ("icons/file.svg", name.clone()),
+                    Given::Folder(name) => ("icons/folder.svg", name.clone()),
+                };
+                let glyph = glyph(path, CHIP_FAVICON, ink);
+                mode_chip(palette.plate(CHIP), ink, Some(glyph), name)
+                    .flex_shrink(1.)
+                    .mr(px(ADDED_GAP))
+                    .id(("given", at))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(InPlaceKey::Given(at))))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.
@@ -3701,6 +3914,7 @@ impl CommandBar {
     ) {
         if std::mem::replace(&mut self.on_ask, on_ask) != on_ask {
             if on_ask {
+                self.host.look_for_agents(cx);
                 // Its site search and commands-only list are the search's.
                 self.site_left(cx);
                 self.commands = None;
@@ -3746,9 +3960,46 @@ impl CommandBar {
             .flex()
             .items_center()
             .children(self.mode_chip(&palette))
+            .children(self.added_chips(&palette))
+            .children(self.given_chips(&palette, cx))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
+    }
+
+    /// The pages the page added for the task, each address with its title, which Ask's field
+    /// draws as chips before the input. Each one's favicon is asked for as it's first added.
+    pub fn set_added(&mut self, added: Vec<(SharedString, SharedString)>, cx: &mut Context<Self>) {
+        for (url, _) in &added {
+            if !self.favicons.contains_key(url.as_ref()) {
+                self.favicons.insert(url.to_string(), None);
+                self.host.page_favicon(url);
+            }
+        }
+        if added != self.added {
+            self.added = added;
+            cx.notify();
+        }
+    }
+
+    /// The files and the folder the page gave the task, which Ask's field draws after its pages.
+    pub fn set_given(&mut self, given: Vec<Given>, cx: &mut Context<Self>) {
+        if given != self.given {
+            self.given = given;
+            cx.notify();
+        }
+    }
+
+    /// The files' and the folder's chips Ask's field draws, as `set_given` gave them.
+    #[cfg(test)]
+    pub fn given(&self) -> &[Given] {
+        &self.given
+    }
+
+    /// The pages Ask's field draws as chips, as `set_added` gave them.
+    #[cfg(test)]
+    pub fn added(&self) -> &[(SharedString, SharedString)] {
+        &self.added
     }
 
     /// The assistant the page's Ask runs on: the first ready one the browser last learned, read as
@@ -3762,6 +4013,28 @@ impl CommandBar {
         (agents.agents.iter())
             .find(|agent| agent.resets.is_none())
             .cloned()
+    }
+
+    /// What the browser knows of the agents changed, as after it learned which are ready: the
+    /// page's bar learns them again if it had, so Ask's assistant shows once one is found. Whether
+    /// they changed.
+    pub fn agents_changed(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.task_agents.is_none() {
+            return false;
+        }
+        let agents = self.learned_agents(cx);
+        if agents == self.task_agents {
+            return false;
+        }
+        self.task_agents = agents;
+        cx.notify();
+        true
+    }
+
+    /// What the page's field says while it's empty.
+    pub fn set_placeholder(&mut self, placeholder: SharedString, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     /// ↩ in the page's Ask: the assistant it runs on and what was typed, trimmed, and the field
@@ -3907,6 +4180,16 @@ impl Render for CommandBar {
                             )
                         })
                         .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
+                        .when(self.ask.is_some(), |bar| {
+                            bar.child(
+                                div()
+                                    .h(px(hairline))
+                                    .mx(px(LINE_INSET))
+                                    .flex_none()
+                                    .bg(palette.faint(LINE_COLOR)),
+                            )
+                            .child(self.foot(cx))
+                        })
                         .children(self.a11y.then(|| self.announcer()))
                         // The modal level's rim in the palette's ink; its outline and shadow are the
                         // host's, round the window, or on Windows round it in the window.

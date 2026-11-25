@@ -1,5 +1,5 @@
 # check.sh runs this at 380.
-# An MCP client reaches the browser through the bridge beside it once Settings › Agents is on and
+# An MCP client reaches the browser through the bridge beside it once Settings › Threads is on and
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
 # its first call that acts on a tab starts its card, one for each connection. Unnamed, the card
@@ -47,29 +47,28 @@
 # discards it. While a page's own alert is up in its tab, a call there answers at once and close_tab
 # closes the tab. A site's sign-in that the browser asks for hands its tab to the user, as hand_off
 # does, and shows over its page once they watch it; the call that met it waits until Hand Back, and
-# the password they type never reaches the agent, the log or the profile. Its download asks first, and Allow Once downloads the
-# file, which the answer names, and Never leaves none. Its upload asks the user for a file in a card
-# naming the site of the field's frame, a subdomain's, an object's or another site's, where Don't
-# Allow says no; Choose File… opens the system's dialog, which closes as its page closes its tab,
-# the agent hearing it closed, and opens none for a field whose frame went, the agent hearing it
-# left. Before any card, upload is refused for a folder's field, a button, a sandboxed frame's field
+# the password they type never reaches the agent, the log or the profile. Its download at Work on pages, where each
+# task starts, answers with the file, which the answer names. Its upload hands the field's step to
+# the user by the field's name, in a subdomain's frame, an object's or another site's, ilo opening
+# no dialog: Hand Back on ilo's line gives the tab back and Not Now leaves it the user's. Before any
+# of that, upload is refused for a folder's field, a button, a sandboxed frame's field
 # and a field in a document whose root element frames none, and a field hidden behind its label is
 # outlined as the label's text with no ref (#3656). It sends requests to its tab's site, carrying a session it
-# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't, a POST
+# never sees, and a change isn't part of Work on pages: ilo refuses it and it's never sent, a POST
 # whose override says GET too. A change without the agent's sentence of what it does is refused
-# before anything asks. The card shows the sentence, cut at a word, over what the browser knows from
-# the method, a delete's under a harmless sentence too, and the whole request opens beside it, where
-# Escape closes it with the question still unanswered and nothing sent (#3548). Settings › Agents
-# opens each request to the agent's sentence, where it went and what it sent, or that the denied one
-# wasn't, and names each by the method sent. A bank's site asks first, in a card whose Allow Once
-# opens it. Always Allow
-# opens it from then on, as Settings › Agents lists with its Revoke. A site the user adds to
-# Settings › Agents' Always ask first asks before the agent opens it and before its next call on a
+# for that first (#3548). Settings › Other apps opens each request to the agent's sentence, where it
+# went and what it sent, or that the refused one wasn't, and names each by the method sent. Paying,
+# an order, a message as the user and a bank's site are stopped at Work on pages too, nothing
+# asked (#4086): each is ilo's line in the conversation with Give Full access, which the keys
+# press, and at Full access each goes through, with no answer kept for Settings › Other apps to
+# list.
+# A site the user adds to Settings › Access' Off limits is refused whatever the task's access, an
+# open of it and each call on a
 # tab that came there by a link, which gives nothing of the page meanwhile (#3724). A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
-# the client's connection. Turning Settings › Agents off takes the socket away and drops a client
+# the client's connection. Turning Settings › Threads off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
 # restarted, its done, sent while its handoff waits on the user, ends its task once that's answered,
 # and its next task ends 3 s after it closed its last page (#3652). Its tools offer it nothing of
@@ -942,6 +941,24 @@ watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
+  # The rail holds more pictures than it shows once the task has many pages, and scrolls to the
+  # page that needs the user, so the one wanted may be past its top, where the first one drawn
+  # stood, or past the window's foot. The user's scroll over the rail brings it back.
+  rail_top=$(grep '^browser: task picture [0-9]* at ' "$log" | head -1 | cut -d' ' -f7)
+  tall=$(sed -n 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/p' "$log" | tail -1)
+  if [ -z "$tall" ]; then
+    send layout
+    tall=$(sed -n 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/p' "$log" | tail -1)
+  fi
+  if [ "$wy" -lt "$rail_top" ] || [ $((wy + wh / 2)) -ge "$tall" ]; then
+    places=$(grep -c "^browser: task picture $1 at " "$log" || true)
+    send scroll $((wx + ww / 2)) $((rail_top + wh / 2)) $((wy - rail_top)) 1
+    await_more "^browser: task picture $1 at " "$places" ||
+      fail "a scroll over the rail didn't bring tab $1's picture back into sight"
+    read -r wx wy ww wh <<PICTURE
+$(picture "$1")
+PICTURE
+  fi
   # Counted, as a page watched before has its lines already.
   watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
   placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
@@ -965,6 +982,45 @@ hand_back_pressed() {
 }
 # Focus Agent Question's key (#3869).
 if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
+# Presses the button named $1 on ilo's newest line that offers any, with the keys, as the user does
+# (#3955): Focus Agent Question's key rings the line's first button, Tab moves along its buttons as
+# they stand, and ↩ presses once the app says a key on the ringed one counts. Sets ilo to the line.
+ilo_press() {
+  case "$1" in
+    "Take Over") ilo_button=TakeOver ;;
+    "Give Full access") ilo_button='Raise(Full)' ;;
+    "Any site") ilo_button=AnySite ;;
+    "Hand Back") ilo_button=HandBack ;;
+    "Show Page") ilo_button=ShowPage ;;
+    "Not Now") ilo_button=NotNow ;;
+    *) fail "the check knows no button of ilo's lines named $1" ;;
+  esac
+  ons=$(grep -c '^browser: ilo keys on ' "$log" || true)
+  readies=$(grep -c '^browser: ilo keys ready on ' "$log" || true)
+  send key $card_key
+  await_more '^browser: ilo keys on ' "$ons" ||
+    fail "Focus Agent Question's key didn't give ilo's line the keyboard, to press $1"
+  ilo=$(grep '^browser: ilo keys on ' "$log" | tail -1 | cut -d' ' -f5)
+  read -r ix iy <<AT
+$(sed -n "s/^browser: ilo line $ilo $1 at \\([0-9-]*\\) \\([0-9-]*\\) .*/\\1 \\2/p" "$log" | tail -1)
+AT
+  [ -n "$ix" ] || fail "ilo's line $ilo, which Focus Agent Question's key went to, drew no $1"
+  # A Tab for each place a button stands before it on its row, each where it was last drawn.
+  tabs=$(sed -n "s/^browser: ilo line $ilo \\(.*\\) at \\([0-9-]*\\) \\([0-9-]*\\) [0-9]* [0-9]*\$/\\2 \\3 \\1/p" "$log" |
+    awk -v x="$ix" -v y="$iy" '{ name = $3; for (i = 4; i <= NF; i++) name = name " " $i; at[name] = $1; row[name] = $2 }
+      END { for (name in at) if (row[name] == y && at[name] + 0 < x + 0) before[at[name]] = 1; n = 0; for (each in before) n++; print n }')
+  await_more '^browser: ilo keys ready on ' "$readies" ||
+    fail "the app never said a key on ilo's line would press"
+  while [ "$tabs" -gt 0 ]; do
+    readies=$(grep -c '^browser: ilo keys ready on ' "$log" || true)
+    send key tab
+    await_more '^browser: ilo keys ready on ' "$readies" ||
+      fail "the app never said a key would press after Tab on ilo's line"
+    tabs=$((tabs - 1))
+  done
+  send key return
+  expect "^browser: ilo key pressed $ilo_button\$" "↩ on ilo's line didn't press $1"
+}
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
 # go into the field.
@@ -986,54 +1042,24 @@ if [ -n "$yours_step" ]; then
       fail "the user's field lost the keyboard while the agent worked"
     send type ok
     expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
-    # One of the app's own windows taking the keyboard from the agent's card (#3869): with the
-    # card's keys come from the user's field, ⌘T's command bar ends them where they are, giving
-    # nobody the keyboard under it, and keeps it, a letter typed reaching the bar and nothing in
-    # the field. Escape gives it back where ⌘T found it, the card, which has no ring: ↩ answers
-    # nothing and a letter reaches no field. Then the key and Escape on the card dismiss the change
-    # unsent.
-    asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
-    request request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}" >&4
-    await_more '^browser: agent mcp-client asks ' "$asks" || fail "the agent's change didn't ask"
-    q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
-    send key $card_key
-    expect "^browser: agent card keys on $q " "Focus Agent Question's key from the user's field didn't give the card the keyboard"
-    ons=$(grep -c "^browser: agent card keys on $q " "$log" || true)
-    send key t cmd
-    bar_step=$step
-    expect '^browser: command bar shown$' "⌘T from the agent's card didn't open the command bar"
-    send type x
-    expect '^browser: command bar suggestions "x" in ' "x typed with the command bar open over the card didn't reach the bar"
-    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
-      fail "x typed with the command bar open over the card reached the user's field"
-    send key escape
-    expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over the card"
-    ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: agent card keys (back|left) by ' | head -1)
-    case "$ended" in
-      "") fail "the command bar taking the keyboard didn't end the card's keys" ;;
-      "browser: agent card keys back by "*)
-        fail "the card's keys gave the keyboard back with the command bar over them: $ended" ;;
+    # What a task's access doesn't cover is refused at once in ilo's own words, with nothing asked
+    # of the user (#4086): a change sent to a site without its page is Full access's, so at Work on
+    # pages the agent is told so and nothing reaches the site. The user's keyboard stays in their
+    # field through it, and Focus Agent Question's key takes it nowhere with no conversation shown.
+    stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
+    unsent=$(call request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}")
+    case "$unsent" in
+      "error: ilo stopped this: "*"It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*"the same call will go through.") ;;
+      *) fail "a change at Work on pages answered: $unsent" ;;
     esac
-    send key return
-    send type y
-    # The key after them, once handled, says they were.
+    await_more '^browser: agent mcp-client stopped Request at Work on pages: localhost$' "$stops" ||
+      fail "the change refused at Work on pages isn't logged as ilo's stop"
+    grep -q '^PUT ' "$out/site.log" && fail "the change refused at Work on pages reached the site"
     send key $card_key
-    await_more "^browser: agent card keys on $q " "$ons" ||
-      fail "Focus Agent Question's key didn't give the card the keyboard after the bar"
-    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
-      fail "a letter typed with or after the command bar over the card reached the user's field"
-    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
-      fail "the card answered after the command bar opened over it, with no ring"
-    expect "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
-    send key escape
-    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
-    await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the change"
-    unsent=$(next_answer) || fail "the browser didn't answer the dismissed change"
-    case "$(printf '%s\n' "$unsent" | answered "the dismissed change")" in
-      "error: The user said no"*) ;;
-      *) fail "the dismissed change answered: $unsent" ;;
-    esac
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: ilo keys on ' &&
+      fail "Focus Agent Question's key took the keyboard with no conversation shown"
+    [ "$key $focus" = "$yours_key $yours_focus" ] ||
+      fail "the refused change, or Focus Agent Question's key after it, took the keyboard from $yours_key, on $yours_focus, to $key, on $focus"
   fi
 else
   echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
@@ -1049,17 +1075,101 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
-  # Its one page so far opens on Talk, and the header's Pages shows its grid, each page a picture
-  # to watch it from (#1080).
-  await_log "^browser: task $session opens on talk\$" "the client's card with one page didn't open on Talk"
-  await_log '^browser: task pages at ' "the conversation's header drew no Pages"
-  read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-  send click $((gx + gw / 2)) $((gy + gh / 2))
-  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
+  # Its one page so far stands in the rail beside the conversation, a tile to watch it from.
   picture "$agent_tab" > /dev/null
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
+  # The change ilo refused stands in the conversation as ilo's line, with Take Over and the step
+  # up that would allow it, each where the app says it drew it.
+  await_log '^browser: ilo line [0-9]* Take Over at ' "the refused change's line drew no Take Over"
+  await_log '^browser: ilo line [0-9]* Give Full access at ' \
+    "the refused change's line drew no Give Full access"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-stopped.png" || fail "no window to capture"
+  # Focus Agent Question's key (#3955), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the line's
+  # first button the keyboard and presses nothing, leaving the conversation's area as it is; ↩
+  # straight after it is ignored, and the key again gives the keyboard back.
+  closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+  # ↩ goes in the driver's queue with the key, as it handles each command once the last is done:
+  # waiting for the key's done line first took Windows' shell past the protection.
+  post key $card_key
+  chord=$step
+  send key return
+  expect '^browser: ilo keys on [0-9]* TakeOver$' \
+    "Focus Agent Question's key didn't give the refused change's line the keyboard on Take Over" "$chord"
+  # The keyboard reaches the ringed button with the next frame, so a ↩ that beats the frame goes
+  # where the keyboard was and one after it is ignored by the line: either way nothing is pressed.
+  sed -n "/^browser: drive $chord: /,\$p" "$log" | grep -q '^browser: ilo key pressed ' &&
+    fail "↩ straight after Focus Agent Question's key pressed the line's button"
+  send key $card_key
+  expect '^browser: ilo keys back by key$' "Focus Agent Question's key again didn't give the keyboard back"
+  [ "$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)" = "$closed" ] ||
+    fail "Focus Agent Question's key closed the conversation's area"
+  # One of the app's own windows taking the keyboard from the line's keys (#3869): ⌘T's command
+  # bar ends them where they are, giving nobody the keyboard under it, and keeps it, a letter typed
+  # reaching the bar. Escape closes the bar and the line has no ring: ↩ presses nothing. Then the
+  # key rings the line again, and Escape gives the keyboard back, nothing pressed.
+  ons=$(grep -c '^browser: ilo keys on ' "$log" || true)
+  send key $card_key
+  await_more '^browser: ilo keys on ' "$ons" ||
+    fail "Focus Agent Question's key didn't give the line the keyboard a second time"
+  ons=$(grep -c '^browser: ilo keys on ' "$log" || true)
+  send key t cmd
+  bar_step=$step
+  expect '^browser: command bar shown$' "⌘T from ilo's line didn't open the command bar"
+  send type x
+  expect '^browser: command bar suggestions "x" in ' "x typed with the command bar open over ilo's line didn't reach the bar"
+  send key escape
+  expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over ilo's line"
+  ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: ilo keys (back|left) by ' | head -1)
+  case "$ended" in
+    "") fail "the command bar taking the keyboard didn't end the line's keys" ;;
+    "browser: ilo keys back by "*)
+      fail "the line's keys gave the keyboard back with the command bar over them: $ended" ;;
+  esac
+  send key return
+  send type y
+  # The key after them, once handled, says they were.
+  readies=$(grep -c '^browser: ilo keys ready on ' "$log" || true)
+  send key $card_key
+  await_more '^browser: ilo keys on ' "$ons" ||
+    fail "Focus Agent Question's key didn't give the line the keyboard after the bar"
+  sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+    fail "a letter typed with or after the command bar over ilo's line reached the user's field"
+  await_more '^browser: ilo keys ready on ' "$readies" ||
+    fail "the app never said a key on ilo's line would press"
+  send key escape
+  expect '^browser: ilo keys back by escape$' "Escape on ilo's line didn't give the keyboard back"
+  sed -n "/^browser: drive $chord: /,\$p" "$log" |
+    grep -E '^browser: ilo key pressed |^browser: agent mcp-client taken over |^browser: task [^ ]* access ' &&
+    fail "ilo's line was pressed by a key that came too soon, after the command bar or by Escape"
+  # ↩ once the app says a key counts presses the ringed button: Take Over makes the tab the
+  # user's, by the keys alone.
+  taken=$(grep -c "^browser: agent mcp-client taken over in $agent_tab\$" "$log" || true)
+  ilo_press "Take Over"
+  await_more "^browser: agent mcp-client taken over in $agent_tab\$" "$taken" ||
+    fail "Take Over on the refused change's line didn't make tab $agent_tab the user's"
+  # Watched, the page they took over has the keyboard, and Focus Agent Question's key is the
+  # page's: it keys no line under the page and leaves the page where it is. ⌘↩ hands it back.
+  watch "$agent_tab"
+  send key $card_key
+  held_step=$step
+  handed=$(grep -c "^browser: agent mcp-client handed back $agent_tab\$" "$log" || true)
+  send key return cmd
+  await_more "^browser: agent mcp-client handed back $agent_tab\$" "$handed" ||
+    fail "⌘↩ on the page the user took over didn't hand tab $agent_tab back"
+  sed -n "/^browser: drive $held_step: /,\$p" "$log" |
+    grep -E "^browser: ilo keys on |^browser: focus key leaves task page |^browser: task page $agent_tab back\$" &&
+    fail "Focus Agent Question's key on a page the user holds keyed a line or left the page"
+  # Handed back it's the agent's, watched with the keyboard the window's: there the key goes back
+  # to the conversation, as the strip's Back does, and rings no button, none having been in sight.
+  thumbs=$(grep -c '^browser: task page in its thumbnail$' "$log" || true)
+  send key $card_key
+  back_step=$step
+  expect "^browser: focus key leaves task page $agent_tab\$" \
+    "Focus Agent Question's key over the agent's page watched didn't go back to the conversation" "$back_step"
+  await_more '^browser: task page in its thumbnail$' "$thumbs" ||
+    fail "the page Focus Agent Question's key left didn't go back into its picture"
+  sed -n "/^browser: drive $back_step: /,\$p" "$log" | grep '^browser: ilo keys on ' &&
+    fail "Focus Agent Question's key over a page watched keyed a line"
   watch "$agent_tab"
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
   # The agent's navigate in its tab the user watches leaves the keyboard where the user has it, here
@@ -1080,80 +1190,27 @@ CHIP
   call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/agent.html\"}" > /dev/null
   await_more "$loaded" "$loads" || fail "the agent's navigate back to its page didn't load it"
   # A download the agent's page starts after its call answered is the agent's in the tab the
-  # conversation watches too (#3655): it asks, lands with Allow Once and is logged as the agent's.
-  # Its script starts it 2 s and 7 s after the page loads, on a host of its own.
+  # conversation watches too (#3655): downloads are part of Work on pages, so it lands with nothing
+  # asked and is logged as the agent's. Its script starts it 2 s and 7 s after the page loads, on a
+  # host of its own.
   printf '%s' '<!doctype html><title>Later</title><script>
 const q = new URLSearchParams(location.search);
 onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get("ms")));
 </script>' > "$out/site/later.html"
   later_logged='^browser: agent logged mcp-client download later\.localhost$'
-  # Focus Agent Question's key (#3869), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the card
-  # the keyboard and answers nothing, leaving the conversation's area as it is; ↩ straight after it
-  # is ignored, the key again gives the keyboard back, and ↩ once the app says the protection's
-  # 500 ms have passed presses Allow Once, which the activity log records as a click's answer.
-  # On a third card Escape answers as its × does, allowing nothing.
-  answer_by_keys() {
-    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
-    # ↩ goes in the driver's queue with the key, as it handles each command once the last is
-    # done: waiting for the key's done line first took Windows' shell past the protection.
-    post key $card_key
-    chord=$step
-    send key return
-    expect "^browser: agent card keys on $1 Allow Once\$" \
-      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once" "$chord"
-    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored" "$chord"
-    send key $card_key
-    expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
-    ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
-      fail "Focus Agent Question's key, or ↩ straight after it, answered the later download: $(grep "^browser: agent mcp-client answered $1 " "$log")"
-    [ "$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)" = "$closed" ] ||
-      fail "Focus Agent Question's key closed the conversation's area"
-    send key $card_key
-    expect "^browser: agent card keys on $1 Allow Once\$" "Focus Agent Question's key didn't give the card the keyboard a second time"
-    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
-    send key return
-    expect "^browser: agent card keys back by card\$" "↩ after the protection didn't answer, giving the keyboard back"
-  }
-  answer_by_escape() {
-    send key $card_key
-    expect "^browser: agent card keys on $1 Allow Once\$" \
-      "Focus Agent Question's key didn't give the third later download's card the keyboard"
-    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
-    send key escape
-    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
-  }
-  for ms in 2000 7000 3000; do
+  for ms in 2000 7000; do
     stem=later-${ms%000}
     printf 'later\n' > "$out/site/$stem.docx"
-    later_asks="^browser: agent mcp-client asks [0-9]*: download $stem\.docx from later\.localhost\$"
-    asks=$(grep -c "$later_asks" "$log" || true)
     logged=$(grep -c "$later_logged" "$log" || true)
     went=$(call navigate "{\"tab\":$agent_tab,\"url\":\"later.localhost:$port/later.html?ms=$ms&file=$stem.docx\"}")
     case "$went" in "error: "*) fail "the agent's navigate to the later download's page answered: $went" ;; esac
-    await_more "$later_asks" "$asks" ||
-      fail "a download the watched tab's page started ${ms%000} s after its navigate answered didn't ask"
-    q=$(grep "$later_asks" "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the later download's question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    case $ms in
-      2000) send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36)) ;;
-      7000) answer_by_keys "$q" ;;
-      *)
-        answer_by_escape "$q"
-        await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the later download's card"
-        continue
-        ;;
-    esac
-    await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the later download"
     await_more "$later_logged" "$logged" ||
-      fail "the watched tab's later download isn't in the activity log as the agent's"
+      fail "a download the watched tab's page started ${ms%000} s after its navigate answered isn't in the activity log as the agent's"
     for _ in $(seq 50); do
       [ -f "$out/downloads/$stem.docx" ] && break
       sleep 0.1
     done
-    [ -f "$out/downloads/$stem.docx" ] || fail "the watched tab's later download, allowed, isn't in the check's folder"
+    [ -f "$out/downloads/$stem.docx" ] || fail "the watched tab's later download isn't in the check's folder"
   done
   call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/agent.html\"}" > /dev/null
 fi
@@ -1581,17 +1638,17 @@ object.data = "missing";
 object.append(document.querySelector("input"));
 document.replaceChild(object, document.documentElement);
 </script>' > "$out/site/upload-object-root.html"
-# The fields the core showed in tab $1 for a card, as its "file field <id> shown in <tab>" says.
+# The fields the core showed in tab $1, as its "file field <id> shown in <tab>" says.
 shown_fields() { grep -c "browser: file field [0-9]* shown in $1\$" "$log" || true; }
 # Calls upload for the ref $2 in tab $1, whose field is $3, and sets refused to its answer, failing
-# if a card asked or the core showed the field for one.
+# if the step was handed to the user, as an upload's is, or the core showed the field.
 upload_refused() {
-  asked=$(grep -c "^browser: agent mcp-client asks [0-9]* upload $1\$" "$log" || true)
+  handed=$(grep -c "^browser: agent mcp-client hands off $1: Choose " "$log" || true)
   shown=$(shown_fields "$1")
   refused=$(call upload "{\"tab\":$1,\"ref\":\"$2\"}")
-  [ "$(grep -c "^browser: agent mcp-client asks [0-9]* upload $1\$" "$log" || true)" = "$asked" ] ||
-    fail "upload for $3 asked the user, as: $refused"
-  [ "$(shown_fields "$1")" = "$shown" ] || fail "the core showed $3 for a card, though upload answered: $refused"
+  [ "$(grep -c "^browser: agent mcp-client hands off $1: Choose " "$log" || true)" = "$handed" ] ||
+    fail "upload for $3 handed the tab to the user, as: $refused"
+  [ "$(shown_fields "$1")" = "$shown" ] || fail "the core showed $3, though upload answered: $refused"
 }
 # Opens the page $1 in a tab of the agent's and sets upload_tab to it and opened to the answer.
 upload_page() {
@@ -2517,7 +2574,7 @@ addEventListener("message", (event) => {
 
   # It sends HTTP requests from its tab to the tab's own site, with the tab's session but never
   # seeing it: reads go at once, their answers without the cookie the site sets or the token in its
-  # body, and a change asks first, every time, in a card whose Allow sends it and Deny doesn't.
+  # body, and a change isn't part of Work on pages: ilo refuses it and it's never sent.
   sent=$(call request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\"},{\"method\":\"GET\",\"path\":\"/api/me\"}]}")
   # The frame's password field, which the outline has, puts a line before the answers: the page
   # asks for a password, so the site may have answered as to someone signed out (#3661).
@@ -2530,179 +2587,112 @@ addEventListener("message", (event) => {
     "the agent's request didn't carry the tab's session" "^GET chromium localhost:$port/api/me "
   await_log "^browser: agent activity mcp-client $frames_tab request\$" \
     "the request didn't reach the activity log"
-  changes='^browser: agent mcp-client asks [0-9]*: make \(a change\|[0-9]* changes\) on localhost$'
+  stops='^browser: agent mcp-client stopped Request at Work on pages: localhost$'
+  unsent="^browser: agent logged mcp-client request localhost refused: Sending changes to a site without its page isn't part of Work on pages\\.\$"
   posted="^POST localhost:$port/api/items cookie .*api=s3cret$port[; ]"
-  # A change without the agent's sentence of what it does is refused before anything asks, and
-  # nothing is sent (#3548).
-  before=$(grep -c "$changes" "$log" || true)
+  # A change without the agent's sentence of what it does is refused for that, before the task's
+  # access comes into it, and nothing is sent (#3548).
+  before=$(grep -c "$stops" "$log" || true)
   unsaid=$(call request "{\"tab\":$frames_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Milk\"}}]}")
   case "$unsaid" in
     'error: Request 1 (POST /api/items) may change something, so it needs a `what`'*'Nothing was sent.') ;;
     *) fail "a change without a sentence answered: $unsaid" ;;
   esac
-  [ "$(grep -c "$changes" "$log" || true)" = "$before" ] || fail "a change without a sentence asked"
-  # Longer than the card shows, so the card cuts it at a word.
+  [ "$(grep -c "$stops" "$log" || true)" = "$before" ] ||
+    fail "a change without a sentence was stopped for the task's access, not for its sentence"
   milk='{"method":"POST","path":"/api/items","body":{"title":"Milk"},"what":"Add Milk to the shared shopping list under Dairy, so whoever shops next picks it up; it changes nothing else on the list and sends nothing else."}'
-  milk_card='“Add Milk to the shared shopping list under Dairy, so whoever shops next picks it up; it changes nothing else on the…” Sends data to localhost'
-  # Asks for the changes $3 and answers $1 with a click on the card's last row, Deny at its left
-  # and Allow at its right, once the card shows the first change as $4, the site having had $2 of
-  # them. The card's capture is $out/$5.png, agent-request.png if not given, and with $6 the whole
-  # request opens first, its capture $out/$6.png.
-  change() {
-    before=$(grep -c "$changes" "$log" || true)
-    # The run's first question, whose place showed no card before it.
-    if [ "$1" = Once ]; then
-      ../tools/window-screenshot.sh "$pid" "$out/agent-request-before.png" || fail "no window to capture"
-    fi
-    request request "{\"tab\":$frames_tab,\"requests\":[$3]}" >&4
-    await_more "$changes" "$before" || fail "a change didn't ask first"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
-    shows=$(grep "^browser: agent question $q change 1: " "$log" | tail -1 | cut -d' ' -f7-)
-    [ "$shows" = "$4" ] || fail "the change's card showed \"$shows\", not \"$4\""
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    ../tools/window-screenshot.sh "$pid" "$out/${5:-agent-request}.png" || fail "no window to capture"
-    if [ "$1" = Once ]; then
-      follows_log "$out/agent-request-before.png" "$out/${5:-agent-request}.png" "$qx $qy $qw $qh" \
-        "the change's question $q"
-    fi
-    if [ -n "$6" ]; then
-      # The whole request opens beside the card with the keyboard, every change the card asks for
-      # in it, and Escape closes it and puts the keyboard back on the card, the question unanswered
-      # and nothing sent.
-      await_log "^browser: agent request see $q at " "the card drew no See the whole request"
-      read -r sx sy sw sh <<SEE
-$(grep "^browser: agent request see $q at " "$log" | tail -1 | cut -d' ' -f7-)
-SEE
-      asked=$(grep -c "^browser: agent question $q change " "$log")
-      hosted=$(grep -c '^browser: agent request shown$' "$log" || true)
-      send click $((sx + 20)) $((sy + sh / 2))
-      await_log "^browser: agent request $q shown, $asked changes\$" "See the whole request didn't show it"
-      # The host's line, once its window is on screen, so the capture has it.
-      await_more '^browser: agent request shown$' "$hosted" || fail "the whole request's window never showed"
-      ../tools/window-screenshot.sh "$pid" "$out/$6.png" || fail "no window to capture"
-      returned=$(grep -c '^browser: agent request keyboard back on see$' "$log" || true)
-      send key escape
-      await_log "^browser: agent request $q closed (Escape)\$" "Escape didn't close the whole request"
-      await_more '^browser: agent request keyboard back on see$' "$returned" ||
-        fail "Escape didn't put the keyboard back on See the whole request"
-      grep -q "^browser: agent mcp-client answered $q " "$log" && fail "Escape answered the change's question"
-    fi
-    [ "$(grep -c "$posted" "$out/site.log")" = "$2" ] || fail "the change went before the user answered"
-    case "$1" in Once) x=$((qw * 3 / 4)) ;; Dismiss) x=$((qw / 4)) ;; esac
-    send click $((qx + x)) $((qy + qh - 26))
-    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the change's question"
-    changed=$(next_answer) || fail "the browser didn't answer the change"
-    changed=$(printf '%s\n' "$changed" | answered "the change")
+  # Sends the changes $1, $2 of them, from the frames' tab. Sending a change without its page isn't
+  # part of Work on pages, so ilo refuses them at once: the call's answer says so and that only the
+  # user changes a task's access, the stop is logged, the activity log has each change as not sent,
+  # and nothing reaches the site. Sets changed to the answer.
+  change_stopped() {
+    before=$(grep -c "$stops" "$log" || true)
+    noted=$(grep -c "$unsent" "$log" || true)
+    reached=$(grep -c '^\(POST\|PUT\|PATCH\|DELETE\) ' "$out/site.log" || true)
+    case "$2" in 1) what="a change" ;; *) what="$2 changes" ;; esac
+    changed=$(call request "{\"tab\":$frames_tab,\"requests\":[$1]}")
+    [ "$changed" = "error: ilo stopped this: make $what on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through." ] ||
+      fail "$what at Work on pages answered: $changed"
+    await_more "$stops" "$before" || fail "$what refused at Work on pages wasn't logged as ilo's stop"
+    await_more "$unsent" "$((noted + $2 - 1))" ||
+      fail "the activity log didn't list each of $what as not sent: $(grep '^browser: agent logged mcp-client request ' "$log" | tail -2)"
+    [ "$(grep -c '^\(POST\|PUT\|PATCH\|DELETE\) ' "$out/site.log" || true)" = "$reached" ] ||
+      fail "$what refused at Work on pages reached the site: $(tail -1 "$out/site.log")"
   }
-  change Once 0 "$milk" "$milk_card" agent-request agent-request-whole
-  # The note on a page asking for a password goes before every answer from it (#3661).
-  case "$changed" in
-    "Tab $frames_tab's page asks for a password"*'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
-    *) fail "the allowed change answered: $changed" ;;
-  esac
-  # Awaited, not read once: a read just after the answer missed a line the site had logged (#3314).
-  # The session may hold other cookies of localhost's, such as profiles', before the body.
-  served "$posted.*body {\"title\":\"Milk\"}\$" \
-    "the allowed change didn't reach the site with the tab's session" "^POST "
-  change Dismiss 1 "$milk" "$milk_card"
-  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
-    fail "the denied change answered: $changed"
-  [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
-  # A delete reads as one from its method, whatever its sentence says.
+  change_stopped "$milk" 1
+  # A delete is a change as a POST is, whatever its sentence says.
   draft='{"method":"DELETE","path":"/api/items/7","what":"Tidy up the old draft so your list is cleaner."}'
-  change Dismiss 1 "$draft" '“Tidy up the old draft so your list is cleaner.” Deletes something on localhost'
-  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
-    fail "the denied delete answered: $changed"
-  grep -q '^DELETE ' "$out/site.log" && fail "the denied delete reached the site"
-  # Settings › Agents lists each request by what it did, and a press opens it to where it went and
-  # what it sent, or, for the change the user said no to, that it wasn't sent (#2326). Each row's
-  # name holds its entry's id, which counts up, and its method.
+  change_stopped "$draft" 1
+  # Settings › Other apps lists each request by what it did, and a press opens it to where it went
+  # and what it sent, or, for a change ilo refused, that it wasn't sent (#2326). Each row's name
+  # holds its entry's id, which counts up, and its method.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
   fi
-  settings_drew Agents
-  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Agents drew no change"
-  posts=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu)
-  allowed_id=$(printf '%s\n' "$posts" | head -1)
-  denied_id=$(printf '%s\n' "$posts" | tail -1)
+  settings_drew 'Other apps'
+  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Other apps drew no change"
+  refused_id=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu | tail -1)
   read_id=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -nu | tail -1)
-  [ -n "$read_id" ] && [ "$allowed_id" != "$denied_id" ] ||
-    fail "Settings › Agents didn't list the read and both changes: $(grep '^browser: settings request ' "$log")"
+  [ -n "$read_id" ] && [ -n "$refused_id" ] ||
+    fail "Settings › Other apps didn't list the read and the refused change: $(grep '^browser: settings request ' "$log")"
   # Opens the request $1, sent with the method $2, and checks its line says it shows $3. The oldest
   # first, the lowest, so a row opened doesn't move the next one. The name is whole, as in_sight
   # finds a scrolled row by its fixed text.
   open_request() {
-    in_sight "request $1 $2" || fail "Settings › Agents didn't draw request $1"
+    in_sight "request $1 $2" || fail "Settings › Other apps didn't draw request $1"
     send clickkey $at
     expect "^browser: settings request $1 opened " "a click on request $1 didn't open it"
     shown=$(sed -n "s/^browser: settings request $1 opened //p" "$log" | tail -1)
     [ "$shown" = "$3" ] || fail "request $1 opened to show \"$shown\", not \"$3\""
   }
   open_request "$read_id" GET "to http://localhost:$port/api/me, sent: "
-  open_request "$allowed_id" POST "to http://localhost:$port/api/items, sent: title: Milk"
+  open_request "$refused_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
   # The agent's sentence, whole and first, as its words; the row's head stays its method and path.
-  said=$(sed -n "s/^browser: settings request $allowed_id said: //p" "$log" | tail -1)
+  said=$(sed -n "s/^browser: settings request $refused_id said: //p" "$log" | tail -1)
   [ "$said" = "$(printf '%s' "$milk" | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["what"])')" ] ||
-    fail "request $allowed_id opened to the agent's sentence \"$said\""
-  open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
+    fail "request $refused_id opened to the agent's sentence \"$said\""
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
-  # Back to General, for the visits below to click Agents.
+  # Back to General, for the visits below to click Other apps.
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  # A POST whose override header says GET asks too, as a server may take either, its card saying it
-  # changes something, the stronger of the two, Deny sends it nowhere, and Settings › Agents names
-  # it by the method sent.
+  # A POST whose override header says GET is a change too, as a server may take either: it goes
+  # nowhere, and Settings › Other apps names it by the method sent.
   oats='{"method":"POST","path":"/api/items","headers":{"X-HTTP-Method-Override":"GET"},"body":{"title":"Oats"},"what":"Add Oats to the list."}'
-  change Dismiss 1 "$oats" '“Add Oats to the list.” Changes something on localhost'
-  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
-    fail "the denied overridden POST answered: $changed"
-  grep -q 'Oats' "$out/site.log" && fail "the denied overridden POST reached the site"
+  change_stopped "$oats" 1
+  grep -q 'Oats' "$out/site.log" && fail "the refused overridden POST reached the site"
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
   fi
-  settings_drew Agents
+  settings_drew 'Other apps'
   # A frame logs its rows after its drew line, the newest first, so the newest is in once one is.
-  expect '^browser: settings request [0-9]* [A-Z]* at ' "Settings › Agents drew no request after the denied overridden POST"
+  expect '^browser: settings request [0-9]* [A-Z]* at ' "Settings › Other apps drew no request after the refused overridden POST"
   newest=$(sed -n 's/^browser: settings request \([0-9]*\) \([A-Z]*\) at .*/\1 \2/p' "$log" | sort -n | tail -1)
-  [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$denied_id" ] ||
-    fail "Settings › Agents didn't name the overridden POST by the method sent: its newest request is $newest"
+  [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$refused_id" ] ||
+    fail "Settings › Other apps didn't name the overridden POST by the method sent: its newest request is $newest"
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  # A long address and body show whole in the whole request, the address breaking at its slashes
-  # and a character that wouldn't show written out, and Deny sends it nowhere.
+  # A long address and body go nowhere either.
   picnic='{"method":"POST","path":"/api/lists/summer-2026/picnics/north-gate/saturday-noon/items/blankets-table-and-cooler/plates-cups-knife-and-bin-bags?draft=1&notify=everyone-on-the-list&note=meet-at-the-north-gate-of-the-park-at-noon","body":{"title":"Picnic","file":"menu\u202etxt.exe","notes":"Meet at the north gate of the park at noon on Saturday. Bring two blankets, the folding table and the blue cooler. Sandwiches: cheese and tomato, egg and cress, and a few plain ones for the children. Fruit: apples, grapes and a melon to cut there. Drinks: lemonade, water and a flask of tea. If it rains we move to the bandstand, and if the bandstand is taken we go to the café by the pond instead. Whoever arrives first saves the spot under the big oak by the lake, with a blanket and a sign.","items":["blankets","table","cooler","plates","cups","knife","bin bags"]},"what":"Save the picnic plan to your list."}'
-  change Dismiss 1 "$picnic" '“Save the picnic plan to your list.” Sends data to localhost' \
-    agent-request-long agent-request-whole-long
-  [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
-    fail "the denied long change answered: $changed"
-  grep -q 'Picnic' "$out/site.log" && fail "the denied long change reached the site"
-  # Several changes in one call ask once, each its own row marked as the agent's words, the whole
-  # request shows them all, and Deny sends none of them.
+  change_stopped "$picnic" 1
+  grep -q 'Picnic' "$out/site.log" && fail "the refused long change reached the site"
+  # Several changes in one call are refused together, each listed, and none of them is sent.
   bread='{"method":"POST","path":"/api/items","body":{"title":"Bread"},"what":"Add Bread to the list."}'
   crumbs='{"method":"DELETE","path":"/api/items/9","what":"Remove the old crumbs entry."}'
-  change Dismiss 1 "$bread,$crumbs" '“Add Bread to the list.” Sends data to localhost' \
-    agent-request-several agent-request-whole-several
-  grep -q "^browser: agent question $q change 2: “Remove the old crumbs entry\.” Deletes something on localhost\$" "$log" ||
-    fail "the card didn't show the second change: $(grep "^browser: agent question $q change " "$log")"
-  [ "$changed" = "error: The user said no: you can't make 2 changes on localhost. Don't try again." ] ||
-    fail "the denied changes answered: $changed"
-  grep -q 'Bread' "$out/site.log" && fail "a denied change of several reached the site"
-  grep -q '^DELETE ' "$out/site.log" && fail "a denied delete of several reached the site"
+  change_stopped "$bread,$crumbs" 2
+  grep -q 'Bread' "$out/site.log" && fail "a refused change of several reached the site"
+  grep -q '^DELETE ' "$out/site.log" && fail "a refused delete reached the site"
 
   # The agent's picture of a page withholds what its outline does of a field, by one rule: a field
   # holding what the agent typed and is unchanged shows it, as does the page's own value, a
@@ -3116,32 +3106,43 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
     *) fail "run_steps answered: $ran" ;;
   esac
 
-  # hand_off waits, in a card in the window, until the user hands the tab back.
-  cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
+  # hand_off waits until the user hands the tab back, and nothing is asked in a card (#4086): the
+  # step is ilo's line in the conversation, with Hand Back and Not Now, and its page's tile says
+  # Needs you. While the user watches another of the task's pages, that one stays where it is.
+  back="^browser: task page $agent_tab back\$"
+  thumbnail='^browser: task page in its thumbnail$'
+  opened_watched="^browser: task page $opened_tab watched\$"
+  opens=$(grep -c "$opened_watched" "$log" || true)
+  placed=$(grep -c "^browser: task page $opened_tab in place\$" "$log" || true)
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in for the check\"}" >&4
   await_log "^browser: agent mcp-client hands off $opened_tab: Sign in for the check\$" \
     "hand_off didn't hand the tab to the user"
-  await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the handoff wasn't drawn"
-  q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
-  read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-  ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
-  # Back in the conversation's Pages, the page handed to the user says so under its picture, with
-  # why (#1080). Then its page is watched again, as before.
-  back="^browser: task page $agent_tab back\$"
-  thumbnail='^browser: task page in its thumbnail$'
+  send state
+  [ "$(grep -c "$opened_watched" "$log" || true)" = "$opens" ] ||
+    fail "the page handed to the user took the place of the page they watched"
+  # Back in the conversation, the page handed to the user says so under its picture (#1080), and
+  # opens by itself, as the user has no other of the task's pages there now.
   before=$(grep -c "$back" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
+  await_log "^browser: task picture $opened_tab says Needs you\$" \
+    "the handed page's tile didn't say it needs the user: $(grep "^browser: task picture $opened_tab says" "$log" | tail -1)"
+  await_more "$opened_watched" "$opens" || fail "the page handed to the user didn't open by itself"
+  await_more "^browser: task page $opened_tab in place\$" "$placed" ||
+    fail "the page handed to the user didn't come to rest in place"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
+  # The keyboard stayed the window's as ilo opened the page, so Escape steps back from it, and the
+  # step's line stands in the conversation with its buttons.
+  before=$(grep -c "^browser: task page $opened_tab back\$" "$log" || true)
   shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
-  await_more "$back" "$before" || fail "Escape didn't step back to Pages"
-  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
-  await_log "^browser: task picture $opened_tab says Needs you · Sign in for the check\$" \
-    "the handed page's picture didn't say it needs the user: $(grep "^browser: task picture $opened_tab says" "$log" | tail -1)"
+  await_more "^browser: task page $opened_tab back\$" "$before" ||
+    fail "Escape didn't step back from the page ilo opened for the user's step"
+  await_more "$thumbnail" "$shrunk" || fail "the handed page didn't go back into its picture"
+  await_log '^browser: ilo line [0-9]* Not Now at ' "the step's line drew no Not Now"
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages-needs-you.png" || fail "no window to capture"
-  watch "$agent_tab"
-  # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
-  send click $((qx + 30)) $((qy + qh - 26))
+  # Hand Back, the line's first button, by the keys.
+  ilo_press "Hand Back"
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
   handed=$(next_answer) || fail "the browser didn't answer hand_off"
   handed=$(printf '%s\n' "$handed" | answered hand_off)
@@ -3149,22 +3150,23 @@ CARD
     "The user handed tab $opened_tab back."*) ;;
     *) fail "hand_off answered: $handed" ;;
   esac
+  watch "$agent_tab"
 
   # A sign-in the browser asks for, which no agent may answer, hands the agent's tab to the user as
-  # hand_off does, its card naming the host that asks, and the call that met it waits (#3662). The
-  # dialog shows over the agent's page once the user watches it, and not before. Esc cancels it and
-  # the tab stays the user's, as Hand Back after the next ask, signed in, says; the call then
-  # answers. The agent's calls on the tab wait behind it meanwhile, as behind hand_off's. The
-  # throwaway password typed reaches no answer and no log line.
+  # hand_off does, its line's step the user's, and the call that met it waits (#3662). The page
+  # opens by itself as its tile turns to Needs you, and the dialog shows over it once it's watched,
+  # never before. Esc cancels it and the tab stays the user's, as ⌘↩ after the next ask, signed in,
+  # hands it back; the call then answers. The agent's calls on the tab wait behind it meanwhile, as
+  # behind hand_off's. The throwaway password typed reaches no answer and no log line.
   sign_in_from="^browser: task page $agent_tab back\$"
   before=$(grep -c "$sign_in_from" "$log" || true)
   shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
   await_more "$sign_in_from" "$before" || fail "Escape didn't step back to Pages for the sign-in"
   await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture for the sign-in"
-  cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
   settled=$(grep -c '^browser: dialog settled$' "$log" || true)
-  # A host as long as a sign-in's can be, whose line the card wraps.
+  opens=$(grep -c "$opened_watched" "$log" || true)
+  # A host as long as a sign-in's can be.
   sign_in_host=sign-in.accounts.a-long-example-host-for-the-card.localhost
   asked="^browser: page $opened_tab dialog SignIn Sign in\$"
   request navigate "{\"tab\":$opened_tab,\"url\":\"$sign_in_host:$port/sign-in?agent\"}" >&4
@@ -3174,16 +3176,12 @@ CARD
   sign_in_why="$(printf '%s' "$sign_in_host" | sed 's/\./\\./g') asks you to sign in\. Hand the tab back when you.*re done\."
   await_log "^browser: agent mcp-client hands off $opened_tab: $sign_in_why\$" \
     "the sign-in didn't hand the agent's tab to the user: $(grep "^browser: agent mcp-client hands off $opened_tab" "$log" | tail -1)"
-  await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the sign-in's handoff wasn't drawn"
-  q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
-  read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-  ../tools/window-screenshot.sh "$pid" "$out/agent-sign-in-card.png" || fail "no window to capture"
-  [ "$(grep -c '^browser: dialog settled$' "$log" || true)" = "$settled" ] ||
-    fail "the agent's sign-in showed while the user wasn't watching its page"
-  watch "$opened_tab"
+  await_more "$opened_watched" "$opens" || fail "the page that asks the user to sign in didn't open by itself"
   await_more '^browser: dialog settled$' "$settled" || fail "the agent's sign-in didn't show over its page watched"
+  # The dialog's line comes after the page's: it never showed while the page wasn't watched.
+  [ "$(grep -n '^browser: dialog settled$' "$log" | tail -1 | cut -d: -f1)" -gt \
+    "$(grep -n "$opened_watched" "$log" | tail -1 | cut -d: -f1)" ] ||
+    fail "the agent's sign-in showed while the user wasn't watching its page"
   ../tools/window-screenshot.sh "$pid" "$out/agent-sign-in-dialog.png" || fail "no window to capture"
   send key escape
   await_log "^browser: page $opened_tab dialog answered cancel\$" "Esc didn't cancel the agent's sign-in"
@@ -3201,8 +3199,10 @@ CARD
   await_log "^browser: title $opened_tab signed in ada\$" "the site didn't take the user's sign-in"
   [ "$(grep -c "^browser: agent mcp-client hands off $opened_tab: $sign_in_why\$" "$log")" = 1 ] ||
     fail "the second sign-in, under the hold, handed the tab off again"
-  send click $((qx + 30)) $((qy + qh - 26))
-  await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the signed-in tab back"
+  handed=$(grep -c "^browser: agent mcp-client handed back $opened_tab\$" "$log" || true)
+  send key return cmd
+  await_more "^browser: agent mcp-client handed back $opened_tab\$" "$handed" ||
+    fail "⌘↩ didn't hand the signed-in tab back"
   waited=$(next_answer) || fail "the browser didn't answer the navigate that met the sign-in"
   waited=$(printf '%s\n' "$waited" | answered navigate)
   case "$waited" in
@@ -3256,28 +3256,30 @@ STRIP
   esac
   await_log "^browser: agent activity mcp-client $opened_tab scroll refused: .*hand it back" \
     "the refusal didn't reach the activity log"
-  # The agent asks for the tab in a card, and Keep, at the left, keeps it the user's.
-  cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
+  # The agent asks for the tab back, which is ilo's line in the conversation (#4086), and Not Now
+  # there keeps it the user's. The page they took has the keyboard, and Escape steps back from it.
   request ask_for_tab "{\"tab\":$opened_tab,\"reason\":\"To finish the check\"}" >&4
   await_log "^browser: agent mcp-client asks for $opened_tab back: To finish the check\$" \
     "ask_for_tab didn't ask"
-  await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the agent's ask wasn't drawn"
-  q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
-  read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
+  before=$(grep -c "^browser: task page $opened_tab back\$" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "^browser: task page $opened_tab back\$" "$before" ||
+    fail "Escape didn't step back from the page the user took over"
+  await_more "$thumbnail" "$shrunk" || fail "the page the user took over didn't go back into its picture"
   ../tools/window-screenshot.sh "$pid" "$out/agent-ask-for-tab.png" || fail "no window to capture"
-  send click $((qx + 30)) $((qy + qh - 26))
-  await_log "^browser: agent mcp-client answered $q Never\$" "Keep didn't answer"
+  ilo_press "Not Now"
   kept=$(next_answer) || fail "the browser didn't answer ask_for_tab"
   kept=$(printf '%s\n' "$kept" | answered ask_for_tab)
   case "$kept" in
     "error: The user keeps tab $opened_tab."*) ;;
     *) fail "ask_for_tab answered: $kept" ;;
   esac
-  # ⌘↩ again hands it back.
+  # Watched again, ⌘↩ hands it back.
+  watch "$opened_tab"
+  handed=$(grep -c "^browser: agent mcp-client handed back $opened_tab\$" "$log" || true)
   send key return cmd
-  await_log "^browser: agent mcp-client handed back $opened_tab\$" "⌘↩ didn't hand the tab back"
+  await_more "^browser: agent mcp-client handed back $opened_tab\$" "$handed" || fail "⌘↩ didn't hand the tab back"
   scrolled=$(call scroll "{\"tab\":$opened_tab}")
   case "$scrolled" in "Scrolled down."*) ;; *) fail "after Hand Back, scroll answered: $scrolled" ;; esac
 
@@ -3407,100 +3409,73 @@ CARD
   send key return cmd
   await_more "$handed" "$before" || fail "⌘↩ didn't hand the filled tab back"
 
-  # open_tab at a file downloads it once the user says yes on the card (#1446), and answers with
-  # its name and size, its empty tab closed. Never cancels the next, which leaves no file.
+  # open_tab at a file downloads it at Work on pages, with nothing asked of the user (#1446,
+  # #4086), and answers with its name and size, its empty tab closed.
   rm -f "$out/downloads/report"*
   printf 'report\n' > "$out/site/report.docx"
-  file="{\"url\":\"files.localhost:$port/report.docx\"}"
-  wants='^browser: agent mcp-client asks [0-9]*: download report\.docx from files\.localhost$'
-  # Opens the file, which asks, and answers $1 with a click, as answer_bank below does. Sets
-  # downloaded to the answer.
-  answer_download() {
-    before=$(grep -c "$wants" "$log" || true)
-    request open_tab "$file" >&4
-    await_more "$wants" "$before" || fail "an agent's download didn't ask first"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the download's question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    # Allow Once and Never share the row above Always Allow, Never at the left. A button is 28
-    # high and 8 from the next row.
-    case "$1" in
-      Once) x=$((qw * 3 / 4)) y=$((qh - 26 - 36)) ;;
-      Never) x=$((qw / 4)) y=$((qh - 26 - 36)) ;;
-      Always) x=$((qw / 2)) y=$((qh - 26)) ;;
-    esac
-    send click $((qx + x)) $((qy + y))
-    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
-    downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
-    downloaded=$(printf '%s\n' "$downloaded" | answered "the download's open_tab")
-  }
-  answer_download Once
+  stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
+  downloaded=$(call open_tab "{\"url\":\"files.localhost:$port/report.docx\"}")
   [ "$downloaded" = "Downloaded report.docx (7 bytes) to downloads. Agents can't open files; ask the user if you need it." ] ||
-    fail "the allowed download answered: $downloaded"
-  [ -f "$out/downloads/report.docx" ] || fail "the allowed download isn't in the check's folder"
+    fail "the download at Work on pages answered: $downloaded"
+  [ -f "$out/downloads/report.docx" ] || fail "the download isn't in the check's folder"
   file_tab=$(grep '^browser: agent download [0-9]* [0-9]* [0-9]* state ' "$log" | tail -1 |
     cut -d' ' -f5)
   listed=$(call list_tabs '{}')
   printf '%s\n' "$listed" | grep -q "^. $file_tab  " && fail "the download's empty tab stayed open"
-  answer_download Never
-  [ "$downloaded" = "error: The user said no: you can't download report.docx from files.localhost. Don't try again." ] ||
-    fail "the refused download answered: $downloaded"
-  # Chrome deletes what a cancelled download wrote on its own sequence, a moment after.
-  for _ in $(seq 50); do
-    [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
-    sleep 0.1
-  done
-  [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
-    fail "the refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
-  # As does one a tab the agent's tab opened starts (#2660): the user's Never for the site just
-  # above refuses it without asking again.
+  [ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
+    fail "ilo stopped a download at Work on pages: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+  # As does one a tab the agent's tab opened starts (#2660): the tab is the agent's from when it's
+  # made, so its download lands at Work on pages too, in the activity log as the agent's.
   if [ -n "$opened_said" ]; then
-    printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/report.docx\" target=\"_blank\">Report</a>" \
+    rm -f "$out/downloads/opened"*
+    printf 'opened\n' > "$out/site/opened.docx"
+    printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/opened.docx\" target=\"_blank\">Report</a>" \
       > "$out/site/files.html"
     opened=$(call open_tab "{\"url\":\"localhost:$port/files.html\"}")
     files=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
     ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-    never='^browser: agent logged mcp-client download files\.localhost refused: You said never on this site\.$'
-    before=$(grep -c "$never" "$log" || true)
+    [ -n "$files" ] && [ -n "$ref" ] || fail "the page with a link to a file didn't open with its link: $opened"
+    landed='^browser: agent logged mcp-client download files\.localhost$'
+    before=$(grep -c "$landed" "$log" || true)
     call click "{\"tab\":$files,\"ref\":\"$ref\"}" > /dev/null
-    await_more "$never" "$before" ||
-      fail "a download a tab the agent's tab opened started wasn't refused by the user's Never for its site; the last download lines:
+    await_more "$landed" "$before" ||
+      fail "a download a tab the agent's tab opened started isn't in the activity log as the agent's; the last download lines:
 $(grep 'browser: agent .*download' "$log" | tail -3)"
     for _ in $(seq 50); do
-      [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
+      [ -f "$out/downloads/opened.docx" ] && break
       sleep 0.1
     done
-    [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
-      fail "the opened tab's refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+    [ -f "$out/downloads/opened.docx" ] ||
+      fail "the opened tab's download isn't in the check's folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
+    [ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
+      fail "ilo stopped a download a tab the agent's tab opened started: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
     # Left open: the agent is at work in it, which the session's end below ends.
   fi
-  # A site the user always allows downloads from, whose page's download link the agent clicks with
-  # another app in front below (#3183). A .docx, which the check's server sends as a file, where a
-  # .txt would open as a page. The link opens a tab, which the download closes at once, as many
-  # sites' do: before #3104 that tab's window show asked the compositor to bring ilo forward.
+  # A site whose page's download link the agent clicks with another app in front below (#3183). A
+  # .docx, which the check's server sends as a file, where a .txt would open as a page. The link
+  # opens a tab, which the download closes at once, as many sites' do: before #3104 that tab's
+  # window show asked the compositor to bring ilo forward.
   printf 'notes\n' > "$out/site/notes.docx"
   printf '%s' '<!doctype html><title>Notes</title><a href="notes.docx" target=_blank>Notes</a>' \
     > "$out/site/notes.html"
-  file="{\"url\":\"saved.localhost:$port/notes.docx\"}"
-  wants='^browser: agent mcp-client asks [0-9]*: download notes\.docx from saved\.localhost$'
-  answer_download Always
+  downloaded=$(call open_tab "{\"url\":\"saved.localhost:$port/notes.docx\"}")
   case "$downloaded" in
     "Downloaded notes.docx "*) ;;
-    *) fail "the download answered with Always Allow: $downloaded" ;;
+    *) fail "the second site's download answered: $downloaded" ;;
   esac
   saved_page=$(call open_tab "{\"url\":\"saved.localhost:$port/notes.html\"}")
   notes_tab=$(printf '%s\n' "$saved_page" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
   [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
-    fail "the agent's tab of the site it may download from didn't open with its link: $saved_page"
+    fail "the agent's tab of the site it downloads from didn't open with its link: $saved_page"
 
-  # A key press that activates a control asks as a click on it does, on a site that sends no
-  # messages (GHSA-hqw3-jp9p-3rhj): typing in a card's field with submit, Enter after typing in it,
-  # Space and Enter on its Pay now button, which Tab brought the keyboard to, and Enter on the box
-  # to save the card, which submits its form too, each ask, and Allow Once pays. Whether the
-  # outline says the button has the keyboard is the question's to say.
+  # Paying, placing an order, sending a message as the user and a bank's site aren't part of Work
+  # on pages, where every task starts: ilo refuses each at once, asking nothing (#4086), the agent
+  # hears that only the user changes a task's access, the stop is logged, and nothing is done on the
+  # page. Each refusal is ilo's line in the conversation, with the step up that would allow it, and
+  # once the user gives Full access there, by the keys, the same steps go through. $level says
+  # which the task has.
+  level="Work on pages"
   printf '%s' "<title>Checkout</title>
 <form onsubmit=\"event.preventDefault(); document.title = 'Paid'\">
 <input aria-label=\"Card number\"><button>Pay now</button>
@@ -3520,76 +3495,84 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     [ -n "$shop_tab" ] && [ -n "$card_ref" ] && [ -n "$save_ref" ] ||
       fail "the checkout didn't open with its fields: $opened"
   }
-  # Calls $1 with $2, which asks first with the words matching $3, and answers Allow with a click,
-  # capturing the card as $4.png. Sets paid to the answer. A payment's card asks every time, so it
-  # has a request's two buttons, Deny and Allow, on its last row.
-  pay_asks() {
-    before=$(grep -c "$3" "$log" || true)
-    request "$1" "$2" >&4
-    await_more "$3" "$before" ||
-      fail "$1 $2 didn't ask first: $(grep '^browser: agent mcp-client asks' "$log" | tail -1); it answered: $(next_answer 5 | answered "$1")"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the key press's question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    ../tools/window-screenshot.sh "$pid" "$out/$4.png" || fail "no window to capture"
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
-    await_log "^browser: agent mcp-client answered $q Once\$" \
-      "Allow didn't answer the key press's question"
-    paid=$(next_answer) || fail "the browser didn't answer $1 $2"
-    paid=$(printf '%s\n' "$paid" | answered "$1")
-    case "$paid" in
-      *"Tab $shop_tab: Paid"*) ;;
-      *) fail "$1 $2, allowed once, didn't pay: $paid" ;;
+  # Calls the tool $1 with $2 on the site $3's tab $4, an act ilo names by the words matching $5
+  # and refuses at Work on pages as $6, the row of the levels' table it's under; done, the page is
+  # titled $7. At Work on pages the answer says ilo stopped it and why, the stop is logged by those
+  # words and the page isn't titled so; at Full access the answer has the page titled so. Sets did
+  # to the answer.
+  does_at() {
+    stop="^browser: agent mcp-client stopped $6 at Work on pages: $5\$"
+    before=$(grep -c "$stop" "$log" || true)
+    did=$(call "$1" "$2")
+    case "$level" in
+      "Work on pages")
+        case "$did" in
+          "error: ilo stopped this: "*" on $3"*". It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through.") ;;
+          *) fail "$1 $2 at Work on pages answered: $did" ;;
+        esac
+        await_more "$stop" "$before" ||
+          fail "$1 $2 at Work on pages wasn't logged as ilo's stop by its words: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+        grep -q "^browser: title $4 $7\$" "$log" && fail "$1 $2, which ilo stopped at Work on pages, was done all the same"
+        ;;
+      *)
+        case "$did" in
+          *"Tab $4: $7"*) ;;
+          *) fail "$1 $2 at $level didn't do it: $did" ;;
+        esac
+        [ "$(grep -c "$stop" "$log" || true)" = "$before" ] || fail "$1 $2 was stopped at $level"
+        ;;
     esac
+    return 0
   }
-  shop=' on shop\.localhost$'
-  pays="press Enter, which may click “Pay now” on shop\\.localhost, after typing “4242” into “Card number”\$"
-  checkout
-  pay_asks type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\",\"submit\":true}" \
-    "^browser: agent mcp-client asks [0-9]*: $pays" agent-pays-typed
-  checkout
-  typed=$(call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}")
-  case "$typed" in
-    "Typed into “Card number”."*) ;;
-    *) fail "typing in the card's field answered: $typed" ;;
-  esac
-  pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
-    "^browser: agent mcp-client asks [0-9]*: press Enter, which may click “Pay now”$shop" \
-    agent-pays-enter
-  checkout
-  call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
-  call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
-  space='press Space\( to click\|, which may click\) “Pay now”'
-  pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Space\"}" \
-    "^browser: agent mcp-client asks [0-9]*: $space$shop" agent-pays-space
-  case "$(grep '^browser: agent mcp-client asks' "$log" | tail -1)" in
-    *"press Space to click "*) space_said="the button it had the keyboard on" ;;
-    *) space_said="the page's paying button, its outline not saying what had the keyboard" ;;
-  esac
-  checkout
-  call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
-  call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
-  button='press Enter\( to click\|, which may click\) “Pay now”'
-  pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
-    "^browser: agent mcp-client asks [0-9]*: $button$shop" agent-pays-enter-button
-  checkout
-  call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
-  saved=$(call click "{\"tab\":$shop_tab,\"ref\":\"$save_ref\"}")
-  case "$saved" in
-    *"Tab $shop_tab: Paid"*) fail "a click on the box to save the card paid: $saved" ;;
-  esac
-  pay_asks press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" \
-    "^browser: agent mcp-client asks [0-9]*: press Enter, which may click “Pay now”$shop" \
-    agent-pays-checkbox
-  # The last checkout stays open: the tab an agent last acted in shows it at work until it goes.
+  # A key press that activates a control is judged as a click on it is, on a site that sends no
+  # messages (GHSA-hqw3-jp9p-3rhj): typing in a card's field with submit, Enter after typing in it,
+  # Space and Enter on its Pay now button, which Tab brought the keyboard to, and Enter on the box
+  # to save the card, which submits its form too, are each a payment. Whether the outline says the
+  # button has the keyboard is the stop's to say.
+  pay_steps() {
+    checkout
+    does_at type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\",\"submit\":true}" shop.localhost "$shop_tab" \
+      'press Enter, which may click “Pay now”, after typing “4242” into “Card number”' Order Paid
+    checkout
+    typed=$(call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}")
+    case "$typed" in
+      "Typed into “Card number”."*) ;;
+      *) fail "typing in the card's field answered: $typed" ;;
+    esac
+    does_at press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" shop.localhost "$shop_tab" \
+      'press Enter, which may click “Pay now”' Order Paid
+    checkout
+    call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
+    call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
+    does_at press_key "{\"tab\":$shop_tab,\"key\":\"Space\"}" shop.localhost "$shop_tab" \
+      'press Space\( to click\|, which may click\) “Pay now”' Order Paid
+    if [ "$level" = "Work on pages" ]; then
+      case "$(grep '^browser: agent mcp-client stopped Order ' "$log" | tail -1)" in
+        *"press Space to click "*) space_said="the button it had the keyboard on" ;;
+        *) space_said="the page's paying button, its outline not saying what had the keyboard" ;;
+      esac
+    fi
+    checkout
+    call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
+    call press_key "{\"tab\":$shop_tab,\"key\":\"Tab\"}" > /dev/null
+    does_at press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" shop.localhost "$shop_tab" \
+      'press Enter\( to click\|, which may click\) “Pay now”' Order Paid
+    checkout
+    call type "{\"tab\":$shop_tab,\"ref\":\"$card_ref\",\"text\":\"4242\"}" > /dev/null
+    saved=$(call click "{\"tab\":$shop_tab,\"ref\":\"$save_ref\"}")
+    case "$saved" in
+      *"Tab $shop_tab: Paid"*) fail "a click on the box to save the card paid: $saved" ;;
+    esac
+    does_at press_key "{\"tab\":$shop_tab,\"key\":\"Enter\"}" shop.localhost "$shop_tab" \
+      'press Enter, which may click “Pay now”' Order Paid
+    # The last checkout stays open: the tab an agent last acted in shows it at work until it goes.
+  }
 
-  # A Send asks on a site that isn't one of the messaging sites once the page holds a message for
-  # it, and an order asks in another language (GHSA-6qxg-jpw9-5jrr): a forum's Comment with its
-  # form's multi-line field empty asks nothing, and with the agent's text in it asks; a chat's
-  # Send in no form asks beside a rich-text editor holding text; a Danish shop's Betal asks.
-  # Allow does each.
+  # A Send is a message on a site that isn't one of the messaging sites once the page holds a
+  # message for it, and an order is one in another language (GHSA-6qxg-jpw9-5jrr): a forum's
+  # Comment with its form's multi-line field empty is a press as any other and posts at Work on
+  # pages, and with the agent's text in it is a message; a chat's Send in no form is one beside a
+  # rich-text editor holding text; a Danish shop's Betal is an order.
   printf '%s' "<title>Forum</title>
 <form onsubmit=\"event.preventDefault(); document.title = document.title + ' posted'\">
 <textarea aria-label=\"Body\"></textarea><button>Comment</button></form>" > "$out/site/forum.html"
@@ -3608,200 +3591,161 @@ CARD
     said_ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $4 \"$3\" \[\(e[0-9]*\)\].*/\1/p" | head -1)
     [ -n "$said_tab" ] && [ -n "$said_ref" ] || fail "$1 didn't open with its $4 “$3”: $opened"
   }
-  # Clicks $1 in said_tab, which asks with the words $2 and is allowed once with a click on the
-  # card, captured as $3.png, and then answers with the page titled $4. With $5, spends, it's a
-  # payment's card, Deny and Allow on its last row; without, Allow Once is the right of the row
-  # above Always Allow.
-  said_asks() {
-    before=$(grep -c "$2" "$log" || true)
-    request click "{\"tab\":$said_tab,\"ref\":\"$1\"}" >&4
-    await_more "$2" "$before" ||
-      fail "the click on $1 in tab $said_tab didn't ask first: $(grep '^browser: agent mcp-client asks' "$log" | tail -1); it answered: $(next_answer 5 | answered click)"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the click's question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    ../tools/window-screenshot.sh "$pid" "$out/$3.png" || fail "no window to capture"
-    y=$((qh - 26 - 36))
-    [ -z "$5" ] || y=$((qh - 26))
-    send click $((qx + qw * 3 / 4)) $((qy + y))
-    await_log "^browser: agent mcp-client answered $q Once\$" "Allow didn't answer the click's question"
-    said=$(next_answer) || fail "the browser didn't answer the click on $1"
-    said=$(printf '%s\n' "$said" | answered click)
-    case "$said" in
-      *"Tab $said_tab: $4"*) ;;
-      *) fail "the click on $1, allowed once, didn't do it: $said" ;;
+  say_steps() {
+    saying forum.html forum Comment button
+    comment_ref=$said_ref
+    body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
+    [ -n "$body_ref" ] || fail "the forum didn't open with its Body field: $opened"
+    posted=$(call click "{\"tab\":$said_tab,\"ref\":\"$comment_ref\"}")
+    case "$posted" in
+      *"Tab $said_tab: Forum posted"*) ;;
+      *) fail "a Comment with nothing in its form's field was stopped at $level or didn't post: $posted" ;;
     esac
+    saying forum.html forum Comment button
+    comment_ref=$said_ref
+    body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
+    call type "{\"tab\":$said_tab,\"ref\":\"$body_ref\",\"text\":\"Looks good\"}" > /dev/null
+    does_at click "{\"tab\":$said_tab,\"ref\":\"$comment_ref\"}" forum.localhost "$said_tab" \
+      'click “Comment”' Message "Forum posted"
+    saying chat.html chat Send button
+    send_ref=$said_ref
+    message_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Message" \[\(e[0-9]*\)\].*/\1/p')
+    [ -n "$message_ref" ] || fail "the chat didn't open with its Message editor: $opened"
+    call type "{\"tab\":$said_tab,\"ref\":\"$message_ref\",\"text\":\"On my way\"}" > /dev/null
+    does_at click "{\"tab\":$said_tab,\"ref\":\"$send_ref\"}" chat.localhost "$said_tab" \
+      'click “Send”' Message Sent
+    saying butik.html butik Betal button
+    does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" butik.localhost "$said_tab" \
+      'click “Betal”' Order Betalt
   }
-  saying forum.html forum Comment button
-  comment_ref=$said_ref
-  body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
-  [ -n "$body_ref" ] || fail "the forum didn't open with its Body field: $opened"
-  posted=$(call click "{\"tab\":$said_tab,\"ref\":\"$comment_ref\"}")
-  case "$posted" in
-    *"Tab $said_tab: Forum posted"*) ;;
-    *) fail "a Comment with nothing in its form's field asked or didn't post: $posted" ;;
-  esac
-  saying forum.html forum Comment button
-  comment_ref=$said_ref
-  body_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Body" \[\(e[0-9]*\)\].*/\1/p')
-  call type "{\"tab\":$said_tab,\"ref\":\"$body_ref\",\"text\":\"Looks good\"}" > /dev/null
-  said_asks "$comment_ref" \
-    '^browser: agent mcp-client asks [0-9]*: click “Comment” on forum\.localhost$' \
-    agent-sends-comment "Forum posted"
-  saying chat.html chat Send button
-  send_ref=$said_ref
-  message_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Message" \[\(e[0-9]*\)\].*/\1/p')
-  [ -n "$message_ref" ] || fail "the chat didn't open with its Message editor: $opened"
-  call type "{\"tab\":$said_tab,\"ref\":\"$message_ref\",\"text\":\"On my way\"}" > /dev/null
-  said_asks "$send_ref" \
-    '^browser: agent mcp-client asks [0-9]*: click “Send” on chat\.localhost$' \
-    agent-sends-chat Sent
-  saying butik.html butik Betal button
-  said_asks "$said_ref" \
-    '^browser: agent mcp-client asks [0-9]*: click “Betal” on butik\.localhost$' \
-    agent-pays-danish Betalt spends
-  # A payment asks every time, whatever was allowed before, and a Send allowed for good goes on
-  # unasked.
-  printf '%s' "<meta charset=utf-8><title>Market</title>
-<form onsubmit=\"event.preventDefault(); document.title = 'Asked'\">
-<textarea aria-label=\"Message\"></textarea><button>Send</button></form>
-<button onclick=\"document.title = 'Bought'\">Buy now</button>" > "$out/site/market.html"
-  saying market.html market Send button
-  send_ref=$said_ref
-  message_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- textbox "Message" \[\(e[0-9]*\)\].*/\1/p')
-  buy_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Buy now" \[\(e[0-9]*\)\].*/\1/p')
-  [ -n "$message_ref" ] && [ -n "$buy_ref" ] || fail "the market didn't open with its fields: $opened"
-  call type "{\"tab\":$said_tab,\"ref\":\"$message_ref\",\"text\":\"Is it in stock?\"}" > /dev/null
-  before=$(grep -c '^browser: agent mcp-client asks [0-9]*: click “Send” on market\.localhost$' "$log" || true)
-  request click "{\"tab\":$said_tab,\"ref\":\"$send_ref\"}" >&4
-  await_more '^browser: agent mcp-client asks [0-9]*: click “Send” on market\.localhost$' "$before" ||
-    fail "the market's Send with a message didn't ask first"
-  q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-  await_log "^browser: agent question $q at " "the Send's question wasn't drawn"
-  read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-  # Always Allow, the card's last row, across its width.
-  send click $((qx + qw / 2)) $((qy + qh - 26))
-  await_log "^browser: agent mcp-client answered $q Always\$" "Always Allow didn't answer the Send's question"
-  said=$(next_answer) || fail "the browser didn't answer the market's Send"
-  said=$(printf '%s\n' "$said" | answered click)
-  case "$said" in *"Tab $said_tab: Asked"*) ;; *) fail "the Send, allowed always, didn't send: $said" ;; esac
-  said=$(call click "{\"tab\":$said_tab,\"ref\":\"$send_ref\"}")
-  case "$said" in *"Tab $said_tab: Asked"*) ;; *) fail "the next Send, allowed always, asked or didn't send: $said" ;; esac
-  said_asks "$buy_ref" \
-    '^browser: agent mcp-client asks [0-9]*: click “Buy now” on market\.localhost$' \
-    agent-buys-after-always Bought spends
-  # The user's Never for files.localhost, on the download above, still refuses a payment there
-  # unasked.
-  saying butik.html files Betal button
-  before=$(grep -c '^browser: agent mcp-client asks' "$log" || true)
-  said=$(call click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}")
-  [ "$said" = "error: The user said never on files.localhost: you can't click “Betal” on files.localhost. Don't try again." ] ||
-    fail "a payment on a site answered Never answered: $said"
-  [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
-    fail "a payment on a site answered Never asked"
-
-  # A bank's site asks first, in a card in the window, and Allow Once opens it.
+  # A bank's site isn't opened at Work on pages, and at Full access it is, where its Overfør moves
+  # money as any order there goes through. Its charset said, as the site's server says none and
+  # the page would read as Latin-1.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
-  asks='^browser: agent mcp-client asks [0-9]*: open bank\.localhost$'
-  # Opens the bank's site, which asks, and answers $1 with a click: Always Allow is the card's last
-  # row, across its width, and Allow Once the right of the row above, beside Never. Sets allowed
-  # to the answer.
-  answer_bank() {
-    before=$(grep -c "$asks" "$log" || true)
-    request open_tab "$bank" >&4
-    await_more "$asks" "$before" || fail "a bank's site didn't ask first"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the agent's question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    ../tools/window-screenshot.sh "$pid" "$out/agent-question.png" || fail "no window to capture"
-    # A button is 28 high and 8 from the next row.
-    case "$1" in Once) x=$((qw * 3 / 4)) y=$((qh - 26 - 36)) ;; Always) x=$((qw / 2)) y=$((qh - 26)) ;; esac
-    send click $((qx + x)) $((qy + y))
-    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question"
-    allowed=$(next_answer) || fail "the browser didn't answer the bank's open_tab"
-    allowed=$(printf '%s\n' "$allowed" | answered "the bank's open_tab")
-  }
-  answer_bank Once
-  case "$allowed" in "Opened tab "*) ;; *) fail "the allowed open_tab answered: $allowed" ;; esac
-  answer_bank Always
-  case "$allowed" in "Opened tab "*) ;; *) fail "the always allowed open_tab answered: $allowed" ;; esac
-  before=$(grep -c "$asks" "$log" || true)
-  allowed=$(call open_tab "$bank")
-  case "$allowed" in "Opened tab "*) ;; *) fail "after Always Allow, open_tab answered: $allowed" ;; esac
-  [ "$(grep -c "$asks" "$log")" = "$before" ] || fail "Always Allow asked again"
-  # A yes to opening a bank's site isn't one to moving money there: its Overfør still asks.
-  # Its charset said, as the site's server says none and the page would read as Latin-1.
   printf '%s' "<meta charset=utf-8><title>Konto</title>
 <button onclick=\"document.title = 'Overført'\">Overfør</button>" > "$out/site/move.html"
-  saying move.html bank Overfør button
-  said_asks "$said_ref" \
-    '^browser: agent mcp-client asks [0-9]*: click “Overfør” on bank\.localhost$' \
-    agent-moves-money Overført spends
+  bank_steps() {
+    stop='^browser: agent mcp-client stopped Bank at Work on pages: bank\.localhost$'
+    before=$(grep -c "$stop" "$log" || true)
+    allowed=$(call open_tab "$bank")
+    case "$level" in
+      "Work on pages")
+        case "$allowed" in
+          "error: ilo stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*) ;;
+          *) fail "a bank's site at Work on pages answered: $allowed" ;;
+        esac
+        await_more "$stop" "$before" ||
+          fail "the bank's site refused at Work on pages wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+        await_log '^browser: agent logged mcp-client open_tab bank\.localhost refused: Using a bank site isn.t part of Work on pages\.$' \
+          "the bank's site refused at Work on pages isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* bank\.localhost' "$log" | tail -1)"
+        ;;
+      *)
+        case "$allowed" in "Opened tab "*) ;; *) fail "a bank's site at $level answered: $allowed" ;; esac
+        saying move.html bank Overfør button
+        does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" bank.localhost "$said_tab" \
+          'click “Overfør”' Order Overført
+        ;;
+    esac
+  }
+  # The refusals are read in the conversation, with no page of the task's watched: each stands
+  # there as ilo's line, the newest with Give Full access, and what's on screen follows the log,
+  # the button drawn where the log says it is.
+  before=$(grep -c "^browser: task page $opened_tab back\$" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "^browser: task page $opened_tab back\$" "$before" ||
+    fail "Escape didn't step back to the conversation for the refusals' lines"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture for the refusals' lines"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-stops-before.png" || fail "no window to capture"
+  # The line drawn last with Give Full access, by its key, which counts up.
+  gives() { sed -n 's/^browser: ilo line \([0-9]*\) Give Full access at .*/\1/p' "$log" | sort -n | tail -1; }
+  pay_steps
+  say_steps
+  lined=$(gives)
+  bank_steps
+  for _ in $(seq 100); do
+    newest=$(gives)
+    [ "${newest:-0}" -gt "${lined:-0}" ] && break
+    sleep 0.1
+  done
+  [ "${newest:-0}" -gt "${lined:-0}" ] ||
+    fail "the bank's refusal drew no line of ilo's with Give Full access: $(grep '^browser: ilo line ' "$log" | tail -2 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-stops.png" || fail "no window to capture"
+  follows_log "$out/agent-stops-before.png" "$out/agent-stops.png" \
+    "$(sed -n "s/^browser: ilo line $newest Give Full access at //p" "$log" | tail -1)" \
+    "Give Full access on ilo's newest line"
+  # The keys press it once the app says a key on it counts: the task's access goes up, and nothing
+  # of the agent's or a page's did it.
+  raised='^browser: task [^ ]* access Work on pages to Full access$'
+  grep -q "$raised" "$log" && fail "the task had Full access before the user gave it"
+  ilo_press "Give Full access"
+  await_log "$raised" "Give Full access on ilo's line didn't raise the task's access"
+  await_log '^browser: agent logged mcp-client access ' "the change of the task's access isn't in the activity log"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-full-access.png" || fail "no window to capture"
+  watch "$opened_tab"
+  level="Full access"
+  pay_steps
+  say_steps
+  bank_steps
 
-  # Settings › Agents lists the permission with its Revoke, which the space menu of the agent's
-  # Space did before #1080. Under Xvfb's 800-point screen the button is drawn below its bottom, so
-  # the click isn't driven; the Agents' tests revoke.
+  # Settings › Other apps has no answer kept for good to list or revoke (#4086): nothing was asked,
+  # and the access the user gave above is that task's alone.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
-  settings_drew Agents
-  drawn "revoke bank.localhost" > /dev/null || fail "Settings › Agents didn't list the bank's permission to revoke"
-  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-revoke.png" || fail "no window to capture"
-  # Always ask first (#3724): Add Site… opens a field with the keyboard, where Return adds the site
+  send clickkey $(drawn "toolbar Other apps")
+  expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
+  settings_drew 'Other apps'
+  grep -q '^browser: settings revoke ' "$log" &&
+    fail "Settings › Other apps listed an answer kept for good to revoke: $(grep '^browser: settings revoke ' "$log" | tail -1)"
+  # Off limits is Access'.
+  send clickkey $(drawn "toolbar Access")
+  expect '^browser: settings tab Access$' "a click on Access didn't show its section"
+  settings_drew Access
+  # Off limits (#3724): Add Site… opens a field with the keyboard, where Return adds the site
   # typed, which the list then shows with its Remove, and Remove takes it off.
   fence_add() {
     added=$(grep -c '^browser: agents fenced pension\.localhost$' "$log" || true)
     click_in_sight "fence open"
-    expect '^browser: settings fence field open$' "Add Site… didn't open Always ask first's field"
-    expect '^browser: field Site where agents always ask first has the keyboard$' \
-      "Add Site… didn't give Always ask first's field the keyboard"
+    expect '^browser: settings fence field open$' "Add Site… didn't open Off limits' field"
+    expect '^browser: field Site agents can.t open or use has the keyboard$' \
+      "Add Site… didn't give Off limits' field the keyboard"
     send type pension.localhost
     send key return
     await_more '^browser: agents fenced pension\.localhost$' "$added" ||
-      fail "Return in Always ask first's field didn't add the site"
+      fail "Return in Off limits' field didn't add the site"
   }
   fence_add
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence.png" || fail "no window to capture"
   click_in_sight "unfence pension.localhost"
-  expect '^browser: agents unfenced pension\.localhost$' "Remove didn't take the site off Always ask first"
+  expect '^browser: agents unfenced pension\.localhost$' "Remove didn't take the site off Off limits"
   # Add Site… moves up with the row gone: its place from a frame drawn since, not the one before.
   drawn_after "fence open" '^browser: agents unfenced pension\.localhost$' > /dev/null ||
-    fail "Always ask first didn't draw again once its site was removed"
+    fail "Off limits didn't draw again once its site was removed"
   fence_add
-  in_sight "unfence pension.localhost" || fail "Always ask first didn't list the site added again"
+  in_sight "unfence pension.localhost" || fail "Off limits didn't list the site added again"
   # At the Settings window's least size, the foot under Add Site… wraps whole.
   send resizekey 720 480
   await_log '^browser: settings drawn at 720x480$' \
     "Settings didn't draw at its least size: $(grep '^browser: settings drawn at ' "$log" | tail -1)"
-  in_sight "fence open" || fail "Always ask first didn't draw Add Site… at the least size"
+  in_sight "fence open" || fail "Off limits didn't draw Add Site… at the least size"
   # The foot's last line can be under the card's edge while Add Site… is in sight.
-  in_sight "fence foot" || fail "Always ask first didn't draw its foot at the least size"
+  in_sight "fence foot" || fail "Off limits didn't draw its foot at the least size"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-least.png" || fail "no window to capture"
   send resizekey 820 660
   await_log '^browser: settings drawn at 820x660$' "Settings didn't draw at its size again"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
-  # upload's card (#3656) names the site of the field's frame, which is what gets the file: a frame
-  # of a subdomain of the tab's site, an object showing a page of it and another site's frame each
-  # name their own, and Don't Allow answers that the user said no there. Choose File… opens the
-  # system's dialog over the window, which no driven input reaches, so its page closes its tab while
-  # it's up, whose field's end closes the dialog: the agent hears it closed with no file chosen, and
-  # the window takes the next card's click. Choose File… for a field whose frame went to another page
-  # after the card asked opens no dialog and answers that the field left. What happens to a pick
-  # once the field changed under the dialog is the core's tests' (FilesLand), as no run picks.
+  # upload for a file field hands its step to the user, as hand_off does (#3656, #4086): the file
+  # goes in by the page's own control, so ilo opens no dialog of its own and the agent hears only
+  # that the tab came back, never what went in. The step says which field by its name, whichever
+  # frame it's in: a frame of a subdomain of the tab's site, an object showing a page of it and
+  # another site's frame. The step's page opens by itself, Hand Back on its line gives the tab
+  # back, and Not Now leaves the step, the tab staying the user's until they hand it back.
   printf '%s' '<input type=file aria-label="Frame file">' > "$out/site/upload-frame.html"
   printf '%s' '<input type=file aria-label="Object file">' > "$out/site/upload-object.html"
   printf '%s' '<input type=file aria-label="Cross file">' > "$out/site/upload-cross.html"
-  printf '%s' '<p>Gone</p>' > "$out/site/upload-gone.html"
   printf '%s' "<title>loading</title>
 <iframe src=http://x.a.localhost:$port/upload-frame.html></iframe>
 <object type=text/html data=http://x.a.localhost:$port/upload-object.html></object>
@@ -3810,334 +3754,190 @@ CARD
 for (const each of document.querySelectorAll('iframe, object'))
   each.onload = () => --loading || (document.title = 'upload frames');</script>" \
     > "$out/site/upload-frames.html"
-  printf '%s' '<title>upload closes</title><script src=told.js></script>
-<input type=file aria-label="Closing file">
-<script>told("upload-closes", () => close());</script>' > "$out/site/upload-closes.html"
-  printf '%s' "<title>loading</title><script src=told.js></script>
-<iframe id=frame src=http://x.a.localhost:$port/upload-frame.html
-  onload=\"document.title = 'upload moves'\"></iframe>
-<script>told('upload-moves', () => {
-  frame.onload = () => fetch('upload-moves.done');
-  frame.src = 'http://x.a.localhost:$port/upload-gone.html';
-});</script>" > "$out/site/upload-moves.html"
-  # Asks for a file for the field $3, by the ref $2 in tab $1: sets q, the card's place once it's
-  # drawn, and upload_field, the core's id of the field it showed.
-  upload_asks() {
-    wants="^browser: agent mcp-client asks [0-9]* upload $1\$"
-    before=$(grep -c "$wants" "$log" || true)
+  # Asks for a file for the field named $3, by the ref $2 in tab $1: the step is handed to the
+  # user by the field's name, its page opens by itself, and Escape steps back from it to the
+  # conversation, where the step's line stands.
+  upload_handed() {
+    handed="^browser: agent mcp-client hands off $1: Choose a file for “$3”\\.\$"
+    before=$(grep -c "$handed" "$log" || true)
+    opens=$(grep -c "^browser: task page $1 watched\$" "$log" || true)
+    placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
+    backs=$(grep -c "^browser: task page $1 back\$" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
     request upload "{\"tab\":$1,\"ref\":\"$2\"}" >&4
-    await_more "$wants" "$before" || fail "upload for $3 didn't ask the user: $(grep 'browser: agent .*upload' "$log" | tail -2 | tr '\n' ' ')"
-    q=$(grep "$wants" "$log" | tail -1 | cut -d' ' -f5)
-    upload_field=$(sed -n "s/.*browser: file field \([0-9]*\) shown in $1\$/\1/p" "$log" | tail -1)
-    [ -n "$upload_field" ] || fail "upload for $3 asked with no field the core showed"
-    await_log "^browser: agent question $q at " "upload's question for $3 wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
+    await_more "$handed" "$before" ||
+      fail "upload for “$3” didn't hand its step to the user: $(grep 'browser: agent .*\(upload\|hands off\)' "$log" | tail -2 | tr '\n' ' ')"
+    await_more "^browser: task page $1 watched\$" "$opens" ||
+      fail "the page of the field “$3”, handed to the user, didn't open by itself"
+    await_more "^browser: task page $1 in place\$" "$placed" ||
+      fail "the page of the field “$3” didn't come to rest in place"
+    send key escape
+    await_more "^browser: task page $1 back\$" "$backs" ||
+      fail "Escape didn't step back from the page of the field “$3”"
+    await_more "$thumbnail" "$shrunk" || fail "the page of the field “$3” didn't go back into its picture"
   }
-  # Don't Allow, at the left of Choose File… where the two share the card's last row, and across
-  # the row above where they don't fit one: that row is tried first, as a press there lands on the
-  # card's text where they share one, and one on the last row could open the system's dialog.
-  # Sets denied to the answer.
-  upload_denied() {
-    dismissed="^browser: agent mcp-client answered $q Dismiss\$"
-    send click $((qx + qw / 4)) $((qy + qh - 26 - 36))
-    for _ in $(seq 30); do grep -q "$dismissed" "$log" && break; sleep 0.1; done
-    grep -q "$dismissed" "$log" || send click $((qx + qw / 4)) $((qy + qh - 26))
-    await_log "$dismissed" "Don’t Allow didn't answer upload's question for $1"
-    denied=$(next_answer) || fail "the browser didn't answer the upload for $1"
-    denied=$(printf '%s\n' "$denied" | answered upload)
-  }
-  # Choose File…, the card's primary, at the right of its last row or across it.
-  upload_chosen() {
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
-    await_log "^browser: agent mcp-client answered $q Choose\$" "Choose File… didn't answer upload's question for $1$2"
-  }
+  # The steps' lines are pressed from the conversation, with no page of the task's watched.
+  before=$(grep -c "^browser: task page $opened_tab back\$" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "^browser: task page $opened_tab back\$" "$before" ||
+    fail "Escape didn't step back to the conversation for the uploads"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture for the uploads"
   upload_page "a.localhost:$port/upload-frames.html"
   frames_upload_tab=$upload_tab
   await_log "^browser: title $frames_upload_tab upload frames\$" "the upload page's frames didn't load"
   outline=$(call snapshot "{\"tab\":$frames_upload_tab}")
   printf '%s\n' "$outline" > "$out/mcp-upload-frames.txt"
-  for each in "Frame file|x.a.localhost|a subdomain's frame" "Object file|x.a.localhost|an object" \
-    "Cross file|127.0.0.1|another site's frame"; do
-    name=${each%%|*} site=${each#*|} what=${each##*|}
-    site=${site%%|*}
+  dialogs=$(grep -c 'browser: file field [0-9]* dialog over window ' "$log" || true)
+  for each in "Frame file|a subdomain's frame" "Object file|an object" "Cross file|another site's frame"; do
+    name=${each%%|*} what=${each##*|}
+    # Its outline afresh, as a tab handed back says to take: the page was the user's meanwhile.
+    outline=$(call snapshot "{\"tab\":$frames_upload_tab}")
     ref=$(ref_in "$outline" button "$name")
     [ -n "$ref" ] || fail "the upload page's outline had no ref for the field in $what: $outline"
-    upload_asks "$frames_upload_tab" "$ref" "the field in $what"
+    noted=$(grep -c '^browser: agent logged mcp-client upload a\.localhost$' "$log" || true)
+    upload_handed "$frames_upload_tab" "$ref" "$name"
+    await_more '^browser: agent logged mcp-client upload a\.localhost$' "$noted" ||
+      fail "the upload handed to the user for the field in $what isn't in the activity log"
     if [ "$what" = "a subdomain's frame" ]; then
       ../tools/window-screenshot.sh "$pid" "$out/agent-upload.png" || fail "no window to capture"
     fi
-    upload_denied "the field in $what"
-    [ "$denied" = "error: The user said no: you can't add a file to “${name}” on $site. Don't try again." ] ||
-      fail "Don’t Allow on upload's card for the field in $what answered: $denied"
-    await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
-      "the upload refused for the field in $what isn't in the activity log under $site"
-  done
-  # Choose File… with the dialog up, the page closes its own tab, and the dialog closes with it, as
-  # its Cancel would. Linux may have none, when neither a toolkit nor the portal answers. On Windows
-  # the dialog is a utility process's, which the core tells to close (#3759): once with it up, and
-  # once with the tab closing as Choose File… is pressed, before its window can show, when the core
-  # closes it as it shows. Either way the browser window, which it held, takes a click again: the
-  # next step's Choose File…, real input on CI.
-  dialog_said="opening a dialog that closes with its tab"
-  closes_cases=up
-  ! windows || closes_cases="up early"
-  for closes_case in $closes_cases; do
-    rm -f "$out/site/upload-closes.go"
-    upload_page "a.localhost:$port/upload-closes.html"
-    closes_ref=$(ref_in "$opened" button "Closing file")
-    [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
-    upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
-    mains=$(grep -c '^browser: window [0-9]* main false$' "$log")
-    upload_chosen "the field whose page closes its tab"
-    [ "$closes_case" = up ] || : > "$out/site/upload-closes.go"
-    dialog=
-    for _ in $(seq 300); do
-      grep -q "browser: file field $upload_field dialog over window [0-9]*\$" "$log" && dialog=up && break
-      grep -q "browser: file field $upload_field has no dialog\$" "$log" && dialog=none && break
-      kill -0 "$pid" 2>/dev/null || fail "the app exited"
-      sleep 0.1
-    done
-    case "$dialog" in
-    up)
-      if [ "$closes_case" = up ]; then
-        # The core logs the dialog as it asks for one. Under Wayland it's the desktop portal's,
-        # which comes up later in another process, and a tab closing before then can't close it:
-        # the portal hasn't made the request yet, so the dialog opens after the tab's gone and
-        # covers the window for the rest of the run (train 6's Wayland leg, 45107971340). So the
-        # page closes once the dialog has taken the window from the browser. On Windows it's a
-        # utility process's, so the page closes once the dialog is shown.
-        if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-          await_more '^browser: window [0-9]* main false$' "$mains" ||
-            fail "the file dialog never took the window from the browser: $(grep "browser: .*file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
-        fi
-        if windows; then
-          shown=
-          for _ in $(seq 100); do
-            [ -n "$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")" ] && shown=1 && break
-            sleep 0.1
-          done
-          [ -n "$shown" ] || fail "Choose File… showed no file dialog in 10 s"
-        fi
-        ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
-        : > "$out/site/upload-closes.go"
-      fi
-      await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
-        "the file field's tab closing with its dialog up didn't end it as closed: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
-      if windows; then
-        # What the user sees first: the dialog gone, and the browser window it held usable.
-        left=
-        for _ in $(seq 100); do
-          left=$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")
-          [ -z "$left" ] && break
-          sleep 0.1
-        done
-        [ -z "$left" ] || fail "a file dialog was still up 10 s after its field's tab closed: $left"
-        held=
-        for _ in $(seq 50); do
-          held=$(python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" |
-            sed 's/^.*" //' | grep -w browser | grep -w disabled || true)
-          [ -z "$held" ] && break
-          sleep 0.1
-        done
-        [ -z "$held" ] || fail "the browser window was still disabled once its file dialog went: $held"
-        await_log "browser: file field $upload_field closing its dialog\$" \
-          "the core didn't close the file dialog of the field whose tab closed"
-        await_log "browser: file field $upload_field dialog ended\$" \
-          "the file dialog of the field whose tab closed didn't end: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
-        # The core's line, after Chromium's prefix.
-        told=$(grep -o "browser: file field $upload_field dialog told to close.*" "$log" | tr -d '\r')
-        if [ "$closes_case" = up ]; then
-          [ "$told" = "browser: file field $upload_field dialog told to close" ] ||
-            fail "the file dialog that was up when its tab closed wasn't told to close as one up: $told"
-        else
-          # Which way it went is free, as the page asks every 100 ms and can't beat the dialog to
-          # showing; the summary says which, so the runs show whether both ways are seen.
-          case "$told" in
-          "browser: file field $upload_field dialog told to close as it showed")
-            early_said="before its dialog showed, closing it as it showed" ;;
-          "browser: file field $upload_field dialog told to close")
-            early_said="after its dialog had shown, closing it as one up" ;;
-          *) fail "the file dialog of the tab closed at once wasn't told to close: $told" ;;
-          esac
-          echo "the tab closed at once after Choose File… closed $early_said"
-          dialog_said="opening a dialog that closes with its tab, also with the tab closed at once ($early_said),"
-        fi
-      fi
-      chosen=$(next_answer) || fail "the browser didn't answer the upload whose tab closed"
+    if [ "$what" = "another site's frame" ]; then
+      ilo_press "Not Now"
+      left=$(next_answer) || fail "the browser didn't answer the upload for the field in $what"
+      left=$(printf '%s\n' "$left" | answered upload)
+      case "$left" in
+        "error: The user won't do the step on tab $frames_upload_tab now. It stays theirs; "*) ;;
+        *) fail "Not Now on the upload's step for the field in $what answered: $left" ;;
+      esac
+      # The tab is the user's still, and ⌘↩ on its page watched hands it back.
+      held=$(call snapshot "{\"tab\":$frames_upload_tab}")
+      case "$held" in "error: "*) ;; *) fail "after Not Now, the agent read the tab left with the user: $held" ;; esac
+      watch "$frames_upload_tab"
+      handed=$(grep -c "^browser: agent mcp-client handed back $frames_upload_tab\$" "$log" || true)
+      send key return cmd
+      await_more "^browser: agent mcp-client handed back $frames_upload_tab\$" "$handed" ||
+        fail "⌘↩ didn't hand back the tab left with the user by Not Now"
+    else
+      handed=$(grep -c "^browser: agent mcp-client handed back $frames_upload_tab\$" "$log" || true)
+      ilo_press "Hand Back"
+      await_more "^browser: agent mcp-client handed back $frames_upload_tab\$" "$handed" ||
+        fail "Hand Back on the upload's step for the field in $what didn't hand the tab back"
+      chosen=$(next_answer) || fail "the browser didn't answer the upload for the field in $what"
       chosen=$(printf '%s\n' "$chosen" | answered upload)
-      [ "$chosen" = "error: The file dialog closed before the user chose a file." ] ||
-        fail "the upload whose tab closed with its dialog up answered: $chosen"
-      grep -q "browser: file field $upload_field chose" "$log" &&
-        fail "the dialog of the field whose tab closed answered with a choice: $(grep "browser: file field $upload_field chose" "$log")"
-      ;;
-    none)
-      [ "$(uname)" = Linux ] || fail "Choose File… found no system file dialog off Linux"
-      chosen=$(next_answer) || fail "the browser didn't answer the upload with no file dialog"
-      chosen=$(printf '%s\n' "$chosen" | answered upload)
-      [ "$chosen" = "error: The file dialog couldn't open." ] ||
-        fail "the upload with no file dialog to open answered: $chosen"
-      dialog_said="answering that no dialog could open, as this Linux has none"
-      echo "skip: a file dialog closing with its tab. This Linux has no system file dialog, so Choose File… answered that none could open."
-      : > "$out/site/upload-closes.go"
-      ;;
-    *) fail "Choose File… opened no file dialog: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')" ;;
-    esac
+      [ "$chosen" = "The user handed tab $frames_upload_tab back. Take a snapshot to see where it is now." ] ||
+        fail "the upload for the field in $what, handed back, answered: $chosen"
+    fi
   done
-  # Choose File… once the field's frame went to another page.
-  upload_page "a.localhost:$port/upload-moves.html"
-  moves_tab=$upload_tab
-  await_log "^browser: title $moves_tab upload moves\$" "the upload page's frame didn't load"
-  outline=$(call snapshot "{\"tab\":$moves_tab}")
-  moves_ref=$(ref_in "$outline" button "Frame file")
-  [ -n "$moves_ref" ] || fail "the page whose frame goes had no ref for its field: $outline"
-  upload_asks "$moves_tab" "$moves_ref" "the field whose frame goes"
-  : > "$out/site/upload-moves.go"
-  served "^GET chromium a\\.localhost:$port/upload-moves\\.done " "the upload page's frame didn't go to another page"
-  upload_chosen "the field whose frame went" ", or the file dialog of the step before is still up"
-  await_log "browser: file field $upload_field left before the dialog\$" \
-    "Choose File… for a field whose frame went didn't find it left: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
-  await_log "^browser: agent mcp-client file field $upload_field left 0\$" \
-    "the app didn't hear the field whose frame went left"
-  chosen=$(next_answer) || fail "the browser didn't answer the upload whose frame went"
-  chosen=$(printf '%s\n' "$chosen" | answered upload)
-  [ "$chosen" = "error: The field left the page before the user chose a file." ] ||
-    fail "the upload whose frame went answered: $chosen"
-  grep -q "browser: file field $upload_field dialog over window" "$log" &&
-    fail "Choose File… for a field whose frame went opened a file dialog"
-  for each in "$frames_upload_tab" "$moves_tab"; do
-    closed=$(call close_tab "{\"tab\":$each}")
-    case "$closed" in "Closed tab $each."*) ;; *) fail "closing upload's tab $each answered: $closed" ;; esac
-  done
+  [ "$(grep -c 'browser: file field [0-9]* dialog over window ' "$log" || true)" = "$dialogs" ] ||
+    fail "an upload handed to the user opened a file dialog of ilo's"
+  # The page the user handed back is watched: back to the one watched before.
+  before=$(grep -c "^browser: task page $frames_upload_tab back\$" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "^browser: task page $frames_upload_tab back\$" "$before" ||
+    fail "Escape didn't step back from the upload's page"
+  await_more "$thumbnail" "$shrunk" || fail "the upload's page didn't go back into its picture"
+  closed=$(call close_tab "{\"tab\":$frames_upload_tab}")
+  case "$closed" in "Closed tab $frames_upload_tab."*) ;; *) fail "closing upload's tab $frames_upload_tab answered: $closed" ;; esac
+  watch "$opened_tab"
 
-  # The site the user listed asks before the agent opens it, in a card of Never and Allow Once
-  # alone, and Allow Once opens it. A tab that comes there by any other way, a link here, asks
-  # before the agent's next call on it, a read included, and the click's answer gives nothing of
-  # the page; Allow Once lets the tab stay, until it leaves. Never refuses the site from then on,
-  # unasked, as an open's Never does (#3724). Each question and answer is in the activity log.
+  # A site the user put off limits is refused whatever the task's access, Full access here, with
+  # nothing asked (#3724, #4086): an open of it, and each call on a tab that comes there by another
+  # way, a link here, a read included; the click's answer and a forward's give nothing of the page.
+  # Off the site again, the tab is the agent's to use as before. Each refusal is in the activity
+  # log.
   printf '%s' '<!doctype html><title>Pension balance</title><p>Balance 1234</p>' \
     > "$out/site/pension.html"
   printf '%s' "<!doctype html><title>To the pension</title>
 <p><a href=\"http://pension.localhost:$port/pension.html\">Pension</a></p>" > "$out/site/to-pension.html"
-  # An open of the site asks to open it, and a call on a tab already there asks to use it.
-  fence_opens='^browser: agent mcp-client asks [0-9]*: open pension\.localhost$'
-  fence_uses='^browser: agent mcp-client asks [0-9]*: use pension\.localhost$'
-  fence_asks=$fence_opens
-  # Waits for the fence's question after the call $3 sent, captured as $2.png, answers it $1 with
-  # a click on the card, and sets fenced to the call's answer. Never and Allow Once share the
-  # card's last row, Never at the left, and it has no Always Allow.
-  fence_answer() {
-    await_more "$fence_asks" "$before" ||
-      fail "$3 didn't ask first: $(grep '^browser: agent mcp-client asks' "$log" | tail -1)"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the question before $3 wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
-    case "$1" in Once) x=$((qw * 3 / 4)) ;; Never) x=$((qw / 4)) ;; esac
-    send click $((qx + x)) $((qy + qh - 26))
-    await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question before $3"
-    fenced=$(next_answer) || fail "the browser didn't answer $3"
-    fenced=$(printf '%s\n' "$fenced" | answered "$3")
+  fence_stops="^browser: agent mcp-client stopped Fenced at $level: pension\\.localhost\$"
+  # Whether $1, the answer to $2, is ilo's refusal of $3 on the site, logged as its stop since
+  # $before.
+  fence_refused() {
+    [ "$1" = "error: ilo stopped this: $3 pension.localhost. pension.localhost is off limits to agents, whatever a task's access. Only the user can change that, in ilo. Don't try another way to the same end." ] ||
+      fail "$2 answered: $1"
+    await_more "$fence_stops" "$before" ||
+      fail "$2 wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
   }
-  before=$(grep -c "$fence_asks" "$log" || true)
-  request open_tab "{\"url\":\"pension.localhost:$port/pension.html\"}" >&4
-  fence_answer Once agent-fence-open "the open of a site the user listed"
-  fence_tab=$(printf '%s\n' "$fenced" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
-  [ -n "$fence_tab" ] || fail "the allowed open of a site the user listed answered: $fenced"
-  read=$(call read_page "{\"tab\":$fence_tab}")
-  case "$read" in *"Balance 1234"*) ;; *) fail "the tab allowed open on the site asked or answered: $read" ;; esac
-  closed=$(call close_tab "{\"tab\":$fence_tab}")
-  case "$closed" in "Closed tab $fence_tab."*) ;; *) fail "closing the listed site's tab answered: $closed" ;; esac
-  # Comes to the site by the link, and asks before reading it, answered $1.
-  linked() {
-    link=$(printf '%s\n' "$went" | sed -n 's/.*- link "Pension" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-    [ -n "$link" ] || fail "the page with a link to the listed site answered: $went"
-    clicked=$(call click "{\"tab\":$fence_tab,\"ref\":\"$link\"}")
-    case "$clicked" in
-      "error: "* | *Balance* | *"Pension balance"*) fail "the click that came to the listed site answered: $clicked" ;;
-    esac
-    await_log "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" \
-      "the link didn't take the tab to the listed site"
-    fence_asks=$fence_uses
-    before=$(grep -c "$fence_asks" "$log" || true)
-    request read_page "{\"tab\":$fence_tab}" >&4
-    fence_answer "$1" "agent-fence-came-$1" "the read of a tab that came to the listed site"
-  }
+  before=$(grep -c "$fence_stops" "$log" || true)
+  fenced=$(call open_tab "{\"url\":\"pension.localhost:$port/pension.html\"}")
+  fence_refused "$fenced" "the open of a site off limits" open
+  await_log '^browser: agent logged mcp-client open_tab pension\.localhost refused: pension\.localhost is on your Off limits list\.$' \
+    "the refused open of a site off limits isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* pension\.localhost' "$log" | tail -1)"
+  listed=$(call list_tabs '{}')
+  case "$listed" in *pension.localhost*) fail "the refused open of a site off limits left a tab on it: $listed" ;; esac
   went=$(call open_tab "{\"url\":\"localhost:$port/to-pension.html\"}")
   fence_tab=$(printf '%s\n' "$went" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$fence_tab" ] || fail "open_tab to-pension.html answered: $went"
-  linked Once
-  case "$fenced" in *"Balance 1234"*) ;; *) fail "the read allowed once answered: $fenced" ;; esac
-  await_log '^browser: agent logged mcp-client asked_first pension\.localhost$' \
-    "the fence's question didn't reach the activity log"
-  await_log '^browser: agent logged mcp-client came_to pension\.localhost$' \
-    "the fence's Allow Once didn't reach the activity log"
-  read=$(call read_page "{\"tab\":$fence_tab}")
-  case "$read" in *"Balance 1234"*) ;; *) fail "the tab let stay asked again or answered: $read" ;; esac
-  # Back off the site and forward onto it again asks again, as coming back does, whether the page
-  # comes back from the back-forward cache or loads again; which it was goes in mcp-fence.txt. It
-  # guards the order the fence rests on: the core's report of the page's address reaches the app
-  # before the forward's answer, a restore's too, or the answer would carry the page.
+  # A read the tab sends from its page, which Settings › Other apps lists under the refusals to
+  # come.
+  sent=$(call request "{\"tab\":$fence_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\"}]}")
+  case "$sent" in *"GET /api/me → 200"*) ;; *) fail "a read from the tab beside the site off limits answered: $sent" ;; esac
+  # Comes to the site by the link.
+  link=$(printf '%s\n' "$went" | sed -n 's/.*- link "Pension" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$link" ] || fail "the page with a link to the site off limits answered: $went"
+  clicked=$(call click "{\"tab\":$fence_tab,\"ref\":\"$link\"}")
+  case "$clicked" in
+    "error: "* | *Balance* | *"Pension balance"*) fail "the click that came to the site off limits answered: $clicked" ;;
+    *"Tab $fence_tab is now on pension.localhost, which is off limits to agents, so nothing of its page is shown and calls on it are refused."*) ;;
+    *) fail "the click that came to the site off limits didn't say where the tab is: $clicked" ;;
+  esac
+  await_log "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" \
+    "the link didn't take the tab to the site off limits"
+  before=$(grep -c "$fence_stops" "$log" || true)
+  fenced=$(call read_page "{\"tab\":$fence_tab}")
+  fence_refused "$fenced" "the read of a tab that came to the site off limits" use
+  await_log '^browser: agent logged mcp-client came_to pension\.localhost refused: pension\.localhost is on your Off limits list\.$' \
+    "the refused read of a tab that came to the site off limits isn't in the activity log: $(grep '^browser: agent logged mcp-client came_to ' "$log" | tail -1)"
+  # Back off the site and forward onto it again is refused again, whether the page comes back
+  # from the back-forward cache or loads again; which it was goes in mcp-fence.txt. It guards the
+  # order the fence rests on: the core's report of the page's address reaches the app before the
+  # forward's answer, a restore's too, or the answer would carry the page.
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"back\"}")
-  case "$went" in "Went back."*'link "Pension"'*) ;; *) fail "back off the listed site answered: $went" ;; esac
+  case "$went" in "Went back."*'link "Pension"'*) ;; *) fail "back off the site off limits answered: $went" ;; esac
   loads=$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log" || true)
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"forward\"}")
   case "$went" in
-    *Balance* | *"Pension balance"*) fail "forward onto the listed site answered its page: $went" ;;
-    "Went forward."*"Tab $fence_tab is now on pension.localhost, where the user wants"*) ;;
-    *) fail "forward onto the listed site answered: $went" ;;
+    *Balance* | *"Pension balance"*) fail "forward onto the site off limits answered its page: $went" ;;
+    "Went forward."*"Tab $fence_tab is now on pension.localhost, which is off limits to agents"*) ;;
+    *) fail "forward onto the site off limits answered: $went" ;;
   esac
-  before=$(grep -c "$fence_asks" "$log" || true)
-  request read_page "{\"tab\":$fence_tab}" >&4
-  fence_answer Once agent-fence-forward "the read after forward onto the listed site"
-  case "$fenced" in *"Balance 1234"*) ;; *) fail "the read after forward, allowed once, answered: $fenced" ;; esac
+  before=$(grep -c "$fence_stops" "$log" || true)
+  fenced=$(call read_page "{\"tab\":$fence_tab}")
+  fence_refused "$fenced" "the read after forward onto the site off limits" use
   case "$(grep -c "^browser: loaded $fence_tab http://pension\.localhost:$port/pension\.html\$" "$log")" in
-    "$loads") echo "forward onto the listed site: restored from the back-forward cache, no load" ;;
-    *) echo "forward onto the listed site: loaded again" ;;
+    "$loads") echo "forward onto the site off limits: restored from the back-forward cache, no load" ;;
+    *) echo "forward onto the site off limits: loaded again" ;;
   esac >> "$out/mcp-fence.txt"
+  # Off the site, the tab is the agent's to read again.
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"localhost:$port/to-pension.html\"}")
-  linked Never
-  case "$fenced" in "error: "*) ;; *) fail "the read answered Never answered: $fenced" ;; esac
-  await_log '^browser: agent logged mcp-client came_to pension\.localhost refused: ' \
-    "the fence's Never didn't reach the activity log"
-  before=$(grep -c '^browser: agent mcp-client asks' "$log" || true)
-  read=$(call read_page "{\"tab\":$fence_tab}")
-  case "$read" in "error: The user said never on pension.localhost"*) ;; *) fail "after Never, the read answered: $read" ;; esac
-  [ "$(grep -c '^browser: agent mcp-client asks' "$log")" = "$before" ] ||
-    fail "after Never, a read on the listed site asked"
-  # Settings › Agents' log has the answers at the tab that came there, in the words of using the
-  # site: its newest entries, from the read refused after Never back.
+  case "$went" in *'link "Pension"'*) ;; *) fail "off the site off limits again, the tab answered: $went" ;; esac
+  # Settings › Other apps' log has the refusals at the tab that came there, in the words of using
+  # the site, over the read the tab sent before them.
+  had=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -n | tail -1)
   send menu Settings…
-  expect '^browser: settings shown ' "Settings… didn't show Settings for the fence's log"
+  expect '^browser: settings shown ' "Settings… didn't show Settings for the refusals' log"
   settings_drew
-  # Settings shows the section it was last on, Agents since the foot's capture.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  # Settings shows the section it was last on, Access since the foot's capture.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section for the log"
   fi
-  settings_drew Agents
-  # The agent's log starts under its grants, whose last row is Revoke All: up to the card's top, its
-  # newest entries show under it. They're the came-to rows, which open nothing, so draw no name.
-  at=$(drawn "revoke all") || fail "Settings › Agents drew no grants above the agent's log"
-  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
-  top=${sight%% to *} bottom=${sight##* to }
-  send scrollkey "${at% *}" $(((top + bottom) / 2)) $((${at#* } - top - 32)) 1
-  drawn_after "revoke all" "^browser: drive $step: " > /dev/null ||
-    fail "Settings › Agents didn't draw again, scrolled to the agent's log"
+  settings_drew 'Other apps'
+  # The read's row is the newest that opens, under the refusals: with it in sight, they show over
+  # it. They open nothing, so draw no name. Its id is past every read's drawn before.
+  for _ in $(seq 100); do
+    newest=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -n | tail -1)
+    [ "${newest:-0}" -gt "${had:-0}" ] && break
+    sleep 0.1
+  done
+  [ "${newest:-0}" -gt "${had:-0}" ] || fail "Settings › Other apps drew no read under the refusals"
+  in_sight "request $newest GET" || fail "Settings › Other apps didn't draw the read under the refusals"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-log.png" || fail "no window to capture"
   send key w cmd
-  expect '^browser: settings hidden$' "⌘W didn't hide Settings after the fence's log"
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after the refusals' log"
   # The tab stays open, as the agent's last at work, which the end of its session reads.
-  # Another bank's site asks, as the answer was for bank.localhost alone.
-  asks='^browser: agent mcp-client asks [0-9]*: open otherbank\.localhost$'
-  request open_tab "{\"url\":\"otherbank.localhost:$port/fields.html\"}" >&4
-  await_more "$asks" 0 || fail "another bank's site didn't ask"
-  # Left unanswered, for the client to go with.
-  pending=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-  await_log "^browser: agent question $pending at " "the agent's question wasn't drawn"
 fi
 # The client closing its end ends its session, which ends its session with the tab.
 exec 4>&-
@@ -4152,20 +3952,19 @@ if [ "$driven" = 1 ]; then
   await_log "^browser: agent session ended mcp-client $agent_tab disconnected\$" \
     "ending the client's session didn't end its session with the tab"
   # Its card ends on its receipt, which names only what had consequences (#1080): the five key
-  # presses allowed to pay, the Danish Betal, the market's Buy now and the bank's Overfør are its
-  # orders, the Comment, the chat's Send and the market's two Sends its messages, the bank's site it was allowed to open is no order or message,
-  # and its pages are Open's to count.
+  # presses that paid at Full access, the Danish Betal and the bank's Overfør are its orders, the
+  # Comment and the chat's Send its messages; what ilo stopped at Work on pages is none of them, the
+  # bank's site it opened is no order or message, and its pages are Open's to count.
   # Library › Agents keeps it, in its agent's profile (#1080).
   await_log '^browser: agents history keeps session-[0-9]*-[0-9]* in profile [1-9]' \
     "the client's ended session wasn't kept for Library › Agents: $(grep '^browser: agents history' "$log" | tail -1)"
-  await_log '^browser: task card session-[0-9]* Done Done · 8 orders placed · 4 messages sent$' \
-    "the client's card didn't count the eight orders it placed and four messages it sent: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
+  await_log '^browser: task card session-[0-9]* Done Done · 7 orders placed · 2 messages sent$' \
+    "the client's card didn't count the seven orders it placed and two messages it sent: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
     fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   # The agent is at work in the tab it last acted in, which is still open.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
-  await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
   # The card on its receipt, its status rolled in by now.
   ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
   # Library › Agents lists it under the title the agent gave it (#3690).
@@ -4241,10 +4040,9 @@ if [ "$driven" = 1 ]; then
       fail "another app didn't take the foreground: $(cat "$out/cover-needs.log")"
     background=windows
   fi
-  # An agent's download in its own Space, from a click in its page on a site the user always
-  # allows, while another app's window has the keyboard: ilo's window neither asks to come forward
-  # nor takes the keyboard (#3183), and the download is in the downloads area and the activity log
-  # all the same. Under Wayland sway marks a window that asks to come forward urgent, and says so.
+  # An agent's download in its own Space, from a click in its page, while another app's window has
+  # the keyboard: ilo's window neither asks to come forward nor takes the keyboard (#3183), and the
+  # download is in the downloads area and the activity log all the same. Under Wayland sway marks a window that asks to come forward urgent, and says so.
   if [ -n "$background" ]; then
     logged='^browser: agent logged mcp-client download saved\.localhost$'
     logs=$(grep -c "$logged" "$log" || true)
@@ -4255,7 +4053,7 @@ if [ "$driven" = 1 ]; then
     # Its link's ref afresh, as the client reconnected since.
     saved_page=$(call snapshot "{\"tab\":$notes_tab}")
     notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-    [ -n "$notes_ref" ] || fail "the agent's tab of the site it may download from has no link: $saved_page"
+    [ -n "$notes_ref" ] || fail "the agent's tab of the site it downloads from has no link: $saved_page"
     call click "{\"tab\":$notes_tab,\"ref\":\"$notes_ref\"}" > /dev/null
     await_more "$logged" "$logs" ||
       fail "the agent's download with another app in front isn't in the activity log: $(grep 'browser: agent .*download' "$log" | tail -3 | tr '\n' ' ')"
@@ -4284,6 +4082,9 @@ if [ "$driven" = 1 ]; then
   ones=$(counted '^browser: needs you 1$')
   urgents=$(counted '^browser: window [0-9]* urgent on$')
   badges=$(counted '^browser: \(dock\|taskbar\) badge 1$')
+  opens=$(counted "^browser: task page $opened_tab watched\$")
+  placed=$(counted "^browser: task page $opened_tab in place\$")
+  backs=$(counted "^browser: task page $opened_tab back\$")
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in once more\"}" >&4
   await_more '^browser: session session-[0-9]* of agent mcp-client as check$' "$sessions" ||
     fail "the reconnected client's call started no card of its own"
@@ -4363,6 +4164,15 @@ PLATE
     send click $((px + pw / 2)) $((py + ph / 2))
     expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
   fi
+  # The handoff's page opens by itself over the conversation shown, none of the task's being
+  # watched there, and Escape steps back from it to the conversation, where the task's Stop is.
+  await_more "^browser: task page $opened_tab watched\$" "$opens" ||
+    fail "the reconnected client's handoff didn't open its page by itself once its conversation showed"
+  await_more "^browser: task page $opened_tab in place\$" "$placed" ||
+    fail "the reconnected client's handoff's page didn't come to rest in place"
+  send key escape
+  await_more "^browser: task page $opened_tab back\$" "$backs" ||
+    fail "Escape didn't step back from the reconnected client's handoff's page"
   # With motion reduced, as on GitHub's Windows runner, the step holds still rather than shimmer.
   if ! grep -q '^browser: reduce motion on$' "$log"; then
     await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
@@ -4403,7 +4213,7 @@ STOP
   kill -0 "$bridge_pid" 2>/dev/null && fail "the bridge stayed connected once the user stopped its client"
   exec 4>&- 5<&-
 
-  # Off in Settings › Agents takes the socket away and drops a client connected.
+  # Off in Settings › Threads takes the socket away and drops a client connected.
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
@@ -4411,12 +4221,12 @@ STOP
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  # Agents, unless Settings came back on it.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  # Threads, unless Settings came back on it.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Threads$'; then
+    send clickkey $(drawn "toolbar Threads")
+    expect '^browser: settings tab Threads$' "a click on Threads didn't show its section"
   fi
-  settings_drew Agents
+  settings_drew Threads
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
@@ -4435,9 +4245,9 @@ quit
 
 # A tab's id names it alone across launches (#1449): relaunched, a call with the user's tab's id
 # from before is refused as one from before ilo restarted, as the tab it comes back as has another.
-# The switch the run turned off goes back on. The launch waits 2 s for an answer and 3 s for a
-# handoff in place of the spec's 5 and 15 minutes, which the time limits' step below reaches, and
-# ends a task 3 s after its last page closed in place of 60.
+# The switch the run turned off goes back on. The launch waits 3 s for a handoff in place of the
+# spec's 15 minutes, which the time limit's step below reaches, and ends a task 3 s after its last
+# page closed in place of 60.
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
 log="$out/mcp-waits.log"
 step=0
@@ -4454,23 +4264,11 @@ mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 stale=$(call read_page "{\"tab\":$user_tab}")
 [ "$stale" = "error: ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
   fail "a call with a tab's id from before the relaunch answered: $stale"
-# The time limits (#2184): a change the user leaves unanswered is refused once its wait ends, and a
-# handoff not handed back answers the agent's call, the tab staying the user's.
+# The time limit (#2184): a handoff not handed back answers the agent's call, the tab staying the
+# user's.
 opened=$(call open_tab "{\"url\":\"localhost:$port/frames.html\"}")
 waits_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$waits_tab" ] || fail "open_tab answered: $opened"
-request request "{\"tab\":$waits_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Late\"},\"what\":\"Add Late to the list.\"}]}" >&4
-await_log '^browser: agent mcp-client asks [0-9]*: make a change on localhost$' "the change didn't ask first"
-q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-await_log "^browser: agent mcp-client asked $q with no answer\$" \
-  "a change left unanswered wasn't refused once its 2 s wait ended"
-refused=$(next_answer) || fail "the browser didn't answer the change left unanswered"
-refused=$(printf '%s\n' "$refused" | answered "the change left unanswered")
-case "$refused" in
-  "error: The user didn't answer in 5 minutes"*) ;;
-  *) fail "the change left unanswered answered: $refused" ;;
-esac
-grep -q '"title":"Late"' "$out/site.log" && fail "the change left unanswered went to the site"
 request hand_off "{\"tab\":$waits_tab,\"reason\":\"Sign in later\"}" >&4
 await_log "^browser: agent mcp-client hands off $waits_tab: Sign in later\$" \
   "hand_off didn't hand the tab to the user"
@@ -4709,19 +4507,17 @@ if [ "$driven" = 1 ]; then
     "pins," \
     "unpins and removes its own tab but not the user's," \
     "sends requests to its tab's site with the tab's session it never sees," \
-    "a change asking each time," \
-    "refused unasked without its sentence," \
-    "its question on screen as the log draws it ($follows% of its place changed) with the sentence cut at a word over the method's facts," \
+    "a change refused at Work on pages and never sent," \
+    "refused for its missing sentence before that," \
     "a delete's too," \
-    "and the whole request beside it until Escape," \
-    "unanswered," \
-    "each opening in Settings › Agents to the agent's sentence," \
+    "each opening in Settings › Other apps to the agent's sentence," \
     "where it went and what it sent or didn't," \
     "asks a page's beforeunload handler first," \
     "with no dialog," \
     "closing one that doesn't ask at the first call and keeping one the agent clicked or typed in that asks until it discards it," \
     "runs steps in one call," \
-    "waits on a handoff until Hand Back," \
+    "waits on a handoff until Hand Back on ilo's line," \
+    "its page opening by itself unless the user watches another," \
     "has its tab handed to the user for a sign-in the browser asks for," \
     "which shows over its page watched," \
     "its call waiting and the password never reaching it," \
@@ -4729,36 +4525,37 @@ if [ "$driven" = 1 ]; then
     "a second connection of the client being a card of its own that ends alone when it closes," \
     "whose conversation watches its page," \
     "opens its tabs muted," \
-    "is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask," \
+    "is refused a tab the user took over with a press in its page until they hand it back and Not Now answers its ask for it," \
     "has a tab the user holds listed as with them and nothing of its page," \
     "is stopped by its conversation's Stop while its waiting step shimmers," \
     "which closes its connection once its call is answered," \
     "gets no saved login filled in or offered in its tab until the user takes it over," \
     "when it fills without a reload," \
-    "its download asks first and answers with the file," \
-    "a refused one leaving none," \
-    "one its watched page starts after its call answered asking too," \
-    "its upload asks in a card naming the field's frame's site," \
-    "Don't Allow saying no," \
-    "Choose File… $dialog_said and none for a field whose frame went," \
+    "its download at Work on pages answers with the file," \
+    "its upload hands the field's step to the user by the field's name," \
+    "in a subdomain's frame," \
+    "an object and another site's frame," \
+    "ilo opening no dialog," \
+    "Not Now leaving the tab theirs," \
     "and is refused unasked for a folder's field," \
     "a button," \
     "a sandboxed frame's field and a document whose root frames none," \
-    "a key press that pays asks as a click on Pay now does," \
+    "a key press that pays is stopped at Work on pages as a click on Pay now is," \
     "typing with submit," \
     "Enter in the card's field," \
-    "Space after Tab asking on $space_said," \
+    "Space after Tab stopped by $space_said," \
     "Enter after Tab," \
     "and Enter on the box to save the card," \
-    "a Send off the messaging sites asks once its page holds a message," \
+    "a Send off the messaging sites is stopped once its page holds a message," \
     "a forum's Comment and a chat's Send in no form," \
     "and not with its field empty," \
-    "a Danish Betal asks," \
-    "a payment asks every time," \
-    "whatever was allowed before," \
-    "a bank's site asks first until Always Allow," \
-    "which Settings › Agents lists," \
-    "its Overfør asking still$needs_said," \
+    "a Danish Betal and a bank's site are stopped," \
+    "each stop ilo's line with Give Full access on screen as the log draws it ($follows% of its place changed)," \
+    "which the keys press," \
+    "and each goes through at Full access," \
+    "with no answer kept for Settings › Other apps to list," \
+    "a site off limits refused at Full access too," \
+    "its open and each call on a tab that came there$needs_said," \
     "and off takes the socket away;" \
     "an action waits for its element and its page to settle ($settle)," \
     "an app in a frame answers with its content or as busy ($framed)," \

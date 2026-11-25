@@ -33,7 +33,7 @@ use crate::{
     palette::{self, Float, STATE_PRESSED},
     settling::Settling,
     shell::cubic_bezier,
-    text_input::TextInput,
+    text_input::{Colors, TextInput},
 };
 
 actions!(dialog, [Confirm, Cancel, NextField]);
@@ -945,7 +945,6 @@ impl Dialog {
             log!("browser: dialog at rest");
         }
         let (also, also_chosen) = question.also.take().unzip();
-        let palette = palette::current(cx);
         let fields: Vec<_> = question
             .fields
             .iter()
@@ -954,9 +953,7 @@ impl Dialog {
                     TextInput::new(field.placeholder.clone(), cx)
                         .with_text(field.text.clone())
                         .secure(field.secure)
-                        .placeholder_color(palette.on_overlay(FIELD_PLACEHOLDER))
-                        .caret_color(palette.accent)
-                        .selection_color(palette.selection())
+                        .follows(field_colors)
                 })
             })
             .collect();
@@ -1196,6 +1193,16 @@ impl Dialog {
             cx.update(show_next);
         }));
         cx.notify();
+    }
+}
+
+/// A field's colours as it draws, in the palette the card draws in then.
+fn field_colors(cx: &App) -> Colors {
+    let palette = palette::current(cx);
+    Colors {
+        placeholder: palette.on_overlay(FIELD_PLACEHOLDER),
+        caret: palette.accent.into(),
+        selection: palette.selection(),
     }
 }
 

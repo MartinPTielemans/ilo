@@ -27,7 +27,7 @@ forget_appearance
 # Settings › Links' switch is kept off as this file, which an earlier run's end may have left.
 cards_off="$profile_dir/link-cards-off"
 rm -f "$cards_off"
-# The agent's token, which Settings › Agents keeps, on from the launch as mcp.sh's.
+# The agent's token, which Settings › Other apps keeps, on from the launch as mcp.sh's.
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
@@ -394,12 +394,6 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
 send click $((px + pw / 2)) $((py + ph / 2))
 expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
-await '^browser: task pages at ' || fail "the agent's conversation drew no Pages"
-read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-send click $((gx + gw / 2)) $((gy + gh / 2))
-expect "^browser: task $session shows pages\$" "a click on Pages didn't show the agent's pages"
 await "^browser: task picture $agent_tab at " || fail "the agent's conversation didn't picture its tab"
 read -r wx wy ww wh <<PICTURE
 $(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)

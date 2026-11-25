@@ -642,7 +642,7 @@ send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
 send flags
-send click 100 154
+send click 100 148
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
 expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar"
 send key escape
@@ -757,9 +757,9 @@ expect "^browser: window $window main false\$" "the window behind Settings wasn'
 expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
 expect "^browser: window $window drew main false\$" "the window behind Settings didn't draw its dimmed glyphs"
 ../tools/window-screenshot.sh "$pid" "$out/nav-dimmed.png" all || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 # Where Settings drew the switch, which differs by OS: it logs that once a place.
 await '^browser: settings switch unload idle tabs at ' || fail "Settings didn't draw Unload tabs' switch"
 unload_switch=$(sed -n 's/^browser: settings switch unload idle tabs at //p' "$log" | tail -1)
@@ -775,8 +775,8 @@ expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen
 since $aged | grep -q "browser: tab $c without its page\$" && fail "a tab let go of its page with the switch off"
 send menu Settings…
 # Settings comes back on the section it showed last.
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't bring Settings back to the front"
-settings_drew 'Tabs & Sidebar'
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't bring Settings back to the front"
+settings_drew 'Tabs & Spaces'
 send clickkey $unload_switch
 expect '^browser: unload idle tabs on$' "a click on Unload tabs' switch didn't turn it on"
 expect "browser: tab $c without its page\$" "turning the switch on didn't unload the tab unseen 2 hours"
@@ -797,9 +797,9 @@ send state
 # the taskbar's Close window does, which Settings takes as hiding.
 if windows; then
   send menu Settings…
-  expect '^browser: settings shown Tabs & Sidebar$' \
-    "Settings… didn't show Tabs & Sidebar again after its close button"
-  settings_drew 'Tabs & Sidebar'
+  expect '^browser: settings shown Tabs & Spaces$' \
+    "Settings… didn't show Tabs & Spaces again after its close button"
+  settings_drew 'Tabs & Spaces'
   post key f4 ctrl
   expect '^browser: settings hidden$' "Alt+F4 didn't hide Settings"
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in Settings"
@@ -1140,7 +1140,7 @@ expect "^browser: loaded $waiting https\{0,1\}://example.org/\$" "⌘↩'s tab d
 # Held, back shrinks a little and grows back as its menu opens; reload pressed shrinks too, and let
 # go off it grows back without reloading, as a button does.
 serve
-back_button='138 23.5'
+back_button='158 23.5'
 reload_button='206 23.5'
 printf '%s' iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR42mNgcPhPGhrVMKph+GoAAJiZPxAbf0wNAAAAAElFTkSuQmCC |
   base64 -d > "$out/site/next.png"
@@ -1327,7 +1327,7 @@ open_from_bar "${site}notes.txt"
 send key w cmd
 expect_tabs "$x $kept" "$o" "closing ⌘T's tab didn't go back to the pinned tab it opened over"
 set -- $(row 1)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $u in " "a click on the second Today row didn't show its tab"
 open_from_bar "${site}notes.txt"
 send key w cmd
@@ -1385,7 +1385,7 @@ under=$(echo $kept | cut -d' ' -f1)
 [ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
 switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"
 send key d cmd
 expect_lists "$o $x" "$before" "after ⌘D on the link's tab"
@@ -1447,7 +1447,7 @@ open_site() {
 # The centre of Today's row $1, under the pinned tabs.
 today_row() {
   set -- $(row "$1")
-  echo "$1 $(($2 + 41 * $(echo $(pinned) | wc -w)))"
+  echo "$1 $(($2 + 34 * $(echo $(pinned) | wc -w)))"
 }
 # The links copied last, from the line logged and the two after it.
 copied() {
@@ -2402,11 +2402,11 @@ sort_item() {
   expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
     "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
 }
-# A right-click on the line over Today, under the Space's name with no pinned tab, shows Sort Today
+# A right-click on the gap over Today, under the Space's name with no pinned tab, shows Sort Today
 # Tabs by Site, dimmed if $1 is "(disabled)", and Clear Today over the empty space's menu, captured
 # in $2.png, which escape closes.
 divider_menu() {
-  post rightclick 60 $((90 + 44 + 7))
+  post rightclick 60 $((86 + 42 + 3))
   expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
     "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"

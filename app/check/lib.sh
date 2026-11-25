@@ -813,6 +813,22 @@ since() {
 none_since() {
   ! since "${2:-}" | grep -q "$1"
 }
+# Clicks first run's Skip, or Skip Setup at its welcome, where step $1 last said it's drawn: each
+# step logs where once it has settled, in the frame after the line saying so. Esc is Back there, so
+# a check going on through the steps clicks this.
+skip_step() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk -v settled="browser: onboarding step $1 settled" '
+      $0 == settled { at = ""; on = 1; next }
+      on && /^browser: onboarding skip at / { at = $5 " " $6 }
+      END { print at }' "$log")
+    [ -n "$at" ] && break
+    sleep 0.1
+  done
+  [ -n "$at" ] || fail "the $1 step didn't say where its Skip is"
+  send click $at
+}
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
 none_while() {
@@ -992,10 +1008,10 @@ switch() {
   send key $1
   expect "^browser: selected $2 in " "key $1 didn't show tab $2 of \"$(today)\""
 }
-# The center of row $1 of Today, counting from 0: rows are 41 apart under "+ New Tab", which is
-# under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
+# The center of row $1 of Today, counting from 0: rows are 34 apart under "+ New Tab", which is
+# under the gap over Today, 6 tall, and the Space's name, 42 tall and 86 below the window's top.
 row() {
-  echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+  echo "100 $((86 + 42 + 6 + 34 * ($1 + 1) + 17))"
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
@@ -1049,9 +1065,9 @@ runner_cpu() {
   echo "${model:-a CPU that names no model}, ${count:-an unknown number of} CPUs"
 }
 
-# The page view keeps the sidebar's 228 points on its left and 10 on its other sides, over GPUI's
+# The page view keeps the sidebar's 228 points on its left and 8 on its other sides, over GPUI's
 # view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
-# sidebar hidden ("inset") it's 10 in from every side.
+# sidebar hidden ("inset") it's 8 in from every side.
 check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
@@ -1064,11 +1080,11 @@ check_layout() {
   # Past the sidebar, 228 wide unless $2 gives its width.
   left=228
   case "${2:-}" in [0-9]*) left=$2 ;; esac
-  expected="$left,10 $((width - left - 10))x$((height - 20))"
+  expected="$left,8 $((width - left - 8))x$((height - 16))"
   # Rounded as the card's corners, square when it fills the window.
-  expected_radius=6
+  expected_radius=10
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
-  [ "${2:-}" = inset ] && expected="10,10 $((width - 20))x$((height - 20))"
+  [ "${2:-}" = inset ] && expected="8,8 $((width - 16))x$((height - 16))"
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
   [ "$radius" = "$expected_radius" ] ||
     fail "$1: the page's corners have a radius of ${radius:-0}, not ${expected_radius:-0}"
@@ -1134,14 +1150,14 @@ plus_adds() {
 # The centre of pinned row $1, counting from 0, under the Space's name, and of the ✕ it shows
 # under the pointer.
 pinned_row() {
-  echo "100 $((90 + 44 + 41 * $1 + 20))"
+  echo "100 $((86 + 42 + 34 * $1 + 17))"
 }
 pinned_close() {
-  echo "202 $((90 + 44 + 41 * $1 + 20))"
+  echo "202 $((86 + 42 + 34 * $1 + 17))"
 }
 # Its favicon's.
 pinned_favicon() {
-  echo "26 $((90 + 44 + 41 * $1 + 20))"
+  echo "26 $((86 + 42 + 34 * $1 + 17))"
 }
 
 # What the profile keeps for Safari's engine, as JSON: its sites, the notes it closed and the listed

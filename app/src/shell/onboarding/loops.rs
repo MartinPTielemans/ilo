@@ -608,35 +608,53 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
     };
     let across = crossing(there + t::IMPORT_FADE);
     let home = crossing(back + t::IMPORT_FADE);
-    // The lock halfway along the way across, lit while something passes it.
-    let lock_at = lerp((t::SIDEBAR - 20., t::ROWS_TOP), phone_row, 0.5);
-    let passing = |gone: f32| (1. - 2. * (gone - 0.5).abs()).max(0.) * (1. - out);
-    let lit = passing(across).max(passing(home));
-    let lock = div()
-        .absolute()
-        .left(px(lock_at.0 - 5.))
-        .top(px(lock_at.1 - 8.))
-        .flex()
-        .flex_col()
-        .items_center()
-        .opacity(0.35 + 0.65 * lit)
-        .child(
-            div()
-                .w(px(6.))
-                .h(px(5.))
-                .rounded_t(px(t::BAR_RADIUS))
-                .border_1()
-                .border_b_0()
-                .border_color(palette.text(0.9)),
-        )
-        .child(
-            div()
-                .w(px(10.))
-                .h(px(8.))
-                .rounded(px(t::ICON_RADIUS))
-                .bg(palette.text(0.9)),
-        )
-        .children(place("lock"));
+    // The lock rides the tab across at its start, never over the page's lines, and rests on the
+    // seam between the window and the phone, where the tab went over. Lit while it rides, it dims
+    // as the tab lands, and lights again as the favorite comes back over the seam.
+    let from = (6., t::ROWS_TOP);
+    let rests = (phone_left - from.0) / (phone_row.0 - from.0);
+    let lock_at = match across < rests {
+        true => lerp(from, phone_row, across),
+        false => (phone_left, lerp(from, phone_row, rests).1),
+    };
+    let landed = t_ - (there + t::IMPORT_FADE + t::SYNC_CROSS);
+    let lit = match across < 1. {
+        true => 1.,
+        false => (1. - landed / t::IMPORT_LAND).clamp(0., 1.),
+    };
+    let over = (phone_tile.0 - phone_left) / (phone_tile.0 - mac_tile.0);
+    let back_over = match home > 0. && home < 1. {
+        true => (1. - 4. * (home - over).abs()).max(0.),
+        false => 0.,
+    };
+    let lit = lit.max(back_over);
+    let lock = (across > 0.).then(|| {
+        div()
+            .absolute()
+            .left(px(lock_at.0 - 5.))
+            .top(px(lock_at.1 + 1.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .opacity((0.35 + 0.65 * lit) * (1. - out))
+            .child(
+                div()
+                    .w(px(6.))
+                    .h(px(5.))
+                    .rounded_t(px(t::BAR_RADIUS))
+                    .border_1()
+                    .border_b_0()
+                    .border_color(palette.text(0.9)),
+            )
+            .child(
+                div()
+                    .w(px(10.))
+                    .h(px(8.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.text(0.9)),
+            )
+            .children(place("lock"))
+    });
     let chip = |name: &'static str, at: (f32, f32), seen: f32| {
         div()
             .absolute()
@@ -662,13 +680,31 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
             )
             .child(name)
     };
-    let moving = (across > 0. && across < 1.).then(|| {
-        let from = (6., t::ROWS_TOP);
-        chip(TABS[0], lerp(from, phone_row, across), 1. - out).children(place("moving"))
-    });
-    let returning = (home > 0. && home < 1.).then(|| {
-        chip("Trails", lerp(phone_tile, mac_tile, home), 1. - out).children(place("returning"))
-    });
+    // Each chip on its way, drawn over the window up to the phone's edge and again in the phone,
+    // whose own edge clips it as it does its rows: none of it ever hangs past the phone.
+    let edge = 1.;
+    let carried = |name: &'static str, at: (f32, f32), named: &'static str| {
+        let over_window = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(px(phone_left))
+            .h(px(t::WINDOW_HEIGHT))
+            .overflow_hidden()
+            .child(chip(name, at, 1. - out).children(place(named)));
+        let in_phone = chip(
+            name,
+            (at.0 - phone_left - edge, at.1 - phone_top - edge),
+            1. - out,
+        );
+        (over_window, in_phone)
+    };
+    let moving = (across > 0. && across < 1.)
+        .then(|| carried(TABS[0], lerp(from, phone_row, across), "moving"));
+    let returning = (home > 0. && home < 1.)
+        .then(|| carried("Trails", lerp(phone_tile, mac_tile, home), "returning"));
+    let (moving, moving_in) = moving.unzip();
+    let (returning, returning_in) = returning.unzip();
     // ilo's window: the pin beside the first tab, and the tile that came back.
     let pin = (pinned > 0.).then(|| {
         div()
@@ -789,6 +825,8 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
         )
         .children(phone_tile)
         .children(phone_rows)
+        .children(moving_in)
+        .children(returning_in)
         .children(place("phone"));
     let shown = div()
         .relative()
@@ -797,9 +835,9 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
         .h(px(t::WINDOW_HEIGHT))
         .child(ilo)
         .child(phone)
-        .child(lock)
         .children(moving)
-        .children(returning);
+        .children(returning)
+        .children(lock);
     centred(shown)
 }
 

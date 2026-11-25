@@ -2,36 +2,51 @@
 //! control before the plus.
 
 use gpui::{
-    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Rgba, Role, canvas, div,
-    prelude::*, px, svg,
+    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Role, canvas, div, prelude::*,
+    px, svg,
 };
 
 use super::{
-    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_RADIUS, NAV_SIZE, PLUS_INSET,
+    FOOTER_HEIGHT, NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_RADIUS, NAV_SIZE, PLUS_INSET,
     SPACE_CLEAR, SPACE_DRAGGED, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER,
-    SPACE_LEAST, SPACE_OTHER, SPACE_PITCH, SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH,
-    SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, Space,
+    SPACE_LEAST, SPACE_OTHER, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED,
+    SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, Space,
     access::Accessible,
     space_order::{Along, DraggedSpace},
 };
+use crate::palette::over;
 use crate::space_icon::{GLYPHS, SpaceIcon};
+use crate::tokens::shell::{FOOT_GLYPH, ICON_INK, SPACE_DOT_TONE};
 use crate::tooltip::{Anchor, Tip};
 
 /// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
 const GLYPH_INK: f32 = 20. / 24.;
 
-/// How wide each of `count` Spaces' cells is in a switcher `span` wide, with the `shown`th shown:
-/// an even share in half points, at most the pitch, and once that's under the least the Space
-/// shown keeps, it keeps that and the others share the rest (Arc 1.171). The cells can come to a
-/// fraction more than the span, which the switcher centres.
-pub(super) fn space_cells(span: f32, count: usize, shown: usize) -> Vec<f32> {
+/// How wide each Space's cell is in a switcher `span` wide, from its own pitch in `pitches`, a
+/// dot's or an icon's, with the `shown`th shown. While they don't all fit, the ones whose pitch is
+/// under an even share of what the rest leave keep theirs and the others take that share, in half
+/// points; once that share is under the least the Space shown keeps, it keeps that and the
+/// others share the rest evenly (Arc 1.171). The cells can come to a fraction more than the span,
+/// which the switcher centres.
+pub(super) fn space_cells(span: f32, pitches: &[f32], shown: usize) -> Vec<f32> {
     let half = |width: f32| (width * 2.).round() / 2.;
-    if count == 0 {
-        return Vec::new();
+    let count = pitches.len();
+    if count < 2 || pitches.iter().sum::<f32>() <= span {
+        return pitches.iter().map(|pitch| pitch.min(span)).collect();
     }
-    let even = half(span / count as f32);
-    if even >= SPACE_SHOWN_LEAST || count == 1 {
-        return vec![even.min(SPACE_PITCH); count];
+    let mut narrowest = pitches.to_vec();
+    narrowest.sort_by(f32::total_cmp);
+    let (mut left, mut share) = (span, 0.);
+    for (index, pitch) in narrowest.into_iter().enumerate() {
+        share = left / (count - index) as f32;
+        if pitch > share {
+            break;
+        }
+        left -= pitch;
+    }
+    let share = half(share);
+    if share >= SPACE_SHOWN_LEAST {
+        return pitches.iter().map(|pitch| pitch.min(share)).collect();
     }
     let others = half((span - SPACE_SHOWN_LEAST).max(0.) / (count - 1) as f32);
     (0..count)
@@ -59,8 +74,8 @@ pub(super) fn squeezed(size: f32, cell: f32) -> f32 {
 pub(super) fn icon_opacity(shown: bool, hovered: bool) -> f32 {
     match (shown, hovered) {
         (true, _) => 1.,
-        (false, false) => SPACE_OTHER / SPACE_SHOWN,
-        (false, true) => SPACE_HOVERED / SPACE_SHOWN,
+        (false, false) => SPACE_OTHER,
+        (false, true) => SPACE_HOVERED,
     }
 }
 
@@ -72,7 +87,6 @@ impl Shell {
         }
         let span = self.switcher_span();
         let cells = self.switcher_cells(span);
-        let behind = self.switcher_behind();
         let shell = cx.weak_entity();
         let dots = self.spaces.iter().zip(cells).map(|(space, cell)| {
             let (id, shown) = (space.id, space.id == self.space);
@@ -112,7 +126,7 @@ impl Shell {
                     let grab = f32::from(grab.x);
                     Shell::start_space_drag(&shell, id, Along::Switcher, cell, grab, cx)
                 })
-                .child(self.space_mark(space, shown, cell, &behind))
+                .child(self.space_mark(space, shown, cell))
                 .child(self.dot_drawn(id))
         });
         Some(
@@ -167,15 +181,8 @@ impl Shell {
         self.width() - 2. * SWITCHER_INSET - control
     }
 
-    /// What the switcher's swatches lie on: the window at the footer, over whatever is behind it.
-    fn switcher_behind(&self) -> [Rgba; 2] {
-        let window = f32::from(self.viewport.height).max(1.);
-        let at = self.gradient_color((window - FOOTER_HEIGHT / 2.) / window);
-        self.palette.over_backdrops(at)
-    }
-
     /// A Space's dot, glyph or emoji in its switcher cell `cell` wide.
-    fn space_mark(&self, space: &Space, shown: bool, cell: f32, behind: &[Rgba; 2]) -> AnyElement {
+    fn space_mark(&self, space: &Space, shown: bool, cell: f32) -> AnyElement {
         let id = space.id;
         match SpaceIcon::parse(&space.icon) {
             SpaceIcon::Dot => {
@@ -187,20 +194,25 @@ impl Shell {
                 // Under the pointer it grows as far again past its squeezed size.
                 let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
                 let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
-                // The Space shown's is the only dot in colour, its swatch, or the ink without one;
-                // the others' are the ink, quiet, firmer under the pointer.
+                // The Space shown's is the only dot in colour, a tone of its first colour toward
+                // the ink, so it reads on its own window, or the ink without one; the others' are
+                // the quietest ink, a step firmer under the pointer.
                 match (shown, self.space_theme(id).is_some()) {
-                    (true, true) => self
-                        .palette_of(id)
-                        .swatch
-                        .draw(squeezed(size, cell), behind),
+                    (true, true) => {
+                        let main = self.palette_of(id).swatch.main();
+                        let toned = over(main, self.palette.ink, SPACE_DOT_TONE);
+                        dot(squeezed(size, cell), toned.into())
+                    }
                     (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
-                    (false, _) => dot(squeezed(size, cell), self.palette.glyph(SPACE_OTHER))
-                        .group_hover("space", |style| {
-                            style
-                                .size(px(hovered))
-                                .bg(self.palette.glyph(SPACE_HOVERED))
-                        }),
+                    (false, _) => dot(
+                        squeezed(size, cell),
+                        self.palette.glyph(self.palette.tertiary()),
+                    )
+                    .group_hover("space", |style| {
+                        style
+                            .size(px(hovered))
+                            .bg(self.palette.glyph(self.palette.secondary()))
+                    }),
                 }
                 .into_any_element()
             }
@@ -212,11 +224,11 @@ impl Shell {
                 .text_color(match (shown, self.space_theme(id).is_some()) {
                     (true, true) => self.palette_of(id).accent.into(),
                     (true, false) => self.palette.glyph(1.),
-                    (false, _) => self.palette.glyph(SPACE_OTHER),
+                    (false, _) => self.palette.glyph(self.palette.tertiary()),
                 })
                 .when(!shown, |glyph| {
                     glyph.group_hover("space", |style| {
-                        style.text_color(self.palette.glyph(SPACE_HOVERED))
+                        style.text_color(self.palette.glyph(self.palette.secondary()))
                     })
                 })
                 .into_any_element(),
@@ -236,7 +248,7 @@ impl Shell {
     /// the switcher.
     pub(super) fn dot_ghost(&self, space: u64, cell: f32) -> Option<AnyElement> {
         let space = self.spaces.iter().find(|each| each.id == space)?;
-        let mark = self.space_mark(space, space.id == self.space, cell, &self.switcher_behind());
+        let mark = self.space_mark(space, space.id == self.space, cell);
         Some(
             div()
                 .w(px(cell))
@@ -275,9 +287,9 @@ impl Shell {
             )
             .child(
                 svg()
-                    .path("icons/nav-plus.svg")
-                    .size(px(NAV_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .path("icons/plus.svg")
+                    .size(px(FOOT_GLYPH))
+                    .text_color(self.palette.glyph(ICON_INK)),
             )
     }
 
@@ -320,7 +332,7 @@ impl Shell {
                 svg()
                     .path("icons/nav-menu.svg")
                     .size(px(NAV_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .text_color(self.palette.glyph(ICON_INK)),
             )
     }
 
@@ -346,35 +358,55 @@ const MENU_CONTROL_NAME: &str = concat!(env!("APP_NAME"), " menu");
 #[cfg(test)]
 mod tests {
     use super::{icon_opacity, space_cells, squeezed};
+    use crate::palette::{TEXT_SECONDARY, TEXT_TERTIARY};
 
-    /// The switcher's cells in Arc's sidebar 300 wide, 216 between the insets: 34 apart while they
-    /// fit, an even share in half points past that, and once that's under 22 the Space shown keeps
-    /// 22 and the others share the rest, as Arc 1.171's 17.5, 13 and 9 with 12, 16 and 22 Spaces.
+    /// The switcher's cells in a sidebar 300 wide, 212 between the insets: a dot's pitch of 17 while
+    /// they fit, and once an even share is under that the Space shown keeps it and the others
+    /// share the rest in half points (the rule is Arc 1.171's): 16.5, 13 and 9.5 with 13, 16 and
+    /// 22 Spaces.
     #[test]
     fn the_switcher_shares_its_span_as_arcs() {
-        let span = 300. - 2. * 42.;
-        assert_eq!(space_cells(span, 5, 0), vec![34.; 5]);
-        assert_eq!(space_cells(span, 8, 3), vec![27.; 8]);
-        for (count, others) in [(12, 17.5), (16, 13.), (22, 9.)] {
-            let cells = space_cells(span, count, 4);
+        let span = 300. - 2. * 44.;
+        assert_eq!(space_cells(span, &[17.; 5], 0), vec![17.; 5]);
+        assert_eq!(space_cells(span, &[17.; 12], 3), vec![17.; 12]);
+        for (count, others) in [(13, 16.5), (16, 13.), (22, 9.5)] {
+            let cells = space_cells(span, &vec![17.; count], 4);
             assert_eq!(cells.len(), count);
-            assert_eq!(cells[4], 22., "the Space shown with {count}");
+            assert_eq!(cells[4], 17., "the Space shown with {count}");
             let shared = cells
                 .iter()
                 .enumerate()
                 .all(|(i, &cell)| i == 4 || cell == others);
             assert!(shared, "{count}: {cells:?}");
-            // Never more than a point over the span, which the switcher centres.
-            assert!(cells.iter().sum::<f32>() <= span + 1., "{count}: {cells:?}");
+            // Never more than the rounding's quarter point a Space over the span, which the
+            // switcher centres.
+            let over = cells.iter().sum::<f32>() - span;
+            assert!(over <= 0.25 * count as f32, "{count}: {cells:?}");
         }
         // Without the Space shown among them, as while a new Space's form shows, all share alike.
         assert!(
-            space_cells(span, 22, usize::MAX)
+            space_cells(span, &[17.; 22], usize::MAX)
                 .iter()
-                .all(|&cell| cell == 9.)
+                .all(|&cell| cell == 9.5)
         );
-        assert!(space_cells(span, 0, 0).is_empty());
-        assert_eq!(space_cells(span, 1, 0), vec![34.]);
+        assert!(space_cells(span, &[], 0).is_empty());
+        assert_eq!(space_cells(span, &[17.], 0), vec![17.]);
+    }
+
+    /// A Space with an icon keeps its wider pitch beside the dots while all fit. Once they don't,
+    /// the dots keep theirs and the icons share what's left, until that's under what the Space
+    /// shown keeps and all share as dots do.
+    #[test]
+    fn an_icon_keeps_its_own_pitch_beside_the_dots() {
+        let span = 228. - 2. * 44.;
+        assert_eq!(space_cells(span, &[34., 17., 34.], 1), [34., 17., 34.]);
+        assert_eq!(space_cells(span, &[34.; 5], 0), [28.; 5]);
+        assert_eq!(
+            space_cells(span, &[34., 17., 34., 17., 34., 17.], 0),
+            [29.5, 17., 29.5, 17., 29.5, 17.]
+        );
+        let cells = space_cells(span, &[34.; 9], 2);
+        assert_eq!((cells[2], cells[0], cells[8]), (17., 15.5, 15.5));
     }
 
     /// An item keeps its size while it has 4 clear of its neighbours, shrinks to keep that, and
@@ -391,22 +423,15 @@ mod tests {
     }
 
     /// An icon is dimmed as the dot it replaces is: the Space shown at full strength, the others
-    /// by the dots' ratio of 0.35 to 0.6, and a hovered one by the dots' 0.5 to 0.6 (#320's
-    /// ladder).
+    /// at the quietest text's, and one under the pointer at the quiet text's.
     #[test]
     fn an_icon_dims_as_the_dot_does() {
         assert_eq!(icon_opacity(true, false), 1.);
         assert_eq!(icon_opacity(true, true), 1.);
         let others = icon_opacity(false, false);
-        assert!(
-            (others - 0.35 / 0.6).abs() < 0.02,
-            "the others are at {others}"
-        );
+        assert_eq!(others, TEXT_TERTIARY);
         let hovered = icon_opacity(false, true);
-        assert!(
-            (hovered - 0.5 / 0.6).abs() < 0.02,
-            "a hovered one is at {hovered}"
-        );
+        assert_eq!(hovered, TEXT_SECONDARY);
         assert!(others < hovered && hovered < 1.);
     }
 }
