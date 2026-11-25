@@ -122,6 +122,9 @@ expect '^browser: onboarding done$' "light: the flow didn't end after its last s
 # First run is the only window until it ends, when the browser's, held off screen, comes on.
 grep -q '^browser: window held for first run$' "$log" ||
   fail "light: the browser's window came on screen while first run showed"
+# The Mac's Chromium puts the window on screen as it makes it, so the host takes it off again.
+[ "$(uname)" != Darwin ] || grep -q '^browser: window held off screen$' "$log" ||
+  fail "light: the Mac left the browser's window on screen while first run showed"
 expect '^browser: window on screen after first run$' \
   "light: the browser's window didn't come on screen as first run ended"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Skip at the colour step gave the Space one"
