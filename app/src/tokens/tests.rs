@@ -168,6 +168,10 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // A thread's stage, at the drawing's values (spec-thread-stage.md): the rail's tiles, and the
+    // user's message, rounder than a row as the drawing's bubble is.
+    "shell.task.tile-radius",
+    "shell.conversation.radius",
 ];
 
 #[test]

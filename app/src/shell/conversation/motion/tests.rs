@@ -34,6 +34,7 @@ fn trace(running: bool, steps: usize) -> Line {
         key: 0,
         running,
         took: (!running).then_some(4),
+        started: None,
         items,
     })
 }
@@ -127,7 +128,7 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     assert!(
         motion
             .swapped(Fold::Trace(0))
-            .is_some_and(|was| was.title == "Working")
+            .is_some_and(|was| was.title == "Weaving")
     );
     assert!(motion.status().is_some_and(|(was, _)| was == "Working"));
 }
@@ -348,11 +349,10 @@ fn with_helpers(helpers: usize, steps: usize) -> Line {
     Line::Trace(trace)
 }
 
-/// The Working line crossfades from its steps to its helpers as the first helper comes, whose
-/// line rises in as a step's does; from then its count rolls as a helper comes, and a step that
-/// comes rolls nothing, as the line no longer counts steps.
+/// The fold over a stretch of work counts nothing, so a helper that comes changes none of its words:
+/// the helper's line rises in as a step's does, and nothing crossfades.
 #[test]
-fn the_working_lines_count_goes_from_its_steps_to_its_helpers() {
+fn a_helper_that_comes_changes_nothing_on_the_fold() {
     let start = Instant::now();
     let mut motion = Motion {
         live: true,
@@ -364,34 +364,6 @@ fn the_working_lines_count_goes_from_its_steps_to_its_helpers() {
         conversation(vec![with_helpers(1, 2)]),
     );
     motion.changed(&none, &one, &opened, start);
-    let was = motion.swapped(Fold::Trace(0)).expect("no crossfade");
-    assert_eq!(
-        (was.title.as_ref(), was.note.as_ref()),
-        ("Working", "2 steps")
-    );
-    assert!(motion.count(0).is_none(), "the steps' count rolled to 1");
-    assert_eq!(motion.came(Key::Step(100)), Some(start));
-
-    let mut motion = Motion {
-        live: true,
-        ..Motion::default()
-    };
-    let (three, four) = (
-        conversation(vec![with_helpers(3, 2)]),
-        conversation(vec![with_helpers(4, 2)]),
-    );
-    motion.changed(&three, &four, &opened, start);
-    assert_eq!(motion.count(0), Some(&("3".into(), start)));
     assert!(motion.swapped(Fold::Trace(0)).is_none());
-
-    let mut motion = Motion {
-        live: true,
-        ..Motion::default()
-    };
-    let stepped = conversation(vec![with_helpers(4, 3)]);
-    motion.changed(&four, &stepped, &opened, start);
-    assert!(
-        motion.count(0).is_none(),
-        "a step rolled the helpers' count"
-    );
+    assert_eq!(motion.came(Key::Step(100)), Some(start));
 }

@@ -214,6 +214,8 @@ pub struct Trace {
     pub running: bool,
     /// How long it worked, in seconds, once it's over.
     pub took: Option<u64>,
+    /// When its first step started, which its fold counts up from while it works.
+    pub started: Option<Instant>,
     /// Its steps, with what the agent said between them.
     pub items: Vec<TraceItem>,
 }
@@ -4338,6 +4340,7 @@ impl<'a> Stretch<'a> {
             key,
             running,
             took,
+            started,
             items,
         }));
     }

@@ -32,6 +32,16 @@ pub fn says(assistant: &str, said: &str) -> String {
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
 
+/// The fold over a stretch of work (Z14), the one place the weaving pair stands: at work, its word
+/// and the time so far; done, the time it took.
+pub fn fold(took: Option<u64>, so_far: u64) -> (String, String) {
+    use crate::agents::task::duration;
+    match took {
+        Some(took) => (format!("Woven in {}", duration(took)), String::new()),
+        None => ("Weaving".to_string(), duration(so_far)),
+    }
+}
+
 /// The live line's button while the user has the task's page.
 pub const HAND_BACK: &str = "Hand Back";
 

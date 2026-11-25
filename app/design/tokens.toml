@@ -3127,7 +3127,9 @@ site-gap = 3.0
 # this size.
 picture-empty-glyph = 16.0
 # The agent's text, at body, and the gap under each block.
-text-line = 20.0
+text-line = 21.0
+# The words the user and the assistant wrote, at this size on `text-line`.
+text = 14.0
 block-gap = 14.0
 # Its Markdown: paragraphs this far apart and a list's items closer, each item's marker in a column
 # of its own so its lines wrap under its text, and a list in a list in by that column. Bold is
@@ -3140,12 +3142,13 @@ code-fill = 0.08
 link-line = 1.0
 link-underline = 0.4
 # The user's message: its plate's padding, its share of the column at most.
-bubble-top = 7.0
-bubble-bottom = 8.0
-bubble-x = 12.0
-bubble-width = 0.8
-radius = 12.0
-bubble-fill = 0.08
+bubble-top = 10.0
+bubble-bottom = 10.0
+bubble-x = 14.0
+bubble-most = 380.0
+radius = 14.0
+bubble-fill = 0x1616184d
+light-bubble-fill = 0x16161811
 # The page chip in the first message, over its text: its words on the text's column, the plate
 # hanging out by its padding less 2.
 page-chip-height = 20.0
@@ -3155,27 +3158,40 @@ page-chip-favicon = 12.0
 page-chip-gap = 5.0
 page-chip-below = 5.0
 page-chip-fill = 0.08
-# The work between two messages, as a trace: a summary line, "Working · 5 steps" or "Worked for
-# 41s · 8 steps", and a chevron, right while folded and down while open. Open, its steps nest under
-# it, each a line of its glyph, its title in secondary and, fainter, what it took from 1 s or why
-# it failed. A line that opens has its own chevron and, under the pointer, a plate hanging outside
-# its text, which then goes to the title's colour. A rule runs down the open trace, in from the
-# column's edge. The step under way shimmers: a band of the full ink sweeps across its title, a
-# pass each period, from wherever the floor text keeps puts the title, as the card's status does.
-# A failed step's line is the find bar's red: its glyph, its title and why.
+# The work between two messages (spec-thread-stage.md › The log): one flat running log, a quiet
+# line per step. A stretch is a fold: its head `fold-head` tall, at work its word in the text's
+# ink at medium, the time counting up in text-2, and a chevron down; done, one phrase in text-2,
+# the icons of the pages it visited, `fold-icons-gap` apart, and a chevron right, and it closes by
+# itself. Under the head, its lines `stretch-gap` apart: an icon slot, the words at `trace-text` on
+# `trace-text-line`, and at the right why a step failed. A step is its kind's glyph, past tense in
+# text-2; the step under way wears the ring, present tense in the text's ink. Each joins the line
+# above with a short connector in the ink at `connector-ink`, under the middle of the icon slot.
+# A failed step is as quiet as any other, a cross for its glyph: never red.
 trace-line = 26.0
-trace-glyph = 14.0
-trace-glyph-alpha = 0.38
-trace-gap = 8.0
-trace-title = 0.55
-trace-note = 0.38
-trace-chevron = 10.0
+page-line = 28.0
+fold-head = 28.0
+fold-gap = 6.0
+fold-done-gap = 8.0
+fold-icon = 14.0
+fold-icons-gap = 4.0
+stretch-gap = 4.0
+trace-text = 13.0
+trace-text-line = 16.0
+trace-glyph = 16.0
+trace-glyph-alpha = 0.55
+trace-gap = 10.0
+trace-title = 0.6
+trace-note = 0.6
+trace-chevron = 12.0
 trace-hover = 0.06
 trace-hang = 6.0
-trace-indent = 22.0
-trace-rule = 1.0
-trace-rule-fill = 0.1
-trace-rule-x = 7.0
+step-ring = 14.0
+step-ring-stroke = 1.6
+connector-width = 1.0
+connector-height = 6.0
+connector-x = 7.5
+connector-above = 3.0
+connector-ink = 0.2
 trace-below = 12.0
 # What a line opens to, under its title: a thought's or an error's text, or the page it saw.
 open-top = 2.0

@@ -16,7 +16,7 @@ use gpui::{
     Bounds, Context, Corners, ElementId, Entity, Focusable, FontStyle, FontWeight, HighlightStyle,
     Hsla, Image, InteractiveText, IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render,
     RenderImage, ScrollHandle, SharedString, Size, StyledText, Transformation, UnderlineStyle,
-    WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgba, size, svg,
 };
 
 use gpui::{Role, accesskit::Live as Telling};
@@ -41,7 +41,6 @@ use crate::agents::task::{
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
-use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -50,17 +49,18 @@ use crate::tokens::shell::conversation::ilo::{
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
-    BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIP_KEY,
-    CHIPS_BELOW, CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW,
-    LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
-    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
-    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
-    REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, TEXT_LINE,
-    TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA,
-    TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
-    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X,
-    TRACE_TITLE,
+    BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY,
+    CHIPS_BELOW, CHIPS_TOP, CODE_FILL, COLUMN, CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK,
+    CONNECTOR_WIDTH, CONNECTOR_X, FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, INSET, ITEM_GAP,
+    LIGHT_BUBBLE_FILL, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE,
+    OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP,
+    PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH,
+    PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
+    REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP,
+    STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
+    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE,
+    TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT,
+    TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -1692,12 +1692,14 @@ impl TalkView {
                     .when(look.a11y, |plate| {
                         plate.role(Role::Label).aria_label(text.clone())
                     })
-                    .max_w(gpui::relative(BUBBLE_WIDTH))
+                    .max_w(px(BUBBLE_MOST))
                     .pt(px(BUBBLE_TOP))
                     .pb(px(BUBBLE_BOTTOM))
                     .px(px(BUBBLE_X))
                     .rounded(px(RADIUS))
-                    .bg(palette.plate(BUBBLE_FILL))
+                    .bg(bubble_fill(&palette))
+                    .text_size(px(TEXT))
+                    .line_height(px(TEXT_LINE))
                     .children(chip)
                     .child(text)
                     .when(landing, |plate| {
@@ -1720,13 +1722,12 @@ impl TalkView {
         let fold = Fold::Trace(trace.key);
         let open = self.is_open(fold, trace.running);
         let running = trace.running;
-        let mut line = summary_line(trace);
+        let mut line = summary_line(trace, look.now);
         line.chevron = Some(self.chevron(fold, open, look));
-        line.rolled = self.motion.count(trace.key).cloned();
         self.crossfade(fold, &mut line, look);
         let summary = trace_line(look, line)
             .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, running, cx)));
-        let mut nest = nest(look);
+        let mut nest = nest();
         for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
@@ -1865,6 +1866,17 @@ impl TalkView {
         self.step_line(step, glyph, glyph, look, cx)
     }
 
+    /// How far round the running ring is now, on the shell's breath, which draws the next frame
+    /// only while a ring is drawn.
+    fn turned(&self, look: &Look, cx: &mut Context<Self>) -> f32 {
+        let Some(shell) = self.shell.upgrade() else {
+            return 0.;
+        };
+        let turned = (shell.read(cx).breath).turned(Duration::from_secs_f32(RING_TURN), look.now);
+        cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
+        turned
+    }
+
     /// As `step`, which may be the `live` line beside the page or, as a helper's, never is.
     fn step_line(
         &self,
@@ -1884,7 +1896,10 @@ impl TalkView {
         line.glyph = glyph.then_some(step.glyph);
         line.failed = step.failed;
         line.chevron = opens.then(|| self.chevron(fold, open, look));
-        line.shimmers = step.running.then(|| look.shimmer(self.made));
+        // The step under way wears the ring, and every step after the first joins the one above.
+        line.ring = (step.running && glyph).then(|| self.turned(look, cx));
+        line.shimmers = (step.running && !glyph).then(|| look.shimmer(self.made));
+        line.joined_above = glyph;
         self.crossfade(Fold::Step(step.key), &mut line, look);
         line.note_alpha = line.note_alpha.min(self.motion.note(step.key, look.now));
         let mut line = trace_line(look, line);
@@ -1958,7 +1973,7 @@ impl TalkView {
                     ),
             ),
             Opens::Steps(steps) => Some(
-                nest(look).children(
+                nest().children(
                     steps
                         .iter()
                         .flat_map(|step| self.step(step, false, look, cx)),
@@ -2173,10 +2188,14 @@ impl TalkView {
                 .h(px(at(from.size.height, to.size.height)))
                 .overflow_hidden()
                 .rounded(px(between(radius, RADIUS)))
-                .bg(look.palette.plate(between(fill, BUBBLE_FILL)))
+                .bg(mixed(
+                    look.palette.plate(fill),
+                    bubble_fill(&look.palette),
+                    done,
+                ))
                 .pt(px(between((height - TEXT_LINE) / 2., BUBBLE_TOP)))
                 .px(px(between(inset, BUBBLE_X)))
-                .text_size(px(text::BODY))
+                .text_size(px(TEXT))
                 .line_height(px(TEXT_LINE))
                 .text_color(look.palette.text(TITLE))
                 .child(landing.text.clone())
@@ -2736,22 +2755,36 @@ fn rolled(
 
 /// What a trace, or a turn's same step on several tabs, opens to: its lines, a step in, along a
 /// rule under the glyph above them.
-fn nest(look: &Look) -> gpui::Div {
+/// The user's message's plate: the drawing's dark plate in Dark, the ink at a card's strength in
+/// Light (light-values.md, Proposed).
+fn bubble_fill(palette: &super::Palette) -> Hsla {
+    rgba(match palette.tone {
+        Tone::Dark => BUBBLE_FILL,
+        Tone::Light => LIGHT_BUBBLE_FILL,
+    })
+    .into()
+}
+
+/// `from` mixed `done` of the way to `to`, channel by channel.
+fn mixed(from: Hsla, to: Hsla, done: f32) -> Hsla {
+    let (from, to) = (from.to_rgb(), to.to_rgb());
+    let at = |a: f32, b: f32| a + (b - a) * done;
+    gpui::Rgba {
+        r: at(from.r, to.r),
+        g: at(from.g, to.g),
+        b: at(from.b, to.b),
+        a: at(from.a, to.a),
+    }
+    .into()
+}
+
+fn nest() -> gpui::Div {
     div()
         .relative()
         .flex()
         .flex_col()
         .items_start()
-        .pl(px(TRACE_INDENT))
-        .child(
-            div()
-                .absolute()
-                .left(px(TRACE_RULE_X))
-                .top_0()
-                .bottom_0()
-                .w(px(TRACE_RULE))
-                .bg(look.palette.plate(TRACE_RULE_FILL)),
-        )
+        .gap(px(STRETCH_GAP))
 }
 
 /// How the lines follow what came at their end: not while the user has scrolled up to read, at
@@ -2819,6 +2852,14 @@ struct TraceLine {
     note: SharedString,
     chevron: Option<f32>,
     shimmers: Option<Option<f32>>,
+    /// The step under way: the ring in its glyph's place, this far round, its words in the
+    /// text's ink.
+    ring: Option<f32>,
+    /// It joins the line above it with a connector, as a step under its page does.
+    joined_above: bool,
+    /// A stretch's fold head, and whether its stretch is at work: its word then in the text's
+    /// ink at medium, else in text-2.
+    head: Option<bool>,
     alpha: f32,
     note_alpha: f32,
     chevron_alpha: f32,
@@ -2843,6 +2884,9 @@ impl TraceLine {
             note,
             chevron: None,
             shimmers: None,
+            ring: None,
+            joined_above: false,
+            head: None,
             alpha: 1.,
             note_alpha: 1.,
             chevron_alpha: 1.,
@@ -2915,12 +2959,22 @@ fn helper_line(
 }
 
 /// A stretch's summary line: its title and what it counts, joined as one string.
-fn summary_line(trace: &Trace) -> TraceLine {
-    let (title, counted) = trace.summary();
+fn summary_line(trace: &Trace, now: Instant) -> TraceLine {
+    let (title, note) = fold_words(trace, now);
     TraceLine {
-        joined: true,
-        ..TraceLine::new(Fold::Trace(trace.key), title, counted)
+        head: Some(trace.took.is_none()),
+        ..TraceLine::new(Fold::Trace(trace.key), title, note)
     }
+}
+
+/// A stretch's fold's words at `now`: at work its word and the time so far, from its first step,
+/// counted on the frames its running ring draws; done, the time it took.
+fn fold_words(trace: &Trace, now: Instant) -> (SharedString, SharedString) {
+    let so_far = (trace.started).map_or(0, |started| {
+        now.saturating_duration_since(started).as_secs()
+    });
+    let (title, note) = words::fold(trace.took, so_far.max(1));
+    (title.into(), note.into())
 }
 
 /// Which line a `TraceLine` is: a trace's, which folds, or one of ilo's.
@@ -2953,6 +3007,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         note: description,
         chevron,
         shimmers,
+        ring,
+        joined_above,
+        head,
         alpha,
         note_alpha,
         chevron_alpha,
@@ -2979,33 +3036,47 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             format!("trace-group-{key}").into(),
         ),
     };
-    // A failed line is red, its glyph, its words and why, under the pointer too.
-    let red: Hsla = rgb(NOT_FOUND).into();
-    let note = if failed {
-        red
-    } else {
-        palette.gray(TRACE_NOTE)
-    };
+    // A failed line is as quiet as any other, a cross for its glyph and why at its end: never
+    // red.
+    let note = palette.gray(TRACE_NOTE);
     let ilos = mark.is_some();
-    let words = match (failed, shimmers) {
-        (true, _) => red,
-        (false, _) if ilos => palette.text(ILO_INK),
-        (false, Some(None)) => palette.text(TITLE),
+    let words = match shimmers {
+        _ if ilos => palette.text(ILO_INK),
+        _ if head == Some(true) => palette.text(TITLE),
+        _ if ring.is_some() => palette.text(TITLE),
+        Some(None) => palette.text(TITLE),
         // At the shimmer's peak, which each part fades down from.
-        (false, Some(Some(_))) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
-        (false, None) => palette.text(TRACE_TITLE),
+        Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
+        None => palette.text(TRACE_TITLE),
     };
     let glyph = glyph.map(|glyph| {
-        let (color, size) = match (failed, ilos) {
-            (true, _) => (red, TRACE_GLYPH),
-            (false, true) => (palette.glyph(ILO_INK), ILO_GLYPH),
-            (false, false) => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
+        let (color, size) = match ilos {
+            true => (palette.glyph(ILO_INK), ILO_GLYPH),
+            false => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
         };
-        svg()
-            .flex_none()
-            .path(glyph)
-            .size(px(size))
-            .text_color(color)
+        let path = if failed { "icons/x.svg" } else { glyph };
+        match ring {
+            Some(turned) => div()
+                .flex_none()
+                .size(px(size))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(ring::ring(
+                    STEP_RING,
+                    STEP_RING_STROKE,
+                    turned,
+                    palette.text(RING_TRACK),
+                    palette.text(TITLE),
+                ))
+                .into_any_element(),
+            None => svg()
+                .flex_none()
+                .path(path)
+                .size(px(size))
+                .text_color(color)
+                .into_any_element(),
+        }
     });
     // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
     // keeps to their first line, which is where a trace's one line is.
@@ -3025,7 +3096,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .flex_none()
             .path("icons/chevron-down.svg")
             .size(px(TRACE_CHEVRON))
-            .text_color(palette.glyph(TRACE_NOTE))
+            .text_color(palette.glyph(TRACE_GLYPH_ALPHA))
             .opacity(chevron_alpha)
             .when(open < 1., |glyph| {
                 glyph.with_transformation(Transformation::rotate(Radians(-FRAC_PI_2 * (1. - open))))
@@ -3065,6 +3136,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         })
         .opacity(alpha)
         .text_color(words)
+        .when(head == Some(true), |title| {
+            title.font_weight(FontWeight::MEDIUM)
+        })
         // A shimmering title is lit by its shimmer, under the pointer too.
         .when(
             opens && !failed && !matches!(shimmers, Some(Some(_))),
@@ -3103,17 +3177,38 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             true => line.min_h(px(TRACE_LINE)).items_start(),
             // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
             false => line
-                .h(px(TRACE_LINE))
+                .relative()
+                .h(px(if head.is_some() {
+                    FOLD_HEAD
+                } else {
+                    TRACE_LINE
+                }))
+                .when(head.is_some(), |line| line.gap(px(FOLD_GAP)))
                 .ml(px(-TRACE_HANG))
                 .px(px(TRACE_HANG))
                 .items_center()
-                .whitespace_nowrap(),
+                .whitespace_nowrap()
+                .text_size(px(TRACE_TEXT))
+                .line_height(px(TRACE_TEXT_LINE)),
+        })
+        .when(joined_above, |line| {
+            line.child(
+                div()
+                    .absolute()
+                    .left(px(TRACE_HANG + CONNECTOR_X - CONNECTOR_WIDTH / 2.))
+                    .top(px((TRACE_LINE - TRACE_GLYPH) / 2.
+                        - CONNECTOR_ABOVE
+                        - CONNECTOR_HEIGHT))
+                    .w(px(CONNECTOR_WIDTH))
+                    .h(px(CONNECTOR_HEIGHT))
+                    .bg(palette.text(CONNECTOR_INK)),
+            )
         })
         .when(opens, |line| {
             line.cursor_pointer()
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
-        .children(glyph.map(|glyph| first(glyph.into_any_element())))
+        .children(glyph.map(first))
         .children(icon.map(|icon| {
             first(
                 img(icon)
@@ -3361,7 +3456,7 @@ impl Render for TalkView {
             .pb(px(REPLY_BOTTOM))
             .flex()
             .flex_col()
-            .text_size(px(text::BODY))
+            .text_size(px(TEXT))
             .line_height(px(TEXT_LINE))
             .text_color(palette.text(TITLE))
             .child(shut(on_column(self.header(&look, cx).into_any_element())))

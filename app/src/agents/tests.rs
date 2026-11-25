@@ -8528,6 +8528,7 @@ mod tasks {
             key: 0,
             running: false,
             took: Some(4),
+            started: None,
             items: vec![TraceItem::Step(step(
                 0,
                 Opens::Steps(vec![step(1, Opens::Nothing), step(2, Opens::Nothing)]),

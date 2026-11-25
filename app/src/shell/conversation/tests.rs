@@ -20,7 +20,12 @@ use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::text_input::TextInput;
 use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
-use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
+use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, STRETCH_GAP, TRACE_LINE};
+
+/// How tall `lines` of a stretch stand, one over the next with the log's gap between.
+fn lines_high(lines: f32) -> f32 {
+    lines * TRACE_LINE + (lines - 1.) * STRETCH_GAP
+}
 use crate::tokens::shell::task_area::BESIDE;
 use crate::tokens::text;
 use crate::tooltip::text_width;
@@ -81,6 +86,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            started: None,
             items,
         })],
         tabs: vec![(30, "skyscanner.net".into())],
@@ -971,7 +977,6 @@ fn a_trace_is_open_while_it_works_unless_the_user_says_otherwise(cx: &mut TestAp
 /// (#1476).
 #[gpui::test]
 fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
-    use crate::tokens::shell::conversation::TRACE_LINE;
     let (shell, _, cx) = shown(cx);
     let tabs = (0..10)
         .map(|key| TraceStep {
@@ -997,6 +1002,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
         key: 0,
         running: true,
         took: None,
+        started: None,
         items,
     })];
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -1018,7 +1024,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(
         height(Fold::Group(0), cx),
-        Some(10. * TRACE_LINE),
+        Some(lines_high(10.)),
         "it didn't open to ten lines"
     );
     assert_eq!(
@@ -1035,7 +1041,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     );
     let opened = height(Fold::Group(0), cx).unwrap();
     assert!(
-        opened > 10. * TRACE_LINE,
+        opened > lines_high(10.),
         "why it failed shows under its tab: {opened}"
     );
 }
@@ -1103,6 +1109,7 @@ fn a_sent_reply_thinks_until_the_first_step(cx: &mut TestAppContext) {
         key: 1,
         running: true,
         took: None,
+        started: None,
         items: vec![TraceItem::Step(step(1, "Reading the page", true))],
     };
     talk.lines.push(Line::Trace(first));
@@ -2830,6 +2837,7 @@ fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
         key: 1,
         running: true,
         took: None,
+        started: None,
         items: vec![helper(began.clone()), helper(began)],
     };
     assert_eq!(trace.helpers(), 2);
@@ -2852,6 +2860,7 @@ fn with_helpers(helpers: usize) -> Conversation {
         key: 0,
         running: true,
         took: None,
+        started: None,
         items: items.collect(),
     })];
     talk
@@ -2865,20 +2874,22 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
-/// A stretch's summary line draws the one string its task's card writes, its dot between how long
-/// it worked and what it counts: under way and over, steps and helpers, one and several. A step's
-/// line has no dot before its note.
+/// A stretch's fold says Z14's words, the one place the weaving pair stands: at work its word and
+/// the time so far from its first step, done the time it took. It counts no steps or strands and
+/// has no dot, whatever the card says. A step's line has no dot before its note.
 #[test]
-fn a_stretchs_summary_line_draws_the_cards_string() {
+fn a_stretchs_fold_says_weaving_then_woven_in() {
     use super::{TraceLine, summary_line};
     for helpers in [0, 1, 4] {
         let mut talk = with_helpers(helpers);
         let trace = its_trace(&mut talk);
-        assert_eq!(summary_line(trace).text(), trace.line().as_ref());
+        let now = std::time::Instant::now();
+        trace.started = Some(now - std::time::Duration::from_secs(72));
+        assert_eq!(summary_line(trace, now).text(), "Weaving 1 min 12 s");
         (trace.running, trace.took) = (false, Some(41));
-        let drawn = summary_line(trace).text();
-        assert_eq!(drawn, trace.line().as_ref());
-        assert!(drawn.contains(" \u{b7} "), "{drawn}");
+        let drawn = summary_line(trace, now).text();
+        assert_eq!(drawn, "Woven in 41 s");
+        assert!(!drawn.contains('\u{b7}'), "{drawn}");
     }
     let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
     assert_eq!(step.text(), "Read shop.example");
@@ -2931,7 +2942,7 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(
         listed(cx),
-        Some(5. * TRACE_LINE),
+        Some(lines_high(5.)),
         "four helpers' lines and the task's own step"
     );
 
@@ -2940,7 +2951,7 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     its_trace(&mut talk).items[0] = helper(step(10, "Read shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
-    assert_eq!(listed(cx), Some(6. * TRACE_LINE));
+    assert_eq!(listed(cx), Some(lines_high(6.)));
 
     view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);

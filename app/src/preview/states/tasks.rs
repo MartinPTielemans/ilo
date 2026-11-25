@@ -176,6 +176,7 @@ fn helper_trace(count: usize, waits: bool) -> Trace {
         key: 10,
         running: true,
         took: None,
+        started: None,
         items: helper_lines(count, waits, true),
     }
 }
@@ -406,6 +407,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            started: None,
             items: items.clone(),
         })],
         tabs: vec![
@@ -475,6 +477,7 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         key: 0,
         running: false,
         took: Some(40),
+        started: None,
         items: steps,
     });
     talk.lines = match card.word {
@@ -511,6 +514,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             key,
             running: false,
             took: Some(40),
+            started: None,
             items: items.to_vec(),
         })
     };
@@ -519,6 +523,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             key,
             running: true,
             took: None,
+            started: None,
             items: vec![TraceItem::Step(TraceStep {
                 key,
                 glyph: "icons/mouse-pointer-2.svg",
@@ -765,6 +770,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                     key: 10,
                     running: false,
                     took: Some(52),
+                    started: None,
                     items: helper_lines(HELPER_PAGES.len(), false, false),
                 }),
                 Line::Said(
@@ -801,6 +807,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 key: 10,
                 running: true,
                 took: None,
+                started: None,
                 items: vec![TraceItem::Step(opened), TraceItem::Step(reading)],
             };
             vec![done(0, before), Line::Trace(trace)]
