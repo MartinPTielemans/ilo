@@ -114,6 +114,9 @@ pub(super) fn at(x: f32, y: f32) -> gpui::Div {
 }
 
 /// The step's heading and its line, at the column's start or centred over the card.
+/// The headings' weight in the display face: v9's semibold, medium until the face has its 600.
+const HEADING_WEIGHT: FontWeight = FontWeight::MEDIUM;
+
 /// A heading's `title` in the display face at the headings' weight, a line `height` tall.
 pub(super) fn heading_text(
     title: impl Into<SharedString>,
@@ -121,7 +124,7 @@ pub(super) fn heading_text(
     height: f32,
     cx: &mut App,
 ) -> gpui::Div {
-    display_text(title, size, height, cx).font_weight(FontWeight(t::HEADING_WEIGHT))
+    display_text(title, size, height, cx).font_weight(HEADING_WEIGHT)
 }
 
 pub(super) fn heading(

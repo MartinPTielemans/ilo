@@ -257,6 +257,8 @@ fn the_steps_are_those_with_something_to_ask(cx: &mut TestAppContext) {
     // here, as a test's shell has no Agents, leaves Other apps out.
     synced(cx, Status::On);
     host.no_browsers.set(true);
+    // As at a launch on a machine with none: a replay lists the browsers through the host it had.
+    shell.update(cx, |shell, _| shell.importing = None);
     started(&shell, cx);
     let shown = steps(&shell, cx);
     assert!(!shown.contains(&Step::Account), "signed in already");
@@ -376,7 +378,12 @@ fn the_progress_counts_only_the_steps_shown(cx: &mut TestAppContext) {
         let still = crate::motion::still(cx);
         shell.onboarding.as_ref().unwrap().progress_now(still)
     });
-    assert_eq!(now, fraction(Step::Favorites, &shell, cx));
+    assert_eq!(
+        steps(&shell, cx),
+        [Step::Import, Step::Space, Step::Done],
+        "an import that offers no favorites leaves their step out as the import is left"
+    );
+    assert_eq!(now, fraction(Step::Space, &shell, cx));
 }
 
 /// Esc cancels a wait under way and nothing else: it never passes a step, never goes back, and
@@ -676,6 +683,9 @@ fn the_tidy_step_tells_of_the_broom_only_where_it_can_be(cx: &mut TestAppContext
         host.broom.set(broom);
         started(&shell, cx);
         on_to(&shell, cx, Step::Tidy);
+        // On the way, Just the Browser turned threads off; as they were, for the step's own case.
+        host.threads.set(Some(threads));
+        settle(&shell, cx);
         assert_eq!(
             placed("broom", cx).is_some(),
             shown,
@@ -1008,6 +1018,14 @@ fn kept_dir(cx: &mut TestAppContext) -> std::path::PathBuf {
     ))
 }
 
+/// The card started again as at a launch, which reads the step kept.
+fn relaunch(shell: &Entity<Shell>, cx: &mut VisualTestContext, dir: &std::path::Path) {
+    let dir = dir.to_string_lossy().into_owned();
+    cx.update(|_, cx| super::resume::kept_in(dir, cx));
+    shell.update(cx, |shell, _| shell.onboarding = None);
+    started(shell, cx);
+}
+
 /// What first run keeps for ⌘Q, if anything.
 fn kept(dir: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(dir.join("first-run-step")).ok()
@@ -1064,14 +1082,12 @@ fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
             super::first_run_waiting(&dir.to_string_lossy()),
             "{written:?}"
         );
-        shell.update(cx, |shell, _| shell.onboarding = None);
-        started(&shell, cx);
+        relaunch(&shell, cx, &dir);
         assert_eq!(step(&shell, cx), Some(at), "{written:?}");
     }
     // At the tidy step the bar shows the time Settings has, as the profile kept it.
     std::fs::write(dir.join("first-run-step"), "5").unwrap();
-    shell.update(cx, |shell, _| shell.onboarding = None);
-    started(&shell, cx);
+    relaunch(&shell, cx, &dir);
     let shown = card(&shell, cx, |o| {
         o.tidy.as_ref().map(|tidy| tidy.stops[tidy.at].1)
     });
@@ -1081,15 +1097,19 @@ fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
     host.sync_server.set(true);
     synced(cx, Status::On);
     std::fs::write(dir.join("first-run-step"), "1").unwrap();
-    shell.update(cx, |shell, _| shell.onboarding = None);
-    started(&shell, cx);
+    relaunch(&shell, cx, &dir);
     assert_eq!(step(&shell, cx), Some(Step::Import));
     // Kept at the tidy step, which this launch leaves out: the next that shows.
     host.archive_after.set(None);
     std::fs::write(dir.join("first-run-step"), "5").unwrap();
+    relaunch(&shell, cx, &dir);
+    assert_eq!(step(&shell, cx), Some(Step::Done));
+
+    // Help › Welcome in the same launch plays the card from its start, whatever is kept.
+    std::fs::write(dir.join("first-run-step"), "5").unwrap();
     shell.update(cx, |shell, _| shell.onboarding = None);
     started(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Done));
+    assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
 /// The lines a check waits on name a step by its number, a switch's or button's place, and how a
@@ -1123,19 +1143,12 @@ fn no_line_names_a_pick(cx: &mut TestAppContext) {
     );
     let picked = Theme::of_color(SWATCHES[2]).to_text();
     let words = [
-        picked.as_str(),
-        "hours",
-        "days",
-        "Never",
-        " on",
-        " off",
-        "true",
-        "false",
-        "Standard",
+        "hours", "days", "Never", "on", "off", "true", "false", "Standard",
     ];
     for line in ours {
-        for word in words {
-            assert!(!line.contains(word), "{line:?} names {word:?}");
+        assert!(!line.contains(picked.as_str()), "{line:?} names {picked:?}");
+        for word in line.split_whitespace() {
+            assert!(!words.contains(&word), "{line:?} names {word:?}");
         }
     }
 }

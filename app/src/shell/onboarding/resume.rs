@@ -15,10 +15,18 @@ struct Kept(String);
 
 impl gpui::Global for Kept {}
 
-/// Keeps it in `dir` for a test, never the app's own folder.
+/// Set once a launch has read the step kept, so Help › Welcome plays the card from its start.
+struct Read;
+
+impl gpui::Global for Read {}
+
+/// Keeps it in `dir` for a test, never the app's own folder, read again as at a launch.
 #[cfg(test)]
 pub(crate) fn kept_in(dir: String, cx: &mut App) {
-    cx.set_global(Kept(dir))
+    cx.set_global(Kept(dir));
+    if cx.has_global::<Read>() {
+        cx.remove_global::<Read>();
+    }
 }
 
 /// The file, in the profile's folder; in a test only where it said, so no test writes into a real
@@ -37,8 +45,12 @@ pub fn waiting(dir: &str) -> bool {
     std::path::Path::new(dir).join(FILE).exists()
 }
 
-/// The step's place kept, if one is and it's a number.
-pub(super) fn read(cx: &App) -> Option<u8> {
+/// The step's place kept, if one is and it's a number: at the launch's first card alone.
+pub(super) fn read(cx: &mut App) -> Option<u8> {
+    if cx.has_global::<Read>() {
+        return None;
+    }
+    cx.set_global(Read);
     std::fs::read_to_string(path(cx)?).ok()?.trim().parse().ok()
 }
 

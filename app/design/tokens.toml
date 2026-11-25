@@ -2467,8 +2467,6 @@ import-hold = 0.6
 width = 780.0
 height = 486.0
 radius = 20.0
-# The headings' weight in the display face: v9's 600, at 500 until the face's 600 file is in.
-heading-weight = 500.0
 fill = 0x222226
 fill-alpha = 0.851
 light-fill = 0xf6f3ec
