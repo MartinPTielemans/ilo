@@ -85,6 +85,7 @@ fn conversation(steps: usize) -> Conversation {
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
@@ -2203,6 +2204,7 @@ fn a_task_that_takes_no_reply_offers_start_again_in_its_fields_place(cx: &mut Te
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     };
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -2251,6 +2253,7 @@ fn ended(kind: IloKind) -> Conversation {
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     }
 }
@@ -2759,6 +2762,56 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
         1,
         "Take Over left the live line between steps"
     );
+}
+
+/// While the task waits at a refused or a handed step, or on its own question, no live line
+/// stands, as ilo's line with its own buttons is the last over the field; on a page the user took
+/// over it says they're driving, with Hand Back, which goes as the ilo line's does. Never Take
+/// Over or working then, whatever step its trace has under way.
+#[gpui::test]
+fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
+    use crate::agents::task::Live;
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let yours = |site: Option<&str>| Live::Yours {
+        tab: 30,
+        site: site.map(Into::into),
+    };
+    for live in [Live::Refused, Live::Handed, Live::Asked, yours(None)] {
+        let talk = Conversation {
+            live: live.clone(),
+            ..conversation(3)
+        };
+        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+        assert_eq!(chips, 0, "Take Over stood on the live line at {live:?}");
+        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
+        assert_eq!(
+            hand_back.is_some(),
+            matches!(live, Live::Yours { .. }),
+            "{live:?}"
+        );
+    }
+    assert_eq!(super::words::live(&Live::Refused), None);
+    assert_eq!(super::words::live(&Live::Handed), None);
+    assert_eq!(
+        super::words::live(&yours(None)).as_deref(),
+        Some("You're driving")
+    );
+    assert_eq!(
+        super::words::live(&yours(Some("maat.pt"))).as_deref(),
+        Some("You're driving maat.pt")
+    );
+    let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get().unwrap());
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which

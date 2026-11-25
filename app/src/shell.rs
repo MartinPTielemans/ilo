@@ -576,7 +576,6 @@ pub(crate) const TILE_HOVERED: f32 =
 use crate::tokens::shell::CREATE_UNNAMED;
 use crate::tokens::shell::DEVELOPER_OUTLINE;
 use crate::tokens::shell::DEVELOPER_OUTLINE_WIDTH;
-use crate::tokens::shell::DEVELOPER_SELECTED;
 use crate::tokens::shell::DEVELOPER_TILE;
 use crate::tokens::shell::FORM_GLYPH_COLOR;
 use crate::tokens::shell::FORM_PILL;
@@ -1483,6 +1482,9 @@ pub struct Shell {
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// The plates the sidebar's buttons with a tooltip were last drawn in, by their command.
     button_frames: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
+    /// The sidebar button whose press ended its tooltip, by its command, which asks for none until
+    /// the pointer has left it: GPUI calls a held button left, and at the release hovered again.
+    tip_pressed: Cell<Option<&'static str>>,
     /// The icon slots the Library's Space cards were last drawn with, by Space, for their
     /// tooltips and the icon picker to hang from.
     slot_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -2184,6 +2186,7 @@ impl Shell {
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
+            tip_pressed: Cell::default(),
             slot_frames: Rc::default(),
             brush_frames: Rc::default(),
             card_press_closes: false,
@@ -5349,7 +5352,7 @@ impl Shell {
                 return row.child(
                     split_plate(segments)
                         .when(panes.contains(&selected), |plate| {
-                            selected_plate(&self.palette, plate, 1., 0., developer)
+                            selected_plate(&self.palette, plate, 1., 0.)
                         })
                         .when(developer, |plate| {
                             plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -5375,7 +5378,7 @@ impl Shell {
                     title(&self.palette, self.title(tab), bright).pr(px(TITLE_END_INSET)),
                 )
                 .when(tab == selected, |plate| {
-                    selected_plate(&self.palette, plate, 1., 0., developer)
+                    selected_plate(&self.palette, plate, 1., 0.)
                 })
                 .when(developer, |plate| {
                     plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -6210,28 +6213,20 @@ fn split_plate(segments: impl IntoIterator<Item = impl IntoElement>) -> gpui::Di
         .children(segments)
 }
 
-/// The selected tab's plate, at `opacity` while it fades in, a step firmer at rest in Developer
-/// Mode, which the pointer takes to the same plate as another tab's.
-fn selected_plate(
-    palette: &Palette,
-    plate: gpui::Div,
-    opacity: f32,
-    hover: f32,
-    developer: bool,
-) -> gpui::Div {
-    let fill = palette.shown(hover);
-    let firmer = if developer {
-        DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
-    } else {
-        0.
-    };
-    let fill = Hsla {
-        a: (fill.a + firmer * (1. - hover)).min(1.),
-        ..fill
-    };
-    plate
-        .bg(fill.opacity(opacity))
-        .shadow(palette.shown_shadow(opacity))
+/// The selected tab's plate, at `opacity` while it fades in. It's the palette's in every mode: a
+/// fill firmer than the one the palette reckoned takes its title under what text needs over a
+/// bright window, so Developer Mode's mark is its outline alone.
+fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32) -> gpui::Div {
+    let fill = palette.shown(hover).opacity(opacity);
+    #[cfg(test)]
+    SHOWN_FILL.set(Some(fill));
+    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The fill `selected_plate` last laid, for a test of what a row's plate is drawn in.
+    static SHOWN_FILL: Cell<Option<Hsla>> = const { Cell::new(None) };
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

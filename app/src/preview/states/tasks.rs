@@ -416,6 +416,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         ],
         on: Some(FIRST_TASK + 200),
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,

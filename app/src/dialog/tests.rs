@@ -868,6 +868,39 @@ fn a_click_on_the_cards_dim_leaves_a_pages_question(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), left(&[], "cancel "));
 }
 
+/// A prompt's field stays as the window under the card goes from dark to light and back, and draws
+/// in the palette the card draws in each time, not in the one it was made in.
+#[gpui::test]
+fn a_prompts_field_follows_the_look(cx: &mut TestAppContext) {
+    use crate::palette::{Palette, Tone as Look};
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    let window = dialog.cx.read(|cx| cx.global::<DialogWindow>().0);
+    let mut colours = Vec::new();
+    for look in [Look::Light, Look::Dark, Look::Light] {
+        let palette = Palette::of(None, look);
+        dialog.cx.update(|window, cx| {
+            palette::set_current(palette, cx);
+            window.refresh();
+        });
+        dialog.cx.run_until_parked();
+        let drawn = window
+            .read_with(&dialog.cx, |dialog, cx| {
+                let asked = dialog.asked.as_ref().expect("the question stays");
+                asked.fields[0].read(cx).colors()
+            })
+            .expect("the dialog's window");
+        let meant = Colors {
+            placeholder: palette.on_overlay(FIELD_PLACEHOLDER),
+            caret: palette.accent.into(),
+            selection: palette.selection(),
+        };
+        assert_eq!(drawn, meant, "{look:?}");
+        colours.push(drawn);
+    }
+    assert_ne!(colours[0], colours[1], "light and dark drew the same field");
+    assert_eq!(colours[0], colours[2]);
+}
+
 #[gpui::test]
 fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     let mut dialog = Asking::page(page_question(vec![field("Ada", false)], None), cx);

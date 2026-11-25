@@ -846,9 +846,9 @@ impl Shell {
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full
     /// ink (or its status, with no steps this turn), over the picture its last page's tile ended
-    /// on. Once over, its one line is a done task's answer's or a stopped one's last finished
-    /// step, if it has one; a task a run before left says when it ended and has none. A card
-    /// with no picture ends after its words. A click opens it.
+    /// on. Once over, its one line is a done task's answer's first or, quiet, a stopped one's
+    /// last finished step, if it has one; a task a run before left says when it ended and has
+    /// none. A card with no picture ends after its words. A click opens it.
     fn recent_card(
         &self,
         index: usize,
@@ -870,8 +870,10 @@ impl Shell {
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.word {
             _ if card.ended_at.is_some() => Vec::new(),
+            // A done task says its answer's first line; a stopped one only its last finished
+            // step, quiet, or nothing after its title.
             Word::Done | Word::Stopped => (card.line.clone().into_iter())
-                .map(|line| (line, true))
+                .map(|line| (line, card.word == Word::Done))
                 .collect(),
             _ if card.steps.is_empty() => vec![(card.status.clone(), true)],
             _ => {

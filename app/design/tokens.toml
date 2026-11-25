@@ -1736,12 +1736,12 @@ tile-unthemed = 0x0000_00ff
 tile-unthemed-light = 0xffff_ffff
 # A tab in Developer Mode (docs/ux-spec.md › Developer Mode; ours, as Arc's isn't recorded and its
 # yellow and black aren't ilo's). The one shown has a dashed outline, a work in progress, in the
-# ink, so it reads on every theme, over its row's fill, a step firmer than another tab's, or in
-# place of its tile's ring. Every tab in it keeps its title in the full ink, and a favorite's tile
-# rests a step firmer, so the sidebar sets them apart.
+# ink, so it reads on every theme, over its row's fill, which stays the one every shown tab has (a
+# firmer one took its title under text's minimum over a bright window), or in place of its tile's
+# ring. Every tab in it keeps its title in the full ink, and a favorite's tile rests a step firmer,
+# so the sidebar sets them apart.
 developer-outline = 0.62
 developer-outline-width = 1.0
-developer-selected = 0.26
 developer-tile = 0.16
 # The header's glyphs (docs/ux-spec.md › Header and URL field): 0.60, and 0.26 for back or forward
 # with nowhere to go, over a hover plate of 0.077. In a window that isn't the user's they all take
