@@ -24,6 +24,7 @@ use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
+use browser::product::PRODUCT;
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
@@ -39,7 +40,6 @@ use gpui::{
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
-use browser::product::PRODUCT;
 use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
@@ -86,6 +86,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
+
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
 
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
@@ -832,6 +838,9 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
             if settings.section == Section::SyncImport {
                 settings
                     .account
@@ -855,6 +864,13 @@ fn look_for_clients(cx: &mut App) {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -1416,6 +1432,9 @@ impl Settings {
         if section == Section::OtherApps {
             look_for_clients(cx);
         }
+        if section == Section::Models {
+            models_shown(cx);
+        }
         if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
@@ -1815,25 +1834,6 @@ impl Settings {
             let row = setting(look, LITTLE_WINDOW, Some(line.into()), vec![switch]);
             (format!("In the {}", button.place), row)
         });
-        let mut looks = Vec::new();
-        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
-        if let Some(switch) = browser::dock_dot::SWITCH {
-            let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle(
-                "dock icon color",
-                switch.name,
-                colored,
-                set_dock_icon_color,
-                accent,
-                cx,
-            );
-            looks.push(setting(
-                look,
-                switch.name,
-                Some(switch.line.into()),
-                vec![colored],
-            ));
-        }
         let downloads: SharedString = "Search and downloads".into();
         let mut blocks = vec![
             Block::Rows(vec![default]),
@@ -1848,11 +1848,6 @@ impl Settings {
         if let Some((heading, row)) = menu_bar {
             blocks.push(Block::Heading(heading.into()));
             blocks.push(Block::Rows(vec![row]));
-        }
-        // The Dock's row stays until its colour goes (#4078).
-        if !looks.is_empty() {
-            blocks.push(Block::Heading("Look".into()));
-            blocks.push(Block::Rows(looks));
         }
         Page::new(Section::General, "", blocks)
     }
@@ -2139,12 +2134,38 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
+        let sort = self.per_profile(
+            profiles,
+            "Sort tabs into folders",
+            Some(
+                format!(
+                    "When you sort, {PRODUCT} sends the titles and site names of today's tabs to \
+                     your assistant."
+                )
+                .into(),
+            ),
+            |profile| {
+                let id = profile.id;
+                broom.then(|| {
+                    self.toggle(
+                        format!("sort tabs {id}"),
+                        "Sort tabs into folders",
+                        crate::broom_host::on(id),
+                        move |on, cx| crate::broom_host::set_on(id, on, cx),
+                        accent,
+                        cx,
+                    )
+                })
+            },
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
-                archive
-                    .into_iter()
+                (archive.into_iter())
                     .chain([unload, battery, moving])
+                    .chain(sort)
                     .collect(),
             ),
             Block::Rows(vec![favorites]),
@@ -3889,10 +3910,11 @@ impl Settings {
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
         if tasks_on {
-            models.push(Block::Heading("Your assistant".into()));
-            models.push(Block::Group(self.assistants(agents, cx)));
-            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
@@ -5525,7 +5547,6 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// The app's own switches that are on unless the user turned them off, each a file in the
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
-const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
 /// each.
 const NO_RECENT: &str = "no-recent-in-cards";
@@ -5550,7 +5571,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
 
@@ -5602,11 +5622,6 @@ pub fn set_sidebar_right(right: bool, cx: &mut App) {
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
     set_off(NO_EDGE_REVEAL, !reveals);
     cx.set_global(shell::SidebarEdge(reveals));
-}
-
-fn set_dock_icon_color(colored: bool, cx: &mut App) {
-    set_off(DOCK_ICON_PLAIN, !colored);
-    browser::dock_dot::set_plain(!colored, cx);
 }
 
 /// About's "Check for updates automatically", which only the Mac and Windows show. It reads the

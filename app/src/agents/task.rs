@@ -769,6 +769,16 @@ pub struct Start {
     pub files: super::files::Picked,
 }
 
+/// What the composer last started a thread with in a profile, which it opens with there next:
+/// its level, never Full access, and the model picked on its assistant. Nothing of the words.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Last {
+    pub tier: Tier,
+    /// The assistant, and the model picked on it by id, empty for its own default; None for
+    /// Settings' assistant and model.
+    pub model: Option<(Cli, String)>,
+}
+
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
 pub const ADDED_MOST: usize = 2048;
 
@@ -877,6 +887,9 @@ pub struct Tasks {
     pub default: Option<Cli>,
     /// Each CLI's model, or none for its own default.
     pub models: HashMap<Cli, String>,
+    /// What the composer last started a thread with, by the folder's name of the profile it
+    /// started in.
+    pub(super) last: HashMap<String, Last>,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
     pub(super) events: Option<(
@@ -904,6 +917,32 @@ pub struct Tasks {
 }
 
 impl Agents {
+    /// What the composer opens with in `space`'s profile: what it last started a thread with
+    /// there, or the level every thread starts at and Settings' assistant and model.
+    pub fn composer_last(&self, space: u64) -> Last {
+        let profile = self.browser.space_profile(space);
+        self.tasks.last.get(&profile).cloned().unwrap_or_default()
+    }
+
+    /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
+    /// it opens there: its model, and its level unless that was Full access, which is set for one
+    /// thread and never remembered. Only the composer's own start calls it.
+    pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
+        let profile = self.browser.space_profile(space);
+        if profile.is_empty() {
+            return;
+        }
+        let tier = match tier {
+            Tier::Full => Tier::default(),
+            tier => tier,
+        };
+        let last = Last { tier, model };
+        if self.tasks.last.get(&profile) != Some(&last) {
+            self.tasks.last.insert(profile, last);
+            self.save();
+        }
+    }
+
     pub fn tasks(&self) -> impl Iterator<Item = &Task> {
         self.tasks.tasks.iter()
     }
@@ -1387,6 +1426,18 @@ impl Agents {
             .collect()
     }
 
+    /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
+    pub fn signed_out_agents(&self) -> Vec<Cli> {
+        if !self.tasks_on() {
+            return Vec::new();
+        }
+        (Cli::ALL.into_iter())
+            .filter(|cli| {
+                (self.tasks.found.get(cli)).is_some_and(|found| found.ready == Ready::SignedOut)
+            })
+            .collect()
+    }
+
     /// Whether the browser has learned which CLIs are ready, in this run or a run before.
     pub fn task_agents_known(&self) -> bool {
         !self.tasks.found.is_empty()
@@ -1398,6 +1449,12 @@ impl Agents {
         if !std::mem::replace(&mut self.tasks.asked_once, true) {
             self.look_for_task_agents(cx);
         }
+    }
+
+    /// Settings › Models opens: it looks for each assistant, as Other Apps does, so its rows say
+    /// what's on this computer. Nothing else in Settings looks, so a launch never runs one.
+    pub fn models_shown(&mut self, cx: &mut Context<Self>) {
+        self.look_for_task_agents(cx);
     }
 
     /// What the browser last learned of `cli`.
@@ -1456,6 +1513,33 @@ impl Agents {
     /// The CLI ⌘T's ask lists first.
     pub fn default_task_agent(&self) -> Option<Cli> {
         self.tasks.default
+    }
+
+    /// What a sort of today's tabs into folders runs (#4252), from what the browser already knows:
+    /// the user's own Claude Code, while tasks are on, it runs them and it's signed in, as last
+    /// learned, with its task model. Codex has no switch that keeps a run to the list, so it sorts
+    /// nothing.
+    pub fn sort_program(&self) -> Option<crate::broom::Program> {
+        let found = self.sorter()?;
+        Some(crate::broom::Program {
+            program: found.program.clone()?,
+            path: found.path.clone(),
+            model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+        })
+    }
+
+    /// Whether a sort has a program to run, as `sort_program` finds it, without copying it: the
+    /// broom is drawn only then.
+    pub fn sorts(&self) -> bool {
+        self.sorter().is_some()
+    }
+
+    fn sorter(&self) -> Option<&Found> {
+        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+            return None;
+        }
+        let found = self.tasks.found.get(&Cli::Claude)?;
+        (found.ready == Ready::SignedIn && found.program.is_some()).then_some(found)
     }
 
     /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
@@ -3254,6 +3338,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
             let home = if task.home != 0 {

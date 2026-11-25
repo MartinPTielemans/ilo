@@ -779,21 +779,12 @@ bool host_close_other_window(void);
 // A detent on the trackpad, as a swipe's nearest Space changes.
 void host_detent(void);
 
-// Gives the Dock icon's dot the color it had when the app last quit, kept in |profile_dir|, and
-// follows the user's icon style from now on (dock.mm). For the launch, before the browser starts.
-void host_dock_dot_launch(const char* profile_dir);
-
-// Gives the Dock icon's dot |color|, as 0xRRGGBB, or without |colored| the icon's own green, once
-// it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
-// it. Asked again for the same color, it checks the style again.
-void host_dock_dot(bool colored, uint32_t color);
-
 // Whether the app is the active one, its windows taking the keyboard.
 bool host_app_active(void);
 
 // |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
-// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
-// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// button's overlay on Windows, with the count up to 9 and then 9+, and on Linux the browser
+// windows' urgency hint, with no count. It stays while the app is active, and
 // nothing bounces, flashes or sounds.
 void host_needs_you_badge(int count);
 

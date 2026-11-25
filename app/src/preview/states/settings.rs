@@ -486,6 +486,7 @@ impl gpui::Render for PicturesPage {
                         marked,
                         a11y,
                         gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
                         Rc::new(|_, _, _| {}),
                     )
                 };

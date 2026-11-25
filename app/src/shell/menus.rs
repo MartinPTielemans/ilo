@@ -305,11 +305,13 @@ impl Shell {
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
             (entry, action)
         };
-        let mut items = vec![
-            command(Command::SortBySite),
-            command(Command::Clear),
-            (MenuEntry::line(), Box::new(|_, _| {})),
-        ];
+        let mut items = vec![command(Command::SortBySite)];
+        // Where the broom is drawn, dimmed as it is.
+        if self.browser.broom().is_some() {
+            items.push(command(Command::SortIntoFolders));
+        }
+        items.push(command(Command::Clear));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         let after = items.len();
         items.extend((self.empty_space_items(self.space, cx).into_iter()).map(
             |(entry, action)| {

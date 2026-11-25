@@ -109,7 +109,6 @@ fn native(root: &Path, header: &Path, os: &str) {
                 .file("platform/mac/drive.mm")
                 .file("platform/mac/menu_window.mm")
                 .file("platform/mac/emoji.mm")
-                .file("platform/mac/dock.mm")
                 .file("platform/mac/needs_you.mm")
                 .file("platform/mac/updates.mm")
                 .file("platform/mac/scripting.mm")

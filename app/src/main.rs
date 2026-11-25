@@ -31,10 +31,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
-    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
-    toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, elevation::Level, folder_preview,
+    hover_card, icon_picker, launch, launch_picture, link_preview, link_target, log, log_always,
+    log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -189,6 +189,7 @@ use other_tabs_host::*;
 mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
 mod boosts_host;
+mod broom_host;
 use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
 
 use browser::bc;
@@ -568,7 +569,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
         held_escape::watch(wayland, cx);
-        cx.set_global(menu::field_menu(Rc::new(|window, request, cx| {
+        let show_over: Rc<menu::ShowOver> = Rc::new(|window, request, cx| {
             // A browser window's field by the view the host knows the window by, as its other
             // menus are, which on Linux isn't GPUI's own: Chromium's surface or the X window GPUI
             // opened in. An overlay's by its own.
@@ -592,7 +593,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 } = request;
                 show_menu(view, items, at, false, look, chosen, cx);
             }
-        })));
+        });
+        cx.set_global(menu::field_menu(show_over.clone()));
+        cx.set_global(menu::entries_menu(show_over));
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -614,7 +617,6 @@ unsafe extern "C" fn started(_: *mut c_void) {
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
         });
-        dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         // The transparency level the window and what floats over it are drawn at, before the
         // first window draws (#4128).
@@ -864,7 +866,6 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     log!("browser: launch window at {:.1} ms", unsafe {
         platform::host_since_launch()
     });
-    unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
 }
 
 /// Off to another app: a toast showing waits until the user is back.
