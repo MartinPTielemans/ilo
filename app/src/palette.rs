@@ -331,9 +331,17 @@ impl Float {
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
-    /// Controls and menus. The rest have none under them yet.
+    /// Controls, menus, toasts and zoom HUD. The rest have none under them yet.
     pub fn over_material(self) -> bool {
-        window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
+        window_material()
+            && matches!(
+                self,
+                Float::Menu
+                    | Float::SiteControls
+                    | Float::TabSwitcher
+                    | Float::Toast
+                    | Float::ZoomHud
+            )
     }
 
     /// Its fill in a `tone` window, as drawn on this host.
@@ -1112,6 +1120,14 @@ impl Palette {
     /// A plate under a row or a field, the ink at `alpha`.
     pub fn plate(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha)
+    }
+
+    /// `dark` on a dark window and `light` on a light one: a token the drawing gives each tone.
+    pub fn toned<T>(&self, dark: T, light: T) -> T {
+        match self.tone {
+            Tone::Dark => dark,
+            Tone::Light => light,
+        }
     }
 
     /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a

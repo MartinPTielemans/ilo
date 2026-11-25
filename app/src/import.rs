@@ -60,7 +60,10 @@ use crate::tokens::settings::{
     DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE, GLYPH_PLATE_GAP,
     HEADER_GAP, ROW_X, STEP,
 };
-use crate::tokens::shell::import::BADGE;
+use crate::tokens::shell::import::{
+    BADGE, KIND_CHIP_FILL, KIND_CHIP_GAP, KIND_CHIP_HEIGHT, KIND_CHIP_INSET, KIND_CHIP_LINE,
+    KIND_CHIP_TEXT, KINDS_LABEL, KINDS_LABEL_GAP, KINDS_LABEL_LINE, KINDS_TOP,
+};
 use crate::tokens::text;
 use found::{Address, Found, FromProfile, Page, Split, Tab};
 use plan::{Add, Counts, Existing, Plan, ProfileRef, SpaceRef, Target};
@@ -639,7 +642,24 @@ pub struct ImportView {
     last_imports: Vec<(String, SystemTime)>,
     /// What the import shown came to, as Done's row says it, when something came in.
     came: Option<Came>,
+    /// What the guided list's chips leave out of the browser picked, as a click on one does.
+    left_out: Vec<Kind>,
+    /// The passwords file the guided list's chip chose, which comes with the browser picked.
+    list_passwords: Option<PathBuf>,
 }
+
+/// The guided list's chips, each what of a browser it brings: shown where the browser picked has
+/// any of its kinds, and a click leaves all of them out or brings them back.
+const KIND_CHIPS: [(&str, &[Kind]); 5] = [
+    (
+        "Spaces and tabs",
+        &[Kind::Spaces, Kind::Favorites, Kind::OpenTabs],
+    ),
+    ("Bookmarks", &[Kind::Bookmarks, Kind::ReadingList]),
+    ("History", &[Kind::History]),
+    ("Addresses", &[Kind::Addresses]),
+    ("Extensions", &[Kind::Extensions]),
+];
 
 /// What came in, as Done's row says it at a glance: "Chrome came in", over its counts, "1 Space ·
 /// 3 pinned tabs", and what more there is to say, such as how the passwords file went.
@@ -703,6 +723,8 @@ impl ImportView {
             import_when_read: false,
             last_imports,
             came: None,
+            left_out: Vec::new(),
+            list_passwords: None,
         }
     }
 
@@ -918,6 +940,16 @@ impl ImportView {
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
             ),
+            // The list's Import reads the browser first, and the list stays until that's done.
+            Step::Pick { .. } if self.guided && self.import_when_read => (
+                "Bring your stuff.".to_string(),
+                format!(
+                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
+                     all stays on {here}."
+                ),
+                None,
+                Corner::Back,
+            ),
             Step::Pick { source, .. } => (
                 format!("What comes from {}.", name(*source)),
                 "All of it, unless you turn something off.".to_string(),
@@ -1031,6 +1063,9 @@ impl ImportView {
 
     fn pressed(&mut self, cx: &mut Context<Self>) {
         match &self.step {
+            Step::List if self.picked_row < self.sources.len() && self.guided => {
+                self.import_picked_row(cx)
+            }
             Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
             Step::Pick { .. } => self.import(cx),
             Step::NoAccess { .. } => self.host.open_full_disk_access(),
@@ -1051,6 +1086,55 @@ impl ImportView {
             self.picked_row = to;
             cx.notify();
         }
+    }
+
+    /// The first launch's Import from …: brings the browser picked at once, with what its chips
+    /// leave out left out and the passwords file one chose, once its files are read.
+    fn import_picked_row(&mut self, cx: &mut Context<Self>) {
+        let (left_out, file) = (self.left_out.clone(), self.list_passwords.clone());
+        self.pick(self.picked_row, cx);
+        if let Step::Pick {
+            picked, passwords, ..
+        } = &mut self.step
+        {
+            picked.retain(|kind| !left_out.contains(kind));
+            *passwords = file.map(|file| (file, true));
+        }
+        self.import(cx);
+    }
+
+    /// Leaves out what the chip `at` brings, or brings it back.
+    fn toggle_chip(&mut self, at: usize, cx: &mut Context<Self>) {
+        let (label, kinds) = KIND_CHIPS[at];
+        let on = !kinds.iter().any(|kind| self.left_out.contains(kind));
+        match on {
+            true => self.left_out.extend(kinds.iter().copied()),
+            false => self.left_out.retain(|kind| !kinds.contains(kind)),
+        }
+        // check.sh reads this line.
+        log!("browser: import chip {label} {}", !on);
+        cx.notify();
+    }
+
+    /// Asks for the passwords file the browser picked exported, which the list's Import brings
+    /// with it; once one is chosen, a click leaves it out again.
+    fn toggle_list_passwords(&mut self, cx: &mut Context<Self>) {
+        if self.list_passwords.take().is_some() {
+            log!("browser: import passwords file left out");
+            return cx.notify();
+        }
+        let view = cx.entity().downgrade();
+        let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
+            view.update(cx, |view, cx| {
+                if let Some(file) = file {
+                    log!("browser: import passwords file {}", file_name(&file));
+                    view.list_passwords = Some(file);
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
+        self.host.clone().choose_file(Exported::Passwords, then, cx);
     }
 
     /// The favorites the last import offers from the history it read, the sites visited most;
@@ -1213,7 +1297,8 @@ impl ImportView {
             picked,
             again,
         };
-        self.import_when_read = false;
+        // The first launch's list imports at once, so it does once the app may read it.
+        self.import_when_read &= self.guided;
         let view = cx.entity().downgrade();
         self.host.when_active(Box::new(move |cx| {
             view.update(cx, |view, cx| {
@@ -2370,7 +2455,7 @@ impl ImportView {
             true => list.child(line(
                 "No browser to import from was found on this computer.",
             )),
-            false => list.child(self.browsers(cx)),
+            false => list.child(self.browsers(cx)).children(self.kind_chips(cx)),
         };
         let extensions = self.extensions_box(cx);
         let files = match self.guided {
@@ -2378,6 +2463,80 @@ impl ImportView {
             false => self.files(cx),
         };
         list.children(extensions).child(files).into_any_element()
+    }
+
+    /// What comes with the browser the guided list picked, as chips: each filled while it comes,
+    /// which a click leaves out, and the passwords file outlined, as it never comes by itself.
+    fn kind_chips(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let look = &self.look;
+        let source = self.sources.get(self.picked_row).filter(|_| self.guided)?;
+        let kinds = read::kinds(source);
+        let fill = look.ink.opacity(KIND_CHIP_FILL);
+        let chip = |id: gpui::ElementId, label: &'static str, on: bool| {
+            div()
+                .id(id)
+                .when(self.a11y, |chip| named_check(chip, label, on))
+                .relative()
+                .flex_none()
+                .h(px(KIND_CHIP_HEIGHT))
+                .px(px(KIND_CHIP_INSET))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .text_size(px(KIND_CHIP_TEXT))
+                .line_height(px(KIND_CHIP_LINE))
+                .when(on, |chip| chip.bg(fill).text_color(look.ink))
+                .when(!on, |chip| {
+                    chip.border_1().border_color(fill).text_color(look.detail)
+                })
+                .child(label)
+                .child(drawn(format!("import-chip {label}"), self.drawn_at.clone()))
+        };
+        let chips = KIND_CHIPS
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (label, of))| {
+                let has: Vec<Kind> = of
+                    .iter()
+                    .copied()
+                    .filter(|kind| kinds.contains(kind))
+                    .collect();
+                if has.is_empty() {
+                    return None;
+                }
+                let on = !has.iter().any(|kind| self.left_out.contains(kind));
+                Some(
+                    chip(("import-chip", at).into(), label, on)
+                        .on_click(cx.listener(move |view, _, _, cx| view.toggle_chip(at, cx))),
+                )
+            });
+        let passwords = chip(
+            "import-chip-passwords".into(),
+            "Passwords, from a file…",
+            self.list_passwords.is_some(),
+        )
+        .on_click(cx.listener(|view, _, _, cx| view.toggle_list_passwords(cx)));
+        let label = div()
+            .text_size(px(KINDS_LABEL))
+            .line_height(px(KINDS_LABEL_LINE))
+            .text_color(look.detail)
+            .child("What comes with you");
+        // At the rows' edge, as the drawing has them.
+        let wrap = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(KIND_CHIP_GAP))
+            .children(chips)
+            .child(passwords);
+        Some(
+            div()
+                .pt(px(KINDS_TOP - BOX_GAP))
+                .flex()
+                .flex_col()
+                .gap(px(KINDS_LABEL_GAP))
+                .child(label)
+                .child(wrap),
+        )
     }
 
     /// The extensions the last import listed, under a heading that says where Add… takes each,
@@ -2698,12 +2857,21 @@ impl ImportView {
     /// file, each a link, in the ink, to the system's open panel.
     fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
+        // With a browser found, its chips bring the passwords file, and this line a browser's
+        // bookmarks from another computer.
+        let found = !self.sources.is_empty();
+        let said = match found {
+            true => "Another computer? Bring a bookmarks file",
+            false => "Another browser or computer? Bring a bookmarks file or a passwords file.",
+        };
         let range = |part: &str| {
             let start = said.find(part).unwrap_or_default();
             start..start + part.len()
         };
-        let links = vec![range("bookmarks file"), range("passwords file")];
+        let links = match found {
+            true => vec![range("Bring a bookmarks file")],
+            false => vec![range("bookmarks file"), range("passwords file")],
+        };
         let ink = gpui::HighlightStyle {
             color: Some(look.ink.into()),
             ..Default::default()
@@ -3508,6 +3676,7 @@ impl Render for ImportView {
         };
         let content = match &self.step {
             Step::List => self.list(cx),
+            Step::Pick { .. } if self.guided && self.import_when_read => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
             Step::Running { name, run, .. } => {
                 // Cancel while there's still something it stops, and Try Again once a profile

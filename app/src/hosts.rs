@@ -93,15 +93,6 @@ impl dialog::Host for DialogHost {
     }
 }
 
-/// The Dock icon's dot, swapped by the host (platform/mac/dock.mm).
-pub(crate) struct DockDot;
-
-impl dock_dot::Host for DockDot {
-    fn show(&self, color: Option<u32>) {
-        unsafe { platform::host_dock_dot(color.is_some(), color.unwrap_or(0)) };
-    }
-}
-
 /// The Site Controls' requests, as calls to the core and to the host's window for them, over the
 /// window in front (`front`).
 pub(crate) struct SiteControlsHost {
@@ -835,10 +826,14 @@ pub(crate) unsafe extern "C" fn tab_link_target(
     let url = unsafe { CStr::from_ptr(url) }
         .to_string_lossy()
         .into_owned();
-    // check.sh reads this line.
+    // check.sh reads this line. A link on a sign-in's page is on its host (#4100), so it names none.
     log!(
         "browser: link target {}",
-        if url.is_empty() { "none" } else { url.as_str() }
+        if url.is_empty() {
+            "none"
+        } else {
+            browser::agents::sign_in::logged(tab, &url)
+        }
     );
     let target = (!url.is_empty()).then(|| link_target::Target {
         text: url.into(),

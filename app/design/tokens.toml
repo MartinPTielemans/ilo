@@ -419,10 +419,6 @@ check-glyph = 12.0
 # The red action's label and glyph.
 text = 0xffffff
 
-[dock-dot]
-# The icon's own green, which a Space in it leaves alone.
-green = 0x0E9F55
-
 [elevation]
 # Three levels, each one recipe (#317): a white rim inside the surface's edge, which reads on dark
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light
@@ -1287,6 +1283,40 @@ control-pressed = 0.2
 control-pressed-light = 0.16
 popup-width = 155.0
 popup-end = 0.0
+# The main button, as drawn: the text colour at this strength, its label the other look's ink at
+# the drawing's 590, semibold; never green (the owner's).
+primary = 1.0
+# The folder a pop-up names, as Save downloads to's: the folder 14 at its start, 8 in, its name 6
+# after it and 10 from its end, in the icon ink, with no chevrons.
+folder-left = 8.0
+folder-right = 10.0
+folder-glyph = 14.0
+# A short choice of words, as drawn: a track 28 tall on the field's plate, its segments 2 in and 2
+# apart at radius 8; each 24 tall, 10 in, at the control radius, its words at 12 on 16. The one
+# chosen is on the shown plate at medium in the ink (the drawing's 510), the rest in the quiet ink.
+segment-height = 24.0
+segment-inset = 2.0
+segment-x = 10.0
+segment-radius = 8.0
+segment-text = 12.0
+segment-line = 16.0
+# Whose settings a group shows, beside its heading, as drawn: 20 tall at radius 10 on a button's
+# plate, 9 in before "For" and 7 after its chevron, 5 apart, at 11 on 14, the profile's name at
+# medium, its chevron 8 in the chevrons' ink.
+scope-height = 20.0
+scope-left = 9.0
+scope-right = 7.0
+scope-gap = 5.0
+scope-text = 11.0
+scope-line = 14.0
+scope-chevron = 8.0
+# A row with the app's mark before its text, as Default browser: the mark 26, 12 before the text,
+# the row at least 56 tall.
+mark = 26.0
+mark-gap = 12.0
+mark-row = 56.0
+# The ring an assistant's row turns while its sign-in is under way, as drawn.
+working = 14.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
 # Ours: a checkbox, as the dialog's, 8 before its name, ticked in the look's on colour with its
@@ -1508,9 +1538,10 @@ page-line-width = 1.0
 page-line = 0xffffff0f
 light-page-line = 0x0000000d
 # The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
-# ink. The page shown is Settings' own: the ink, where the sidebar's selected row is white in light.
+# ink. The page shown is Settings' own: the paper's plate in dark, and in light the palette's ink at
+# this alpha, where the sidebar's selected row is white.
 shown = 0xf3f0e833
-light-shown = 0x16161829
+light-shown = 0.16
 
 [shell]
 # The docked sidebar's width at first, where the card starts.
@@ -1751,11 +1782,9 @@ divider-gap = 9.0
 today-gap = 6.0
 clear-gap = 3.0
 clear-height = 20.0
-# The broom after Clear on the New Tab line: its glyph in a box of its own, the line's gap after
-# Clear, so Clear sits the two left of where it ends alone. With nothing to sort the glyph keeps its
-# place at this much of its strength.
+# The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
+# line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
 broom-size = 14.0
-broom-unavailable = 0.4
 # The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
 # the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
 # sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
@@ -2820,6 +2849,22 @@ tile-name-line = 14.0
 tile-name-gap = 8.0
 tile-unticked = 0.4
 profile-gap = 24.0
+# First run's list says what comes with the browser picked as chips under the browsers (the
+# drawing, step 22): `kinds-top` under them, a label 11/14 in the detail, `kinds-label-gap` over a
+# wrap of chips `kind-chip-gap` apart. A chip is `kind-chip-height` high, fully round, its 12/16
+# label `kind-chip-inset` in, filled with the ink at `kind-chip-fill` while it comes; one that
+# never comes by itself, the passwords file, is that ink as a hairline round it instead, its
+# label in the detail.
+kinds-top = 16.0
+kinds-label = 11.0
+kinds-label-line = 14.0
+kinds-label-gap = 8.0
+kind-chip-height = 26.0
+kind-chip-inset = 11.0
+kind-chip-gap = 6.0
+kind-chip-text = 12.0
+kind-chip-line = 16.0
+kind-chip-fill = 0.2
 
 [shell.import.motion]
 # Seconds. A card comes as a task's chips do ([shell.task.motion] chips, chips-stagger,
@@ -3141,14 +3186,8 @@ chips = 0.18
 chips-delay = 0.12
 chips-stagger = 0.05
 chips-rise = 4.0
-# The glyph's dot circles once in `orbit`, and the status's highlight sweeps in `shimmer`, both
-# linear.
-orbit = 1.4
+# The status's highlight sweeps in `shimmer`, linear.
 shimmer = 1.8
-ring = 0.24
-dot-fade = 0.2
-tick = 0.3
-tick-delay = 0.09
 # Open's pages fly to their rows one after another, their contents fading in, and their rows show
 # as they land.
 ghost = 0.42
@@ -3178,6 +3217,83 @@ bump-scale = 1.18
 bump-glyph = 0.95
 # With motion reduced, every change is a crossfade this long.
 crossfade = 0.2
+
+[shell.task-card]
+# The owner's drawing (sidebar-and-library, Notes · 36; spec-thread-card): a thread is one outlined
+# card in today's list, among the tabs, and never looks like one. Every ink is the window's ink at
+# an alpha, as a plate's is, so one card reads on a dark window and a light one (light-values: the
+# Light values are the lead's, Proposed). The frame: `padding` in, the row radius, `gap` between
+# its rows, the ink at `fill`, an outline `outline-width` inside at `outline`, and `under` under it
+# in the list. Row 1: the state's glyph, `glyph` square, `glyph-gap` before the title, which is
+# body type on `title-line`, semibold. Rows 2 and 3 start under the title.
+padding = 10.0
+radius = 12.0
+gap = 8.0
+under = 4.0
+fill = 0.067
+outline = 0.18
+outline-width = 1.0
+glyph = 16.0
+glyph-gap = 9.0
+title-line = 16.0
+# Row 2: the live line, small type on `live-line` in text-2 (the drawing's 12 is off the scale); a
+# done card's on `done-line`. Text-2 is a step stronger on a light window, where dark ink at 60%
+# over a light glass falls under the reading floor sooner.
+live-line = 15.0
+done-line = 16.0
+# A done card not yet seen: its finding wraps to at most `finding-lines` on `done-line`, its first
+# sentence in text, the rest in text-2.
+finding-lines = 3
+text-2 = 0.6
+text-2-light = 0.65
+# Row 3: its pages as icons `icon` square, `icon-gap` apart, those not yet visited at
+# `unvisited`, and at its right the count in small type on `count-line`, in text-3.
+icon = 14.0
+icon-gap = 5.0
+unvisited = 0.4
+count-line = 14.0
+text-3 = 0.42
+text-3-light = 0.5
+# Waits for you: the outline turns bright, `rim-width` at `rim`, and its one button is
+# `button-height` tall, `button-x` at each side, `button-radius` corners, filled with the ink, its
+# label small on `button-line`, semibold, in `on-primary` (`on-primary-light` on a light window).
+rim = 0.851
+rim-width = 1.5
+button-height = 24.0
+button-x = 10.0
+button-radius = 8.0
+button-line = 16.0
+on-primary = 0x161618
+on-primary-light = 0xF3F0E8
+# A line: a card folded, done and seen, or one of several at work, `line` tall, `line-x` at each
+# side, `line-around` above and below it in the list.
+line = 34.0
+line-x = 10.0
+line-around = 3.0
+# Not seen yet: a dot `dot` across after the title, in the ink.
+dot = 6.0
+# The glyphs in their box. At work, a quarter arc in the ink on a ring at `track`, radius `ring`,
+# stroke `ring-stroke`, turning once a `turn`. Done, a check in the ink in a circle of the same
+# radius at `circle` (`circle-unseen` until its conversation shows), stroke `check-stroke`.
+# Waiting, a disc of radius `pause` in the ink, with two bars in on-primary, stroke `pause-stroke`,
+# from `pause-top` to `pause-bottom` at `pause-left` and `pause-right` of the box.
+track = 0.2
+ring = 6.25
+ring-stroke = 1.5
+circle = 0.4
+circle-unseen = 0.6
+check-stroke = 1.4
+pause = 6.8
+pause-stroke = 1.6
+pause-top = 5.6
+pause-bottom = 10.4
+pause-left = 6.3
+pause-right = 9.7
+
+[shell.task-card.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. The ring
+# at work turns once in `turn`, on the loading dots' clock, so a list at rest draws nothing.
+turn = 1.4
 
 [shell.conversation]
 # Ours, as Arc had no tasks: a task's conversation in the page's place, a column of text no wider

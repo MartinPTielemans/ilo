@@ -37,16 +37,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the preview's made-up Space colours",
     ),
     (
-        "shell/dock_dot.rs",
-        "0x8655BF",
-        "a test's made-up Space colour",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0xE0475B",
-        "a test's made-up Space colour",
-    ),
-    (
         "shell/undo_tests.rs",
         "Some(0xff0000)",
         "a test's made-up Space colour",
@@ -184,6 +174,10 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // A thread card's button, at the drawing's 8 (spec-thread-card).
+    "shell.task-card.button-radius",
+    // Settings' segmented track, concentric round its segments at the control radius.
+    "settings.segment-radius",
 ];
 
 #[test]

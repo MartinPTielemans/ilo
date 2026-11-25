@@ -109,6 +109,9 @@ impl Element for Scaled {
             Origin::Top => point(bounds.center().x, bounds.top()),
             Origin::Middle => bounds.center(),
         };
-        window.with_scale(factor, origin, |window| self.child.paint(window, cx));
+        // The glass under a plate it paints follows it (glass.rs).
+        crate::glass::scaled(factor, origin, || {
+            window.with_scale(factor, origin, |window| self.child.paint(window, cx))
+        });
     }
 }

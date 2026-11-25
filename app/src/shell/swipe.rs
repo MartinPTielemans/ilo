@@ -696,6 +696,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         };
         ids.iter().map(space).collect()
     }

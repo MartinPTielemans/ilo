@@ -555,17 +555,23 @@ expect "^browser: command bar picks none in $(printf '%s\n' "$picks" | sed 's/[]
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \"$(today)\""
-# A profile's own settings sit in the sections they belong to, a row per profile: its search
-# engine and download folder in General, its archive time in Tabs & Spaces. Settings' Profiles
-# lists the profiles, with New Profile under them. Settings logs where it draws each control the
-# run clicks. Change… sends the second profile's downloads to the folder the run named.
+# A profile's own settings sit in the sections they belong to: its search engine and download
+# folder in General, the first's until the chip by their heading picks another, its archive time
+# in Tabs & Spaces, a row per profile. Settings' Profiles lists the profiles, with New Profile
+# under them. Settings logs where it draws each control the run clicks. Save downloads to sends
+# the second profile's downloads to the folder the run named.
 send menu Settings…
 expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't show Tabs & Spaces"
 settings_drew 'Tabs & Spaces'
 send clickkey $(drawn "toolbar General")
 expect '^browser: settings tab General$' "a click on General didn't show its section"
 settings_drew 'General'
-in_sight "download folder $work" || fail "Settings didn't draw the second profile's Change…"
+post clickkey $(drawn "scope")
+expect '^browser: menu shown Default (checked), .*Profile 2' \
+  "General's chip didn't list the profiles with the first shown: $(grep '^browser: menu shown' "$log" | tail -1)"
+send choose "Profile 2"
+expect "^browser: settings scope profile $work\$" "picking Profile 2 from the chip didn't show its settings"
+in_sight "download folder $work" || fail "Settings didn't draw the second profile's Save downloads to"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-boxes.png" || fail "no window to capture"
 send clickkey $at
 expect "^browser: download folder of profile $work $(printf '%s\n' "$work_downloads" | sed 's/[][\\.*^$]/\\&/g') set\$" \

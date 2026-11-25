@@ -136,6 +136,15 @@ pub fn quiet(tab: u64) -> bool {
     (QUIET.lock().unwrap().as_ref()).is_some_and(|tabs| tabs.contains(&tab))
 }
 
+/// What a log line says of `text`, an address, a title or a link from `tab`'s page: nothing of it
+/// while the tab shows a sign-in's page, whose title can be its address and whose links its host.
+pub fn logged(tab: u64, text: &str) -> &str {
+    match quiet(tab) {
+        true => "(a sign-in's page)",
+        false => text,
+    }
+}
+
 pub(super) fn set_quiet(tab: u64, on: bool) {
     let mut tabs = QUIET.lock().unwrap();
     let tabs = tabs.get_or_insert_default();

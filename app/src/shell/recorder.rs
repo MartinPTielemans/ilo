@@ -53,7 +53,7 @@ impl Core {
 }
 
 #[derive(Default)]
-pub(super) struct Recorder {
+pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
     pub(super) core: Rc<Core>,
     /// This window's Clears, by id, the last ten.
@@ -114,6 +114,7 @@ pub(super) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
+    pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -209,6 +210,8 @@ pub(super) struct Recorder {
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
     pub(super) bar_open: Cell<bool>,
+    /// The tab the core shows already, before the shell hears of it, as a test sets it.
+    pub(super) shown_now: Cell<u64>,
     /// The find bar has the keyboard, as a test sets it.
     pub(super) find_typing: Cell<bool>,
     /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
@@ -1895,6 +1898,10 @@ impl Browser for Recorder {
         self.bar_open.get()
     }
 
+    fn shown_now(&self) -> u64 {
+        self.shown_now.get()
+    }
+
     fn command_bar_in_place(
         &self,
         window: &mut gpui::Window,
@@ -2203,6 +2210,15 @@ impl Browser for Recorder {
         self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
+    }
+
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        self.other_apps.get()
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(Some(on));
+        self.record(format!("other apps {on}"))
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {

@@ -59,6 +59,9 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of a done task's last answer its card keeps, before the card's three lines cut it
+/// (spec-thread-card).
+pub const FINDING_KEPT: usize = 160;
 /// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
@@ -610,8 +613,19 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
-    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    /// Its pages now, in its Space's order: the icons on its card in the sidebar.
     pub pages: Vec<u64>,
+    /// Those of `pages` a step of its has been on, which its card shows at full strength.
+    pub visited: Vec<u64>,
+    /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
+    /// card's `Done · {time}`.
+    pub ended_time: SharedString,
+    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
+    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
+    /// quit, which keeps no conversation.
+    pub finding: SharedString,
+    /// Done, what a screen reader is told of its finding (`told`): empty with none.
+    pub told: SharedString,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -1381,6 +1395,18 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
+            visited: visited(task, &pages),
+            ended_time: (task.ended)
+                .map(|at| super::local_time(seconds(at)).into())
+                .unwrap_or_default(),
+            finding: match task.state {
+                State::Done { .. } => finding(&task.messages),
+                _ => SharedString::default(),
+            },
+            told: match task.state {
+                State::Done { .. } => told(&task.messages),
+                _ => SharedString::default(),
+            },
             pages,
             tier: task.tier,
             question,
@@ -3978,6 +4004,99 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
+/// A done task's finding: the first paragraph of the agent's last answer, as plain text on one
+/// line, with no link, formatting or line break, kept to FINDING_KEPT characters and written out as
+/// its title is (#3690), so nothing in it can pose as ilo's words or turn the text around. It is
+/// the agent's words: shown on its card only, never logged.
+pub fn finding(messages: &[Message]) -> SharedString {
+    let Some(answer) = last_answer(messages) else {
+        return SharedString::default();
+    };
+    let paragraph: Vec<&str> = (answer.lines())
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("```"))
+        .map(|line| {
+            let line = line.trim_start_matches(['#', '>']).trim_start();
+            let unlisted = (line.split_once(". "))
+                .filter(|(number, _)| {
+                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(|(_, rest)| rest);
+            match unlisted {
+                Some(rest) => rest,
+                None => (["- ", "* ", "+ "].iter())
+                    .find_map(|mark| line.strip_prefix(mark))
+                    .unwrap_or(line),
+            }
+        })
+        .collect();
+    let plain = plain_text(&paragraph.join(" "));
+    let kept = page::clip(&plain, FINDING_KEPT);
+    super::request::escaped(&kept, false).0.into()
+}
+
+/// What a screen reader is told of a done task's finding: its last answer's first line as the
+/// conversation tells it (`told_line`), up to TOLD_KEPT characters ending at a whole word, as
+/// nothing marks a cut in speech. Empty with no answer.
+pub fn told(messages: &[Message]) -> SharedString {
+    last_answer(messages)
+        .and_then(told_line)
+        .unwrap_or_default()
+}
+
+/// The agent's last answer, trimmed, if it gave one.
+fn last_answer(messages: &[Message]) -> Option<&str> {
+    (messages.iter().rev())
+        .filter(|message| matches!(message.who, Who::Agent | Who::Result))
+        .map(|message| message.text.trim())
+        .find(|text| !text.is_empty())
+}
+
+/// Markdown's inline marks taken out of `text`: a link or an image is its words, a bare link in
+/// angle brackets its address, and emphasis, code and strikethrough marks go. Runs of white space
+/// are one space.
+fn plain_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let opens = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
+        let link = opens.and_then(|inside| {
+            let (words, after) = inside.split_once("](")?;
+            let (_, after) = after.split_once(')')?;
+            (!words.contains(']')).then_some((words, after))
+        });
+        if let Some((words, after)) = link {
+            plain.push_str(words);
+            rest = after;
+            continue;
+        }
+        let autolink = (rest.strip_prefix('<'))
+            .and_then(|inside| inside.split_once('>'))
+            .filter(|(address, _)| {
+                address.contains("://") && !address.contains(char::is_whitespace)
+            });
+        if let Some((address, after)) = autolink {
+            plain.push_str(address);
+            rest = after;
+            continue;
+        }
+        if let Some(after) = ["**", "__", "~~"]
+            .iter()
+            .find_map(|mark| rest.strip_prefix(mark))
+        {
+            rest = after;
+            continue;
+        }
+        if !matches!(c, '*' | '`') {
+            plain.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// A result's first words for its card's line: its first line of text, or "Finished" with none.
 fn first_words(result: &str) -> SharedString {
     first_line(result).unwrap_or_else(|| "Finished".into())
@@ -4084,6 +4203,13 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
         .collect();
     steps.reverse();
     steps
+}
+
+/// Those of `pages` a step of `task`'s has been on.
+fn visited(task: &Task, pages: &[u64]) -> Vec<u64> {
+    (pages.iter().copied())
+        .filter(|&tab| task.trace.iter().any(|step| step.did.tab == Some(tab)))
+        .collect()
 }
 
 /// Of a task's `pages` now, the last its steps acted on, else its last.

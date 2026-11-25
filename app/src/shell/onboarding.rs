@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    AnyElement, App, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
     KeystrokeEvent, MouseButton, Pixels, Rgba, SharedString, Subscription, Window,
     accesskit::{Role, Toggled},
     canvas, div,
@@ -114,19 +114,19 @@ pub(super) enum Switch {
     /// while it shows (#2978).
     DailyCount,
     CrashReports,
+    /// Other apps' agents', offered only while agents are on: the just-the-browser path has none.
+    OtherApps,
     /// One the host reads and sets for the Space's profile, turned at once.
     Setting(Setting),
 }
 
 impl Switch {
     /// The switches `step` shows, in its order: the opt-ins' and the tidy and private steps'.
-    // Outside apps' agents' switch, off until asked (step 30's third row), waits for its own
-    // setting (#4260): today's agents switch is the one the assistant step's choice will set.
     // The private step's cookie notices wait for a row in Settings, and its secure connections
     // for a setting in the build.
     fn of(step: Step) -> &'static [Switch] {
         match step {
-            Step::OptIns => &[Switch::DailyCount, Switch::CrashReports],
+            Step::OptIns => &[Switch::DailyCount, Switch::CrashReports, Switch::OtherApps],
             Step::Tidy => &[Switch::Setting(Setting::RestoreWindows)],
             Step::Private => &[
                 Switch::Setting(Setting::AdBlocking),
@@ -141,6 +141,7 @@ impl Switch {
         match self {
             Switch::DailyCount => "daily-count",
             Switch::CrashReports => "crash-reports",
+            Switch::OtherApps => "other-apps",
             Switch::Setting(Setting::RestoreWindows) => "restore-windows",
             Switch::Setting(Setting::AdBlocking) => "ad-blocking",
             Switch::Setting(Setting::SavePasswords) => "save-passwords",
@@ -156,10 +157,24 @@ impl Switch {
                 ("Block ads and trackers", "Built in, on every site".into())
             }
             // Settings' name: the drawing's "Save and fill" and its Touch ID aren't what it sets.
-            Switch::Setting(Setting::SavePasswords) => ("Offer to save passwords", "".into()),
+            // The spec gives only the Mac's line, so the others go without.
+            Switch::Setting(Setting::SavePasswords) => (
+                "Offer to save passwords",
+                if cfg!(target_os = "macos") {
+                    "Kept on this Mac"
+                } else {
+                    ""
+                }
+                .into(),
+            ),
             Switch::DailyCount => (
                 "Send a daily usage count",
                 crate::daily_count::words(env!("APP_NAME")).into(),
+            ),
+            // The drawing's, as Settings › Other apps has no row of its own yet.
+            Switch::OtherApps => (
+                concat!("Let other apps' agents use ", env!("APP_NAME")),
+                "Over MCP, each in a Space of its own".into(),
             ),
             Switch::CrashReports => (
                 "Send crash reports",
@@ -262,8 +277,7 @@ impl Step {
             ),
             Step::Private => (
                 "Private from the start.",
-                "These are on. Turn off what you don't want, here or for one site from its \
-                 address.",
+                "Turn off what you don't want, here or for one site from its address.",
                 "Continue",
             ),
             // Its button only while signed out; the view's own buttons are the step's after.
@@ -393,6 +407,8 @@ pub(super) struct Onboarding {
     keyboard: bool,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
+    /// The assistants' programs have been looked for since the assistant step last showed.
+    looked: bool,
     /// The assistant step's rows follow the Agents, as a sign-in under way changes them.
     _assistants: Option<Subscription>,
     /// The assistants' rows the preview shows, and the one marked, as it has no Agents to read.
@@ -555,6 +571,7 @@ impl Shell {
             keys: None,
             keyboard: false,
             account,
+            looked: false,
             _assistants: (crate::agents::global(cx))
                 .map(|agents| cx.observe(&agents, |_, _, cx| cx.notify())),
             shown_assistants: None,
@@ -580,6 +597,12 @@ impl Shell {
             });
         });
         cx.notify();
+    }
+
+    /// First run's window has the keyboard, with the flow in it.
+    pub(super) fn first_run_key(&self, cx: &App) -> bool {
+        self.onboarding.is_some()
+            && (self.first_run).is_some_and(|handle| cx.active_window() == Some(handle.into()))
     }
 
     /// First run is showing, so the browser window it opened at launch waits for it to end.
@@ -768,12 +791,29 @@ impl Shell {
         cx.notify();
     }
 
-    /// As the assistants' step shows, ilo looks for them once, off the UI thread, as Settings ›
-    /// Agents does as it opens, so each row says what it found, not that it's checking.
-    fn onboarding_shown(&self, step: Step, cx: &mut Context<Self>) {
+    /// As the assistants' step shows with agents on, ilo looks for them once, off the UI thread,
+    /// as Settings › Agents does as it opens, so each row says what it found, not that it's
+    /// checking. With agents off nothing of an assistant runs until the user says yes there.
+    fn onboarding_shown(&mut self, step: Step, cx: &mut Context<Self>) {
         if step != Step::Assistant {
             return;
         }
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            onboarding.looked = false;
+        }
+        self.onboarding_look(cx);
+    }
+
+    /// Looks for the assistants' programs, once a showing of their step, only with agents on.
+    fn onboarding_look(&mut self, cx: &mut Context<Self>) {
+        let agents_on = self.browser.agents(cx) == Some(true);
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        if onboarding.step != Step::Assistant || onboarding.looked || !agents_on {
+            return;
+        }
+        onboarding.looked = true;
         if let Some(agents) = crate::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         }
@@ -810,8 +850,8 @@ impl Shell {
         self.onboarding_pick(index, cx);
     }
 
-    /// Shows the assistants' step with `rows`, `marked` the one tasks run on, for the preview's
-    /// captures: the preview has no Agents for them to come from.
+    /// Shows the assistants' step with `rows`, `marked` the one tasks run on, with agents on, for
+    /// the preview's captures: the preview has no Agents for them to come from.
     pub fn onboarding_show_assistants(
         &mut self,
         rows: Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>,
@@ -822,6 +862,8 @@ impl Shell {
             onboarding.shown_assistants = Some((rows, marked));
             cx.notify();
         }
+        // The rows are the with-an-assistant path's.
+        self.onboarding_agents(true, cx);
     }
 
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
@@ -1012,6 +1054,10 @@ impl Shell {
                 )
             }
             Switch::CrashReports => self.browser.crash_reports(cx),
+            Switch::OtherApps => match self.browser.agents(cx)? {
+                true => self.browser.other_apps(cx),
+                false => None,
+            },
             Switch::Setting(setting) => self.browser.setting(self.space, setting, cx),
         };
         (Switch::of(step).iter())
@@ -1038,6 +1084,7 @@ impl Shell {
         cx.defer(move |cx| match opt_in {
             Switch::DailyCount => {}
             Switch::CrashReports => browser.set_crash_reports(!on, cx),
+            Switch::OtherApps => browser.set_other_apps(!on, cx),
             Switch::Setting(setting) => browser.set_setting(space, setting, !on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
@@ -1048,6 +1095,48 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// The assistant step's pick: with an assistant turns agents on, just the browser turns them
+    /// off, Settings › Agents' one switch, set at once as the step's other switches are. The
+    /// opt-ins' step comes or goes as other apps' agents' row does with it.
+    pub(super) fn onboarding_agents(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.browser.agents(cx) != Some(!on) {
+            return;
+        }
+        log!(
+            "browser: onboarding agents {}",
+            if on { "on" } else { "off" }
+        );
+        let (browser, shell) = (self.browser.clone(), cx.entity());
+        // Outside this update, as the host reads the shell as it turns agents off.
+        cx.defer(move |cx| {
+            browser.set_agents(on, cx);
+            shell.update(cx, |shell, cx| {
+                shell.onboarding_plan_opt_ins(cx);
+                shell.onboarding_look(cx);
+                cx.notify();
+            });
+        });
+    }
+
+    /// Puts the opt-ins' step in the flow's order while it has a row, and takes it out without.
+    fn onboarding_plan_opt_ins(&mut self, cx: &mut Context<Self>) {
+        let offered = !self.opt_ins(cx).is_empty();
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        let order = |step: Step| STEPS.iter().position(|&each| each == step);
+        match (onboarding.steps.contains(&Step::OptIns), offered) {
+            (true, false) => onboarding.steps.retain(|&each| each != Step::OptIns),
+            (false, true) => {
+                let at = (onboarding.steps.iter())
+                    .position(|&each| order(each) > order(Step::OptIns))
+                    .unwrap_or(onboarding.steps.len());
+                onboarding.steps.insert(at, Step::OptIns);
+            }
+            _ => {}
+        }
     }
 
     /// Picks swatch `index` at the colour step.
@@ -1171,6 +1260,9 @@ impl Shell {
             (Step::SearchEngine, "up") => {
                 self.onboarding_pick_engine(engine.map_or(0, |at| at.saturating_sub(1)), cx)
             }
+            // ↑ and ↓ move the assistant step's pick, between its two choices.
+            (Step::Assistant, "up") => self.onboarding_agents(true, cx),
+            (Step::Assistant, "down") => self.onboarding_agents(false, cx),
             // ↩ is the import's button for the state its view shows, and ↑ ↓ move its list's pick.
             (Step::Import, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
@@ -1399,8 +1491,27 @@ impl Shell {
             .then(|| self.opt_in_rows(step, colors, cx));
         let tidy = (step == Step::Tidy).then(|| self.tidy_step(colors, cx));
         // Taller than its room, the list scrolls in it, and the foot stays where every step has it.
-        let assistants =
-            (step == Step::Assistant).then(|| frame::choice(self.assistant_rows(step, colors, cx)));
+        // Just the browser folds the assistants' rows away for its line.
+        let assistants = (step == Step::Assistant).then(|| {
+            let rows = match self.browser.agents(cx) == Some(true) {
+                true => self.assistant_rows(step, colors, cx),
+                // The drawing's, as the words table has none for it.
+                false => div()
+                    .w_full()
+                    .px(px(PADDING))
+                    .text_color(colors.ink(QUIET))
+                    .child("Agents stay off. Turn them on later in Settings › Agents."),
+            };
+            frame::choice(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(PADDING))
+                    .child(self.agents_rows(colors, cx))
+                    .child(rows),
+            )
+        });
         let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
         let favorites = (step == Step::Favorites)
             .then(|| self.favorite_tiles(colors, window, cx))
@@ -1747,22 +1858,7 @@ impl Shell {
         let a11y = self.a11y;
         let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
             let on = onboarding.engine == Some(index);
-            let dot = div()
-                .flex_none()
-                .size(px(ENGINE_DOT))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .map(|dot| match on {
-                    true => dot.bg(colors.ink(1.)).child(
-                        div().size(px(ENGINE_DOT_CENTER)).rounded_full().bg(Rgba {
-                            a: 1.,
-                            ..colors.ground
-                        }),
-                    ),
-                    false => dot.border_1().border_color(colors.ink(QUIET)),
-                });
+            let dot = radio_dot(on, colors);
             let toggled = match on {
                 true => Toggled::True,
                 false => Toggled::False,
@@ -1811,6 +1907,55 @@ impl Shell {
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
             .into_any_element()
+    }
+
+    /// The assistant step's two choices, rows as the engines' are, the pick's dot filled: with an
+    /// assistant, as agents are on, or just the browser, as they're off. A click on a row picks it,
+    /// and ↑ ↓ move the pick from anywhere in the step (onboarding_key).
+    fn agents_rows(&self, colors: Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
+        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
+        let agents = self.browser.agents(cx) == Some(true);
+        let a11y = self.a11y;
+        // The drawing's names, as the words table has none for them.
+        let rows =
+            [(true, "With an assistant"), (false, "Just the browser")].map(|(choice, name)| {
+                let on = agents == choice;
+                let row = div()
+                    .id(("onboarding-agents", usize::from(choice)))
+                    .when(a11y, |row| {
+                        row.role(Role::RadioButton)
+                            .aria_label(name)
+                            .aria_toggled(match on {
+                                true => Toggled::True,
+                                false => Toggled::False,
+                            })
+                    })
+                    .h(px(ENGINE_ROW))
+                    .px(px(PADDING))
+                    .flex()
+                    .items_center()
+                    .gap(px(PADDING))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(
+                        cx.listener(move |shell, _, _, cx| shell.onboarding_agents(choice, cx)),
+                    )
+                    .flex_row_reverse()
+                    .justify_between()
+                    .child(radio_dot(on, colors))
+                    .child(
+                        div()
+                            .when(on, |name| name.font_weight(gpui::FontWeight::MEDIUM))
+                            .child(name),
+                    );
+                div().child(row)
+            });
+        group(&look, rows)
+            .id("onboarding-agents")
+            .when(a11y, |list| list.role(Role::RadioGroup))
+            .w_full()
+            .text_size(px(crate::tokens::text::BODY))
+            .text_color(look.ink)
     }
 
     /// The favorites offered, as the import view's tiles across the sheet's left half, scrolling
@@ -1954,6 +2099,27 @@ fn skip_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl IntoE
 
 /// Where the step shown draws a control, by its name (Shell::place).
 pub(super) type Places = Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>;
+
+/// A radio's dot: filled in the ink with the ground at its centre when `on`, else a ring.
+fn radio_dot(on: bool, colors: Colors) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(ENGINE_DOT))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .map(|dot| match on {
+            true => {
+                dot.bg(colors.ink(1.))
+                    .child(div().size(px(ENGINE_DOT_CENTER)).rounded_full().bg(Rgba {
+                        a: 1.,
+                        ..colors.ground
+                    }))
+            }
+            false => dot.border_1().border_color(colors.ink(QUIET)),
+        })
+}
 
 /// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
 type Frames = Rc<RefCell<HashMap<(Switch, &'static str), Bounds<Pixels>>>>;

@@ -13,8 +13,61 @@ macro_rules! log {
     ($($arg:tt)*) => {{
         if $crate::checked() {
             $crate::log_always!($($arg)*);
+        } else {
+            $crate::log_heard!($($arg)*);
         }
     }};
+}
+
+/// `log!`'s line for a unit test that listens (`heard`), in test builds only: elsewhere it is
+/// nothing, so an unchecked launch still never formats a line.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! log_heard {
+    ($($arg:tt)*) => {{
+        #[cfg(test)]
+        $crate::heard::line(|| format!($($arg)*));
+    }};
+}
+
+/// The lines `log!` would write, kept while a unit test listens on its thread, as the tests run
+/// unchecked and write none: a test reads them for what a line must never name. Outside the tests
+/// `log!` never asks.
+#[doc(hidden)]
+pub mod heard {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LINES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// Whether a test listens on this thread.
+    pub fn on() -> bool {
+        LINES.with(|lines| lines.borrow().is_some())
+    }
+
+    /// Keeps the line `made` makes, made only while a test listens.
+    pub fn line(made: impl FnOnce() -> String) {
+        if !on() {
+            return;
+        }
+        let line = made();
+        LINES.with(|lines| {
+            if let Some(lines) = lines.borrow_mut().as_mut() {
+                lines.push(line);
+            }
+        });
+    }
+
+    /// Keeps this thread's lines from now.
+    pub fn listen() {
+        LINES.with(|lines| *lines.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// The lines kept since `listen`, and stops keeping them.
+    pub fn take() -> Vec<String> {
+        LINES.with(|lines| lines.borrow_mut().take().unwrap_or_default())
+    }
 }
 
 /// Writes a line to stderr in every launch, as `eprintln!` does, but in one write where `eprintln!`
@@ -175,7 +228,6 @@ pub mod daily_count;
 pub mod default_browser;
 pub mod dialog;
 pub mod dismissal;
-pub mod dock_dot;
 pub mod elevation;
 pub mod face;
 pub mod find_status;
@@ -183,6 +235,7 @@ pub mod find_status;
 pub mod flatpak;
 pub mod folder_preview;
 pub mod foot_bar;
+pub mod glass;
 pub mod glow;
 pub mod hold;
 pub mod hover_card;
