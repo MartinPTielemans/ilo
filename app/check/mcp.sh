@@ -1431,6 +1431,30 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   one_stopped "a click whose page put it in its own place"
   await_log "^browser: tab $replaced closed\$" \
     "the agent's tab $replaced, with no page behind the one that never opened, stayed open: $(grep "^browser: page $replaced " "$log" | tail -1)"
+  # Enter after a type's text, on a form whose page then does the same: the commonest road for a
+  # step that is no click. It went, and hears so as a result, in the words a step that is no click
+  # has; the tab closes, and the page was asked for that type once, never again.
+  stepped="The step went through. The page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the step."
+  printf '%s' "<!doctype html><title>Leaving form</title>
+<form onsubmit=\"location.replace('http://$plain/split-a.html'); return false\">
+<input aria-label=\"Leaving field\"><button>Send</button></form>" > "$out/site/submit-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/submit-plain.html\"}")
+  entered=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" textbox "Leaving field")
+  [ -n "$entered" ] && [ -n "$ref" ] ||
+    fail "open_tab of the form that puts http://$plain in its page's place answered: $opened"
+  count_stopped
+  typed=$(call type "{\"tab\":$entered,\"ref\":\"$ref\",\"text\":\"by-the-agent\",\"submit\":true}")
+  [ "$typed" = "$stepped" ] ||
+    fail "a typed Enter that went, whose form put http://$plain in its page's place and whose tab closed, answered: $typed"
+  await_log "browser: tab $entered error -20\$" \
+    "the page a typed Enter put in its own place, http://$plain/split-a.html, wasn't stopped before http: $(grep "^browser: loaded $entered " "$log" | tail -1)"
+  one_stopped "a typed Enter whose form put it in its page's place"
+  await_log "^browser: tab $entered closed\$" \
+    "the agent's tab $entered, with no page behind the one that never opened, stayed open: $(grep "^browser: page $entered " "$log" | tail -1)"
+  send state
+  [ "$(grep -c "^browser: agent activity mcp-client $entered type" "$log" || true)" = 1 ] ||
+    fail "the type whose Enter went was asked of tab $entered $(grep -c "^browser: agent activity mcp-client $entered type" "$log" || true) times, not once"
   # An open whose page does the same as it loads, while the open still waits for it: not opened,
   # in the words that has, and its tab closes.
   printf '%s' "<!doctype html><title>Gone page</title>
