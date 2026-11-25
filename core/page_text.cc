@@ -70,7 +70,8 @@ PageText::PageText(content::WebContents* contents)
 
 PageText::~PageText() = default;
 
-void PageText::Read(uint64_t request) {
+void PageText::Read(uint64_t request, base::ScopedClosureRunner lift) {
+  lifts_[request] = std::move(lift);
   // A tab without its page, or one opened behind and not yet shown, has nothing to read: it loads
   // once it's shown.
   if (!Tab::Loaded(tab_)) {
@@ -102,6 +103,8 @@ void PageText::Snapshotted(uint64_t request, ui::AXTreeUpdate& update) {
 }
 
 void PageText::Answer(uint64_t request, std::optional<std::string> text) {
+  // Every answer comes here, an empty one too, so the page goes back to the rank it had.
+  lifts_.erase(request);
   // Bound to the tab's id rather than this, which a closing tab deletes before the task runs.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text)));

@@ -2381,7 +2381,10 @@ void bc_tab_picture(bc_id id, uint64_t request, int width, int height) {
 
 void bc_tab_read_text(bc_id id, uint64_t request) {
   if (content::WebContents* contents = browser_core::Tab::FromId(id)) {
-    browser_core::PageText::GetOrCreateForWebContents(contents)->Read(request);
+    // Lifted from the call's entry, ahead of anything the core does before the page's own work,
+    // to its answer (#4227).
+    base::ScopedClosureRunner lift = browser_core::LiftWhileWorking(*contents);
+    browser_core::PageText::GetOrCreateForWebContents(contents)->Read(request, std::move(lift));
   } else if (browser_core::Host().tab_text) {
     // A tab without its page, or none: nothing to read, told from a task of its own.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
