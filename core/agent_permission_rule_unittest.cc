@@ -157,6 +157,30 @@ TEST(AgentPermissionRule, ALoadWithNoCertificateToOfferGoesOnInAnyTab) {
   EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/false, kHeld));
 }
 
+TEST(AgentPermissionRule, AUsersTabOpensASelectsSystemMenu) {
+  EXPECT_FALSE(RefusesPagePopup(PagePopup::kSystemMenu, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceOpensNoSystemMenu) {
+  EXPECT_TRUE(RefusesPagePopup(PagePopup::kSystemMenu, kAgents));
+}
+
+TEST(AgentPermissionRule, AHeldTabOpensASelectsSystemMenu) {
+  EXPECT_FALSE(RefusesPagePopup(PagePopup::kSystemMenu, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabOpensAPagesPopupWindow) {
+  EXPECT_FALSE(RefusesPagePopup(PagePopup::kWindow, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceOpensNoPopupWindow) {
+  EXPECT_TRUE(RefusesPagePopup(PagePopup::kWindow, kAgents));
+}
+
+TEST(AgentPermissionRule, AHeldTabOpensAPagesPopupWindow) {
+  EXPECT_FALSE(RefusesPagePopup(PagePopup::kWindow, kHeld));
+}
+
 constexpr DownloadQuestion kDownloadQuestions[] = {
     DownloadQuestion::kUsersSaveAs,
     DownloadQuestion::kUsersSetting,

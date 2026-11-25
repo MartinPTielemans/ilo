@@ -408,6 +408,15 @@ CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRende
 // started it, not the page. One refused ends as a restricted preview does, and its page goes on.
 extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_users_command);
 
+// content/browser/renderer_host/render_frame_host_impl.cc and
+// content/browser/web_contents/web_contents_impl.cc: whether the page in |frame| is refused a list
+// or picker of its own drawn outside it, asked in RenderFrameHostImpl::ShowPopupMenu before the
+// system's menu for a select is shown (|system_menu|) and in WebContentsImpl::ShowCreatedWidget
+// before a popup window the page draws is. One refused ends as the engine ends one for a tab that
+// isn't shown. Exported by content.
+CONTENT_EXPORT extern bool (*g_browser_core_no_page_popup)(content::RenderFrameHost* frame,
+                                                           bool system_menu);
+
 // chrome/browser/download/chrome_download_manager_delegate.cc: whether the core takes Chrome's
 // question of where |download|'s file goes, asked first in
 // ChromeDownloadManagerDelegate::RequestConfirmation, before any sheet is made for it. One taken

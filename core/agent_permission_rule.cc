@@ -91,6 +91,15 @@ bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& ta
   return any_to_offer && Refuses(Kind::kClientCertificate, tab);
 }
 
+bool RefusesPagePopup(PagePopup popup, const agent_space_rule::Tab& tab) {
+  switch (popup) {
+    case PagePopup::kSystemMenu:
+    case PagePopup::kWindow:
+      return tab.agents && !tab.held;
+  }
+  return false;
+}
+
 DownloadAnswer AnswersDownloadQuestion(DownloadQuestion question,
                                        const agent_space_rule::Tab& tab) {
   if (!tab.agents || tab.held) {

@@ -110,6 +110,20 @@ enum class Taken {
 // answers no question for a page a thread holds.
 Taken TakesRequest(bool link_handler_offer, const agent_space_rule::Tab& tab);
 
+// What a page draws outside itself for a field of its own.
+enum class PagePopup {
+  // The system's menu for a select, where the system draws a select's list.
+  kSystemMenu,
+  // A window the page draws by itself: a select's list elsewhere, a date or time field's
+  // calendar, a color field's picker.
+  kWindow,
+};
+
+// A user's tab, and one of an agent's Space the user holds, opens them as ever. A page in an
+// agent's Space the user doesn't hold opens neither, whoever asked: an agent's click, a key, or
+// the page itself. Its select stays shut, and nothing is drawn over the user's screen for it.
+bool RefusesPagePopup(PagePopup popup, const agent_space_rule::Tab& tab);
+
 // Why Chrome would ask the user where a download's file goes.
 enum class DownloadQuestion {
   // The user's own command to save something under a name of their choosing.

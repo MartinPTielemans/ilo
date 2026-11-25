@@ -261,6 +261,13 @@ bool NoClientCertificate(content::WebContents* contents, bool any_to_offer) {
   return true;
 }
 
+bool NoPagePopup(content::RenderFrameHost* frame, bool system_menu) {
+  using agent_permission_rule::PagePopup;
+  return frame && agent_permission_rule::RefusesPagePopup(
+                      system_menu ? PagePopup::kSystemMenu : PagePopup::kWindow,
+                      RuleTabOf(content::WebContents::FromRenderFrameHost(frame)));
+}
+
 bool TakesDownloadQuestion(download::DownloadItem* download,
                            const base::FilePath& suggested_path,
                            DownloadConfirmationReason reason,

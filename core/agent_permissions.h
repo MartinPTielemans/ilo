@@ -68,6 +68,12 @@ void ClosePrintPreview(content::WebContents* contents);
 // the user has any to offer, with its entry at the tab.
 bool NoClientCertificate(content::WebContents* contents, bool any_to_offer);
 
+// Whether the page in |frame| is refused a list or picker of its own drawn outside it: the
+// system's menu for a select (|system_menu|) or a popup window the page draws. A page in an
+// agent's Space the user doesn't hold, whoever asked. It makes no entry: it is no question to the
+// user, and an agent chooses in a select without opening it.
+bool NoPagePopup(content::RenderFrameHost* frame, bool system_menu);
+
 // Chrome's question of where |download|'s file goes, asked before any sheet is made for it:
 // whether the core took it, which it does for a download of a page in an agent's Space the user
 // doesn't hold. One taken is answered through |callback| at once: on to |suggested_path| where
