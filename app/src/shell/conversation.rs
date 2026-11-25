@@ -399,8 +399,7 @@ impl Shell {
             }
             old => {
                 if let Some(old) = old {
-                    let stale = old.view.update(cx, |view, _| view.let_go());
-                    self.stale_pictures.extend(stale);
+                    self.talk_let_go(&old.agent, &old.view, cx);
                 }
                 // The reply's placeholder follows the appearance, as the lines do (#1659).
                 let colors = Self::form_colors(cx);
@@ -451,6 +450,8 @@ impl Shell {
                 })
             }
         };
+        // Its rail pictures its pages again, so its plate's goes.
+        self.drop_plate(&agent);
         // check.sh reads this line.
         log!("browser: task {agent} shown");
         self.talk = Some(Talk {
@@ -509,9 +510,59 @@ impl Shell {
     /// again.
     pub(super) fn talk_closed(&mut self, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
-        let view = talk.view.clone();
-        let stale = view.update(cx, |view, _| view.let_go());
+        let (agent, view) = (talk.agent.clone(), talk.view.clone());
+        self.talk_let_go(&agent, &view, cx);
+    }
+
+    /// `agent`'s conversation lets its pictures go, but for its card's page's, which its plate in
+    /// Latest tasks shows from then on.
+    fn talk_let_go(
+        &mut self,
+        agent: &SharedString,
+        view: &Entity<TalkView>,
+        cx: &mut Context<Self>,
+    ) {
+        let card = self.task_cards.iter().find(|card| card.agent == *agent);
+        let tab = card.and_then(|card| card.last_tab);
+        let (kept, stale) = view.update(cx, |view, _| {
+            let kept = tab.and_then(|tab| view.take_picture(tab));
+            (kept, view.let_go())
+        });
         self.stale_pictures.extend(stale);
+        if let (Some(tab), Some(picture)) = (tab, kept) {
+            self.drop_plate(agent);
+            self.card_plates.push((agent.clone(), tab, picture));
+        }
+    }
+
+    /// `agent`'s card's plate lets its picture go.
+    fn drop_plate(&mut self, agent: &SharedString) {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
+            .into_iter()
+            .partition(|(each, ..)| each == agent);
+        self.card_plates = kept;
+        self.stale_pictures
+            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
+    }
+
+    /// The plates' pictures of cards that no longer picture that page, or are gone, go.
+    pub(super) fn keep_plates(&mut self) {
+        let cards = &self.task_cards;
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
+            .into_iter()
+            .partition(|(agent, tab, _)| {
+                (cards.iter()).any(|card| card.agent == *agent && card.last_tab == Some(*tab))
+            });
+        self.card_plates = kept;
+        self.stale_pictures
+            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
+    }
+
+    /// The picture a card of Latest tasks shows on its plate, if its conversation left one.
+    pub(super) fn plate_of(&self, card: &Card) -> Option<PagePicture> {
+        (self.card_plates.iter())
+            .find(|(agent, tab, _)| *agent == card.agent && card.last_tab == Some(*tab))
+            .map(|(.., picture)| picture.clone())
     }
 
     /// A picture the conversation asked for came: whether it was one of its own.
@@ -712,6 +763,12 @@ impl TalkView {
         let old = entry.2.replace(picture.clone());
         cx.notify();
         Some(old.map(|old| old.image()).into_iter().collect())
+    }
+
+    /// `tab`'s picture, which it no longer holds.
+    fn take_picture(&mut self, tab: u64) -> Option<PagePicture> {
+        let at = self.pictures.iter().position(|(each, ..)| *each == tab)?;
+        self.pictures.remove(at).2
     }
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.

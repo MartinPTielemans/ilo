@@ -692,6 +692,7 @@ impl Shell {
             self.foot.slot = false;
         }
         self.task_cards = cards;
+        self.keep_plates();
         self.area_takes_space();
         // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
         // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.

@@ -148,7 +148,7 @@ fn between(from: Bounds<Pixels>, to: Bounds<Pixels>, way: f32) -> Bounds<Pixels>
 
 /// Where a picture of `picture`'s size goes to fill `bounds`, as wide as them at least, its top at
 /// theirs, as a thumbnail shows a page's top.
-fn covering(bounds: Bounds<Pixels>, picture: (f32, f32)) -> Bounds<Pixels> {
+pub(in crate::shell) fn covering(bounds: Bounds<Pixels>, picture: (f32, f32)) -> Bounds<Pixels> {
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let zoom = (width / picture.0).max(height / picture.1);
     let (drawn_width, drawn_height) = (picture.0 * zoom, picture.1 * zoom);
