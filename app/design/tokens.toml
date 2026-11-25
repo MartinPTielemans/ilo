@@ -1802,12 +1802,12 @@ space-pitch = 17.0
 space-icon-pitch = 34.0
 space-height = 34.0
 # A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
-# pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window.
+# pointer (ours). The Space shown's is its first colour this far toward the ink, as the redesign
+# mixes it: a light tone of it on a dark window.
 space-swatch-shown = 7.0
 space-swatch = 7.0
 space-swatch-hovered = 9.0
-space-dot-tone = 0.5
+space-dot-tone = 0.55
 # More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
 # under a dot's pitch, the Space shown keeps that and the others share the rest: 13 and 9.5 with
 # 16 and 22 Spaces in a sidebar 300 wide (the rule is Arc 1.171's). A squeezed item's ink keeps 4
