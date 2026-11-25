@@ -107,6 +107,11 @@ extern void (*g_browser_core_adjust_navigate)(NavigateParams& params);
 extern media_router::MediaRouterDialogController* (*g_browser_core_cast_dialog)(
     content::WebContents* contents);
 
+// chrome/browser/ssl/https_only_mode_tab_helper.cc: whether Chrome shows no warning before http
+// for |url|, which answered only over http and was stopped in |contents|: the core has taken the
+// tab, and puts it back.
+extern bool (*g_browser_core_no_http_warning)(content::WebContents* contents, const GURL& url);
+
 // chrome/browser/devtools/devtools_window.cc: the core docks DevTools in its windows, which have no
 // DevtoolsUIController. Whether |browser|'s window can, and the call as the docked DevTools of
 // |inspected|, a tab of |browser|, open, lay out again or close.

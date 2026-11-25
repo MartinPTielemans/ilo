@@ -1,0 +1,41 @@
+Lets the core keep Chrome's warning before http out of an agent's tab (//browser_core/hooks.h,
+//browser_core/secure_connections.h). The warning is a dialog whose Continue to site loads the
+page over http and remembers the site: the user's to press. Where Chrome would show it, the tab
+helper asks the core first; the core answers for the tab the page is in and, in an agent's, puts
+the tab back itself, so no warning ever exists there. The helper holds no rule of its own.
+
+--- a/chrome/browser/ssl/https_only_mode_tab_helper.cc
++++ b/chrome/browser/ssl/https_only_mode_tab_helper.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ssl/https_only_mode_tab_helper.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include "base/feature_list.h"
+ #include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
+@@ -14,6 +15,11 @@
+ #include "content/public/browser/web_contents.h"
+ #include "url/gurl.h"
+ 
++// browser_core: an agent's tab has no warning before http
++// (//browser_core/hooks.h).
++bool (*g_browser_core_no_http_warning)(content::WebContents* contents,
++                                       const GURL& url) = nullptr;
++
+ HttpsOnlyModeTabHelper::~HttpsOnlyModeTabHelper() = default;
+ 
+ void HttpsOnlyModeTabHelper::DidStartNavigation(
+@@ -73,6 +79,12 @@
+           security_interstitials::features::kHttpsFirstDialogUi) &&
+       is_navigation_fallback_ &&
+       !navigation_handle->GetURL().SchemeIsCryptographic()) {
++    // browser_core: the core has taken the tab, and puts it back.
++    if (g_browser_core_no_http_warning &&
++        g_browser_core_no_http_warning(navigation_handle->GetWebContents(),
++                                       navigation_handle->GetURL())) {
++      return;
++    }
+     auto* tab = tabs::TabInterface::MaybeGetFromContents(
+         navigation_handle->GetWebContents());
+     if (!tab) {
