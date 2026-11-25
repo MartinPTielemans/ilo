@@ -1036,3 +1036,145 @@ fn a_reply_is_recorded_as_its_words_and_how_many_tabs() {
     });
     assert_eq!(format!("{with:?}"), r#"Reply("And these" with Picked(2))"#);
 }
+
+/// The replies that wait for `agent`'s turn under way to end: each one's words and tabs.
+fn held(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<(String, Vec<u64>)> {
+    run.agents.read_with(cx, |agents, _| {
+        (agents.held_replies(agent).into_iter())
+            .map(|reply| (reply.text.to_string(), reply.tabs.tabs().to_vec()))
+            .collect()
+    })
+}
+
+/// A thread at work is handed nothing mid-turn. A reply with a tab waits for the turn under way
+/// to end, out of the conversation, and one sent after it waits behind it. At the turn's end each
+/// is given in its order, its tabs checked again then: one that no longer fits isn't handed, and
+/// a reply left with nothing to say isn't given. The thread stays under way on them.
+#[gpui::test]
+fn a_reply_with_a_tab_waits_for_the_turn_under_way_to_end(cx: &mut TestAppContext) {
+    let run = run("handed-held", cx);
+    (run.browser.tabs.borrow_mut()).push((FARES.0, USERS, FARES.1, FARES.2));
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    reply(&run, &agent, "And this", &[TRAINS.0], cx);
+    reply(&run, &agent, "And then?", &[], cx);
+    reply(&run, &agent, "", &[SEATS.0], cx);
+    reply(&run, &agent, "Fares too", &[FARES.0], cx);
+    let waits = [
+        ("And this".to_string(), vec![TRAINS.0]),
+        ("And then?".to_string(), vec![]),
+        (String::new(), vec![SEATS.0]),
+        ("Fares too".to_string(), vec![FARES.0]),
+    ];
+    assert_eq!(held(&run, &agent, cx), waits);
+    assert!(given(&run).is_empty());
+    assert!(replies(&run, &agent, cx).is_empty());
+    assert!(entries(&run, &agent, handed::HANDED, cx).is_empty());
+    for tab in [TRAINS.0, SEATS.0, FARES.0] {
+        assert_eq!(space_of(&run, tab), USERS);
+    }
+    // Meanwhile one is no longer the core's to give, and one closed.
+    run.browser.not_given.borrow_mut().insert(SEATS.0);
+    (run.browser.tabs.borrow_mut()).retain(|tab| tab.0 != FARES.0);
+    run.said(&agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
+    run.said(&agent, Out::Ended(None), cx);
+    cx.run_until_parked();
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert!(held(&run, &agent, cx).is_empty());
+    assert_eq!(given(&run), [TRAINS.0]);
+    assert_eq!(
+        heard(&run, 1, 2),
+        format!(
+            "And this\n\nThe user added one of their tabs to your pages.\n{}",
+            line_of(TRAINS)
+        )
+    );
+    assert_eq!(heard(&run, 1, 3), "And then?");
+    assert_eq!(heard(&run, 1, 4), "Fares too");
+    assert_eq!(
+        replies(&run, &agent, cx),
+        ["And this", "And then?", "Fares too"]
+    );
+    // The chip of the tab that closed, by the title it had at the send.
+    let shown = [
+        (1, vec![(TRAINS.0, TRAINS.1.to_string(), true)]),
+        (3, vec![(FARES.0, FARES.1.to_string(), false)]),
+    ];
+    assert_eq!(chips(&run, &agent, cx), shown);
+    assert!(
+        run.agents
+            .update(cx, |agents, _| agents.take_unsent(&agent).is_empty())
+    );
+    // The turn they started ends as any does, with nothing held.
+    run.finish(&agent, cx);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+}
+
+/// Stop means stop: a reply held when the thread is stopped, fails or finishes is never given.
+/// Nothing is handed, no message joins the conversation, the log has no entry, and the user has
+/// their words and picks back, once.
+#[gpui::test]
+fn a_reply_held_at_a_stop_is_never_given(cx: &mut TestAppContext) {
+    use crate::agents::runner::Failure;
+    type End = fn(&Run, &str, &mut TestAppContext);
+    let ends: [(&str, End); 3] = [
+        ("stop", |run, agent, cx| {
+            run.agents.update(cx, |agents, cx| {
+                agents.task_action(agent, TaskAction::Stop, cx);
+            })
+        }),
+        ("failure", |run, agent, cx| {
+            let failure = Failure::Other("It broke.".into());
+            run.said(agent, Out::Ended(Some(failure)), cx)
+        }),
+        ("finish", |run, agent, cx| {
+            let done = call(
+                &run.agents,
+                agent,
+                "finish",
+                json!({ "result": "Booked." }),
+                cx,
+            );
+            cx.run_until_parked();
+            assert!(!done.try_recv().expect("answered").error);
+            // Its turn winds down after it.
+            run.said(agent, Out::Ended(None), cx);
+        }),
+    ];
+    for (name, end) in ends {
+        let run = run(&format!("handed-held-{name}"), cx);
+        let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+        run.ran(1);
+        reply(&run, &agent, "And this", &[TRAINS.0], cx);
+        reply(&run, &agent, "And then?", &[], cx);
+        end(&run, &agent, cx);
+        cx.run_until_parked();
+        assert_ne!(run.state(&agent, cx), State::Working, "{name}");
+        assert!(given(&run).is_empty(), "{name}");
+        assert_eq!(space_of(&run, TRAINS.0), USERS, "{name}");
+        assert!(replies(&run, &agent, cx).is_empty(), "{name}");
+        assert!(chips(&run, &agent, cx).is_empty(), "{name}");
+        assert!(held(&run, &agent, cx).is_empty(), "{name}");
+        for action in [handed::HANDED, handed::GIVEN_BACK, handed::TAKEN_BACK] {
+            assert!(entries(&run, &agent, action, cx).is_empty(), "{name}");
+        }
+        let unsent = |cx: &mut TestAppContext| -> Vec<(String, Vec<u64>)> {
+            run.agents.update(cx, |agents, _| {
+                (agents.take_unsent(&agent).into_iter())
+                    .map(|reply| (reply.text.to_string(), reply.tabs.tabs().to_vec()))
+                    .collect()
+            })
+        };
+        let back = [
+            ("And this".to_string(), vec![TRAINS.0]),
+            ("And then?".to_string(), vec![]),
+        ];
+        assert_eq!(unsent(cx), back, "{name}");
+        assert!(unsent(cx).is_empty(), "{name}: handed back twice");
+        // The turn's end that follows gives nothing either.
+        run.said(&agent, Out::Ended(None), cx);
+        cx.run_until_parked();
+        assert!(given(&run).is_empty(), "{name}");
+        assert!(replies(&run, &agent, cx).is_empty(), "{name}");
+    }
+}

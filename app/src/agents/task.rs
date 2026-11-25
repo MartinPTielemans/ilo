@@ -1781,7 +1781,8 @@ impl Agents {
         self.tasks.tasks.push(task);
         self.tokens_changed();
         // The user's tabs picked for it are its pages from here, and its assistant is told so.
-        let (chips, told) = self.hand_with_message(&agent, tabs, cx);
+        let titles = self.titles_of(&tabs, cx);
+        let (chips, told) = self.hand_with_message(&agent, tabs, titles, cx);
         // No words, and no tab that went after all: nothing was asked, so no thread started.
         if asked.is_empty() && told.is_none() {
             self.end_task(&agent, true, cx);
@@ -2222,8 +2223,14 @@ impl Agents {
                 }
             }
             Out::Ended(None) => {
+                let working = (self.task(&agent)).is_some_and(|task| task.state == State::Working);
+                // The replies held for this turn's end are given now: the thread is under way on
+                // them, and keeps what it holds.
+                if working && self.give_held(&agent, cx) {
+                    return cx.notify();
+                }
                 // No longer under way from here: the tabs it holds of the user's go back first.
-                if (self.task(&agent)).is_some_and(|task| task.state == State::Working) {
+                if working {
                     self.hand_all_back(&agent, cx);
                 }
                 let Some(task) = self.task_mut(&agent) else {
@@ -2350,15 +2357,40 @@ impl Agents {
         if text.is_empty() && tabs.is_empty() {
             return;
         }
+        // A chip shows its tab's title as it is at the user's send.
+        let titles = self.titles_of(&tabs, cx);
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
-            return self.answer_ask(agent, text, tabs, cx);
+            return self.answer_ask(agent, text, tabs, titles, cx);
         }
         // One a run before left comes back in its own profile, or not at all (#4105).
         if !self.goes_on(agent) {
             return cx.notify();
         }
-        self.give_reply(agent, text, tabs, cx);
+        // A thread at work is handed nothing mid-turn: a reply with a tab of the user's waits for
+        // the turn under way to end, out of the conversation until then, and one sent while it
+        // waits goes after it.
+        if let Some(task) = self.task_mut(agent)
+            && task.state == State::Working
+            && task.sends.holds(&tabs)
+        {
+            let text = text.to_string().into();
+            task.sends.hold(handed::Reply { text, tabs }, titles);
+            return cx.notify();
+        }
+        self.give_reply(agent, text, tabs, titles, cx);
+    }
+
+    /// `agent`'s turn under way ended: the replies held for it are given, in the order sent, each
+    /// handing its tabs as it goes, checked again now. Whether any was, on which the thread is
+    /// still under way.
+    fn give_held(&mut self, agent: &str, cx: &mut Context<Self>) -> bool {
+        let held = (self.task_mut(agent)).map_or_else(Vec::new, |task| task.sends.take_held());
+        let mut given = false;
+        for (reply, titles) in held {
+            given |= self.give_reply(agent, &reply.text, reply.tabs, titles, cx);
+        }
+        given
     }
 
     /// Gives `agent`'s assistant the user's reply, `text` with `tabs`. Whether there was anything
@@ -2368,9 +2400,10 @@ impl Agents {
         agent: &str,
         text: &str,
         tabs: handed::Picked,
+        titles: Vec<SharedString>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let (chips, told) = self.hand_with_message(agent, tabs, cx);
+        let (chips, told) = self.hand_with_message(agent, tabs, titles, cx);
         if text.is_empty() && told.is_none() {
             return false;
         }
@@ -2422,9 +2455,10 @@ impl Agents {
         agent: &str,
         answer: &str,
         tabs: handed::Picked,
+        titles: Vec<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        let (chips, told) = self.hand_with_message(agent, tabs, cx);
+        let (chips, told) = self.hand_with_message(agent, tabs, titles, cx);
         // No words and no tab that went: nothing answered it, and it still waits.
         if answer.is_empty() && told.is_none() {
             return;

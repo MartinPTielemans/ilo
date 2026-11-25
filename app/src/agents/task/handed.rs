@@ -139,9 +139,39 @@ pub(in crate::agents) struct Sends {
     /// The chips of each message that had any, by which of the user's messages it is: 0 the one
     /// that started the thread, then each reply in turn.
     chips: Vec<(usize, Vec<Chip>)>,
+    /// The replies held until the turn under way ends, in the order sent, each with its tabs'
+    /// titles as they were at the user's send: one with a tab of theirs, sent while the thread
+    /// was at work, and every reply sent after it.
+    held: Vec<(Reply, Vec<SharedString>)>,
+    /// Those never given, as the thread was no longer under way before the turn ended: the
+    /// user's to have back, words and picks.
+    unsent: Vec<Reply>,
 }
 
 impl Sends {
+    /// Whether a reply with `tabs` to the thread at work waits for the turn under way to end: one
+    /// with a tab of the user's does, as nothing is handed mid-turn, and so does any sent while
+    /// one waits, which goes after it.
+    pub(super) fn holds(&self, tabs: &Picked) -> bool {
+        !tabs.is_empty() || !self.held.is_empty()
+    }
+
+    /// `reply` waits for the turn under way to end, after those that wait already.
+    pub(super) fn hold(&mut self, reply: Reply, titles: Vec<SharedString>) {
+        self.held.push((reply, titles));
+    }
+
+    /// The turn under way ended: the replies held for it, to give in their order.
+    pub(super) fn take_held(&mut self) -> Vec<(Reply, Vec<SharedString>)> {
+        std::mem::take(&mut self.held)
+    }
+
+    /// The thread is no longer under way: what was held is never given.
+    fn not_given(&mut self) {
+        let held = self.held.drain(..);
+        self.unsent.extend(held.map(|(reply, _)| reply));
+    }
+
     /// The user's message `said` showed `chips`.
     pub(super) fn showed(&mut self, said: usize, chips: Vec<Chip>) {
         if !chips.is_empty() {
@@ -303,18 +333,23 @@ impl Agents {
         self.tasks_on() && picked.tabs.iter().any(fits)
     }
 
+    /// The titles of the tabs `picked`, in their order, as they are now: read at the user's send,
+    /// for the message's chips.
+    pub(super) fn titles_of(&self, picked: &Picked, cx: &App) -> Vec<SharedString> {
+        let title = |tab: &u64| self.browser.tab(*tab, cx).title;
+        picked.tabs.iter().map(title).collect()
+    }
+
     /// The user's message hands `picked` to `agent`'s thread, as `hand_tabs` does. Returns the
-    /// message's chips, each with whether its tab went, and what the thread's assistant is told of
-    /// those that did.
+    /// message's chips, each by its title of `titles` and with whether its tab went, and what the
+    /// thread's assistant is told of those that did.
     pub(super) fn hand_with_message(
         &mut self,
         agent: &str,
         picked: Picked,
+        titles: Vec<SharedString>,
         cx: &mut Context<Self>,
     ) -> (Vec<Chip>, Option<String>) {
-        // Each as the user picked it: a tab's title as it is at their send.
-        let title = |tab: &u64| self.browser.tab(*tab, cx).title;
-        let titles: Vec<SharedString> = picked.tabs.iter().map(title).collect();
         let handed = self.hand_tabs(agent, picked, cx);
         let told = self.told_of_handed(agent, &handed, cx);
         let chips = (handed.into_iter().zip(titles))
@@ -328,6 +363,23 @@ impl Agents {
     /// conversation to show, and nothing else: no tool's answer or log line carries it.
     pub fn message_chips(&self, agent: &str) -> Vec<(usize, Vec<Chip>)> {
         (self.task(agent)).map_or_else(Vec::new, |task| task.sends.chips.clone())
+    }
+
+    /// The replies to `agent`'s thread that wait for its turn under way to end, in the order sent:
+    /// for the composer to show as not yet given.
+    pub fn held_replies(&self, agent: &str) -> Vec<Reply> {
+        let Some(task) = self.task(agent) else {
+            return Vec::new();
+        };
+        let held = task.sends.held.iter();
+        held.map(|(reply, _)| reply.clone()).collect()
+    }
+
+    /// The replies to `agent`'s thread that were never given, as it was stopped or ended before
+    /// its turn under way did: the user's words and picks, in the order sent, handed back as data
+    /// and no longer anywhere else. Nothing of them was given, handed or entered in the log.
+    pub fn take_unsent(&mut self, agent: &str) -> Vec<Reply> {
+        (self.task_mut(agent)).map_or_else(Vec::new, |task| std::mem::take(&mut task.sends.unsent))
     }
 
     /// What `agent`'s assistant is told of the tabs just handed it, those of `handed` that went.
@@ -392,8 +444,12 @@ impl Agents {
     /// `agent`'s thread is no longer under way, or goes: every tab it holds of the user's returns
     /// to their tabs, in the order handed, each with its entry, before the thread's record closes
     /// and before anything closes a page of its Space. A wait on the user, an ask or a step handed
-    /// to them, is still under way, and returns none.
+    /// to them, is still under way, and returns none. A reply held for the end of its turn is
+    /// never given: it hands nothing, and is the user's to have back.
     pub(super) fn hand_all_back(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if let Some(task) = self.task_mut(agent) {
+            task.sends.not_given();
+        }
         for tab in self.handed_order(agent) {
             self.return_tab(agent, tab, By::Thread, cx);
         }
