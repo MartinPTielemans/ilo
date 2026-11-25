@@ -772,6 +772,73 @@ fn only_a_walled_claude_is_started_with_the_walls_knobs() {
     assert_eq!(set(&walled(Cli::Codex, None)), set(&launch(Cli::Codex)));
 }
 
+/// A start inside a wall whose listener is up, as put_up answers one.
+fn listening(cli: Cli) -> Launch {
+    Launch {
+        wall: Some(Arc::new(Wall::for_test_listening(cli))),
+        ..launch(cli)
+    }
+}
+
+/// A walled start of either assistant names the wall's listener as its every proxy and clears
+/// what would exempt a host from it or name another; a start with no wall names none and clears
+/// nothing, as before.
+#[test]
+fn only_a_walled_start_names_the_listener_as_its_proxy() {
+    let proxies = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+    let cleared = [
+        "NO_PROXY",
+        "no_proxy",
+        "https_proxy",
+        "http_proxy",
+        "all_proxy",
+    ];
+    let removed = |launch: &Launch| -> Vec<String> {
+        let mut command = crate::child::command(&launch.program);
+        environment(&mut command, launch);
+        (command.get_envs())
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    };
+    for cli in Cli::ALL {
+        let inside = listening(cli);
+        let port = (inside.wall.as_ref()).and_then(|wall| wall.port()).unwrap();
+        let named = format!("http://127.0.0.1:{port}");
+        let has = set(&inside);
+        for name in proxies {
+            let at = (has.iter())
+                .find(|(set, _)| set == name)
+                .map(|(_, value)| value);
+            assert_eq!(at, Some(&named), "{cli:?}: {name}");
+        }
+        let gone = removed(&inside);
+        for name in cleared {
+            assert!(
+                gone.iter().any(|gone| gone == name),
+                "{cli:?}: {name} isn't cleared"
+            );
+            assert!(
+                !has.iter().any(|(set, _)| set == name),
+                "{cli:?}: {name} is set"
+            );
+        }
+
+        let outside = launch(cli);
+        let has = set(&outside);
+        for name in proxies.iter().chain(&cleared) {
+            assert!(
+                !has.iter().any(|(set, _)| set == name),
+                "{cli:?}: {name} is set"
+            );
+        }
+        assert!(
+            removed(&outside).is_empty(),
+            "{cli:?}: a start with no wall clears a name"
+        );
+    }
+}
+
 /// Every name a start sets on its process is one the wall's launcher is told to keep: the wall
 /// drops every other on the way, and nothing would say so. The list itself is one the launcher
 /// takes: no name twice, and no more than it reads.
@@ -793,6 +860,7 @@ fn every_name_a_start_sets_is_in_the_kept_list() {
             launch(cli),
             with_helpers,
             walled(cli, Some("/nonexistent/tmp")),
+            listening(cli),
         ];
         for start in starts {
             for (name, _) in set(&start) {

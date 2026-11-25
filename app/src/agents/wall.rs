@@ -230,7 +230,8 @@ impl Wall {
         self.tmp.as_deref()
     }
 
-    /// The port of its listener, which its start's proxy variables are to name.
+    /// The port of its listener, which a walled start's HTTPS_PROXY, HTTP_PROXY and ALL_PROXY
+    /// name, with NO_PROXY cleared (runner.rs, `sets` and `environment`).
     pub fn port(&self) -> Option<u16> {
         self.listener.as_ref().map(listener::Listener::port)
     }
@@ -247,6 +248,14 @@ impl Wall {
             place: None,
             listener: None,
         }
+    }
+
+    /// As `for_test`, with its listener started, as put_up starts one.
+    #[cfg(test)]
+    pub(crate) fn for_test_listening(cli: crate::agents::runner::Cli) -> Wall {
+        let mut wall = Wall::for_test(None);
+        wall.listener = Some(listener::Listener::start(cli).unwrap());
+        wall
     }
 }
 
