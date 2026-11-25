@@ -162,19 +162,20 @@ fn a_split_views_line_keeps_the_plain_plate_whatever_its_panes_colours(cx: &mut 
 }
 
 #[gpui::test]
-fn a_dark_page_has_a_hairline_round_its_line_and_a_light_one_none(cx: &mut TestAppContext) {
+fn a_page_light_or_dark_has_a_hairline_of_its_own_ink_round_its_line(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
-    show(&shell, cx, 10, Some(WHITE));
-    let (joined, _) = drawn(&shell, cx);
-    assert_eq!(joined.and_then(|joined| joined.outline), None);
-    show(&shell, cx, 10, Some(DARK));
-    let (joined, _) = drawn(&shell, cx);
-    let on = shell.read_with(cx, |shell, _| shell.line_palette(10));
-    assert_eq!(on.tone, Tone::Dark);
-    assert_eq!(
-        joined.and_then(|joined| joined.outline),
-        Some(on.faint(DIVIDER))
-    );
+    for (color, tone) in [(WHITE, Tone::Light), (DARK, Tone::Dark)] {
+        show(&shell, cx, 10, Some(color));
+        let (joined, _) = drawn(&shell, cx);
+        let on = shell.read_with(cx, |shell, _| shell.line_palette(10));
+        assert_eq!(on.tone, tone, "{color:06x}");
+        // The ink that reads on the page, dark on a light one, at the divider's strength.
+        assert_eq!(
+            joined.and_then(|joined| joined.outline),
+            Some(on.faint(DIVIDER)),
+            "{color:06x}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -210,9 +211,10 @@ fn a_white_page_and_a_black_one_in_a_dark_window_both_keep_a_title_that_reads(
         let (joined, plain) = drawn(&shell, cx);
         let joined = joined.expect("the open tab's line isn't joined to its page");
         assert_eq!((hex(joined.fill), plain), (color, None), "{color:06x}");
-        // A black page in a dark window is told from it by its hairline alone.
-        assert_eq!(joined.outline.is_some(), tone == Tone::Dark, "{color:06x}");
         let on = shell.read_with(cx, |shell, _| shell.line_palette(10));
+        // A black page in a dark window is told from it by its hairline alone, and a white one
+        // has its own.
+        assert_eq!(joined.outline, Some(on.faint(DIVIDER)), "{color:06x}");
         assert_eq!(on.tone, tone, "{color:06x}");
         let (fill, title) = (rgb(color), on.text(0.));
         let reads = contrast(
@@ -266,22 +268,16 @@ fn the_shape_ends_on_the_pixel_of_the_screen_the_page_starts_on(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn the_line_round_a_dark_pages_shape_stops_at_the_pages_own(cx: &mut TestAppContext) {
+fn the_line_round_a_pages_shape_stops_at_the_pages_own(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     let (line, curve) = (px(PAGE_OUTLINE_WIDTH), px(JOIN_RADIUS));
-    // A light page's shape has no line, so none to keep anywhere.
-    show(&shell, cx, 10, Some(WHITE));
-    let (joined, _) = drawn(&shell, cx);
-    assert_eq!(joined.and_then(|joined| joined.lined), None);
-    show(&shell, cx, 10, Some(DARK));
-    for right in [false, true] {
+    for (color, right) in [(WHITE, false), (WHITE, true), (DARK, false), (DARK, true)] {
+        show(&shell, cx, 10, Some(color));
         cx.update(|_, cx| cx.set_global(SidebarRight(right)));
         let (joined, _) = drawn(&shell, cx);
         let joined = joined.expect("the open tab's line isn't joined to its page");
         assert_eq!(joined.page_left, right);
-        let lined = joined
-            .lined
-            .expect("a dark page's shape has no line round it");
+        let lined = joined.lined.expect("a page's shape has no line round it");
         // The page's own line is a line's width outside the page, down its whole side: the
         // shape's stops beside it, from the curve above the line to the one below.
         // Round the line's far end it is all there.
