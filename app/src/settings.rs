@@ -5068,8 +5068,10 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
+    /// Bring in, take out: the import's view, as it is, then Export Spaces as Markdown, under one
+    /// heading as drawn (S6); inside an import, the crumb that names its browser.
     fn import_export(&self, cx: &mut Context<Self>) -> Page {
+        const BRING_IN: &str = "Bring in, take out";
         let look = &self.look;
         let export = self
             .button("export-spaces", "Export…")
@@ -5078,7 +5080,7 @@ impl Settings {
             .on_click(|_, _, cx| crate::export_spaces(cx));
         let export = setting(
             look,
-            "Spaces as Markdown",
+            "Export Spaces as Markdown",
             None,
             vec![export.into_any_element()],
         );
@@ -5087,7 +5089,7 @@ impl Settings {
         let inside = import.and_then(ImportView::crumb).is_some();
         let heading = match import.and_then(ImportView::crumb) {
             Some(inside) => Block::Crumb("Import".into(), inside),
-            None => Block::Heading("Import".into()),
+            None => Block::Heading(BRING_IN.into()),
         };
         let under_way = import.is_some_and(ImportView::under_way);
         let mut blocks = vec![heading];
@@ -5097,7 +5099,6 @@ impl Settings {
                 .map(|import| Block::View(import.into_any_element())),
         );
         if !under_way {
-            blocks.push(Block::Heading("Export".into()));
             blocks.push(Block::Rows(vec![export]));
         }
         // Inside an import the crumb says where it is, so the page's sentence gives way.
