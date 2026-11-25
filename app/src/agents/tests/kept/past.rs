@@ -401,6 +401,46 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
 }
 
+/// A done task's finding comes from this run's conversation alone: its card says it, and after a
+/// quit the task brought back, its kept card and the kept list's row say none of it, nor does the
+/// file.
+#[gpui::test]
+fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+    let run = Run::new("finding", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    run.finish(&agent, cx);
+    let finding = (run.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&agent).unwrap(), cx).finding
+    });
+    assert_eq!(finding, "Two seats at 9:05, car 4.");
+
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    (next.agents).read_with(cx, |agents, cx| {
+        let back = agents.card(agents.task(&past).unwrap(), cx);
+        assert!(back.finding.is_empty(), "{:?}", back.finding);
+        let kept = agents.kept_cards(cx);
+        assert!(
+            kept.iter().any(|card| card.agent == past.as_str()),
+            "no kept card"
+        );
+        for card in kept {
+            assert!(card.finding.is_empty(), "{:?}", card.finding);
+        }
+    });
+    for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
+        assert!(
+            !title.contains("9:05") && !about.contains("9:05"),
+            "{title} {about}"
+        );
+    }
+    let text = std::fs::read_to_string(index(&next)).unwrap();
+    assert!(!text.contains("9:05"), "the file has the finding");
+}
+
 /// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
 /// reply at Work on pages at most, as any does.
 #[gpui::test]
