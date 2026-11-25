@@ -177,6 +177,7 @@ use crate::tokens::shell::library::BUTTON_PROGRESS_BOTTOM;
 use crate::tokens::shell::library::BUTTON_PROGRESS_FILL;
 use crate::tokens::shell::library::BUTTON_PROGRESS_HEIGHT;
 use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK_PLATED;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
 use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::PROGRESS_BOTTOM;
@@ -4329,7 +4330,10 @@ impl Shell {
     pub(super) fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let progress = downloads_progress(&self.downloads);
         let command = Command::ViewLibrary;
-        let lit = self.library_lit();
+        // While its plate of recent downloads is up the button is the plate's foot, in its fill:
+        // no plate of its own, its glyph in the ink.
+        let plated = self.recent_downloads.plated();
+        let lit = self.library_lit() && !plated;
         div()
             .id("library")
             .when(self.a11y, |button| {
@@ -4346,8 +4350,11 @@ impl Shell {
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
             .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .when(!plated, |button| {
+                button
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            })
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
                 shell.hover_button(
@@ -4360,12 +4367,6 @@ impl Shell {
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                    shell.hover_kinds_menu(event.position, cx)
-                }),
-            )
             .when(lit, |button| {
                 button.child(
                     div()
@@ -4383,7 +4384,11 @@ impl Shell {
             // A task's card folding into it bumps its glyph as it lands.
             .child({
                 let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
-                let alpha = if lit { LIBRARY_OPEN_GLYPH } else { alpha };
+                let alpha = if lit || plated {
+                    LIBRARY_OPEN_GLYPH
+                } else {
+                    alpha
+                };
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))
@@ -4404,6 +4409,7 @@ impl Shell {
                         .h(px(BUTTON_PROGRESS_HEIGHT))
                         .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
                         .bg(self.palette.faint(match self.palette.tone {
+                            _ if plated => BUTTON_PROGRESS_TRACK_PLATED,
                             Tone::Dark => BUTTON_PROGRESS_TRACK,
                             Tone::Light => LIGHT_BUTTON_PROGRESS_TRACK,
                         }))

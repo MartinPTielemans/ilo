@@ -996,12 +996,6 @@ impl Browser for Fake {
     // Nor captures.
     fn list_captures(&self, _: &mut App) {}
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        browser::shell::HOVER_ALL
-    }
-
-    fn set_hover_kinds(&self, _: u32, _: &mut App) {}
-
     // The made-up downloads have no files, so each is gone already and none drags.
     fn trash(&self, _: &str, _: &mut App) -> bool {
         true
@@ -2862,6 +2856,7 @@ fn main() {
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
+                    let files = states::var("PREVIEW_DOWNLOADS").as_deref() == Ok("files");
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
                         .map(
@@ -2869,7 +2864,14 @@ fn main() {
                                 id,
                                 name: name.into(),
                                 url: url.into(),
-                                path: SharedString::default(),
+                                // PREVIEW_DOWNLOADS=files gives the finished ones made-up files:
+                                // the Library button's plate lists a finished one only with one.
+                                path: match state {
+                                    DownloadState::Done if files => {
+                                        format!("/preview/{name}").into()
+                                    }
+                                    _ => SharedString::default(),
+                                },
                                 received,
                                 total,
                                 state,

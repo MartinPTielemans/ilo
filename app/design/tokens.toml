@@ -2383,6 +2383,8 @@ button-progress-bottom = 4.0
 # dark window and 0.16 on a light one, and what has arrived in the text's.
 button-progress-track = 0.2
 light-button-progress-track = 0.16
+# On the plate of recent downloads, whose foot the button is, the track is the button level's.
+button-progress-track-plated = 0.1
 button-progress-fill = 1.0
 # Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
 # centre right of and above the glyph's, until it leaves.
@@ -2971,28 +2973,62 @@ veil = 0.12
 rim = 0.5
 
 [shell.recent-downloads]
-recent-pitch = 56.0
-column-x = 8.0
-column = 40.0
-icon = 26.0
-text-x = 61.0
-text-end = 12.0
+# The Library button's plate of recent downloads (the owner's): with the pointer resting on the
+# button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
+# lists this many downloads, newest first.
+count = 4
+# The floating level's fill, opaque as it's drawn, since it lies over the tab list with nothing
+# blurring what's under it; its top corners and its far bottom one round, the near bottom one
+# square where it runs into the button; and the floating level's shadow.
+fill = 0x303036
+light-fill = 0xf6f5f1
+fill-alpha = 1.0
+radius = 12.0
+padding = 6.0
+shadow = 0.35
+shadow-y = 12.0
+shadow-blur = 32.0
+# The button's own box takes the fill, round at its foot, and a curve this big takes its far side
+# into the plate's foot.
+strip-radius = 10.0
+curve = 8.0
+# Its heading, at the detail's size, semibold, in text-3.
+heading = 26.0
+# A row: its plate under the pointer the button level's; a tile, the file's picture or the page
+# glyph on the card level's fill; its name, medium, over one line of detail in text-2. The name is
+# drawn at 12.5, which is off the chrome's four sizes: it's body, as a row of the Library's is.
+row = 44.0
+row-inset = 8.0
+row-gap = 9.0
+row-radius = 9.0
+row-hovered = 0.1
+tile = 28.0
+tile-radius = 7.0
+tile-fill = 0.067
+tile-glyph = 14.0
+tile-glyph-ink = 0.8
 name = 1.0
-name-size = 15.0
-name-line = 19.0
-age-size = 11.0
-age-line = 15.0
-# Ours: a tall image's preview keeps 4 pt inside its row's plate, with corners concentric with it:
-# the plate's 12 less 4.
-preview-height = 48.0
-preview-radius = 8.0
-# Ours: a row's plate under the pointer, as the Library's rows have one.
-plate-inset = 4.0
-plate-radius = 12.0
-# Arc's: the tab list behind is hidden from this far above the top row, and comes back over the
-# shade's height above that.
-shade-gap = 3.0
-shade = 170.0
+name-size = 13.0
+name-line = 16.0
+detail-size = 11.0
+detail-line = 14.0
+detail-above = 1.0
+# A download still coming: a bar before how much of it has come, its track the button level's and
+# what has come in the text's.
+bar-width = 44.0
+bar-height = 3.0
+bar-gap = 7.0
+bar-above = 2.0
+bar-track = 0.1
+bar-fill = 1.0
+
+# Ours: it opens once the pointer has rested this long on the button, grows from the button's own
+# box on an ease-out with its rows fading in from this far through, and folds back faster.
+[shell.recent-downloads.motion]
+rest = 0.15
+grow = 0.2
+fold = 0.15
+rows-from = 0.5
 
 [shell.scroller]
 # The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the

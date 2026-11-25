@@ -281,10 +281,6 @@ pub trait Browser {
     /// Lists the captures saved to the Library, away from the main thread, and calls
     /// `Shell::set_captures`.
     fn list_captures(&self, cx: &mut App);
-    /// What the Library button's hover lists, as `recent_downloads::HOVER_IMAGES`' and its
-    /// fellows' bits, as the user picked them from its menu.
-    fn hover_kinds(&self, cx: &mut App) -> u32;
-    fn set_hover_kinds(&self, kinds: u32, cx: &mut App);
     /// Moves the file at `path` to the system's Trash, and says whether it's gone, as it is if it
     /// was gone already.
     fn trash(&self, path: &str, cx: &mut App) -> bool;
