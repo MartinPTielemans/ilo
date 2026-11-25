@@ -2074,7 +2074,7 @@ impl Shell {
                 .child(
                     div()
                         .absolute()
-                        .left(px(list_x(SEARCH_X)))
+                        .left(px(list_x(COLUMN_WIDTH + SEARCH_X)))
                         .top(px(SEARCH_TOP))
                         .w(px(SEARCH_WIDTH))
                         .flex()
@@ -4863,7 +4863,7 @@ mod tests {
         });
         cx.run_until_parked();
         let filter = point(
-            px(FILTER_X + FILTER_WIDTH / 2.),
+            px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
             px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
         );
         let click = |cx: &mut gpui::VisualTestContext| {

@@ -15,7 +15,7 @@ use super::{
     CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
-use crate::tokens::shell::library::COLUMN_WIDTH;
+use crate::tokens::shell::library::{COLUMN_WIDTH, SEARCH_HEIGHT, SEARCH_TOP, SEARCH_X};
 
 const WIDTH: f32 = 1000.;
 
@@ -297,6 +297,42 @@ fn in_full_screen_the_side_moves_the_edge(cx: &mut TestAppContext) {
     assert!(
         to(WIDTH - 1., 306., cx),
         "the right edge didn't bring it out"
+    );
+}
+
+/// The Library's search field is over the list on either side, never over the column of sections:
+/// a press on the column at the field's height leaves the keyboard where it was, and one just inside
+/// the list's edge gives it to the field.
+#[gpui::test]
+fn the_search_field_is_over_the_list_on_either_side(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.section = Section::Downloads;
+        shell.set_library(true, cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    draw(&shell, cx);
+    let keys = |x: f32, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.blur(cx));
+        let at = point(px(x), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| shell.read(cx).library_search_keys(window, cx))
+    };
+    assert!(
+        !keys(COLUMN_WIDTH - 16., &shell, cx),
+        "a press on the column of sections went to the search field"
+    );
+    assert!(
+        keys(COLUMN_WIDTH + SEARCH_X + 16., &shell, cx),
+        "a press just inside the list's edge didn't reach the search field"
+    );
+    side(true, &shell, cx);
+    let list = shell.read_with(cx, |shell, _| shell.library_x());
+    assert!(
+        keys(list + SEARCH_X + 16., &shell, cx),
+        "on the right, a press just inside the list's edge, at {list}, didn't reach the search field"
     );
 }
 
