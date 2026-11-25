@@ -293,6 +293,13 @@ pub trait Browser {
     fn task_spaces(&self) -> Vec<u64>;
     /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
     fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
+    /// Whether `space` is a Space of the user's that shows `tab` as one of its own: a pinned or
+    /// Today tab of it, or a favorite it shows. No agent's Space shows a tab in this sense.
+    fn shows(&self, tab: u64, space: u64, cx: &App) -> bool;
+    /// Gives the user's `tab` to the agent whose Space is `space`, where it's one of that agent's
+    /// pages until it goes back (bc_tab_give_to_agent). Whether it moved: the core refuses the
+    /// tabs it never gives, whatever asks. The user's send alone calls it (task/handed.rs).
+    fn give_tab(&self, tab: u64, space: u64, cx: &mut App) -> bool;
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
@@ -1926,40 +1933,7 @@ impl Agents {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                // A tab of its own off the web is listed by its number alone, so it can close it,
-                // and one the user holds by its number and theirs, so where they go stays theirs.
-                let mut tabs = self.browser.agent_tabs(&agent, cx);
-                // A page of a task the user stopped isn't listed to its client, by number or
-                // otherwise, until they hand it back.
-                tabs.retain(|tab| !self.withheld(&agent, tab.id));
-                // A tab that came to a fenced site is listed without its page's title or address.
-                let came: HashSet<u64> = (tabs.iter())
-                    .filter(|tab| self.came_to(tab.id, cx).is_some())
-                    .map(|tab| tab.id)
-                    .collect();
-                let tabs: Vec<TabInfo> = (tabs.into_iter())
-                    .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
-                        None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => {
-                            Some(TabInfo {
-                                title: WITH_THE_USER.into(),
-                                url: "".into(),
-                                ..tab
-                            })
-                        }
-                        None if came.contains(&tab.id) => Some(TabInfo {
-                            title: fence::LISTED.into(),
-                            url: "".into(),
-                            ..tab
-                        }),
-                        None => Some(tab),
-                        Some(NOT_WEB_PAGE) => Some(TabInfo {
-                            title: OFF_THE_WEB.into(),
-                            url: "".into(),
-                            ..tab
-                        }),
-                        Some(_) => None,
-                    })
-                    .collect();
+                let tabs = self.tabs_listed(&agent, cx);
                 self.note(&agent, connection, "list_tabs", "", "");
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
@@ -2885,6 +2859,42 @@ impl Agents {
                 }
             }
         }
+    }
+
+    /// The agent's tabs as list_tabs lists them, each with what an agent may know of it.
+    fn tabs_listed(&self, agent: &str, cx: &App) -> Vec<TabInfo> {
+        // A tab of its own off the web is listed by its number alone, so it can close it,
+        // and one the user holds by its number and theirs, so where they go stays theirs.
+        let mut tabs = self.browser.agent_tabs(agent, cx);
+        // A page of a task the user stopped isn't listed to its client, by number or
+        // otherwise, until they hand it back.
+        tabs.retain(|tab| !self.withheld(agent, tab.id));
+        // A tab that came to a fenced site is listed without its page's title or address.
+        let came: HashSet<u64> = (tabs.iter())
+            .filter(|tab| self.came_to(tab.id, cx).is_some())
+            .map(|tab| tab.id)
+            .collect();
+        (tabs.into_iter())
+            .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
+                None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => Some(TabInfo {
+                    title: WITH_THE_USER.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                None if came.contains(&tab.id) => Some(TabInfo {
+                    title: fence::LISTED.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                None => Some(tab),
+                Some(NOT_WEB_PAGE) => Some(TabInfo {
+                    title: OFF_THE_WEB.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                Some(_) => None,
+            })
+            .collect()
     }
 
     /// The tab a call names, else its default (`default_tab`); or None, having answered why.
@@ -5315,9 +5325,10 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match site.is_empty() {
-                true => tools::describe(action).to_string(),
-                false => format!("{} · {site}", tools::describe(action)),
+            let doing = match (task::handed::entry(action, site), site.is_empty()) {
+                (Some(whole), _) => whole,
+                (None, true) => tools::describe(action).to_string(),
+                (None, false) => format!("{} · {site}", tools::describe(action)),
             };
             self.doing.insert(agent.into(), doing.into());
         }

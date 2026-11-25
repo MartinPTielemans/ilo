@@ -75,6 +75,10 @@ struct Made {
     profiles: RefCell<Vec<(u64, &'static str)>>,
     /// The Spaces that are a private window's own, as a test says.
     private: RefCell<Vec<u64>>,
+    /// The user's tabs given to an agent, each with the Space it left and its place there, in the
+    /// order given; and those the core refuses to give, as a test says.
+    given: RefCell<Vec<(u64, u64, usize)>>,
+    not_given: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -387,6 +391,31 @@ impl Browser for Made {
             moved.1 = space;
             tabs.insert(0, moved);
         }
+    }
+
+    /// A Space no agent has is the user's, and shows the tabs in it.
+    fn shows(&self, tab: u64, space: u64, _: &App) -> bool {
+        let agents = self.agent_spaces.borrow();
+        let tabs = self.tabs.borrow();
+        space != 0
+            && !agents.values().any(|own| *own == space)
+            && tabs.iter().any(|each| each.0 == tab && each.1 == space)
+    }
+
+    /// As the core's: the tab goes to the agent's Space, and where it left is kept.
+    fn give_tab(&self, tab: u64, space: u64, _: &mut App) -> bool {
+        if self.not_given.borrow().contains(&tab) {
+            return false;
+        }
+        let mut tabs = self.tabs.borrow_mut();
+        let Some(at) = tabs.iter().position(|each| each.0 == tab) else {
+            return false;
+        };
+        let from = tabs[at].1;
+        let place = tabs[..at].iter().filter(|each| each.1 == from).count();
+        self.given.borrow_mut().push((tab, from, place));
+        tabs[at].1 = space;
+        true
     }
 
     /// The user's Space is 1.
@@ -13442,6 +13471,8 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 }
 
 mod fenced;
+#[cfg(unix)]
+mod handed;
 #[cfg(unix)]
 mod helpers;
 mod holds;

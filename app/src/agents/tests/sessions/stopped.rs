@@ -450,13 +450,14 @@ fn the_hand_backs_entry_counts_its_pages() {
 /// that page has an entry by its tool's name.
 #[gpui::test]
 fn a_call_by_an_entrys_name_is_no_tool_and_leaves_nothing(cx: &mut TestAppContext) {
-    const NAMES: [&str; 6] = [
+    const NAMES: [&str; 7] = [
         "request_permission camera",
         "request_permission midi",
         "file_dialog file_input",
         "file_dialog file_system_access",
         "request_device usb",
         "taken back",
+        "tab_handed",
     ];
     let (agents, browser, first) = lowered(Tier::Full, cx);
     let now = std::time::Instant::now;

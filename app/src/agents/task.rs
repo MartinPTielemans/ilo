@@ -28,6 +28,7 @@ use super::tier::{self, Sites, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
+pub mod handed;
 pub mod ilo;
 mod pick_up;
 pub(super) mod revoke;
@@ -781,6 +782,8 @@ pub struct Start {
     pub only_added: bool,
     /// The files and the folder picked on the `+` menu (#4101), given at the start alone.
     pub files: super::files::Picked,
+    /// The user's own tabs picked on the `+` menu, handed to the thread as it starts.
+    pub tabs: handed::Picked,
 }
 
 /// What the composer last started a thread with in a profile, which it opens with there next:
@@ -916,6 +919,8 @@ pub struct Tasks {
     pub(super) sign_ins: super::sign_in::SignIns,
     /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
     pub(super) look_again: bool,
+    /// The user's tabs the threads hold (handed.rs).
+    pub(super) handed: handed::Records,
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
@@ -1666,6 +1671,7 @@ impl Agents {
             pages,
             only_added,
             files: given,
+            tabs,
         } = start.into();
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
@@ -1673,7 +1679,9 @@ impl Agents {
             .filter_map(|url| added_address(url))
             .collect();
         let asked = asked.trim();
-        if asked.is_empty() || !self.tasks_on() {
+        // A tab picked and no words starts a thread too: what its assistant is told of the tab
+        // is then the whole message. With neither there is nothing to start.
+        if !self.tasks_on() || (asked.is_empty() && !self.any_to_hand(home, &tabs, cx)) {
             return None;
         }
         // A private window starts no task, whichever way it was asked: agents get no path into
@@ -1762,9 +1770,18 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
+        // The user's tabs picked for it are its pages from here, and its assistant is told so.
+        let handed = self.hand_tabs(&agent, tabs, cx);
+        let told = self.told_of_handed(&agent, &handed, cx);
+        // No words, and no tab that went after all: nothing was asked, so no thread started.
+        if asked.is_empty() && told.is_none() {
+            self.end_task(&agent, true, cx);
+            return None;
+        }
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
+        let first = handed::with_told(first, told);
         self.start_with(&agent, first, given, cx);
         cx.notify();
         Some(agent)
@@ -3947,9 +3964,14 @@ const RETRY: &str = "Go on from where you stopped.";
 
 /// The first message: what the user asked, and the page they were on, by its address and title.
 pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
+    // With no words, as a thread started with a tab alone, the page is the whole of it.
+    let before = match asked.is_empty() {
+        true => "",
+        false => "\n\n",
+    };
     match page {
         Some(page) => format!(
-            "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
+            "{asked}{before}(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
             super::request::plain(&page.title),
             page.url
         ),
