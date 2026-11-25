@@ -188,8 +188,8 @@ expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't tak
 if [ "$(uname)" = Darwin ]; then edit_row=341; else edit_row=317; fi
 send click $(in_page 442 $edit_row)
 expect '^browser: capture run edit$' "the menu's Edit didn't run"
-# The bar is at the ring's left, 8 under it: 12 buttons of 28, 4 apart, in 4 of padding.
-expect '^browser: capture markup drawn [a-z]* at 296 312 388 36$' \
+# The bar is at the ring's left, 8 under it: 12 buttons of 28, 4 apart, in the menu's 5 of padding.
+expect '^browser: capture markup drawn [a-z]* at 296 312 390 38$' \
   "Edit's bar didn't show under the box: $(grep '^browser: capture markup drawn' "$log" | tail -1)"
 send move $(in_page 320 250)
 send press $(in_page 320 250)
