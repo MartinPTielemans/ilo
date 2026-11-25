@@ -370,7 +370,7 @@ fn the_progress_counts_only_the_steps_shown(cx: &mut TestAppContext) {
         "counting no more steps"
     );
 
-    shell.update(cx, |shell, cx| shell.onboarding_next("test", cx));
+    shell.update(cx, |shell, cx| shell.onboarding_next(cx));
     assert!(
         asks_for_frames(&shell, cx),
         "the step changed: it fades and the knot moves"

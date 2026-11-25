@@ -927,7 +927,8 @@ step_settled() {
   fail "$2"
 }
 # Leaves first run's step $1, settled with the keyboard where it rests, the way that takes nothing
-# it offers, and checks it went that way, $2 starting each failure. A bare button with the
+# it offers, and checks the step was left, $2 starting each failure: the line says its number
+# alone, never what was picked. A bare button with the
 # keyboard takes ↩ as its own press. The Welcome (1) rests on Continue, whose ↩ signs in, so ⇥ to
 # Not Now; the import (3) and the favorites (3b) have Skip; the rest, ↩ for their main button. The
 # assistants' (2) have none with nobody signed in, where ↩ does nothing and the step rests on its
@@ -945,7 +946,7 @@ pass_step() {
       from=$step
       # Handled after the key, so by its end ↩ has done what it does.
       send state
-      if ! logged '^browser: onboarding left 2 via ' "$from"; then
+      if ! logged '^browser: onboarding left 2$' "$from"; then
         send key tab shift
         send key return
         how=just-the-browser
@@ -958,7 +959,7 @@ pass_step() {
     *) send key return ;;
   esac
   [ -n "${from:-}" ] && [ "$how" = return ] || from=$step
-  expect "^browser: onboarding left $1 via $how\$" "${2:-}$how didn't leave first run's step $1" "$from"
+  expect "^browser: onboarding left $1\$" "${2:-}$how didn't leave first run's step $1" "$from"
 }
 # Goes through first run's card from its first step, each left by pass_step, until step $1 has
 # settled, or with no $1 until the card has ended; $2 starts each failure, saying which run.

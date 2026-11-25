@@ -600,7 +600,7 @@ impl Shell {
         });
         let events = cx.subscribe(&view, |shell, _, event, cx| match event {
             AccountEvent::Finished if shell.onboarding_on(Step::Account) => {
-                shell.onboarding_next("account", cx)
+                shell.onboarding_next(cx)
             }
             AccountEvent::Finished => {}
         });
@@ -655,9 +655,9 @@ impl Shell {
         self.start_onboarding(None, cx);
     }
 
-    /// Goes on from the step shown, to the next or out of the card after the last, `how` saying
-    /// what did it for check.sh.
-    pub(super) fn onboarding_next(&mut self, how: &str, cx: &mut Context<Self>) {
+    /// Goes on from the step shown, to the next or out of the card after the last. Its line for
+    /// check.sh says the step's number alone, never what was picked: the check drives the key.
+    pub(super) fn onboarding_next(&mut self, cx: &mut Context<Self>) {
         // The favorites come only while an import has some to offer.
         let favorites = self.importing.as_ref().is_some_and(|importing| {
             (importing.view.read(cx).suggested()).is_some_and(|tabs| !tabs.is_empty())
@@ -671,7 +671,7 @@ impl Shell {
         };
         onboarding.end_entry();
         let step = onboarding.step;
-        log!("browser: onboarding left {} via {how}", step.number());
+        log!("browser: onboarding left {}", step.number());
         // Help improve is set as its step is left, whichever way: nothing is sent while the step
         // shows, and turned on and off again it's as it was (#2978).
         let help = (step == Step::Done)
@@ -721,9 +721,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Back to the step before the one shown, `how` saying what did it for check.sh. What was
+    /// Back to the step before the one shown, its line saying the step's number alone. What was
     /// picked stays picked.
-    fn onboarding_back(&mut self, how: &str, cx: &mut Context<Self>) {
+    fn onboarding_back(&mut self, cx: &mut Context<Self>) {
         let still = crate::motion::still(cx);
         let signed_in = !signed_out(&account::synced(cx));
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
@@ -750,7 +750,7 @@ impl Shell {
             return;
         };
         onboarding.end_entry();
-        log!("browser: onboarding left {} via {how}", step.number());
+        log!("browser: onboarding left {}", step.number());
         onboarding.show(before, still);
         resume::keep(before.place(), cx);
         log!("browser: onboarding step {}", before.number());
@@ -802,7 +802,7 @@ impl Shell {
             && onboarding.ending.is_none()
             && onboarding.step.number() != number
         {
-            self.onboarding_next("preview", cx);
+            self.onboarding_next(cx);
         }
     }
 
@@ -855,18 +855,18 @@ impl Shell {
             }
             _ => {}
         }
-        self.onboarding_next(how, cx);
+        self.onboarding_next(cx);
     }
 
     /// Just the Browser: the threads' switch off, and on. Nothing else, so Other apps' switch is
     /// as it was.
-    fn onboarding_just_the_browser(&mut self, how: &str, cx: &mut Context<Self>) {
+    fn onboarding_just_the_browser(&mut self, cx: &mut Context<Self>) {
         if self.browser.threads(cx) == Some(true) {
             let browser = self.browser.clone();
             // Outside this update, as the host reads the shell as it turns threads off.
             cx.defer(move |cx| browser.set_threads(false, cx));
         }
-        self.onboarding_next(how, cx);
+        self.onboarding_next(cx);
     }
 
     /// A row's Sign In: nothing of the assistant's program runs before it. A program the browser
@@ -958,15 +958,15 @@ impl Shell {
                     shell
                         .update(cx, |shell, cx| {
                             if shell.onboarding_on(Step::Import) {
-                                shell.onboarding_next("import", cx);
+                                shell.onboarding_next(cx);
                             }
                         })
                         .ok();
                 })
                 .detach();
             }
-            ImportEvent::Done if on_it => self.onboarding_next("import", cx),
-            ImportEvent::Skipped if on_it => self.onboarding_next("skip", cx),
+            ImportEvent::Done if on_it => self.onboarding_next(cx),
+            ImportEvent::Skipped if on_it => self.onboarding_next(cx),
             _ => cx.notify(),
         }
     }
@@ -1101,7 +1101,7 @@ impl Shell {
         let modifiers = key.modifiers;
         if modifiers.secondary(cx) {
             if key.key == "[" && !modifiers.shift && !modifiers.alt {
-                self.onboarding_back("back-key", cx);
+                self.onboarding_back(cx);
             }
             return;
         }
@@ -1564,9 +1564,7 @@ impl Shell {
                 .when_some(self.step_stop(step, |o| &o.skip_stop), |control, stop| {
                     control.track_focus(&stop).focus_from_keys_only()
                 })
-                .on_click(cx.listener(|shell, _, _, cx| {
-                    shell.onboarding_just_the_browser("just-the-browser", cx)
-                }))
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_just_the_browser(cx)))
                 .relative()
                 .children(self.place(step, "just-the-browser"))
                 .into_any_element()
@@ -1586,7 +1584,7 @@ impl Shell {
                 .when_some(self.step_stop(step, |o| &o.skip_stop), |control, stop| {
                     control.track_focus(&stop).focus_from_keys_only()
                 })
-                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next("skip", cx)))
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next(cx)))
                 .relative()
                 .children(self.place(step, "skip"))
                 .children(frame)
@@ -1632,10 +1630,10 @@ impl Shell {
                     });
                     match left {
                         true => cx.notify(),
-                        false => shell.onboarding_back("back", cx),
+                        false => shell.onboarding_back(cx),
                     }
                 }
-                _ => shell.onboarding_back("back", cx),
+                _ => shell.onboarding_back(cx),
             }))
             .relative()
             .children(self.place(step, "back"))
@@ -1711,7 +1709,7 @@ impl Shell {
                     self.step_stop(Step::Account, |o| &o.skip_stop),
                     |control, stop| control.track_focus(&stop).focus_from_keys_only(),
                 )
-                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next("not-now", cx)))
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next(cx)))
                 .relative()
                 .children(self.place(Step::Account, "not-now"))
         });

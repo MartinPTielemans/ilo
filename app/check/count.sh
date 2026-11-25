@@ -110,7 +110,7 @@ turn_count() {
 # Leaves the last step with Return, Start Browsing, which ends the onboarding.
 leave_onboarding() {
   send key return
-  expect '^browser: onboarding left 7 via return$' "Return didn't leave the last step"
+  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
   expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
   # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
   # open behind the browser's window with a click meant for it landing in the sidebar.

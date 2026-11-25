@@ -118,7 +118,7 @@ first_launch() {
 # Leaves the last step with Return, Start Browsing, which ends the onboarding.
 start_browsing() {
   send key return
-  expect '^browser: onboarding left 7 via return$' "Return didn't leave the last step"
+  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
   expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
 }
 
