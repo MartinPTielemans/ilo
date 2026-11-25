@@ -683,6 +683,13 @@ fn the_keyboard_goes_round_every_part_and_moves_the_bars(cx: &mut TestAppContext
     let mut panel = Panel::new(theme, cx);
     assert_eq!(panel.keyed(), None);
     panel.keys("tab");
+    assert_eq!(
+        panel.keyed(),
+        Some(Target::Appearance(Appearance::Automatic))
+    );
+    panel.keys("right right space");
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
+    panel.keys("tab");
     // Onto the palette the Space has.
     assert_eq!(panel.keyed(), Some(Target::Palette(1)));
     panel.keys("right space");
@@ -706,20 +713,50 @@ fn the_keyboard_goes_round_every_part_and_moves_the_bars(cx: &mut TestAppContext
     panel.keys("tab");
     assert_eq!(panel.keyed(), Some(Target::Reset));
     panel.keys("tab");
-    assert_eq!(panel.keyed(), Some(Target::Palette(2)));
+    assert_eq!(panel.keyed(), Some(Target::Appearance(Appearance::Dark)));
     panel.keys("shift-tab");
     assert_eq!(panel.keyed(), Some(Target::Reset));
 }
 
 #[gpui::test]
-fn without_a_colour_the_keyboard_has_the_palettes_transparency_and_reset(cx: &mut TestAppContext) {
+fn without_a_colour_the_keyboard_has_the_appearance_palettes_transparency_and_reset(
+    cx: &mut TestAppContext,
+) {
     let mut panel = Panel::new(None, cx);
-    panel.keys("tab");
+    panel.keys("tab tab");
     assert_eq!(panel.keyed(), Some(Target::Palette(0)));
     panel.keys("tab");
     assert_eq!(panel.keyed(), Some(Target::Bar(Bar::Transparency)));
     panel.keys("tab");
     assert_eq!(panel.keyed(), Some(Target::Reset));
+}
+
+#[gpui::test]
+fn auto_light_and_dark_set_the_space_s_appearance_and_wait_for_a_first_colour(
+    cx: &mut TestAppContext,
+) {
+    let segment = |index: usize| {
+        let (left, top) = layout::segment(index);
+        (left + SEGMENT_WIDTH / 2., top + SEGMENT_HEIGHT / 2.)
+    };
+    let mut panel = Panel::new(Some(Theme::at(0.5, 0.)), cx);
+    panel.click(segment(2));
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
+    assert_eq!(panel.handed_on(), vec![true]);
+    // A palette keeps it.
+    panel.click(layout::disc(3));
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
+
+    // Chosen with no colour, the first colour takes it, from the pad or a palette.
+    let mut panel = Panel::new(None, cx);
+    panel.click(segment(1));
+    assert_eq!(panel.handed_on(), Vec::<bool>::new());
+    panel.click(Panel::on_pad(0.3, 0.4));
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Light);
+    let mut panel = Panel::new(None, cx);
+    panel.click(segment(2));
+    panel.click(layout::disc(1));
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
 }
 
 #[gpui::test]
@@ -778,6 +815,12 @@ fn voiceover_reads_the_panel_and_moves_its_bars(cx: &mut TestAppContext) {
     panel.cx.run_until_parked();
     named(&mut panel, Role::Dialog, "Space Theme");
     named(&mut panel, Role::Group, "Colors, 2");
+    let (_, automatic) = named(&mut panel, Role::RadioButton, "Automatic");
+    assert_eq!(automatic.toggled(), Some(Toggled::True));
+    let (dark, _) = named(&mut panel, Role::RadioButton, "Dark");
+    panel.cx.simulate_a11y_action(dark, Action::Click);
+    panel.cx.run_until_parked();
+    assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
     let (_, dusk) = named(&mut panel, Role::RadioButton, "Dusk");
     assert_eq!(dusk.toggled(), Some(Toggled::True));
     let (none, _) = named(&mut panel, Role::RadioButton, "No color");

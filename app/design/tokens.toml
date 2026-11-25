@@ -3367,6 +3367,17 @@ label = 14.0
 label-size = 11.0
 label-inset = 2.0
 reset-width = 32.0
+# Auto · Light · Dark at the head's right, as drawn: a frame 24 high, 2 inside, rounded 7, in the
+# field plate; three segments 20 high, the chosen one on the tab shown's plate rounded
+# 5, its word weight 510. Each is 44 wide (ours: the drawing sizes each by its word, 9 either side,
+# and one width gives each the same target).
+segment-frame = 24.0
+segment-inset = 2.0
+segment-frame-radius = 7.0
+segment-height = 20.0
+segment-width = 44.0
+segment-radius = 5.0
+segment-weight = 510.0
 # The palettes: the row of eight discs 6 under their label, each in a 30 slot, spaced between. A
 # disc is 24 with a faint rim; the chosen one 22, ringed 1.5 in the text colour on its slot.
 palettes-gap = 6.0

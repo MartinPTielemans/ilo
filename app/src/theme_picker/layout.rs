@@ -39,6 +39,14 @@ impl Bar {
     }
 }
 
+/// Appearance segment `index`'s left and top, the three at the head's right.
+pub fn segment(index: usize) -> (f32, f32) {
+    let frame = 3. * SEGMENT_WIDTH + 2. * SEGMENT_INSET;
+    let left = WIDTH - PADDING - frame + SEGMENT_INSET + index as f32 * SEGMENT_WIDTH;
+    let top = PADDING + (HEAD - SEGMENT_HEIGHT) / 2.;
+    (left, top)
+}
+
 /// The top of the palettes' label row.
 pub const fn palettes_top() -> f32 {
     PADDING + HEAD + GAP

@@ -5,9 +5,10 @@
 //! icon picker, it's a window of its own that the host shows over the browser window, as its
 //! child; what it asks of that window goes through `Host`.
 //!
-//! The keyboard (ours: the drawing has none): tab and shift-tab go round the palettes, the Points
+//! The keyboard (ours: the drawing has none): tab and shift-tab go round the appearance, the
+//! palettes, the Points
 //! chip, the value field, each bar and Reset, ringed as Focus Sidebar rings a row; left and right
-//! go along the palettes or the chip, or move a bar by 1, with shift by 10; space and return press
+//! go along the appearance, the palettes or the chip, or move a bar by 1, with shift by 10; space and return press
 //! what's ringed. The handles stay the mouse's: a palette or a typed value sets a colour.
 //!
 //! The Boost editor keeps the form today's picker had, its arrow and its card (`corners_of`,
@@ -35,7 +36,7 @@ use crate::{
     icon_picker,
     palette::{self, Palette, Tone},
     shell::KEY_CONTEXT,
-    theme::{self, MAX_COLORS, Theme},
+    theme::{self, Appearance, MAX_COLORS, Theme},
 };
 
 pub use layout::Bar;
@@ -107,6 +108,7 @@ pub struct Also {
 /// What a press in the panel lands on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
+    Appearance(Appearance),
     /// A palette's disc, the first being no colour.
     Palette(usize),
     /// A colour's handle, the main one 0.
@@ -134,6 +136,8 @@ struct Editing {
     theme: Option<Theme>,
     /// The Space's glass on its Transparency bar, as the panel makes it.
     glass: f32,
+    /// The appearance chosen before there's a colour, for the first one to take.
+    appearance: Appearance,
     changed: Changed,
     also: Option<Also>,
     /// Whether it opened to the left of what opened it, from a sidebar on the right.
@@ -369,6 +373,7 @@ pub fn show(
                 theme,
                 left,
                 glass: crate::space_transparency::START,
+                appearance: theme.map_or(Appearance::default(), |theme| theme.appearance),
                 changed,
                 also: None,
                 open: true,
@@ -451,6 +456,12 @@ pub fn target(x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
     let within = |left: f32, top: f32, width: f32, height: f32| {
         (left..=left + width).contains(&x) && (top..=top + height).contains(&y)
     };
+    for (index, &appearance) in Appearance::ALL.iter().enumerate() {
+        let (left, top) = layout::segment(index);
+        if within(left, top, SEGMENT_WIDTH, SEGMENT_HEIGHT) {
+            return Some(Target::Appearance(appearance));
+        }
+    }
     for index in 0..layout::palette_count() {
         let (dx, dy) = layout::disc(index);
         if (x - dx).hypot(y - dy) <= SLOT / 2. {
@@ -586,8 +597,9 @@ fn percent(value: f32) -> String {
 /// palettes, the chip, the value field, each bar and Reset. The chip, the field and Intensity
 /// wait for a colour, as their clicks do.
 fn key_stops(theme: Option<&Theme>) -> Vec<Vec<Target>> {
+    let appearances = Appearance::ALL.iter().map(|&each| Target::Appearance(each));
     let palettes = (0..layout::palette_count()).map(Target::Palette).collect();
-    let mut stops = vec![palettes];
+    let mut stops = vec![appearances.collect(), palettes];
     if let Some(theme) = theme {
         let mut points: Vec<Target> = (0..theme.count).map(Target::Point).collect();
         if theme.count < MAX_COLORS {
@@ -605,10 +617,12 @@ fn key_stops(theme: Option<&Theme>) -> Vec<Vec<Target>> {
     stops
 }
 
-/// Where tab lands in `stop`: the palette the Space has, the colour chosen, else the first.
-fn key_entry(stop: &[Target], theme: Option<&Theme>, chosen: usize) -> Target {
+/// Where tab lands in `stop`: the appearance chosen, the palette the Space has, the colour
+/// chosen, else the first.
+fn key_entry(stop: &[Target], theme: Option<&Theme>, chosen: usize, look: Appearance) -> Target {
     let palette = layout::palette_of(theme);
     let answers = |target: &&Target| match target {
+        Target::Appearance(appearance) => *appearance == look,
         Target::Palette(index) => palette.is_none_or(|palette| palette == *index),
         Target::Point(index) => *index == chosen,
         _ => true,
@@ -782,7 +796,14 @@ impl ThemePicker {
             return;
         };
         match (target, editing.theme) {
-            (Target::Palette(_) | Target::Point(_) | Target::Add | Target::Reset, _) => {
+            (
+                Target::Appearance(_)
+                | Target::Palette(_)
+                | Target::Point(_)
+                | Target::Add
+                | Target::Reset,
+                _,
+            ) => {
                 self.pick(target, window, cx);
             }
             (Target::Value, Some(_)) => self.type_value(window, cx),
@@ -801,7 +822,11 @@ impl ThemePicker {
             (Target::Pad, None) => {
                 let (across, down) = layout::on_pad(x, y);
                 let (fx, fy) = layout::field_point(across, down);
-                editing.theme = Some(Theme::at(fx, fy));
+                let appearance = editing.appearance;
+                editing.theme = Some(Theme {
+                    appearance,
+                    ..Theme::at(fx, fy)
+                });
                 editing.drag = Some(Drag::Handle(0, 0., 0.));
                 editing.chosen = 0;
                 self.changed(false, cx);
@@ -818,12 +843,21 @@ impl ThemePicker {
             return false;
         };
         match (target, editing.theme) {
+            (Target::Appearance(appearance), theme) => {
+                editing.appearance = appearance;
+                editing.theme = theme.map(|theme| Theme {
+                    appearance,
+                    ..theme
+                });
+                self.changed(true, cx);
+            }
             (Target::Palette(0), _) => self.cleared(cx),
             (Target::Palette(index), theme) => {
                 let Some(made) = layout::palette_theme(index, theme.as_ref()) else {
                     return false;
                 };
-                editing.theme = Some(made);
+                let appearance = theme.map_or(editing.appearance, |theme| theme.appearance);
+                editing.theme = Some(Theme { appearance, ..made });
                 editing.chosen = 0;
                 self.changed(true, cx);
             }
@@ -938,7 +972,10 @@ impl ThemePicker {
             (Some(at), true) => (at + 1) % stops.len(),
             (Some(at), false) => (at + stops.len() - 1) % stops.len(),
         };
-        let keyed = key_entry(&stops[next], editing.theme.as_ref(), editing.chosen);
+        let look = editing
+            .theme
+            .map_or(editing.appearance, |theme| theme.appearance);
+        let keyed = key_entry(&stops[next], editing.theme.as_ref(), editing.chosen, look);
         editing.keyed = Some(keyed);
         cx.notify();
     }
@@ -1261,6 +1298,16 @@ impl Render for ThemePicker {
                 .border_color(ring_color)
         };
         let keyed_ring = keyed.map(|keyed| match keyed {
+            Target::Appearance(appearance) => {
+                let index = Appearance::ALL.iter().position(|&each| each == appearance);
+                let (left, top) = layout::segment(index.unwrap_or(0));
+                ring(
+                    left + SEGMENT_WIDTH / 2.,
+                    top + SEGMENT_HEIGHT / 2.,
+                    SEGMENT_WIDTH,
+                    SEGMENT_HEIGHT,
+                )
+            }
             Target::Palette(index) => {
                 let (x, y) = layout::disc(index);
                 ring(x, y, SLOT, SLOT)
@@ -1351,6 +1398,65 @@ impl Render for ThemePicker {
             .font_weight(FontWeight(TITLE_WEIGHT))
             .text_color(text)
             .child("Theme");
+
+        // Auto · Light · Dark, the Space's appearance, at the head's right.
+        let look = theme.map_or(editing.appearance, |theme| theme.appearance);
+        let frame = 3. * SEGMENT_WIDTH + 2. * SEGMENT_INSET;
+        let segments = div()
+            .absolute()
+            .left(px(WIDTH - PADDING - frame))
+            .top(px(PADDING + (HEAD - SEGMENT_FRAME) / 2.))
+            .w(px(frame))
+            .h(px(SEGMENT_FRAME))
+            .rounded(px(SEGMENT_FRAME_RADIUS))
+            .bg(palette.plate(crate::palette::FIELD_PLATE));
+        let segment_words = Appearance::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, &appearance)| {
+                let (word, name) = match appearance {
+                    Appearance::Automatic => ("Auto", "Automatic"),
+                    Appearance::Light => ("Light", "Light"),
+                    Appearance::Dark => ("Dark", "Dark"),
+                };
+                let chosen = appearance == look;
+                let (left, top) = layout::segment(index);
+                div()
+                    .id(name)
+                    // The panel answers presses where they land, so its press is a click there.
+                    .when(a11y, |segment| {
+                        segment
+                            .role(Role::RadioButton)
+                            .aria_label(name)
+                            .aria_toggled(if chosen {
+                                Toggled::True
+                            } else {
+                                Toggled::False
+                            })
+                            .a11y_synthetic_children(|builder| {
+                                builder.parent_node().add_action(Action::Click)
+                            })
+                    })
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(SEGMENT_WIDTH))
+                    .h(px(SEGMENT_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(SEGMENT_RADIUS))
+                    .text_size(px(LABEL_SIZE))
+                    .line_height(px(LABEL))
+                    .when(chosen, |segment| {
+                        segment
+                            .bg(palette.shown(0.))
+                            .font_weight(FontWeight(SEGMENT_WEIGHT))
+                            .text_color(text)
+                    })
+                    .when(!chosen, |segment| segment.text_color(text_2))
+                    .child(word)
+            });
 
         let chosen_palette = layout::palette_of(theme.as_ref());
         let palettes_label = label_row(
@@ -1838,6 +1944,8 @@ impl Render for ThemePicker {
                 .child(card)
                 .children(tint)
                 .child(head)
+                .child(segments)
+                .children(segment_words)
                 .child(palettes_label)
                 .children(discs)
                 .child(pad)
