@@ -470,6 +470,14 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    // Inside a wall the listener is the only proxy anything reads: nothing exempt from it, and
+    // no lower-case name of the browser's own naming another, which curl reads first. Cleared
+    // before the start's own are set, since on Windows a name in any case is the same variable.
+    if launch.wall.is_some() {
+        for name in PROXY_CLEARED {
+            command.env_remove(name);
+        }
+    }
     command.envs(sets(launch));
 }
 
@@ -498,6 +506,12 @@ pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
             sets.push((CLAUDE_TMP, tmp.into()));
         }
     }
+    // Inside a wall either assistant reaches its own service through the wall's listener, the
+    // one port its network may reach (#4101).
+    if let Some(port) = (launch.wall.as_ref()).and_then(|wall| wall.port()) {
+        let proxy = format!("http://127.0.0.1:{port}");
+        sets.extend(PROXY.map(|name| (name, proxy.as_str().into())));
+    }
     sets
 }
 
@@ -512,6 +526,16 @@ pub(crate) const CLAUDE_WALLED: [&str; 5] = [
 ];
 /// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
 const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+/// What a walled start names its listener with, for either assistant.
+const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+/// What a walled start clears of the browser's own environment.
+const PROXY_CLEARED: [&str; 5] = [
+    "NO_PROXY",
+    "no_proxy",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+];
 
 /// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
 /// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
@@ -521,9 +545,15 @@ pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
         Cli::Claude => {
             let helpers = super::helpers::ENV.map(|(name, _)| name);
-            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+            [
+                &[PATH, CLAUDE_TMP][..],
+                &CLAUDE_WALLED[..],
+                &helpers[..],
+                &PROXY[..],
+            ]
+            .concat()
         }
-        Cli::Codex => vec![PATH, super::bridge::TOKEN],
+        Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }
 
