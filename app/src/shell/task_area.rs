@@ -182,6 +182,7 @@ impl Shell {
                             name,
                             color,
                             theme: Theme::parse(&theme),
+                            transparency: crate::space_transparency::read(&theme),
                             icon,
                             profile,
                             agent,

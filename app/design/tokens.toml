@@ -3478,6 +3478,14 @@ menu-shadow-y = 6.0
 menu-shadow-blur = 14.0
 hairline = 0.5
 
+[space-transparency]
+# A Space's Transparency bar (P6), from solid at 0 to 1, today's More, the clearest at which text
+# still holds its floor over a white window behind. Where today's Less sits on it, so a Space
+# carried over at Less looks as the app did.
+less = 0.3
+# Where today's Standard sits on it: the value a Space comes with and Reset gives.
+start = 0.4
+
 [zoom-hud]
 # Arc's, measured at 2× (Arc 1.170 rec): 41.5 tall, 8 inside the card's top right corner, the
 # percent 16 in from the pill's right, in the toast's fill, rim and shadow. Arc's percent is 14 pt;
