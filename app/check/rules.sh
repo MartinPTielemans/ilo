@@ -397,18 +397,30 @@ if [ "$driven" = 1 ]; then
   for tool in remove_tab close_tab; do
     refused "$tool" "{\"tab\":$own_tab}" "$tool of the held tab" "$held"
   done
-  # The user's step has no card (#4086): it's ilo's line in the conversation of the task that
-  # handed the tab over, which a click on that task's card shows. Hand Back, the line's first
-  # button, is pressed with the keys, as the user does: Focus Agent Question's key rings it, and ↩
-  # presses once the app says a key on it counts.
-  second=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as rules-second$/\1/p' "$log" | tail -1)
-  [ -n "$second" ] || fail "the second connection's hand_off made no task of its own"
-  await "^browser: task plate task-${second#session-} at " || fail "the card of the task that handed the tab over wasn't drawn"
+  # The user's step has no card (#4086): it's ilo's line, and it stands where its page is, in the
+  # conversation of the task that holds the page, though another connection asked. That one only
+  # handed a page over, so it has no task. A click on the task's card shows its conversation, where
+  # the tile of the page that needs the user opens it by itself; Escape steps back to the line.
+  # Hand Back, the line's first button, is pressed with the keys, as the user does: Focus Agent
+  # Question's key rings it, and ↩ presses once the app says a key on it counts.
+  if grep -q '^browser: session session-[0-9]* of agent mcp-client as rules-second$' "$log"; then
+    fail "the second connection, which only handed a page over, was made a task of its own"
+  fi
+  first=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as .*/\1/p' "$log" | tail -1)
+  [ -n "$first" ] || fail "the agent's own page has no task"
+  await "^browser: task plate task-${first#session-} at " || fail "the card of the task that holds the held tab wasn't drawn"
   read -r px py pw ph << PLATE
-$(grep "^browser: task plate task-${second#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+$(grep "^browser: task plate task-${first#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
 PLATE
+  opens=$(grep -c "^browser: task page $own_tab watched\$" "$log" || true)
+  backs=$(grep -c "^browser: task page $own_tab back\$" "$log" || true)
   send click $((px + pw / 2)) $((py + ph / 2))
-  expect "^browser: task $second shown\$" "a click on the card of the task that handed the tab over didn't show its conversation"
+  expect "^browser: task $first shown\$" "a click on the card of the task that holds the held tab didn't show its conversation"
+  await_more "^browser: task page $own_tab watched\$" "$opens" ||
+    fail "the page handed to the user didn't open by itself in the conversation of the task that holds it"
+  await "^browser: task page $own_tab in place\$" || fail "the page handed to the user didn't come to rest in place"
+  send key escape
+  await_more "^browser: task page $own_tab back\$" "$backs" || fail "Escape didn't step back from the page handed to the user"
   await '^browser: ilo line [0-9]* Hand Back at ' || fail "the step's line drew no Hand Back"
   if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
   send key $card_key

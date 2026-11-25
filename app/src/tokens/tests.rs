@@ -113,6 +113,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
+    // The page's own corner, as the redesign draws it: between a control's and a row's.
+    "shell.card-radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",

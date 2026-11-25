@@ -91,7 +91,6 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_TASKS", values: "1, open, done, needs-you, stopped, interrupted, two", shows: "tasks' groups at the sidebar's foot: three closed, the working one open, or one state's" },
     State { name: "PREVIEW_THEME", values: "#RRGGBB, or a theme as the core keeps it", shows: "the first Space with that theme" },
     State { name: "PREVIEW_THEME_PICKER", values: "1", shows: "the theme picker for the first Space" },
-    State { name: "PREVIEW_TOP_BAR", values: "1", shows: "Settings' Top bar on" },
     State { name: "PREVIEW_TRANSLATE", values: "<language>", shows: "the made-up pages in that language, offering a translation" },
     State { name: "PREVIEW_TROUBLE", values: "crashed, hung, split", shows: "a page that died or stopped answering" },
     State { name: "PREVIEW_UPDATE", values: "ready, available, ready-open, available-open", shows: "the update banner on a made-up release" },

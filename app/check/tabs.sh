@@ -1140,7 +1140,7 @@ expect "^browser: loaded $waiting https\{0,1\}://example.org/\$" "⌘↩'s tab d
 # Held, back shrinks a little and grows back as its menu opens; reload pressed shrinks too, and let
 # go off it grows back without reloading, as a button does.
 serve
-back_button='138 23.5'
+back_button='158 23.5'
 reload_button='206 23.5'
 printf '%s' iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR42mNgcPhPGhrVMKph+GoAAJiZPxAbf0wNAAAAAElFTkSuQmCC |
   base64 -d > "$out/site/next.png"

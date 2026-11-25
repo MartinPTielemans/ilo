@@ -20,7 +20,8 @@ pub enum Tier {
     /// It opens pages, reads, scrolls and takes pictures, and changes nothing.
     Look,
     /// It types, presses, fills in and sends forms, but not what ilo recognises as paying, placing
-    /// an order, sending a message as the user, or a bank's site. Where every task starts.
+    /// an order, sending a message as the user, or a bank's site. Where every task starts, but
+    /// an outside client's whose others the user left lower (`Agents::starting_tier`).
     #[default]
     Work,
     /// Everything the user could do on a page. Set by the user for one task, never a default and
