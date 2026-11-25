@@ -217,7 +217,9 @@ impl Popup {
             Popup::SearchEngine(_) => SEARCH_WITH.into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Assistant(cli) => {
+                format!("{} options", browser::settings_rows::assistant_name(cli)).into()
+            }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
             Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
