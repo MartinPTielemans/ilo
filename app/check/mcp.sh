@@ -1844,7 +1844,7 @@ upload_page() {
 }
 folder_why="That field takes a folder. Hand the tab to the user with hand_off."
 button_why="That element isn't a file field. Call upload on an input type=file (listed in snapshot as a button, usually “Choose File” or “Browse”)."
-no_site_why="That field is in a frame with no site of its own, so ilo can't say which site is asking. Hand the tab to the user with hand_off."
+no_site_why="That field is in a frame with no site of its own, so the browser can't say which site is asking. Hand the tab to the user with hand_off."
 upload_page "localhost:$port/upload-refused.html"
 refused_tab=$upload_tab
 await_log "^browser: title $refused_tab upload refused\$" "the upload page's sandboxed frame didn't load"
@@ -4476,7 +4476,7 @@ mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"
   > /dev/null
 mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 stale=$(call read_page "{\"tab\":$user_tab}")
-[ "$stale" = "error: ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
+[ "$stale" = "error: The browser restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
   fail "a call with a tab's id from before the relaunch answered: $stale"
 # The time limit (#2184): a handoff not handed back answers the agent's call, the tab staying the
 # user's.
