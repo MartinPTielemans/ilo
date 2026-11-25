@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/values.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 
@@ -67,6 +68,20 @@ bool Hatches(const FieldFacts& field, Hatched hatched);
 // field: a token ending in "password", as "current-password" and "new-password", one starting
 // "cc-", or "one-time-code".
 bool SecretAutocomplete(std::string_view autocomplete);
+
+// What a field is by its type and autocomplete, as its markup has them: a password field, and
+// secret, which a password field is and one whose autocomplete SecretAutocomplete names.
+struct FieldKind {
+  bool password = false;
+  bool secret = false;
+};
+FieldKind KindOf(const std::optional<std::string>& type,
+                 const std::optional<std::string>& autocomplete);
+
+// What the app, and no agent, is told of a text field on its node of the outline: "secret" and
+// "autofilled", each there as true or false, so the app can tell no from not said. They decide
+// what the app keeps of what was typed there, and nothing an outline or a picture shows.
+void TellKinds(base::DictValue& node, bool secret, bool autofilled);
 
 // |box|, in a frame's CSS pixels, in its parent's: cut to the frame's |frame| box there, then moved
 // to it, so a field never reaches past the frame it's seen through.

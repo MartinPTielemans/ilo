@@ -233,8 +233,7 @@ void AddDescribed(FieldFacts& facts, const base::DictValue* described) {
   }
   const std::optional<std::string> type = AttributeOf(*node, "type");
   const std::optional<std::string> autocomplete = AttributeOf(*node, "autocomplete");
-  facts.secret |= (type && base::EqualsCaseInsensitiveASCII(*type, "password")) ||
-                  (autocomplete && SecretAutocomplete(*autocomplete));
+  facts.secret |= KindOf(type, autocomplete).secret;
   facts.markup = MarkupOf(*node);
   // A select's value is its option's label, as the tree reads it, its runs of spaces one.
   const std::string* name = node->FindString("nodeName");
@@ -284,6 +283,11 @@ base::DictValue Hearing() {
 bool IsRole(const base::DictValue& node, std::string_view role) {
   const std::string* value = node.FindStringByDottedPath("role.value");
   return value && *value == role;
+}
+
+// A text field, by its role: the fields whose markup is read for what kind each is.
+bool IsTextField(const base::DictValue& node) {
+  return IsRole(node, "textbox") || IsRole(node, "searchbox");
 }
 
 // An element's id: the slot of the session its frame is in, above its DOM node's id there, as each
@@ -480,6 +484,11 @@ base::ListValue AgentTree(base::ListValue nodes,
         case Seen::kChanged:
           dict->Set("contents", "changed");
           break;
+      }
+      // Only of a text field, whose type and autocomplete were read (CheckPasswords): of any
+      // other field the two aren't said.
+      if (IsTextField(*dict)) {
+        TellKinds(*dict, field->second.secret, field->second.autofilled);
       }
     }
     if (IsField(*dict)) {
@@ -1506,18 +1515,18 @@ void AgentPage::Mouse(const char* type, gfx::PointF at, int slot, base::OnceClos
 
 void AgentPage::Type(bool submit) {
   const int64_t element = job_->element;
-  IsPassword(element,
+  ReadKindOf(element,
              base::BindOnce(
                  [](base::WeakPtr<AgentPage> page, int64_t element, bool submit,
-                    std::optional<bool> password) {
+                    std::optional<FieldKind> kind) {
                    if (!page) {
                      return;
                    }
-                   if (!password) {
+                   if (!kind) {
                      page->Fail("The element isn't on the page any more. Take a new snapshot.");
                      return;
                    }
-                   if (*password) {
+                   if (kind->password) {
                      page->Fail(
                          "Password fields are off limits to agents: signing in is the "
                          "user's to do.",
@@ -2590,13 +2599,12 @@ void AgentPage::StitchTree(size_t next) {
     if (choosing_ == Choosing::kChosen) {
       shows_ = Shows(nodes);
     }
-    // Its text fields, each checked for whether it's for a password.
+    // Its text fields, each checked for whether it's for a password, or secret another way.
     std::vector<int64_t> fields;
     for (const base::Value& node : nodes) {
       const base::DictValue* dict = node.GetIfDict();
-      const std::string* role = dict ? dict->FindStringByDottedPath("role.value") : nullptr;
       const std::optional<int64_t> backend = dict ? ElementOf(*dict) : std::nullopt;
-      if (role && backend && (*role == "textbox" || *role == "searchbox")) {
+      if (backend && IsTextField(*dict)) {
         fields.push_back(*backend);
       }
     }
@@ -2666,7 +2674,7 @@ void AgentPage::CheckLabels(base::ListValue nodes,
                                          .Set("type", "tristate")
                                          .Set("value", choice->second.checked ? "true" : "false")));
     }
-    CheckPasswords(std::move(nodes), std::move(fields), {});
+    CheckPasswords(std::move(nodes), std::move(fields), {}, {});
     return;
   }
   const int64_t label = labels.back();
@@ -2800,7 +2808,8 @@ void AgentPage::FindChoice(int slot,
 
 void AgentPage::CheckPasswords(base::ListValue nodes,
                                std::vector<int64_t> fields,
-                               std::set<int64_t> passwords) {
+                               std::set<int64_t> passwords,
+                               std::set<int64_t> secrets) {
   if (fields.empty()) {
     // What the agent typed or chose, which a field then shows only while it holds exactly that:
     // typing replaces what the field held, so anything else in it, even what the page or an
@@ -2820,7 +2829,8 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
       }
       FieldFacts facts;
       facts.value = base::UTF8ToUTF16(ValueOf(*dict).value_or(std::string()));
-      facts.secret = passwords.contains(*element) || Has(*dict, "wasPassword");
+      facts.secret = passwords.contains(*element) || secrets.contains(*element) ||
+                     Has(*dict, "wasPassword");
       facts.autofilled = Has(*dict, "autofilled");
       facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
       facts.select = IsRole(*dict, "combobox");
@@ -2835,22 +2845,25 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
   }
   const int64_t field = fields.back();
   fields.pop_back();
-  IsPassword(field,
+  ReadKindOf(field,
              base::BindOnce(
                  [](base::WeakPtr<AgentPage> page, base::ListValue nodes,
-                    std::vector<int64_t> fields, std::set<int64_t> passwords, int64_t field,
-                    std::optional<bool> password) {
+                    std::vector<int64_t> fields, std::set<int64_t> passwords,
+                    std::set<int64_t> secrets, int64_t field, std::optional<FieldKind> kind) {
                    if (!page) {
                      return;
                    }
-                   // One that couldn't be read is taken for one.
-                   if (password.value_or(true)) {
+                   // One that couldn't be read is taken for a password's.
+                   if (!kind || kind->password) {
                      passwords.insert(field);
+                   } else if (kind->secret) {
+                     secrets.insert(field);
                    }
-                   page->CheckPasswords(std::move(nodes), std::move(fields), std::move(passwords));
+                   page->CheckPasswords(std::move(nodes), std::move(fields), std::move(passwords),
+                                        std::move(secrets));
                  },
                  weak_factory_.GetWeakPtr(), std::move(nodes), std::move(fields),
-                 std::move(passwords), field));
+                 std::move(passwords), std::move(secrets), field));
 }
 
 void AgentPage::ReadContents(base::ListValue nodes,
@@ -2883,7 +2896,8 @@ void AgentPage::ReadContents(base::ListValue nodes,
   std::map<int64_t, FieldShown> contents;
   for (const auto& [element, facts] : filled) {
     const Seen seen = SeenOf(facts);
-    contents[element] = {seen, seen == Seen::kValue ? base::UTF16ToUTF8(facts.value) : ""};
+    contents[element] = {seen, seen == Seen::kValue ? base::UTF16ToUTF8(facts.value) : "",
+                         facts.secret, facts.autofilled};
   }
   base::DictValue answer =
       base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords, contents));
@@ -3106,27 +3120,19 @@ void AgentPage::Point(const gfx::RectF& box) {
                             bc_rect{points.x(), points.y(), points.width(), points.height()});
 }
 
-void AgentPage::IsPassword(int64_t element, base::OnceCallback<void(std::optional<bool>)> then) {
+void AgentPage::ReadKindOf(int64_t element,
+                           base::OnceCallback<void(std::optional<FieldKind>)> then) {
   Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
        base::BindOnce(
-           [](base::OnceCallback<void(std::optional<bool>)> then, const base::DictValue* result) {
+           [](base::OnceCallback<void(std::optional<FieldKind>)> then,
+              const base::DictValue* result) {
              const base::DictValue* node = result ? result->FindDict("node") : nullptr;
              if (!node) {
                std::move(then).Run(std::nullopt);
                return;
              }
-             const base::ListValue* attributes = node->FindList("attributes");
-             bool password = false;
-             // Name, value, name, value.
-             for (size_t i = 0; attributes && i + 1 < attributes->size(); i += 2) {
-               const std::string* name = (*attributes)[i].GetIfString();
-               const std::string* value = (*attributes)[i + 1].GetIfString();
-               if (name && value && base::EqualsCaseInsensitiveASCII(*name, "type") &&
-                   base::EqualsCaseInsensitiveASCII(*value, "password")) {
-                 password = true;
-               }
-             }
-             std::move(then).Run(password);
+             std::move(then).Run(
+                 KindOf(AttributeOf(*node, "type"), AttributeOf(*node, "autocomplete")));
            },
            std::move(then)),
        SlotOfElement(element));
