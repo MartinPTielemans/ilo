@@ -103,6 +103,7 @@ impl command_bar::Host for RestingBar {
             return Some(TaskAgents {
                 agents: Vec::new(),
                 known: false,
+                ..TaskAgents::default()
             });
         }
         let claude = TaskAgent {
@@ -121,6 +122,7 @@ impl command_bar::Host for RestingBar {
         Some(TaskAgents {
             agents: vec![claude],
             known: true,
+            ..Default::default()
         })
     }
     fn over_private(&self) -> bool {
@@ -140,6 +142,8 @@ impl command_bar::Host for RestingBar {
         agent: &str,
         text: &str,
         _: Option<(SharedString, SharedString)>,
+        _: crate::agents::tier::Tier,
+        _: Option<String>,
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));

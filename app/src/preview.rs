@@ -2199,6 +2199,7 @@ impl command_bar::Host for PreviewBar {
         Some(command_bar::TaskAgents {
             agents: vec![claude],
             known: true,
+            ..Default::default()
         })
     }
 
@@ -2214,7 +2215,16 @@ impl command_bar::Host for PreviewBar {
         None
     }
 
-    fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
+    fn run_task(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<(SharedString, SharedString)>,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
 
     fn set_up_agents(&self, _: &mut App) {}
 

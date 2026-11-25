@@ -769,6 +769,16 @@ pub struct Start {
     pub files: super::files::Picked,
 }
 
+/// What the composer last started a thread with in a profile, which it opens with there next:
+/// its level, never Full access, and the model picked on its assistant. Nothing of the words.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Last {
+    pub tier: Tier,
+    /// The assistant, and the model picked on it by id, empty for its own default; None for
+    /// Settings' assistant and model.
+    pub model: Option<(Cli, String)>,
+}
+
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
 pub const ADDED_MOST: usize = 2048;
 
@@ -877,6 +887,9 @@ pub struct Tasks {
     pub default: Option<Cli>,
     /// Each CLI's model, or none for its own default.
     pub models: HashMap<Cli, String>,
+    /// What the composer last started a thread with, by the folder's name of the profile it
+    /// started in.
+    pub(super) last: HashMap<String, Last>,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
     pub(super) events: Option<(
@@ -904,6 +917,32 @@ pub struct Tasks {
 }
 
 impl Agents {
+    /// What the composer opens with in `space`'s profile: what it last started a thread with
+    /// there, or the level every thread starts at and Settings' assistant and model.
+    pub fn composer_last(&self, space: u64) -> Last {
+        let profile = self.browser.space_profile(space);
+        self.tasks.last.get(&profile).cloned().unwrap_or_default()
+    }
+
+    /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
+    /// it opens there: its model, and its level unless that was Full access, which is set for one
+    /// thread and never remembered. Only the composer's own start calls it.
+    pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
+        let profile = self.browser.space_profile(space);
+        if profile.is_empty() {
+            return;
+        }
+        let tier = match tier {
+            Tier::Full => Tier::default(),
+            tier => tier,
+        };
+        let last = Last { tier, model };
+        if self.tasks.last.get(&profile) != Some(&last) {
+            self.tasks.last.insert(profile, last);
+            self.save();
+        }
+    }
+
     pub fn tasks(&self) -> impl Iterator<Item = &Task> {
         self.tasks.tasks.iter()
     }
@@ -1383,6 +1422,18 @@ impl Agents {
             .map(|cli| AskAgent {
                 cli,
                 resets: self.tasks.limits.get(&cli).cloned().flatten(),
+            })
+            .collect()
+    }
+
+    /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
+    pub fn signed_out_agents(&self) -> Vec<Cli> {
+        if !self.tasks_on() {
+            return Vec::new();
+        }
+        (Cli::ALL.into_iter())
+            .filter(|cli| {
+                (self.tasks.found.get(cli)).is_some_and(|found| found.ready == Ready::SignedOut)
             })
             .collect()
     }
