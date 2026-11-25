@@ -2012,8 +2012,7 @@ fn the_hidden_sidebar_comes_out_over_a_tasks_view(cx: &mut TestAppContext) {
 }
 
 /// Standing on a page, the conversation is a panel between the sidebar and the page: at the card's
-/// left, the page its own shape after a gap to its right, out to the card's right edge, and the
-/// panel never more than half a narrow card.
+/// left, the page its own shape after a gap to its right, out to the card's right edge.
 #[test]
 fn the_panel_stands_between_the_sidebar_and_the_page() {
     use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP};
@@ -2036,14 +2035,43 @@ fn the_panel_stands_between_the_sidebar_and_the_page() {
         "the page doesn't reach the card's right"
     );
     assert_eq!(page.size.height, card.size.height);
-    let narrow = Bounds::new(card.origin, size(px(BESIDE), px(700.)));
-    let (page, panel) = split(narrow);
-    assert_eq!(
-        panel.size.width,
-        px(BESIDE / 2.),
-        "the panel is over half a narrow card"
-    );
-    assert_eq!(page.right(), narrow.right());
+}
+
+/// As the window narrows, the panel keeps its width while the page has its least beside it; then
+/// the page keeps its least and the panel gives way down to its own; narrower still, both give way
+/// in proportion to their least. Neither jumps between the ranges, and the two and the gap always
+/// fill the card.
+#[test]
+fn in_a_narrow_window_the_page_keeps_its_least_before_the_panel_gives_way() {
+    use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
+    let widths = |card: f32| {
+        let card = Bounds::new(point(px(240.), px(8.)), size(px(card), px(700.)));
+        let (page, panel) = split(card);
+        assert_eq!(page.right(), card.right(), "the page doesn't reach the card's right");
+        assert_eq!(page.left(), panel.right() + px(BESIDE_GAP));
+        (f32::from(panel.size.width), f32::from(page.size.width))
+    };
+    let wide = BESIDE + BESIDE_GAP + PAGE_LEAST;
+    let least = BESIDE_LEAST + BESIDE_GAP + PAGE_LEAST;
+    for card in [wide, wide + 1., wide + 600.] {
+        assert_eq!(widths(card).0, BESIDE, "the panel gave way at a card of {card}");
+    }
+    for card in [wide - 1., (wide + least) / 2., least] {
+        let (panel, page) = widths(card);
+        assert_eq!(page, PAGE_LEAST, "the page gave way first at a card of {card}");
+        assert!((BESIDE_LEAST..BESIDE).contains(&panel), "{panel} at a card of {card}");
+    }
+    for card in [least - 1., least / 2., BESIDE_GAP + 1.] {
+        let (panel, page) = widths(card);
+        assert!(page < PAGE_LEAST && panel < BESIDE_LEAST, "{panel}, {page} at {card}");
+        let share = panel / (panel + page);
+        assert!((share - BESIDE_LEAST / (BESIDE_LEAST + PAGE_LEAST)).abs() < 1e-4);
+    }
+    // No jump where one range meets the next.
+    for edge in [wide, least] {
+        let (a, b) = (widths(edge - 0.5), widths(edge + 0.5));
+        assert!((a.0 - b.0).abs() <= 1. && (a.1 - b.1).abs() <= 1., "a jump at {edge}");
+    }
 }
 
 /// Standing on one of a task's pages, a click on another in the panel's head stands on it at once,

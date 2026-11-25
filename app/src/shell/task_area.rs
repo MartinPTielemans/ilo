@@ -24,7 +24,7 @@ use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::conversation::ilo::ARM;
-use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP};
+use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -107,13 +107,27 @@ fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
 /// The card split for standing on a page with the conversation beside it: the page's part on its
 /// right, and the conversation's panel at its left, between the sidebar and the page.
 fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
-    let wide = px(BESIDE.min(f32::from(card.size.width) / 2.));
+    let wide = px(panel_width(f32::from(card.size.width)));
     let panel = Bounds::new(card.origin, size(wide, card.size.height));
     let page = Bounds::new(
         point(panel.right() + px(BESIDE_GAP), card.top()),
         size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
     );
     (page, panel)
+}
+
+/// The panel's width in a card `card` wide: its own while the page keeps its least beside it, then
+/// what the page leaves it down to the panel's least, and narrower still each in proportion to its
+/// least, so neither jumps as the window narrows.
+fn panel_width(card: f32) -> f32 {
+    let room = (card - BESIDE_GAP).max(0.);
+    if room >= BESIDE + PAGE_LEAST {
+        BESIDE
+    } else if room >= BESIDE_LEAST + PAGE_LEAST {
+        room - PAGE_LEAST
+    } else {
+        room * BESIDE_LEAST / (BESIDE_LEAST + PAGE_LEAST)
+    }
 }
 
 fn pushed(bounds: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
