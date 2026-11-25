@@ -2188,9 +2188,24 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 // screen's, a window's or a tab's picture: never a pinned tab, a favorite, or a tab of a private
 // window or another window's own Space. The app asks the same before it gives one; this is the
 // answer that holds whatever asks. A hold on it from an earlier agent ends. Returns whether it
-// moved. The user's: an agent never takes the user's tabs, so agents get none. Moving the tab to a
-// Space of the user's takes it back.
+// moved. The user's: an agent never takes the user's tabs, so agents get none.
+//
+// A window showing the tab doesn't go with it: it shows what closing the tab would show next. From
+// the give until the tab leaves the agent's Space the core keeps where it left, and the tab never
+// closes with that Space: deleting it (bc_space_delete) returns the tab first, as
+// bc_tab_return_from_agent does, or moves it to the first Space of the user's if the one it left
+// is gone. Moving the tab to a Space of the user's (bc_tab_move_to_space) takes it back too, to
+// the top of that Space.
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
+
+// Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's
+// Space still, to the Space it left: a Today tab at the place it left there, on the page it's at
+// now, and the user's again as a tab moved out of an agent's Space is, the agent's session in it
+// ended. A window showing it goes with it. Returns false, moving nothing, for a tab that wasn't
+// given or has left the agent's Space since, or whose Space is gone or in another profile now:
+// bc_tab_move_to_space then takes it to a Space the app picks. The user's and the app's: agents
+// get none.
+BC_EXPORT bool bc_tab_return_from_agent(bc_id tab);
 
 // The profile the Space's tabs open in, which its favorites are in.
 BC_EXPORT bc_id bc_space_profile(bc_id space);

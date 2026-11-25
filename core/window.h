@@ -496,8 +496,14 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // else no page: for the window's own picks, which never take another window's page.
   void Pick(bc_id tab);
   // |tab| went from |from| to |space|, as |moved|: each window showing it goes with it, and each
-  // that would show it in |from| shows |next| there instead.
-  static void FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next);
+  // that would show it in |from| shows |next| there instead. Unless it |follows|, a window showing
+  // it stays where it is and shows |next|, as for a tab the user gives an agent.
+  static void FollowMove(bc_id tab,
+                         bc_id moved,
+                         bc_id from,
+                         bc_id space,
+                         bc_id next,
+                         bool follows = true);
   // Shows next_after_closing_, as the tab shown has closed.
   void SelectAfterClosing();
   // Chrome stopped a close or a quit (|closing| false): the window stays if its Browsers did.

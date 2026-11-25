@@ -52,6 +52,7 @@
 #include "browser_core/favicon.h"
 #include "browser_core/favorites.h"
 #include "browser_core/find.h"
+#include "browser_core/handed.h"
 #include "browser_core/handed_give_rule.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
@@ -708,6 +709,10 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   const browser_core::Tab::Captures captures = page->captures();
+  // Where it leaves, for its way back (handed.h).
+  const bc_id home = from->id();
+  const browser_core::Space::Node* node = from->NodeOf(tab);
+  const browser_core::Space::Node left = node ? *node : browser_core::Space::Node();
   // The page goes as it is, with its profile's logins, so never into another profile's Space,
   // where it would load again. And only a tab that may be handed: the app asks the same before it
   // gives one, and the rule holds here whatever asked.
@@ -745,9 +750,14 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  browser_core::handed::Given(tab, home, left);
   // One the user took back from an agent before is the agent's now.
   browser_core::HandBack(tab);
   return true;
+}
+
+bool bc_tab_return_from_agent(bc_id tab) {
+  return browser_core::handed::Return(tab);
 }
 
 bool bc_agent_hand_off(const char* agent, bc_id tab) {

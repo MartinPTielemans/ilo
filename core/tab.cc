@@ -25,6 +25,7 @@
 #include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
 #include "browser_core/focus_leaving.h"
+#include "browser_core/handed.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
@@ -214,6 +215,8 @@ void Forget(bc_id id) {
   }
   std::unique_ptr<Tab> tab = std::move(it->second);
   Tabs().erase(it);
+  // Closed, it's no agent's from the user any more.
+  handed::Left(id);
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(tab));
 }
 
