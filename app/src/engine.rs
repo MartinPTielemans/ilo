@@ -2204,6 +2204,16 @@ impl Browser for Engine {
         }
     }
 
+    fn other_apps(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
+    }
+
+    fn set_other_apps(&self, on: bool, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
+        }
+    }
+
     fn daily_count(&self, _: &App) -> Option<bool> {
         crate::daily_count_host::named().then(crate::daily_count_host::on)
     }

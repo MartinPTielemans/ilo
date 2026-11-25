@@ -114,6 +114,9 @@ pub(super) enum Switch {
     /// while it shows (#2978).
     DailyCount,
     CrashReports,
+    /// Settings › Other apps' switch, on both paths: an outside app is another kind of agent
+    /// from the assistant the assistant step asks about, so that answer doesn't touch it.
+    OtherApps,
     /// One the host reads and sets for the Space's profile, turned at once.
     Setting(Setting),
 }
@@ -124,7 +127,7 @@ impl Switch {
     // for a setting in the build.
     fn of(step: Step) -> &'static [Switch] {
         match step {
-            Step::OptIns => &[Switch::DailyCount, Switch::CrashReports],
+            Step::OptIns => &[Switch::DailyCount, Switch::CrashReports, Switch::OtherApps],
             Step::Tidy => &[Switch::Setting(Setting::RestoreWindows)],
             Step::Private => &[
                 Switch::Setting(Setting::AdBlocking),
@@ -139,6 +142,7 @@ impl Switch {
         match self {
             Switch::DailyCount => "daily-count",
             Switch::CrashReports => "crash-reports",
+            Switch::OtherApps => "other-apps",
             Switch::Setting(Setting::RestoreWindows) => "restore-windows",
             Switch::Setting(Setting::AdBlocking) => "ad-blocking",
             Switch::Setting(Setting::SavePasswords) => "save-passwords",
@@ -167,6 +171,10 @@ impl Switch {
             Switch::DailyCount => (
                 "Send a daily usage count",
                 crate::daily_count::words(env!("APP_NAME")).into(),
+            ),
+            Switch::OtherApps => (
+                concat!("Let other apps' agents use ", env!("APP_NAME")),
+                "Through its command line or MCP".into(),
             ),
             Switch::CrashReports => (
                 "Send crash reports",
@@ -1048,6 +1056,7 @@ impl Shell {
                 )
             }
             Switch::CrashReports => self.browser.crash_reports(cx),
+            Switch::OtherApps => self.browser.other_apps(cx),
             Switch::Setting(setting) => self.browser.setting(self.space, setting, cx),
         };
         (Switch::of(step).iter())
@@ -1074,6 +1083,7 @@ impl Shell {
         cx.defer(move |cx| match opt_in {
             Switch::DailyCount => {}
             Switch::CrashReports => browser.set_crash_reports(!on, cx),
+            Switch::OtherApps => browser.set_other_apps(!on, cx),
             Switch::Setting(setting) => browser.set_setting(space, setting, !on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {

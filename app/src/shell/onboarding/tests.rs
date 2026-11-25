@@ -11,7 +11,7 @@ use gpui::{
     point, px,
 };
 
-use super::{END_FADE, FirstRun, STEP_MOTION, Step, Switch};
+use super::{END_FADE, FirstRun, STEP_MOTION, STEPS, Step, Switch};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Broom, Folders, Setting, Shell, commands::Command, recorder::Recorder};
@@ -729,6 +729,73 @@ fn just_the_browser_turns_agents_off(cx: &mut TestAppContext) {
         Some(Step::Assistant),
         "a pick doesn't go on"
     );
+}
+
+/// The opt-ins' step offers other apps' agents on both paths, off, and turning the row on sets
+/// that switch alone; just the browser leaves it as it was, no other step has a row about other
+/// apps, and Skip Setup leaves it as it was.
+#[gpui::test]
+fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.reads_shell(shell.downgrade());
+    host.crash_reports.set(Some(false));
+    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.opt_ins(cx))
+    };
+    // Just the browser, then with an assistant.
+    for (key, agents) in [("down", false), ("up", true)] {
+        host.agents.set(Some(!agents));
+        host.other_apps.set(Some(false));
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Assistant);
+        host.take();
+        press(key, cx);
+        assert_eq!(
+            host.take(),
+            vec![format!("agents {agents}")],
+            "the pick sets the agents' switch alone"
+        );
+        assert_eq!(host.other_apps.get(), Some(false), "and leaves other apps'");
+        let others = shell.update(cx, |shell, cx| {
+            (STEPS.iter())
+                .filter(|&&step| step != Step::OptIns)
+                .any(|&step| {
+                    (shell.switches(step, cx).iter()).any(|(each, _)| *each == Switch::OtherApps)
+                })
+        });
+        assert!(!others, "no other step has a row about other apps");
+        skip_to(&shell, cx, Step::OptIns);
+        assert_eq!(
+            offered(&shell, cx),
+            vec![(Switch::CrashReports, false), (Switch::OtherApps, false)],
+            "agents {agents}: after crash reports, off"
+        );
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.onboarding_switch(Switch::OtherApps, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(host.take(), vec!["other apps true".to_string()]);
+        assert_eq!(host.agents.get(), Some(agents), "the agents' as picked");
+        click_skip(cx);
+        in_through_the_keys(&shell, cx);
+        later(&shell, cx, END_FADE);
+    }
+
+    // Skip Setup leaves it as it was, on or off.
+    for was in [true, false] {
+        host.other_apps.set(Some(was));
+        started(&shell, cx);
+        host.take();
+        shell.update(cx, |shell, cx| shell.onboarding_skip_setup("skip", cx));
+        cx.run_until_parked();
+        assert!(
+            !(host.take().iter()).any(|call| call.starts_with("other apps")),
+            "Skip Setup sets nothing of other apps'"
+        );
+        assert_eq!(host.other_apps.get(), Some(was));
+        later(&shell, cx, END_FADE);
+    }
 }
 
 /// With both opt-ins offered, in first run's fixed window, each switch lies inside its row, and a
