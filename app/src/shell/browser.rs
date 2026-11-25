@@ -919,6 +919,11 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// The tab the core shows in this window now, 0 for none. The shell hears of it only when
+    /// the core's report comes, which at launch can be after the user's first keys.
+    fn shown_now(&self) -> u64 {
+        0
+    }
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;

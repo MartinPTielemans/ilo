@@ -1104,6 +1104,28 @@ fn cmd_t_and_cmd_l_give_the_field_the_keyboard_and_open_no_bar(cx: &mut TestAppC
     );
 }
 
+/// ⌘T pressed before the shell has heard of the page the core shows, as one pressed as the window
+/// comes on screen with a page to open, opens the bar over that page: the field it would have gone
+/// to goes as the page is heard of, and took the key with it (#4268).
+#[gpui::test]
+fn cmd_t_before_the_shown_page_is_heard_of_opens_the_bar(cx: &mut TestAppContext) {
+    use crate::shell::Command;
+    let (shell, cx, host) = window_with_no_tab(cx);
+    key_window(cx);
+    host.shown_now.set(1);
+    for from in ["ui", "page"] {
+        shell.update(cx, |shell, cx| shell.run(Command::NewTab, from, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "⌘T via {from}, with the core showing a page the shell hadn't heard of, opened no bar"
+        );
+        host.bar_open.set(false);
+        shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    }
+}
+
 /// An open overlay keeps the keyboard: ⌘T's field waits for it to close.
 #[gpui::test]
 fn the_field_takes_no_keyboard_from_an_overlay(cx: &mut TestAppContext) {
