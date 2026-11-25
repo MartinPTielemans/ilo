@@ -3517,6 +3517,14 @@ composer-level-line = 16.0
 composer-round = 28.0
 composer-arrow = 13.0
 composer-square = 9.0
+# The user's message, reduced: `bubble-most` wide at most, its words wrapping inside it, which
+# leaves the body's column room at its left; `bubble-y` and `bubble-x` round them at
+# `bubble-text`/`bubble-line`.
+bubble-most = 232.0
+bubble-y = 8.0
+bubble-x = 12.0
+bubble-text = 13.0
+bubble-line = 18.0
 
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it

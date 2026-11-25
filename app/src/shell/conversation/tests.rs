@@ -3787,3 +3787,22 @@ fn said_words_between_steps_are_in_the_texts_ink() {
         assert!(ratio >= 7., "{tone:?} {ratio:.2}:1");
     }
 }
+
+/// The user's message wraps inside the panel's column beside a page, never wider than it, so none
+/// of it leaves the panel; the stage's measure wouldn't fit there.
+#[test]
+fn a_users_message_in_the_panel_fits_its_column() {
+    use crate::tokens::shell::conversation::panel::BODY_X;
+    use crate::tokens::shell::task_area::BESIDE;
+    let column = BESIDE - 2. * BODY_X;
+    let (panel, stage) = (super::Bubble::of(true), super::Bubble::of(false));
+    assert!(
+        panel.most <= column,
+        "{panel:?} is wider than the panel's {column}"
+    );
+    assert!(
+        stage.most > column,
+        "the stage's {stage:?} would fit the panel"
+    );
+    assert!(panel.text < stage.text && panel.line < stage.line);
+}

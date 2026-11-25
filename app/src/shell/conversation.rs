@@ -1998,6 +1998,7 @@ impl TalkView {
         look: &Look,
     ) -> gpui::AnyElement {
         let palette = look.palette;
+        let bubble = Bubble::of(look.standing);
         let chip = page.map(|(title, favicon)| {
             let icon = match favicon {
                 Some(favicon) => img(favicon).size(px(PAGE_CHIP_FAVICON)).into_any_element(),
@@ -2034,14 +2035,15 @@ impl TalkView {
                     .when(look.a11y, |plate| {
                         plate.role(Role::Label).aria_label(text.clone())
                     })
-                    .max_w(px(BUBBLE_MOST))
-                    .pt(px(BUBBLE_TOP))
-                    .pb(px(BUBBLE_BOTTOM))
-                    .px(px(BUBBLE_X))
+                    .min_w_0()
+                    .max_w(px(bubble.most))
+                    .pt(px(bubble.top))
+                    .pb(px(bubble.bottom))
+                    .px(px(bubble.x))
                     .rounded(px(RADIUS))
                     .bg(bubble_fill(&palette))
-                    .text_size(px(TEXT))
-                    .line_height(px(TEXT_LINE))
+                    .text_size(px(bubble.text))
+                    .line_height(px(bubble.line))
                     .children(chip)
                     .child(text)
                     .when(landing, |plate| {
@@ -3465,6 +3467,41 @@ fn answer_text_3(palette: &super::Palette) -> Hsla {
     match palette.tone {
         Tone::Dark => rgba(TEXT_3).into(),
         Tone::Light => rgba(LIGHT_TEXT_3).into(),
+    }
+}
+
+/// The user's message's measures: the stage's, or reduced in the panel beside a page, where it
+/// wraps inside the narrower column.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Bubble {
+    most: f32,
+    top: f32,
+    bottom: f32,
+    x: f32,
+    text: f32,
+    line: f32,
+}
+
+impl Bubble {
+    fn of(standing: bool) -> Self {
+        match standing {
+            true => Bubble {
+                most: panel::BUBBLE_MOST,
+                top: panel::BUBBLE_Y,
+                bottom: panel::BUBBLE_Y,
+                x: panel::BUBBLE_X,
+                text: panel::BUBBLE_TEXT,
+                line: panel::BUBBLE_LINE,
+            },
+            false => Bubble {
+                most: BUBBLE_MOST,
+                top: BUBBLE_TOP,
+                bottom: BUBBLE_BOTTOM,
+                x: BUBBLE_X,
+                text: TEXT,
+                line: TEXT_LINE,
+            },
+        }
     }
 }
 
