@@ -75,6 +75,8 @@ struct Made {
     profiles: RefCell<Vec<(u64, &'static str)>>,
     /// The Spaces that are a private window's own, as a test says.
     private: RefCell<Vec<u64>>,
+    /// The user's Space in view, where a test moves it from 1.
+    user: std::cell::Cell<Option<u64>>,
 }
 
 impl Made {
@@ -389,9 +391,9 @@ impl Browser for Made {
         }
     }
 
-    /// The user's Space is 1.
+    /// The user's Space is 1, or the one a test moved the user to.
     fn user_space(&self, _: u64) -> u64 {
-        1
+        self.user.get().unwrap_or(1)
     }
 
     fn space_profile(&self, space: u64) -> String {
@@ -3263,6 +3265,25 @@ fn every_tool_and_step_is_in_one_class() {
         })
         .collect();
     assert_eq!(acts, super::access::ACTS);
+}
+
+/// No tool lists or reads the user's downloads: the sidebar's plate of recent downloads and the
+/// Library's Downloads are the user's own, and an agent's only word of one is the activity log's
+/// line for a file its own page started.
+#[test]
+fn no_tool_reads_the_downloads() {
+    let every: Vec<String> = ["claude-code", "task-1"]
+        .into_iter()
+        .flat_map(tools::names)
+        .chain(tools::STEPS.map(String::from))
+        .collect();
+    assert!(!every.is_empty());
+    for name in &every {
+        assert!(
+            !name.contains("download") && !name.contains("librar"),
+            "{name} would read the downloads"
+        );
+    }
 }
 
 /// Lowered mid-task, the next act above the new tier is refused, the log keeps the change, and the
@@ -6751,6 +6772,52 @@ mod tasks {
             agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
         });
         assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+    }
+
+    /// Every tool `dispatch` runs is listed for an agent that may call it, as a call by any other
+    /// name is answered as no tool before it gets there: an arm listed for nobody would never run,
+    /// and one only a task runs is listed for a task's. A made-up name is no tool, and leaves no
+    /// entry.
+    #[gpui::test]
+    fn every_tool_dispatch_runs_is_listed_and_no_other_is_one(cx: &mut TestAppContext) {
+        let source = include_str!("../agents.rs");
+        let body = &source[source.find("    fn dispatch(").expect("no dispatch")..];
+        let body = &body[..body[1..]
+            .find("\n    fn ")
+            .map_or(body.len(), |end| end + 1)];
+        let (task, outside) = (tools::names("task-1"), tools::names("claude-code"));
+        let mut arms = Vec::new();
+        for line in body.lines() {
+            // An arm of its match, at its depth, by a name or a few.
+            let Some(arm) = line.strip_prefix("            \"") else {
+                continue;
+            };
+            let Some((pattern, _)) = arm.split_once("=>") else {
+                continue;
+            };
+            let pattern = format!("\"{pattern}");
+            for name in pattern.split('"').skip(1).step_by(2) {
+                let listed = match pattern.contains("if is_task(") {
+                    true => task.iter().any(|each| each == name),
+                    false => task.iter().chain(&outside).any(|each| each == name),
+                };
+                assert!(
+                    listed,
+                    "dispatch runs {name}, which no agent that may call it is listed"
+                );
+                arms.push(name.to_string());
+            }
+        }
+        assert!(arms.len() > 15, "dispatch's arms weren't found: {arms:?}");
+
+        let (agents, _, _) = connected(cx);
+        let before = log(&agents, "claude-code", cx);
+        let answer = call(&agents, "claude-code", "sum_the_receipts", json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error("There's no tool sum_the_receipts.")
+        );
+        assert_eq!(log(&agents, "claude-code", cx), before);
     }
 
     #[gpui::test]
@@ -10536,6 +10603,61 @@ mod sessions {
         (agents, browser)
     }
 
+    /// A session's card has a home as a task's has, the Space it was asked from: the user's Space
+    /// in view when its first call acted on a tab, which the browser says and the client doesn't.
+    /// The user moving on leaves it there, a later session takes the Space in view then, and no
+    /// answer tells the client where its card is.
+    #[gpui::test]
+    fn a_sessions_card_is_at_home_in_the_users_space_in_view(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.user.set(Some(4242));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let mut answers = vec![call_as(&agents, 1, "list_tabs", json!({}), cx)];
+        answered(&agents, 1, cx);
+        answers.push(call_as(&agents, 2, "read_page", json!({ "tab": 20 }), cx));
+        let first = cards(&agents, cx)[0].clone();
+        assert_eq!(first.home, 4242);
+        browser.user.set(Some(4343));
+        answers.push(call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx));
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        assert_eq!(card(&agents, &first.agent, cx).home, 4242);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let now = std::time::Instant::now();
+        answers.push(call_on(
+            &agents,
+            2,
+            4,
+            "read_page",
+            json!({ "tab": 20 }),
+            now,
+            cx,
+        ));
+        let second = cards(&agents, cx)[0].clone();
+        assert_ne!(second.agent, first.agent);
+        assert_eq!(second.home, 4343);
+        cx.run_until_parked();
+        for answer in answers {
+            if let Ok(answer) = answer.try_recv() {
+                for home in ["4242", "4343"] {
+                    assert!(!answer.text.contains(home), "{}", answer.text);
+                }
+            }
+        }
+    }
+
+    /// A private window is never a session's home: with one in view, its card lists in no Space.
+    #[gpui::test]
+    fn a_private_window_is_never_a_sessions_home(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.private.borrow_mut().push(1);
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 1, "read_page", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].home, 0);
+    }
+
     /// The first call that acts on a tab starts its connection's card, with its name, and a
     /// second connection of the client's is a card of its own, each with only its own steps. Its
     /// conversation is its steps, with no ask, and the user talks to it where they started it. Its
@@ -13071,6 +13193,8 @@ mod other_apps;
 mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
+#[cfg(unix)]
+mod searches;
 mod sign_ins;
 mod uploads;
 mod went_to;

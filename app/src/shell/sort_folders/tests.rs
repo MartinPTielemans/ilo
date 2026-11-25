@@ -104,7 +104,7 @@ fn a_sort_hands_loose_web_tabs_alone_each_as_its_title_and_host(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn a_sort_needs_two_tabs_that_count(cx: &mut TestAppContext) {
+fn a_sort_needs_four_tabs_that_count(cx: &mut TestAppContext) {
     let (shell, cx, _) = shell(cx, "");
     let off_web = |tab: u64, shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
         let page = Page {
@@ -114,12 +114,10 @@ fn a_sort_needs_two_tabs_that_count(cx: &mut TestAppContext) {
         shell.set_page(tab, page, cx)
     };
     shell.update(cx, |shell, cx| {
-        for tab in [10, 11, 12] {
-            off_web(tab, shell, cx);
-        }
+        off_web(10, shell, cx);
     });
     let sorts = |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.broom_sorts(1));
-    assert!(!sorts(cx), "one tab left that counts");
+    assert!(!sorts(cx), "three tabs left that count");
     assert!(shell.read_with(cx, |shell, _| shell.broom_counts(13)
         && !shell.broom_counts(10)));
     shell.update(cx, |shell, cx| {
@@ -225,7 +223,7 @@ fn a_ninth_new_folder_moves_nothing(cx: &mut TestAppContext) {
 }
 
 /// The pass's own cost, as ⌘T and a window's first showing of a Space run it: 200 today's tabs
-/// none of which counts, which it reads to the end, and the usual case, where the first two count.
+/// none of which counts, which it reads to the end, and the usual case, where the first four count.
 /// `cargo test --release --lib broom_pass_bench -- --ignored --nocapture`
 #[gpui::test]
 #[ignore]

@@ -385,7 +385,7 @@ pub fn plain(text: &str) -> String {
 
 /// `text` as one line of at most `most` characters, its control characters spaces and its
 /// direction marks gone, so it can't run on into ilo's words or turn them around.
-fn capped(text: &str, most: usize) -> String {
+pub fn capped(text: &str, most: usize) -> String {
     let line: String = (text.chars())
         .filter(|c| !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
         .map(|c| match c.is_control() {

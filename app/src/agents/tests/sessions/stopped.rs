@@ -447,16 +447,18 @@ fn the_hand_backs_entry_counts_its_pages() {
 /// user's has, is answered as no tool and leaves nothing that could read as theirs: no entry in
 /// the activity log, which Settings › Agents and a past thread list, and no step in the task's
 /// trace. So while the task works on its page, and once the user stopped it, when every call on
-/// that page has an entry by its tool's name.
+/// that page has an entry by its tool's name. The assistant's own web search is one: its entry is
+/// the browser's count of a task's searches, never a client's call.
 #[gpui::test]
 fn a_call_by_an_entrys_name_is_no_tool_and_leaves_nothing(cx: &mut TestAppContext) {
-    const NAMES: [&str; 6] = [
+    const NAMES: [&str; 7] = [
         "request_permission camera",
         "request_permission midi",
         "file_dialog file_input",
         "file_dialog file_system_access",
         "request_device usb",
         "taken back",
+        tools::SEARCHED,
     ];
     let (agents, browser, first) = lowered(Tier::Full, cx);
     let now = std::time::Instant::now;
