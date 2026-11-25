@@ -1161,6 +1161,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // The app only answers here: it opens the preview after this call, outside the navigation.
     if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
                                    params.url.spec().c_str(), click.x(), click.y())) {
+      source->link_preview_ask().Keep(params.url.spec());
       params.disposition = WindowOpenDisposition::IGNORE_ACTION;
       return;
     }
@@ -2077,9 +2078,13 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));
   NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
-  // What the page would have sent with the link, by the policy Chrome's pages default to.
-  load.referrer = content::Referrer(
-      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  // What the page would have sent with its link, by the policy Chrome's pages default to. A
+  // preview the user opens from elsewhere, as the Library's, is no page's link and sends none.
+  Tab* asker = Tab::FromWebContents(&opener);
+  if (asker && asker->link_preview_ask().Take(url.spec())) {
+    load.referrer = content::Referrer(opener.GetLastCommittedURL(),
+                                      network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  }
   preview->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(preview, &load));
   return preview;
 }
