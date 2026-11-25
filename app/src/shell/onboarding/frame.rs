@@ -390,9 +390,10 @@ impl Shell {
         let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
         // Just the browser's sidebar is tabs only, with no thread at work or chip about one.
-        let scene = match step == Step::Assistant && self.browser.threads(cx) != Some(true) {
-            true => picture::Scene::default(),
-            false => picture::Scene::of(step),
+        let scene = match step {
+            Step::Assistant if self.browser.threads(cx) != Some(true) => picture::Scene::default(),
+            Step::Tidy if self.broom_card(cx) => picture::Scene::sorted(),
+            _ => picture::Scene::of(step),
         };
         let rest = match scene.rest {
             true => picture::Rest {
@@ -689,7 +690,80 @@ impl Shell {
                     .pr(px(right))
                     .child(self.opt_in_rows(Step::Tidy, colors, cx)),
             )
+            .children(
+                self.broom_card(cx)
+                    .then(|| broom_card(inks, right).children(self.place(Step::Tidy, "broom"))),
+            )
     }
+
+    /// Whether the tidy step tells of the broom: only with an assistant, and only where the
+    /// broom can be at all, which `Browser::broom` answers whatever today's tabs number.
+    pub(super) fn broom_card(&self, cx: &App) -> bool {
+        self.browser.threads(cx) == Some(true) && self.browser.broom().is_some()
+    }
+}
+
+/// The broom's card: its tile, what it does and where it is. Words and a picture only, so nothing
+/// on it takes a click.
+fn broom_card(inks: Inks, right: f32) -> gpui::Div {
+    let [top, height, radius, start, end, gap] = t::BROOM_CARD;
+    let [tile, tile_radius, glyph] = t::BROOM_TILE;
+    let [title_size, title_line] = t::BROOM_TITLE;
+    let [line_size, line_line] = t::BROOM_LINE;
+    div().relative().pt(px(top)).pr(px(right)).child(
+        div()
+            .h(px(height))
+            .pl(px(start))
+            .pr(px(end))
+            .flex()
+            .items_center()
+            .gap(px(gap))
+            .rounded(px(radius))
+            .bg(inks.text(t::CARD))
+            .border_1()
+            .border_color(inks.text(t::CARD_LINE))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(tile))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(tile_radius))
+                    .bg(rgb(t::BROOM_TILE_FILL))
+                    .child(
+                        gpui::svg()
+                            .size(px(glyph))
+                            .path("icons/broom.svg")
+                            .text_color(rgb(t::BROOM_GLYPH)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(title_size))
+                            .line_height(px(title_line))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Sort tabs into folders"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(line_size))
+                            .line_height(px(line_line))
+                            .text_color(inks.text(inks.quiet))
+                            .child(concat!(
+                                "Click the broom above today's tabs and ",
+                                env!("APP_NAME"),
+                                " sorts them by what they're for."
+                            )),
+                    ),
+            ),
+    )
 }
 
 /// The keys that run `command`, as a tooltip's chips spell them, spaced: "⌘ T". None with no key.

@@ -14,6 +14,7 @@ use super::{
     Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
     ListGlide, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE, PRESS_TIME, Place,
     ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What, files, slots,
+    task_cards,
 };
 
 /// The tab that links or files dragged in stand for until they're dropped: none, as the core
@@ -513,7 +514,11 @@ impl Shell {
                     let blocks = (self.shown_space())
                         .map(|space| space.live_blocks(&pinned))
                         .unwrap_or_default();
-                    let layout = slots(self.list_head(), &pinned, &blocks, &today);
+                    // And the task cards among Today's.
+                    let cards = (self.shown_space())
+                        .map(|space| task_cards::blocks(&space.placed, &today))
+                        .unwrap_or_default();
+                    let layout = slots(self.list_head(), &pinned, &blocks, &today, &cards);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();

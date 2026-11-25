@@ -1177,7 +1177,8 @@ pub trait Browser {
     }
     fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
     /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
-    /// and the times Settings offers it, in its order; None before the profile has loaded.
+    /// and the times Settings offers it, in its order; None before the profile has loaded. A
+    /// thread's card done and seen goes after as long; below 0 is Never.
     fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
         None
     }

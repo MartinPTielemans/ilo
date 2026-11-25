@@ -10,7 +10,7 @@ const REASON: &str = "agent_space";
 
 /// Each kind with a sentence of its own, by the core's code word, and what its site was stopped
 /// from.
-const KINDS: [(&str, &str); 18] = [
+const KINDS: [(&str, &str); 19] = [
     ("camera", "using the camera"),
     ("camera_pan_tilt_zoom", "using the camera"),
     ("microphone", "using the microphone"),
@@ -32,6 +32,7 @@ const KINDS: [(&str, &str); 18] = [
     ("client_certificate", "asking for a certificate"),
     ("cast", "casting to your devices"),
     ("extension_install", "installing an extension"),
+    ("app_install", "installing an app"),
 ];
 
 /// Kinds with no sentence of their own.

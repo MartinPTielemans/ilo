@@ -4352,19 +4352,12 @@ impl Shell {
                     shell.hover_kinds_menu(event.position, cx)
                 }),
             )
-            // A task's card folding into it bumps its glyph as it lands.
-            .child({
-                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+            .child(
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))
-                    .text_color(self.palette.glyph(alpha))
-                    .when(scale != 1., |glyph| {
-                        glyph.with_transformation(gpui::Transformation::scale(gpui::size(
-                            scale, scale,
-                        )))
-                    })
-            })
+                    .text_color(self.palette.glyph(NAV)),
+            )
             .when_some(progress, |button, done| {
                 button.child(
                     div()
@@ -4591,6 +4584,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }
     }
 
