@@ -2006,7 +2006,8 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
-// The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
+// The tab isn't in the agent's Space, the user holds it, or it's one the user handed the agent
+// (bc_tab_give_to_agent), which is returned and never closed. As agent_close_answered's answer: it
 // stays for another reason, as it went to another page, its page was unloaded, or the user took it
 // over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
@@ -2195,7 +2196,16 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 // closes with that Space: deleting it (bc_space_delete) returns the tab first, as
 // bc_tab_return_from_agent does, or moves it to the first Space of the user's if the one it left
 // is gone. Moving the tab to a Space of the user's (bc_tab_move_to_space) takes it back too, to
-// the top of that Space.
+// the top of that Space. No agent's close closes it (bc_agent_close_tab).
+//
+// The history the tab had is the user's: for as long as the agent has it, nothing takes the tab
+// to an entry it had at the give other than the one it was on, not the agent's back or forward
+// (bc_agent_page), the app's (bc_tab_go_back, bc_tab_go_forward), nor the page's own script,
+// which then does nothing. While the user holds the tab (bc_tab_take_back, bc_agent_hand_off)
+// they go through all of it, and from bc_tab_hand_back the entry it's on then is the one the
+// agent can't go behind or past. The session keeps the tab as the user's, with the Space it left,
+// and the account's other devices see it there as it was. Its page has an agent's page's size
+// from the give.
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
 
 // Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's

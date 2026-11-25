@@ -685,8 +685,10 @@ size_t bc_agent_disconnected(const char* agent) {
 
 int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   const browser_core::Tab* closing = browser_core::Tab::Get(tab);
+  // A tab the user handed the agent is the user's, and no agent's close closes it: the app
+  // returns it instead (bc_tab_return_from_agent).
   if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
-      browser_core::IsHeld(tab)) {
+      browser_core::IsHeld(tab) || browser_core::handed::Of(tab)) {
     return BC_AGENT_CLOSE_REFUSED;
   }
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
