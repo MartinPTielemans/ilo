@@ -10,7 +10,7 @@
 # leaves out and another brings back, and Skip; Your favorites (3b), once an import offers sites;
 # Your first Space (4), whose → picks a swatch; Tidy tabs (5) while the core has the profile's
 # time; Other apps (6) while an agent program is found, whose switch the dark pass turns on and off
-# again; and You're woven in (7), always last, whose Help improve the dark pass turns on and off
+# again; and step 7, always last, whose Help improve the dark pass turns on and off
 # from the keyboard, and whose Start Browsing leaves the card for the first Space with the command
 # bar up. ↩ presses a step's main button; ⌘[ goes back a step, which the dark pass checks at the
 # last; Esc and ⌘W leave the step as it is. Make Default makes ilo the default for a moment only on

@@ -149,7 +149,7 @@ await '^browser: onboarding started$' || fail "the onboarding didn't start"
 # one's speech recorded as it comes, marked once Orca is quiet on the step before: the next thing is
 # the key or click leaving it, and Orca speaks within milliseconds of that, sooner than a wait for
 # the app's line sees it. Your first Space (4), which every run shows, rests on its swatches, where
-# ⇥ goes on to Back and Next, ⇧⇥ back, and → picks a colour; You're woven in (7), the last, rests on
+# ⇥ goes on to Back and Next, ⇧⇥ back, and → picks a colour; step 7, the last, rests on
 # Start Browsing, where ⇥ goes round its row's button and Help improve's switch, and ⇧⇥ back. Each
 # goes back as far as it went, so the step's ↩ is still its main button's.
 for orca_step in $(onboarding_steps); do

@@ -94,7 +94,7 @@ launch_count() {
       fail "$1: a new profile's first launch with no page didn't play the onboarding"
   fi
 }
-# Goes through the onboarding's steps, taking nothing they offer, to the last, You're woven in (7),
+# Goes through the onboarding's steps, taking nothing they offer, to the last, step 7,
 # where Help improve's switch is.
 to_done() {
   walk_steps 7 "$1: "
