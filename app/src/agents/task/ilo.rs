@@ -1,5 +1,6 @@
 //! ilo's own lines in a task's conversation: what the browser stopped, a step that's the user's, a
-//! tab the agent needs back, a sign-in ilo did and a change of the task's access. And of a task
+//! tab the agent needs back, a sign-in ilo did, a change of the task's access and that the user
+//! stopped it. And of a task
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
 //! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
 //! And of a task with files (#4101) whose assistant ilo couldn't limit to them: that it started
@@ -75,6 +76,9 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// The user stopped the task, which held `pages` pages then: a count, never a page's title or
+    /// its site.
+    YouStopped { pages: usize },
     /// ilo stopped the task over its helpers (#4102), by `limit`: its turn where it started more
     /// than a task may, the task itself where a helper started one of its own or isn't one ilo
     /// allows. `tab` is the page the task stood on, or 0 with none. The count its line says is
@@ -189,6 +193,8 @@ pub enum IloButton {
     AnySite,
     /// The tab goes back to the agent.
     HandBack,
+    /// The pages of an outside agent's task the user stopped are its client's again.
+    PagesBack,
     /// The page is shown beside the conversation, and nothing else changes: a step's first
     /// button while its page isn't the one shown.
     ShowPage,
@@ -203,7 +209,10 @@ impl IloButton {
     /// Whether it widens what the agent may do, and so takes no press until its line has stood
     /// still for a moment: an agent decides when such a line comes.
     pub fn widens(self) -> bool {
-        matches!(self, IloButton::Raise(_) | IloButton::AnySite)
+        matches!(
+            self,
+            IloButton::Raise(_) | IloButton::AnySite | IloButton::PagesBack
+        )
     }
 }
 
@@ -239,6 +248,9 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         // Not Now keeps the tab, as the user's own.
         IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
+        // Its one button, on an outside agent's task only, until pressed: the line of a task ilo
+        // runs is settled from the start.
+        IloKind::YouStopped { .. } => vec![IloButton::PagesBack],
         // What happened, which no press undoes: the files are given again at a task's start.
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
@@ -283,7 +295,7 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::Yours { tab, .. }
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
-        IloKind::TierChanged { .. } => None,
+        IloKind::TierChanged { .. } | IloKind::YouStopped { .. } => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }

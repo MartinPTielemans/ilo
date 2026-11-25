@@ -411,6 +411,37 @@ fn return_in_ask_opens_the_started_task(cx: &mut TestAppContext) {
     );
 }
 
+/// ↩ in Ask from the resting field opens the started task's conversation in the page's place,
+/// though its card comes before the window hears of the task's Space, as the core tells that
+/// after the call that made it: the start waits for the Space, and opens as it comes.
+#[gpui::test]
+fn return_in_ask_opens_its_task_when_its_space_comes_after_its_card(cx: &mut TestAppContext) {
+    let (shell, cx, host) = composed(cx);
+    let started = card(2, Dot::Working);
+    shell.update(cx, |shell, cx| {
+        shell.composed_started(Some("task-2".into()));
+        shell.set_task_cards(vec![started.clone()], cx);
+    });
+    cx.run_until_parked();
+    let area = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            (shell.talk_agent(), shell.task_area.is_some())
+        })
+    };
+    assert_eq!(
+        area(cx),
+        (None, false),
+        "it opened with no Space to open in"
+    );
+    made(std::slice::from_ref(&started), &shell, &host, cx);
+    cx.run_until_parked();
+    assert_eq!(
+        area(cx),
+        (Some("task-2".into()), true),
+        "the started task's conversation didn't take the page's place once its Space came"
+    );
+}
+
 /// Once the Agents say which task ↩ started, that one's card alone opens a view: another of the
 /// same Space that comes first opens none.
 #[gpui::test]

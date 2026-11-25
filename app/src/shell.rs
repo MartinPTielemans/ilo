@@ -69,8 +69,6 @@ mod commands;
 mod conversation;
 #[cfg(test)]
 mod copy_tests;
-#[cfg(test)]
-mod corner_tests;
 mod display_face;
 #[cfg(test)]
 mod dock_dot;
@@ -128,7 +126,6 @@ mod side_tests;
 mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
-mod top_bar_tests;
 #[cfg(test)]
 mod undo_tests;
 #[cfg(test)]
@@ -160,10 +157,11 @@ mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
+#[cfg(test)]
+mod tab_background_tests;
 mod task_area;
 mod themes;
 mod tile_theme;
-mod top_bar;
 mod trace;
 mod translate;
 mod trouble;
@@ -226,7 +224,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, SidebarRight, TopBar, edge_reveals, sidebar_right, top_bar};
+pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -239,33 +237,6 @@ pub use crate::tokens::shell::CARD_INSET;
 pub use crate::tokens::shell::CARD_RADIUS;
 pub use crate::tokens::shell::SIDEBAR_WIDTH;
 use crate::tokens::shell::SPLIT_GAP;
-
-/// The radius of the card's corners and the page's in a window whose own corner is `window`, or 0
-/// where it's square: concentric with it, so the frame between them is as thick round the curve as
-/// along the sides, and never under 0 where the frame is wider than the window's curve (Windows
-/// 11's). A square corner has no curve to follow, and the card keeps ilo's own, so a Mac window
-/// going full screen keeps its card as it was.
-pub fn card_radius(window: f32) -> f32 {
-    match window > 0. {
-        true => (window - CARD_INSET).max(0.),
-        false => CARD_RADIUS,
-    }
-}
-
-/// The radius of the corners the OS gives a browser window that isn't maximized or full screen, or
-/// 0 where they're square.
-pub fn window_radius() -> f32 {
-    use crate::tokens::shell as tokens;
-    #[cfg(target_os = "macos")]
-    return tokens::WINDOW_RADIUS_MAC;
-    #[cfg(target_os = "windows")]
-    return match crate::build_info::windows_11() {
-        true => tokens::WINDOW_RADIUS_WINDOWS,
-        false => 0.,
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    return tokens::WINDOW_RADIUS_LINUX;
-}
 
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
@@ -335,8 +306,10 @@ const SELECTED_UNHOVER: f32 = 0.17;
 const PRESS_SCALE: f32 = 0.99;
 const PRESS_TIME: f32 = 0.07;
 // A pressed header button, back, forward or reload, shrinks the same way, also 1 pt in at each end,
-// so a press reads the same on a 32 pt button as on a row (ours: Arc's isn't recorded).
-const NAV_PRESS_SCALE: f32 = (NAV_SIZE - 2.) / NAV_SIZE;
+// so a press reads the same on its plate as on a row (ours: Arc's isn't recorded).
+const NAV_PRESS_SCALE: f32 = (CONTROLS_PLATE - 2.) / CONTROLS_PLATE;
+// The first row's buttons share the window buttons' line.
+const CONTROLS_TOP: f32 = WINDOW_BUTTON_Y - CONTROLS_PLATE / 2.;
 // A pressed row comes away once the pointer has moved this far (ours), and the tiles make room for
 // a dragged tab critically damped, as Arc's do (docs/ux-spec.md › Motion: Favorites room).
 const DRAG_START: f32 = 4.;
@@ -392,15 +365,16 @@ const WHEEL_LINE: f32 = 10.;
 const WHEEL_BURST: Duration = Duration::from_millis(49);
 const WHEEL_REST: Duration = Duration::from_millis(250);
 
-use crate::tokens::shell::FULL_SCREEN_SIDEBAR_BUTTON_X;
-use crate::tokens::shell::NAV_AFTER_SIDEBAR;
+use crate::tokens::shell::CONTROLS_GAP;
+use crate::tokens::shell::CONTROLS_GLYPH;
+use crate::tokens::shell::CONTROLS_INSET;
+use crate::tokens::shell::CONTROLS_PLATE;
+use crate::tokens::shell::CONTROLS_SIDEBAR_GLYPH;
 use crate::tokens::shell::NAV_GLYPH;
 use crate::tokens::shell::NAV_PITCH;
 use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_SIZE;
-use crate::tokens::shell::NAV_TOP;
-use crate::tokens::shell::NAV_TRAIL;
-use crate::tokens::shell::SIDEBAR_BUTTON_X;
+use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT, PAGE_OUTLINE_WIDTH};
 
 use crate::tokens::shell::URL_BUTTON_GLYPH;
 use crate::tokens::shell::URL_BUTTON_INSET;
@@ -583,7 +557,6 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::FORM_PLATE;
 use crate::tokens::shell::FORM_TEXT;
 use crate::tokens::shell::NAV;
-use crate::tokens::shell::NAV_DISABLED;
 use crate::tokens::shell::NAV_HOVERED;
 use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
@@ -658,6 +631,9 @@ struct Tab {
     theme: RefCell<Option<(u64, Option<Rc<TileTheme>>)>>,
     /// Its page is on another host than the URL it's pinned or a favorite at, which its row names.
     left_pinned_host: bool,
+    /// Its page's own background colour, 0xRRGGBB in sRGB, which the open tab's line takes. None
+    /// while the page has no single opaque one.
+    background: Option<u32>,
 }
 
 impl Tab {
@@ -672,6 +648,10 @@ impl Tab {
 
     fn keep_page(&mut self, page: Page) -> bool {
         replace(&mut self.page, page)
+    }
+
+    fn keep_background(&mut self, color: Option<u32>) -> bool {
+        replace(&mut self.background, color)
     }
 }
 
@@ -1681,8 +1661,6 @@ pub struct Shell {
     sidebar_hidden: bool,
     /// Whether the window's own buttons show (`window_buttons_shown`).
     window_buttons: bool,
-    /// Whether the host has them at the bar's end (`buttons_at_bar_end`).
-    buttons_at_bar_end: bool,
     /// The window's own buttons as the system draws them, once it has said, which the copies
     /// drawn in their place match.
     window_button_geometry: Option<WindowButtonGeometry>,
@@ -2061,8 +2039,6 @@ pub struct Shell {
     /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
     /// drew (`Shell::right`).
     right: bool,
-    /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
-    top_bar: bool,
     forced_tone: Option<Tone>,
     /// Whether something blurs what's behind the window under its tint, as the Mac's material
     /// does. Where nothing does, the tint would show what's behind sharp, so the window draws its
@@ -2271,7 +2247,6 @@ impl Shell {
             full_screen_timing: None,
             sidebar_hidden: false,
             window_buttons: true,
-            buttons_at_bar_end: false,
             window_button_geometry: None,
             sidebar_width,
             resize: None,
@@ -2464,7 +2439,6 @@ impl Shell {
             clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             right: false,
-            top_bar: false,
             forced_tone: None,
             blurred: BLURRED,
             window_active: true,
@@ -2830,13 +2804,10 @@ impl Shell {
         }
     }
 
-    /// The radius of the card's corners and the page's, which follow the window's own corner while
-    /// the OS rounds it.
+    /// The radius of the card's corners and the page's: the same in every window, whatever corner
+    /// the OS gives it.
     pub fn card_radius(&self) -> f32 {
-        card_radius(match self.full_screen || self.maximized {
-            true => 0.,
-            false => window_radius(),
-        })
+        CARD_RADIUS
     }
 
     /// Where the page goes as the window's content takes `viewport`, unless it's held where it is
@@ -2899,7 +2870,7 @@ impl Shell {
         (
             f32::from(pane.left()),
             f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()) + self.bar_drop(),
+            f32::from(pane.top() - frame.top()),
         )
     }
 
@@ -3785,6 +3756,19 @@ impl Shell {
         self.tab_changed(tab, changed, cx);
     }
 
+    /// The page of `tab` has the background colour `color`, 0xRRGGBB in sRGB, or with None no
+    /// single opaque one (tab_background_color_changed, and bc_tab_background_color as a tab is
+    /// shown).
+    pub fn set_tab_background(&mut self, tab: u64, color: Option<u32>, cx: &mut Context<Self>) {
+        let changed = self.tabs.entry(tab).or_default().keep_background(color);
+        self.tab_changed(tab, changed, cx);
+    }
+
+    /// The background colour of the page of `tab`, as set_tab_background last had it.
+    pub fn tab_background(&self, tab: u64) -> Option<u32> {
+        self.tabs.get(&tab)?.background
+    }
+
     fn tab_changed(&self, tab: u64, changed: bool, cx: &mut Context<Self>) {
         let (selected, space) = (self.selected, self.shown_space());
         if changed
@@ -4641,10 +4625,6 @@ impl Render for Shell {
         if right != self.right {
             self.set_sidebar_right(right, cx);
         }
-        let top_bar = sidebar::top_bar(cx) && self.little.is_none();
-        if top_bar != self.top_bar {
-            self.set_top_bar(top_bar, cx);
-        }
         self.full_screen_step("drawn", window.viewport_size());
         self.shape_safe_start(cx);
         self.step_opening(window, cx);
@@ -4891,11 +4871,6 @@ impl Render for Shell {
             self.window_buttons = window_buttons;
             self.browser.show_window_buttons(window_buttons, cx);
         }
-        let at_bar_end = self.buttons_at_bar_end();
-        if at_bar_end != self.buttons_at_bar_end {
-            self.buttons_at_bar_end = at_bar_end;
-            self.browser.set_window_buttons_right(at_bar_end, cx);
-        }
         // AppKit's say how they're drawn once they show, out of full screen, as at rest.
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
@@ -5063,7 +5038,6 @@ impl Render for Shell {
             .children(self.side_panel(cx))
             .children(under)
             .children(sidebar)
-            .children(self.top_bar_row(cx))
             .children(over)
             .children(edge)
             .children(own_buttons)
@@ -5082,11 +5056,18 @@ impl Shell {
         let (frame, _) = self.page_frame(self.viewport);
         // At the pages' scale, as a tab or a link over them draws them smaller.
         let (scale, radius) = (self.content_scale.now(), self.card_radius());
-        let card = |bounds, fill| {
-            card(
-                split_targets::scaled_about(bounds, frame.center(), scale),
+        let scaled = |bounds| split_targets::scaled_about(bounds, frame.center(), scale);
+        let card = |bounds, fill| card(scaled(bounds), radius, fill);
+        // A page that takes the window has no edge to keep. The side that meets the docked
+        // sidebar has no line: the open tab's row runs into the page there.
+        let outlined = self.card_left() > 0.;
+        let meets_sidebar = self.card_left() == self.width();
+        let outline = |bounds| {
+            card_outline(
+                scaled(bounds),
                 radius,
-                fill,
+                meets_sidebar.then_some(self.right),
+                self.palette.tone,
             )
         };
         let panes = self.panes(self.selected);
@@ -5099,24 +5080,24 @@ impl Shell {
         };
         let split = panes.len() > 1;
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let mut cards: Vec<_> = pane_frames(frame, panes.len(), stacked, &shares)
-            .into_iter()
-            .zip(&panes)
-            .map(|(bounds, &tab)| {
-                let focused = split && tab == self.selected;
-                card(bounds, self.palette.page)
-                    .when(focused, |card| card.shadow(vec![glow.clone()]))
-            })
-            .collect();
+        let mut frames = pane_frames(frame, panes.len(), stacked, &shares);
+        let focused = (panes.iter()).position(|&tab| split && tab == self.selected);
         if let Some(with) = self.adding_pane {
             let count = self.panes(with).len() + 1;
             let (full, _) = self.card_frames(self.viewport);
-            cards.push(card(
-                pane_frames(full, count, self.stacked(with), &[])[count - 1],
-                self.palette.page,
-            ));
+            frames.push(pane_frames(full, count, self.stacked(with), &[])[count - 1]);
         }
-        cards
+        // The lines first, under every card and its glow.
+        let outlines = frames
+            .iter()
+            .filter(|_| outlined)
+            .map(|&bounds| outline(bounds));
+        let cards = frames.iter().enumerate().map(|(index, &bounds)| {
+            card(bounds, self.palette.page).when(focused == Some(index), |card| {
+                card.shadow(vec![glow.clone()])
+            })
+        });
+        outlines.chain(cards).collect()
     }
 
     /// The sidebar: the header's buttons, the URL field and the Space's tabs, or the Create a
@@ -5128,12 +5109,7 @@ impl Shell {
             .top_0()
             .bottom_0()
             .w(px(self.width()))
-            .children(
-                (!self.bar_on())
-                    .then(|| self.nav_buttons(cx))
-                    .into_iter()
-                    .flatten(),
-            );
+            .children(self.nav_buttons(cx));
         let leaving = self
             .leaving_form
             .as_ref()
@@ -5177,7 +5153,7 @@ impl Shell {
                     .w(px(self.width()))
                     .when(leaving.is_some(), |page| page.opacity(0.));
                 let page = page
-                    .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
+                    .child(self.with_page(self.url_field(cx)))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
@@ -5639,10 +5615,7 @@ impl Shell {
                 div()
                     .absolute()
                     .left(px(left))
-                    .top(px(match self.bar_on() {
-                        true => crate::tokens::shell::TOP_BAR,
-                        false => REVEAL_INSET,
-                    }))
+                    .top(px(REVEAL_INSET))
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
@@ -5665,30 +5638,11 @@ impl Shell {
                         )
                         .opacity(weight)
                     }))
-                    .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
                     .child(self.scroll_listener(false, cx)),
             )
-            // Its window spans the bar's end over the sidebar's column, so it draws the bar's
-            // buttons and the window's where the bar has them, and they take its clicks.
-            .children(self.bar_on().then(|| {
-                let column = match self.right {
-                    true => span - self.width(),
-                    false => 0.,
-                };
-                div()
-                    .absolute()
-                    .top_0()
-                    .left(px(column))
-                    .w(px(self.width()))
-                    .h(px(crate::tokens::shell::TOP_BAR))
-                    .children(
-                        (!self.buttons_at_bar_end())
-                            .then(|| self.window_buttons(px(self.width()), cx)),
-                    )
-                    .children(self.nav_buttons(cx))
-            }))
             .child(self.reveal_listener(cx))
             // The mouse's back and forward buttons over the panel page the Spaces, as over the
             // docked sidebar, its window hearing them as the browser window does.
@@ -5715,7 +5669,7 @@ impl Shell {
     fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let right = self.right;
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(right || self.buttons_at_bar_end(), cx);
+            return self.windows_buttons(right, cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"
@@ -5857,6 +5811,32 @@ fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
         .h(bounds.size.height)
         .rounded(px(radius))
         .bg(fill)
+}
+
+/// The line round a card at `bounds` where it faces the window, outside it, on every side but
+/// the one that meets the sidebar: `open` is None with no sidebar beside it, or whether that side
+/// is the right. It has no fill, as the card's own may show the window through.
+fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: Tone) -> gpui::Div {
+    let width = px(PAGE_OUTLINE_WIDTH);
+    let [left, right] = [Some(false), Some(true)].map(|side| match open == side {
+        true => px(0.),
+        false => width,
+    });
+    div()
+        .absolute()
+        .left(bounds.left() - left)
+        .top(bounds.top() - width)
+        .w(bounds.size.width + left + right)
+        .h(bounds.size.height + 2. * width)
+        .rounded(px(radius + PAGE_OUTLINE_WIDTH))
+        .border_color(rgba(match tone {
+            Tone::Dark => PAGE_OUTLINE,
+            Tone::Light => PAGE_OUTLINE_LIGHT,
+        }))
+        .border_t(width)
+        .border_b(width)
+        .border_l(left)
+        .border_r(right)
 }
 
 /// `way`, but past `low` or `high` only a little further, on the Space pages' rubber band.

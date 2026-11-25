@@ -112,7 +112,11 @@ fn only_a_task_brought_back_says_its_assistant_still_has_it(cx: &mut TestAppCont
     run.ran(2);
     name_it(&run, &stopped, "Porto seats", cx);
     act(&run, &stopped, TaskAction::Stop, cx);
-    assert_eq!(run.ilo_lines(&stopped, cx), []);
+    // Its one line is that the user stopped it, which this run alone holds.
+    assert_eq!(
+        run.ilo_lines(&stopped, cx),
+        [IloKind::YouStopped { pages: 0 }]
+    );
 
     quit(&run, cx);
     let next = next(&run, cx);

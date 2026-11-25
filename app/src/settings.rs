@@ -1777,8 +1777,8 @@ impl Settings {
     }
 
     /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
-    /// position, with Page zoom and the Top bar beside them.
-    fn appearance_page(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// position, with Page zoom beside them.
+    fn appearance_page(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let appearance = self.appearance;
         let appearance_line: SharedString = match cfg!(target_os = "macos") {
@@ -1880,24 +1880,7 @@ impl Settings {
                 .into(),
             pair,
         );
-        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
-        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
-        let top_bar = setting(
-            look,
-            "Top bar",
-            Some(
-                format!(
-                    "The URL field and the sidebar's buttons in a row across the window's top, \
-                     the page under it. {top_bar_keys} turns it on and off."
-                )
-                .into(),
-            ),
-            vec![top_bar],
-        );
-        groups.extend([
-            Block::Heading("Layout".into()),
-            Block::Rows(vec![position, top_bar]),
-        ]);
+        groups.extend([Block::Heading("Layout".into()), Block::Rows(vec![position])]);
         Page::new(Section::Appearance, "", groups)
     }
 
@@ -5422,9 +5405,6 @@ const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
 
-/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
-const TOP_BAR: &str = "top-bar";
-
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
 }
@@ -5441,7 +5421,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
@@ -5488,14 +5467,6 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
-    cx.refresh_windows();
-}
-
-/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
-/// it as it draws.
-pub fn set_top_bar(on: bool, cx: &mut App) {
-    set_off(TOP_BAR, on);
-    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 
@@ -6174,7 +6145,7 @@ impl Settings {
     ) -> Page {
         match section {
             Section::General => self.general(&profiles(), accent, cx),
-            Section::Appearance => self.appearance_page(accent, cx),
+            Section::Appearance => self.appearance_page(cx),
             Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
             Section::Features => self.features(&profiles(), accent, cx),
             Section::Agents => match agents::global(cx) {
@@ -6239,7 +6210,7 @@ impl Settings {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
-            self.appearance_page(accent, cx),
+            self.appearance_page(cx),
             self.tabs_and_sidebar(&profiles, accent, cx),
             self.features(&profiles, accent, cx),
         ];

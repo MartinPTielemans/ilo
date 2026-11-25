@@ -1,5 +1,6 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
-//! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
+//! user's, each time an agent asks for a tab back, each change of the task's access, each time the
+//! user stops it, and each wall
 //! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
 //! rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
@@ -124,6 +125,8 @@ pub enum Happened {
     /// ilo couldn't copy the files the user attached, so the task started without them. `files`
     /// is where the copies were to be.
     NotCopied { files: Given },
+    /// The user stopped the task, which held `pages` pages then.
+    YouStopped { pages: usize },
 }
 
 impl Happened {
@@ -131,6 +134,7 @@ impl Happened {
         match self {
             Happened::Yours { tab } | Happened::TabBack { tab } => Some(*tab),
             Happened::TierChanged { .. }
+            | Happened::YouStopped { .. }
             | Happened::Revoked { .. }
             | Happened::FolderGone { .. }
             | Happened::NotCopied { .. } => None,
@@ -146,10 +150,14 @@ pub(super) fn turn(task: &Task) -> usize {
 }
 
 impl Agents {
-    /// Puts `made` in the conversation of the task `agent`'s act on `connection`, for its call
-    /// `call`, is of.
+    /// Puts `made` in a task's conversation. A line about a page stands where the page is, in
+    /// the task under way that holds it, whichever of its client's connections asked; any other
+    /// in the task `agent`'s act on `connection`, for its call `call`, is of.
     pub(super) fn place(&mut self, agent: &str, connection: u64, call: u64, made: Happened) {
-        let key = (self.acting_task(agent, connection, call)).map(|task| task.agent.clone());
+        let held_by = made.tab().and_then(|tab| self.page_task(agent, tab));
+        let key = held_by
+            .or_else(|| self.acting_task(agent, connection, call))
+            .map(|task| task.agent.clone());
         if let Some(key) = key {
             self.place_in(&key, made);
         }
@@ -166,8 +174,16 @@ impl Agents {
         if made.tab().is_some() && task.placed.iter().any(standing) {
             return;
         }
-        // The task's access or its files changed: the line said so, and it needs nothing of the user.
-        let settled = made.tab().is_none();
+        // The task's access changed, the user stopped it, or its files changed: the line said
+        // so, and it needs nothing of the user.
+        let settled = matches!(
+            made,
+            Happened::TierChanged { .. }
+                | Happened::YouStopped { .. }
+                | Happened::Revoked { .. }
+                | Happened::FolderGone { .. }
+                | Happened::NotCopied { .. }
+        );
         task.placed.push(Placed {
             kind: made,
             after,
@@ -296,11 +312,18 @@ impl Agents {
                     Some(left) => IloKind::NotCopied { left },
                     None => continue,
                 },
+                Happened::YouStopped { pages } => IloKind::YouStopped { pages: *pages },
+            };
+            let settled = match &placed.kind {
+                // An outside agent's task the user stopped offers its pages back, ended as it
+                // is, until they're handed back.
+                Happened::YouStopped { .. } => !Self::offers_pages_back(task),
+                _ => placed.settled || ended,
             };
             let line = IloLine {
                 key: PLACED + index,
                 kind,
-                settled: placed.settled || ended,
+                settled,
             };
             let mark = Mark {
                 after: placed.after,

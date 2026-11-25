@@ -6,7 +6,7 @@ use gpui::{AssetSource, SharedString};
 
 /// The shell's glyphs, built in: Lucide's outlines (NOTICE) at one stroke weight, and the nav
 /// buttons, the Library's cards, the loading ring, the window buttons' glyphs, the close button's
-/// bars, the baseball and the planet, which are ours.
+/// bars, the baseball and the planet, which are ours. The product's mark comes from `product`.
 pub struct Assets;
 
 // The close button's bars, as Arc's: 11.4 pt between the middles of their round ends, 2 wide,
@@ -451,14 +451,6 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/mouse-pointer-2.svg"),
     ),
     (
-        "icons/nav-back.svg",
-        include_bytes!("../../assets/icons/nav-back.svg"),
-    ),
-    (
-        "icons/nav-forward.svg",
-        include_bytes!("../../assets/icons/nav-forward.svg"),
-    ),
-    (
         "icons/nav-menu.svg",
         include_bytes!("../../assets/icons/nav-menu.svg"),
     ),
@@ -467,20 +459,12 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-plus.svg"),
     ),
     (
-        "icons/nav-reload.svg",
-        include_bytes!("../../assets/icons/nav-reload.svg"),
-    ),
-    (
         "icons/nav-sidebar.svg",
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
         "icons/nav-sidebar-right.svg",
         include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
-    ),
-    (
-        "icons/nav-stop.svg",
-        include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
     (
         "icons/network.svg",
@@ -505,10 +489,6 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-right.svg",
         include_bytes!("../../assets/icons/panel-right.svg"),
-    ),
-    (
-        "icons/panel-top.svg",
-        include_bytes!("../../assets/icons/panel-top.svg"),
     ),
     (
         "icons/paw-print.svg",
@@ -835,6 +815,7 @@ impl AssetSource for Assets {
         }
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .find(|(name, _)| *name == path)
             .map(|&(_, icon)| Cow::Borrowed(icon)))
     }
@@ -842,6 +823,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .filter(|(name, _)| name.starts_with(path))
             .map(|&(name, _)| name.into())
             .collect())

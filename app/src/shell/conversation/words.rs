@@ -21,6 +21,9 @@ pub fn working(agent: &str) -> String {
     format!("{agent} is working")
 }
 
+/// A task the user stopped, as the last line of its log says it.
+const YOU_STOPPED: &str = "You stopped it";
+
 /// The live line's button while the user has the task's page.
 pub const HAND_BACK: &str = "Hand Back";
 
@@ -66,6 +69,14 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
+        // The pages it held then, by their count alone (Z17).
+        IloKind::YouStopped { pages } => (
+            match crate::agents::tools::pages_counted(*pages) {
+                Some(pages) => format!("· {YOU_STOPPED} · {pages}"),
+                None => format!("· {YOU_STOPPED}"),
+            },
+            None,
+        ),
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
         IloKind::Helpers { limit, .. } => (
             match (*limit, crate::tokens::agents::helpers::MOST) {
@@ -249,6 +260,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
+        IloKind::YouStopped { .. } => None,
         IloKind::Helpers { .. } => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
@@ -283,7 +295,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
         IloButton::AnySite => "Any site",
-        IloButton::HandBack => "Hand Back",
+        IloButton::HandBack | IloButton::PagesBack => "Hand Back",
         IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",

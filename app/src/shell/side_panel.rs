@@ -73,7 +73,6 @@ impl Shell {
         // On the right, the card and its panel are today's mirrored, so the panel stays between
         // the page and the sidebar.
         let card = self.little_card(super::sidebar::mirrored(self.right, viewport.width, card));
-        let card = self.under_bar(card);
         match self.side_panel.is_some() && card_left != 0. {
             true => {
                 let (page, panel) = split_card(card, panel_width(self.side_panel_width));
@@ -372,7 +371,10 @@ mod tests {
     /// In a narrow window the panel gives way, and the page keeps at least as much as it.
     #[test]
     fn a_narrow_card_keeps_half_for_the_page() {
-        let card = Bounds::new(point(px(10.), px(10.)), size(px(610.), px(500.)));
+        let card = Bounds::new(
+            point(px(CARD_INSET), px(CARD_INSET)),
+            size(px(600. + CARD_INSET), px(500.)),
+        );
         let (page, panel) = split_card(card, 600.);
         assert_eq!(panel.size.width, px(300.));
         assert!(page.size.width >= panel.size.width);

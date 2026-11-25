@@ -382,8 +382,8 @@ impl Card {
             .mr(px(CARD_INSET))
             .mb(px(CARD_INSET))
             .relative()
-            // A window of its own, whose corner it follows as the browser window's card does.
-            .rounded(px(crate::shell::card_radius(crate::shell::window_radius())))
+            // A window of its own, with the browser window's card's corners.
+            .rounded(px(crate::shell::CARD_RADIUS))
             .bg(fill)
             .when(dark, |card| card.border_1().border_color(rgba(CARD_RIM)))
             .when(!dark, |card| {

@@ -2293,6 +2293,8 @@ impl TalkView {
             | IloKind::NotRaised { .. } => "icons/ban.svg",
             IloKind::Yours { .. } => "icons/user.svg",
             IloKind::TabBack { .. } => "icons/undo-2.svg",
+            // The user's own stop has Stop's glyph.
+            IloKind::YouStopped { .. } => "icons/square.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
             IloKind::TierChanged { .. } | IloKind::KeptAt { .. } | IloKind::SetBack { .. } => {
                 "icons/shield.svg"
@@ -2475,6 +2477,7 @@ impl TalkView {
             IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
             IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
+            IloButton::PagesBack => Some(TaskAction::PagesBack),
             // It only shows the page, as its picture's click does.
             IloButton::ShowPage => {
                 if let Some(tab) = tab {
