@@ -857,6 +857,7 @@ impl Task {
             title,
             model: SharedString::default(),
             model_id: None,
+            effort: None,
             added: Vec::new(),
             state,
             ended: Some(at),

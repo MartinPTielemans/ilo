@@ -42,6 +42,16 @@ impl Cli {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
     }
 
+    /// The effort levels its own program takes when ilo starts it, under the names its help gives
+    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
+    /// lists these; Codex's help names no effort option.
+    pub fn efforts(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Cli::Codex => &[],
+        }
+    }
+
     /// What the user calls it, in text only: agents have no maker's logo or colour.
     pub fn name(self) -> &'static str {
         match self {
@@ -105,6 +115,9 @@ pub struct Launch {
     pub server: Server,
     /// The model, or None for the CLI's default.
     pub model: Option<String>,
+    /// The effort level the user picked for the thread, one of `cli.efforts()`, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// What it's told about working in the browser, after its own system prompt.
     pub instructions: String,
     /// The tools it may call, as the server lists them.
@@ -597,6 +610,9 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     args.push(allowed.join(","));
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
+    }
+    if let Some(effort) = (launch.effort.as_deref()).filter(|e| Cli::Claude.efforts().contains(e)) {
+        args.extend(["--effort".into(), effort.to_string()]);
     }
     args.extend([
         "--append-system-prompt-file".into(),

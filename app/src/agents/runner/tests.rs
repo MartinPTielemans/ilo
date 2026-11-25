@@ -20,6 +20,7 @@ fn launch(cli: Cli) -> Launch {
             token: "secret".into(),
         },
         model: Some("haiku".into()),
+        effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
@@ -172,6 +173,36 @@ fn a_task_starts_through_a_cmd_shim() {
         drop(process);
     }
     _ = std::fs::remove_dir_all(dir);
+}
+
+/// A level picked for the thread reaches Claude as its own `--effort`; with none picked, or one
+/// its program doesn't list, ilo passes nothing and Claude uses its own default.
+#[test]
+fn claude_gets_the_picked_effort_and_nothing_else() {
+    let mut launch = launch(Cli::Claude);
+    let effort = |launch: &Launch| {
+        let args = claude_args(launch);
+        let at = args.iter().position(|arg| arg == "--effort");
+        at.map(|at| args[at + 1].clone())
+    };
+    assert_eq!(effort(&launch), None, "an effort with nothing picked");
+    for level in Cli::Claude.efforts() {
+        launch.effort = Some(level.to_string());
+        assert_eq!(effort(&launch).as_deref(), Some(*level));
+    }
+    launch.effort = Some("turbo".into());
+    assert_eq!(effort(&launch), None, "a level Claude doesn't list");
+}
+
+/// The levels are Claude Code's `--effort` as its help prints them, in its order; Codex's help
+/// names no effort option, so it has none.
+#[test]
+fn only_claude_takes_an_effort() {
+    assert_eq!(
+        Cli::Claude.efforts(),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    assert!(Cli::Codex.efforts().is_empty());
 }
 
 #[test]

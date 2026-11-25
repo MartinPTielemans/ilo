@@ -401,6 +401,9 @@ pub struct Task {
     /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
     /// own default; None for Settings' Model, read at each launch.
     pub(super) model_id: Option<String>,
+    /// The effort level the user picked for it, which each of its runs passes its CLI; None for
+    /// the CLI's own.
+    pub(super) effort: Option<String>,
     /// The addresses of the pages the user added to it, which its first message names.
     pub(super) added: Vec<String>,
     pub state: State,
@@ -774,6 +777,9 @@ pub struct Start {
     pub tier: Tier,
     /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
     pub model: Option<String>,
+    /// The effort level picked for it on the composer's menu, one its CLI takes, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// The addresses of the pages the user added on the `+` menu, which the task opens in tabs of
     /// its own: never a tab of the user's, nor its title or anything of its state.
     pub pages: Vec<String>,
@@ -1707,10 +1713,13 @@ impl Agents {
         let Start {
             tier,
             model: picked,
+            effort,
             pages,
             only_added,
             files: given,
         } = start.into();
+        // Only a level its CLI's own program offers is passed it.
+        let effort = effort.filter(|level| cli.efforts().contains(&level.as_str()));
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
         let pages: Vec<String> = (pages.iter())
@@ -1763,6 +1772,7 @@ impl Agents {
             title,
             model,
             model_id,
+            effort,
             added: pages.clone(),
             state: State::Working,
             ended: None,
@@ -2051,6 +2061,7 @@ impl Agents {
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = self.launch_model(agent, cli);
+        let effort = self.task(agent).and_then(|task| task.effort.clone());
         // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
         let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
@@ -2065,6 +2076,7 @@ impl Agents {
                 token: task.token.clone(),
             },
             model,
+            effort,
             instructions: match task.helpers.on {
                 true => format!(
                     "{}\n\n{}",
@@ -3258,6 +3270,7 @@ impl Agents {
             page: None,
             model: SharedString::default(),
             model_id: None,
+            effort: None,
             added: Vec::new(),
             state: State::Working,
             ended: None,
