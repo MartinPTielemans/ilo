@@ -607,7 +607,9 @@ AgentPage::~AgentPage() {
 
 void AgentPage::Act(uint64_t request, int action, int64_t element, std::string text) {
   acted_ = true;
-  jobs_.push_back({request, action, element, std::move(text)});
+  Job job{request, action, element, std::move(text)};
+  job.asked = secure_connections_rule::TakenBy(asked_, action == BC_AGENT_PAGE_QUIET);
+  jobs_.push_back(std::move(job));
   Next();
 }
 
@@ -621,6 +623,40 @@ void AgentPage::Fill(int64_t element,
   job.put = std::move(put);
   jobs_.push_back(std::move(job));
   Next();
+}
+
+// static
+void AgentPage::Asked(content::WebContents* contents, int64_t load, bool opened) {
+  if (!contents) {
+    return;
+  }
+  CreateForWebContents(contents);
+  FromWebContents(contents)->asked_ = {.load = load, .opened = opened};
+}
+
+// static
+void AgentPage::PageTaken(bc_id tab, int64_t load) {
+  content::WebContents* contents = Tab::FromId(tab);
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page) {
+    return;
+  }
+  const auto asked = [load](const Job& job) {
+    return secure_connections_rule::AskedFor(job.asked, load);
+  };
+  if (page->job_ && asked(*page->job_)) {
+    page->Fail(secure_connections_rule::NotOpened(page->job_->asked.opened),
+               BC_AGENT_FAILURE_NOT_SECURE);
+    return;
+  }
+  // Behind another job still, as a navigate asked while a click was under way.
+  const auto queued = std::ranges::find_if(page->jobs_, asked);
+  if (queued != page->jobs_.end()) {
+    Job job = std::move(*queued);
+    page->jobs_.erase(queued);
+    page->Owe(job, secure_connections_rule::NotOpened(job.asked.opened),
+              BC_AGENT_FAILURE_NOT_SECURE);
+  }
 }
 
 // static
@@ -3137,14 +3173,14 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   }
 }
 
-void AgentPage::Owe(Job& job, const std::string& why) {
+void AgentPage::Owe(Job& job, const std::string& why, bc_agent_failure failure) {
   if (job.put) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(job.put), false));
     return;
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, BC_AGENT_FAILURE_NONE));
+      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, failure));
 }
 
 // static
@@ -3207,6 +3243,7 @@ void AgentPage::LetGo() {
   weak_factory_.InvalidateWeakPtrs();
   // What the agent typed is kept only to compare with while its session lasts.
   typed_.clear();
+  asked_ = {};
   acted_ = false;
   pictures_ = 0;
   wheel_.reset();

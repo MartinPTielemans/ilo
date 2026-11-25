@@ -5,6 +5,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/agent_space_page.h"
 #include "browser_core/host.h"
 #include "browser_core/secure_connections_rule.h"
@@ -65,10 +66,12 @@ void Enter(std::string agent, bc_id tab, std::string host, const char* action) {
 }
 
 // The browser's own step, not the agent's: back to the page the tab showed, which of a tab the
-// user handed over is the page they handed it at, or closed. The entry goes first, so the app
-// ends the step that waits on the page before the tab's own end answers it.
-void PutBack(bc_id id, std::string agent, std::string host, const char* action) {
+// user handed over is the page they handed it at, or closed. First the job that asked for |load|
+// is answered that its page didn't open, so the tab's own end never answers it: the entry is the
+// log's alone, and ends no step in the app.
+void PutBack(bc_id id, std::string agent, std::string host, const char* action, int64_t load) {
   Enter(std::move(agent), id, std::move(host), action);
+  AgentPage::PageTaken(id, load);
   if (content::WebContents* contents = Window::PageOf(id)) {
     content::NavigationController& history = contents->GetController();
     switch (secure_connections_rule::PutBackTo(history.CanGoBack())) {
@@ -83,8 +86,9 @@ void PutBack(bc_id id, std::string agent, std::string host, const char* action) 
 }
 
 // TakesHttpWarning, with the |action| its entry has: one of the rule's two, which outlive the
-// posted call.
-bool Takes(content::WebContents* contents, const GURL& url, const char* action) {
+// posted call. |load| is the navigation that was stopped, or 0 for a page no job's navigation
+// opened, as one the user left at a Hand Back.
+bool Takes(content::WebContents* contents, const GURL& url, const char* action, int64_t load) {
   // A page inside another's has no warning of its own: only a tab's page does.
   const Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr;
   if (!tab || !secure_connections_rule::NoWarning(RuleTabOf(contents))) {
@@ -94,7 +98,7 @@ bool Takes(content::WebContents* contents, const GURL& url, const char* action) 
   LOG(ERROR) << "browser: tab " << tab->id() << " not secure, not opened: an agent's tab";
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&PutBack, tab->id(), space->agent()->id, std::string(url.host()),
-                                action));
+                                action, load));
   return true;
 }
 
@@ -139,7 +143,7 @@ bool SetSecureConnections(Profile* profile, bool on) {
 
 bool TakesHttpWarning(content::NavigationHandle* navigation) {
   return Takes(navigation->GetWebContents(), navigation->GetURL(),
-               secure_connections_rule::kEntryAction);
+               secure_connections_rule::kEntryAction, navigation->GetNavigationId());
 }
 
 namespace {
@@ -166,8 +170,8 @@ void LeaveNoHttpWarning(bc_id tab) {
     return;
   }
   content::WebContents* contents = Window::PageOf(tab);
-  if (Takes(contents, contents->GetLastCommittedURL(),
-            secure_connections_rule::kHandedBackAction)) {
+  if (Takes(contents, contents->GetLastCommittedURL(), secure_connections_rule::kHandedBackAction,
+            /*load=*/0)) {
     warning->CloseDialog();
   }
 }

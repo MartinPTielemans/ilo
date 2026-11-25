@@ -6,6 +6,8 @@
 #ifndef BROWSER_CORE_SECURE_CONNECTIONS_RULE_H_
 #define BROWSER_CORE_SECURE_CONNECTIONS_RULE_H_
 
+#include <cstdint>
+
 #include "browser_core/agent_space_rule.h"
 
 namespace browser_core::secure_connections_rule {
@@ -52,6 +54,27 @@ inline constexpr char kEntryReason[] = "not_secure";
 // the tab back. No step of the agent's asked for that page, so the app ends none on this entry:
 // a step the agent began since the hand-back still goes, and is never told it didn't.
 inline constexpr char kHandedBackAction[] = "handed_back_page";
+
+// The navigation an agent's open or navigate started in a tab, for the job that waits on its
+// page: the navigation's id, 0 for none, and whether the call was an open.
+struct Asked {
+  int64_t load = 0;
+  bool opened = false;
+};
+
+// What the next job in the tab has of |kept|, which is left empty either way: all of it if the job
+// |waits| for a page to settle, as the app asks right after its open or its navigate, and nothing
+// if it is any other job. So a load is one job's at most, and no later job has an older load's.
+Asked TakenBy(Asked& kept, bool waits);
+
+// Whether the job that has |asked| is the one whose page the stopped navigation |taken| was to
+// open: that job alone is told its page didn't open. A job that asked for no load never is, as a
+// click whose page then went to http, nor is any job for a page left at a Hand Back, which was no
+// job's (0).
+bool AskedFor(const Asked& asked, int64_t taken);
+
+// What that job is told, as the app says it of a tab that couldn't open or couldn't go.
+const char* NotOpened(bool opened);
 
 }  // namespace browser_core::secure_connections_rule
 

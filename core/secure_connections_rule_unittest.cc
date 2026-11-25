@@ -67,6 +67,56 @@ TEST(SecureConnectionsRuleTest, TheHandBacksEntryHasAnActionOfItsOwn) {
   EXPECT_STRNE(kHandedBackAction, kEntryAction);
 }
 
+// The app asks an open's or a navigate's wait right after the call, so the wait has its load.
+TEST(SecureConnectionsRuleTest, TheWaitAfterAnOpenOrANavigateHasItsLoad) {
+  Asked kept = {.load = 7, .opened = true};
+  const Asked job = TakenBy(kept, /*waits=*/true);
+  EXPECT_EQ(job.load, 7);
+  EXPECT_TRUE(job.opened);
+}
+
+// So only one job is ever told of a load, and it is answered for it once.
+TEST(SecureConnectionsRuleTest, ALoadIsOneJobsOnly) {
+  Asked kept = {.load = 7};
+  TakenBy(kept, /*waits=*/true);
+  EXPECT_EQ(kept.load, 0);
+  EXPECT_EQ(TakenBy(kept, /*waits=*/true).load, 0);
+}
+
+// A click that came first isn't the load's job, and the wait after it has no older load's id.
+TEST(SecureConnectionsRuleTest, AJobThatIsntTheWaitDropsTheLoad) {
+  Asked kept = {.load = 7};
+  EXPECT_EQ(TakenBy(kept, /*waits=*/false).load, 0);
+  EXPECT_EQ(kept.load, 0);
+  EXPECT_EQ(TakenBy(kept, /*waits=*/true).load, 0);
+}
+
+TEST(SecureConnectionsRuleTest, TheJobThatAskedForTheStoppedLoadIsToldSo) {
+  EXPECT_TRUE(AskedFor({.load = 7}, 7));
+}
+
+// A click whose page then went to http, a type, a wait: its page left under it, and it goes on.
+TEST(SecureConnectionsRuleTest, AJobThatAskedForNoLoadIsNeverToldSo) {
+  EXPECT_FALSE(AskedFor({}, 7));
+}
+
+// As a page that opened and then went on to http by itself: another navigation than the one asked.
+TEST(SecureConnectionsRuleTest, AJobThatAskedForAnotherLoadIsNeverToldSo) {
+  EXPECT_FALSE(AskedFor({.load = 7}, 8));
+}
+
+// A page left at a Hand Back was the user's, and no job's.
+TEST(SecureConnectionsRuleTest, APageNoNavigationOfAJobsOpenedEndsNoJob) {
+  EXPECT_FALSE(AskedFor({}, 0));
+  EXPECT_FALSE(AskedFor({.load = 7}, 0));
+}
+
+// The two sentences the app has for a tab that couldn't open or couldn't go, and no third.
+TEST(SecureConnectionsRuleTest, TheJobIsToldInTheAppsOwnTwoSentences) {
+  EXPECT_STREQ(NotOpened(/*opened=*/true), "The tab couldn't open.");
+  EXPECT_STREQ(NotOpened(/*opened=*/false), "The tab couldn't go there.");
+}
+
 // An entry about the page its tab shows names no site. Every other entry the core sends is built
 // as this one, by its fields' names without the site, which leaves the site null.
 TEST(SecureConnectionsRuleTest, AnEntryBuiltWithoutASiteNamesNone) {
