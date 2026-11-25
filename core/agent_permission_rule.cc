@@ -9,6 +9,7 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
     case Kind::kClipboardWrite:
       return agent_space_rule::Refuses(agent_space_rule::Ask::kCopy, tab);
     case Kind::kPrint:
+    case Kind::kClientCertificate:
       return tab.agents && !tab.held;
     default:
       return tab.agents;
@@ -77,11 +78,17 @@ const char* CodeWord(Kind kind) {
       return "color_picker";
     case Kind::kPrint:
       return "print";
+    case Kind::kClientCertificate:
+      return "client_certificate";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";
   }
   return "other";
+}
+
+bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& tab) {
+  return any_to_offer && Refuses(Kind::kClientCertificate, tab);
 }
 
 bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab) {

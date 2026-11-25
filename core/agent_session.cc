@@ -144,6 +144,8 @@ bool HandBack(bc_id tab) {
   Blur(tab);
   // A print preview the user opened while they held the tab doesn't stay over a thread's page.
   ClosePrintPreview(Tab::FromId(tab));
+  // Nor a certificate chooser, or anything else Chrome asked them over the page while they held it.
+  CloseTabDialogs(Tab::FromId(tab));
   return true;
 }
 

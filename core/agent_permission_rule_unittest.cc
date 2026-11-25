@@ -30,12 +30,12 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
   }
 }
 
-// The user holding the tab changes two answers: their own copy writes the clipboard, and a print
-// is theirs to make.
-TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForACopyAndAPrint) {
+// The user holding the tab changes three answers: their own copy writes the clipboard, and a print
+// and the choice of a certificate are theirs to make.
+TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
-    if (kind == Kind::kClipboardWrite || kind == Kind::kPrint) {
+    if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -135,6 +135,26 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsRefusedAPrint) {
 // page's.
 TEST(AgentPermissionRule, AHeldTabPrints) {
   EXPECT_FALSE(Refuses(Kind::kPrint, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {
+  EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/true, kUsers));
+}
+
+TEST(AgentPermissionRule, ALoadInAnAgentsSpaceThatAsksACertificateIsEnded) {
+  EXPECT_TRUE(RefusesClientCertificate(/*any_to_offer=*/true, kAgents));
+}
+
+// While the user holds the tab the choice is theirs, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabIsShownTheCertificateChooser) {
+  EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/true, kHeld));
+}
+
+// No chooser is drawn where the user has none to offer: the load goes on in any tab.
+TEST(AgentPermissionRule, ALoadWithNoCertificateToOfferGoesOnInAnyTab) {
+  EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/false, kUsers));
+  EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/false, kAgents));
+  EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/false, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsAskedAsEver) {

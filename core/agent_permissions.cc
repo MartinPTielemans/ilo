@@ -15,6 +15,7 @@
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/request_type.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/render_frame_host.h"
@@ -245,6 +246,24 @@ void ClosePrintPreview(content::WebContents* contents) {
   }
   if (auto* print_preview = ui->GetController()->GetAs<printing::PrintPreviewUI>()) {
     print_preview->OnClosePrintPreviewDialog();
+  }
+}
+
+bool NoClientCertificate(content::WebContents* contents, bool any_to_offer) {
+  if (!contents ||
+      !agent_permission_rule::RefusesClientCertificate(any_to_offer, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kClientCertificate, contents->GetOutermostWebContents());
+  return true;
+}
+
+void CloseTabDialogs(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kClientCertificate, RuleTabOf(contents))) {
+    return;
+  }
+  if (auto* dialogs = web_modal::WebContentsModalDialogManager::FromWebContents(contents)) {
+    dialogs->CloseAllDialogs();
   }
 }
 

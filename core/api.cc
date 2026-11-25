@@ -770,8 +770,10 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
     return false;
   }
   browser_core::handed::Given(tab, home, left);
-  // A print preview the user had open over it doesn't ride into the agent's Space.
+  // A print preview the user had open over it doesn't ride into the agent's Space, nor a
+  // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));
+  browser_core::CloseTabDialogs(browser_core::Tab::FromId(tab));
   // No window shows it any more, and it had the size of the user's window: an agent's page's own
   // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
   // the user, it takes the size of the window that shows it.

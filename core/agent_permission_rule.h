@@ -51,6 +51,8 @@ enum class Kind {
   kColorPicker,
   // A print of the page, which draws a preview over it and the system's print sheet after.
   kPrint,
+  // The chooser for a certificate of the user's, which a server asks for as a load starts.
+  kClientCertificate,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
@@ -61,8 +63,9 @@ inline constexpr size_t kKinds = static_cast<size_t>(Kind::kLeftAsToday) + 1;
 
 // Whether the browser refuses |kind| to a page in |tab|, whatever the profile has saved for its
 // site. Nothing in a tab of the user's and nothing left as today. In an agent's Space every other
-// kind, held or not, but the two the user's own doing needs at a step they do themselves: a write
-// to the clipboard, for their copy, and a print, which a held tab has as a tab of theirs does.
+// kind, held or not, but those the user's own doing needs at a step they do themselves: a write to
+// the clipboard, for their copy, and a print and the choice of a certificate, which a held tab has
+// as a tab of theirs does.
 bool Refuses(Kind kind, const agent_space_rule::Tab& tab);
 
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one
@@ -75,6 +78,11 @@ const char* CodeWord(Kind kind);
 // own storage is no file of the user's and is the page's in any tab; any other is refused in an
 // agent's Space, held or not, as the picker for one is.
 bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab);
+
+// Whether a load for a page in |tab| that a server asks a certificate of is ended in place of the
+// chooser. One with no certificate of the user's to offer draws no chooser and goes on as in any
+// tab.
+bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& tab);
 
 // The kinds a document's refusals have an entry for: one per document and kind, however often the
 // page asks.

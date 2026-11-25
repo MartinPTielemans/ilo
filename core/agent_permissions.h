@@ -60,6 +60,17 @@ bool NoPrint(content::RenderFrameHost* frame, bool by_users_command);
 // becomes an agent's, so none stays over a page a thread works on.
 void ClosePrintPreview(content::WebContents* contents);
 
+// Whether a load for the page in |contents| that a server asks a certificate of is ended in place
+// of the chooser for one of the user's: a page in an agent's Space the user doesn't hold, where
+// the user has any to offer, with its entry at the tab.
+bool NoClientCertificate(content::WebContents* contents, bool any_to_offer);
+
+// Closes what Chrome drew over the page in |contents| as a tab's dialog, a certificate chooser
+// among them, if the page is in an agent's Space the user doesn't hold, as Chrome closes them
+// when a page is left: where the user's hold of a tab ends and where a tab of theirs becomes an
+// agent's. What a hold let the user be asked ends with it, as cancelled.
+void CloseTabDialogs(content::WebContents* contents);
+
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
 // |contents|, if it's in an agent's Space: once per document and kind, however often the page
 // asks, and after the task that refused it, since the app takes no entry inside a call of its own

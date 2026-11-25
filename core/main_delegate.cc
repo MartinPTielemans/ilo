@@ -15,6 +15,7 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
@@ -95,12 +96,15 @@
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/performance_manager/public/features.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "net/ssl/client_cert_identity.h"
+#include "net/ssl/ssl_cert_request_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
@@ -464,6 +468,24 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
       return false;
     }
     return ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
+  }
+
+  // Chrome's, but a load for a page in an agent's Space that the user doesn't hold is shown no
+  // chooser for a certificate of the user's: it ends as the engine cancels one, with nothing
+  // remembered for the site, and has its entry in the activity log.
+  base::OnceClosure SelectClientCertificate(
+      content::BrowserContext* context,
+      int process_id,
+      content::WebContents* contents,
+      net::SSLCertRequestInfo* request,
+      net::ClientCertIdentityList certificates,
+      std::unique_ptr<content::ClientCertificateDelegate> delegate) override {
+    if (NoClientCertificate(contents, !certificates.empty())) {
+      // Letting go of |delegate| unanswered cancels the request.
+      return base::OnceClosure();
+    }
+    return ChromeContentBrowserClient::SelectClientCertificate(
+        context, process_id, contents, request, std::move(certificates), std::move(delegate));
   }
 
   // Chrome's, but a page in an agent's Space opens no Picture in Picture window for a document,
