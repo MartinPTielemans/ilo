@@ -171,4 +171,38 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), STATES.len(), "a state has two rows");
     }
+
+    /// The working task's steps each name the page they acted on, the first going to it, so its
+    /// log draws a page's line with its steps under it, and its done fold the page's icon, as
+    /// the app's do.
+    #[test]
+    fn the_working_tasks_steps_are_on_its_page() {
+        use browser::agents::task::{Line, TraceItem};
+        let talk = super::tasks::task_conversation("claude".into());
+        let Some(Line::Trace(trace)) = talk.lines.first() else {
+            panic!("the working conversation starts with its trace");
+        };
+        let steps: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step),
+                _ => None,
+            })
+            .collect();
+        let pages: Vec<_> = steps.iter().map(|step| step.page.as_ref()).collect();
+        assert!(
+            pages.iter().all(Option::is_some),
+            "a step has no page: {pages:?}"
+        );
+        let went: Vec<bool> = pages.iter().flatten().map(|page| page.went).collect();
+        assert!(
+            went[0] && !went[1..].contains(&true),
+            "only the first goes to it: {went:?}"
+        );
+        for page in pages.iter().flatten().skip(1) {
+            assert_eq!(
+                page.tab, talk.on,
+                "a step after the first is on the task's tab"
+            );
+        }
+    }
 }

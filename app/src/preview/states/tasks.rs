@@ -362,6 +362,7 @@ pub(crate) fn bench_ended() -> Option<&'static str> {
 /// the step under way, on four pages, so it opens on Pages.
 pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     let (title, _, _) = TASKS[0];
+    // Every step is on the tickets page: the first went to it, so it heads the page's line.
     let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
         key,
         glyph,
@@ -374,7 +375,11 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             false => Opens::Nothing,
         },
         under: "".into(),
-        page: None,
+        page: Some(OnPage {
+            tab: (key != 0).then_some(FIRST_TASK + 200),
+            site: "tickets.example".into(),
+            went: key == 0,
+        }),
         says: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
@@ -471,7 +476,11 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
-            page: None,
+            page: Some(OnPage {
+                tab: (key != 0).then_some(pages[0].0),
+                site: site(pages[0].2),
+                went: key == 0,
+            }),
             says: "".into(),
         })
     };
