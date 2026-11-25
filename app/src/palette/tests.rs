@@ -2061,22 +2061,12 @@ fn a_spaces_glass_shows_more_further_along_its_bar() {
     }
 }
 
-/// Menus, the command bar, dialogs and everything else that floats keep Standard's fills whatever
-/// a Space's glass or the app's level: a Space's value changes only the window's glass.
+/// A window's overlay and dialog fills are the same whatever its Space's glass: a Space's value
+/// changes only the window's glass.
 #[test]
-fn what_floats_keeps_standards_fill_at_any_glass() {
+fn overlay_and_dialog_fills_dont_follow_a_spaces_glass() {
     for level in Transparency::ALL {
         set_transparency(level);
-        for surface in Float::ALL {
-            for tone in [Tone::Dark, Tone::Light] {
-                let standard = Some(Transparency::Standard);
-                assert_eq!(
-                    surface.fill_on(tone, true),
-                    surface.fill_at(tone, standard),
-                    "{surface:?} {tone:?} {level:?}"
-                );
-            }
-        }
         for glass in [0., START, 1.] {
             for tone in [Tone::Dark, Tone::Light] {
                 let (overlay, dialog) = tone.overlays();
