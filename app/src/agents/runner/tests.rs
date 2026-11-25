@@ -780,6 +780,13 @@ fn listening(cli: Cli) -> Launch {
     }
 }
 
+/// Whether two names are one variable, as the started program reads them: on Windows in any case,
+/// where a name keeps the spelling it was first given on the command, so a proxy name cleared in
+/// lower case and then set in upper case is spelled in lower case.
+fn same_name(one: &str, other: &str) -> bool {
+    one == other || (cfg!(windows) && one.eq_ignore_ascii_case(other))
+}
+
 /// A walled start of either assistant names the wall's listener as its every proxy and clears
 /// what would exempt a host from it or name another; a start with no wall names none and clears
 /// nothing, as before.
@@ -801,10 +808,6 @@ fn only_a_walled_start_names_the_listener_as_its_proxy() {
             .map(|(name, _)| name.to_string_lossy().into_owned())
             .collect()
     };
-    // On Windows a name in any case is the same variable, so a lower-case proxy name reads the
-    // listener the upper-case one is set to, under whichever spelling was given first.
-    let same =
-        |one: &str, other: &str| one == other || (cfg!(windows) && one.eq_ignore_ascii_case(other));
     for cli in Cli::ALL {
         let inside = listening(cli);
         let port = (inside.wall.as_ref()).and_then(|wall| wall.port()).unwrap();
@@ -812,21 +815,21 @@ fn only_a_walled_start_names_the_listener_as_its_proxy() {
         let has = set(&inside);
         for name in proxies {
             let at = (has.iter())
-                .find(|(set, _)| same(set, name))
+                .find(|(set, _)| same_name(set, name))
                 .map(|(_, value)| value);
             assert_eq!(at, Some(&named), "{cli:?}: {name}");
         }
         let gone = removed(&inside);
         for name in cleared {
             let reads_listener =
-                (has.iter()).any(|(set, value)| same(set, name) && *value == named);
+                (has.iter()).any(|(set, value)| same_name(set, name) && *value == named);
             assert!(
-                gone.iter().any(|gone| same(gone, name)) || reads_listener,
+                gone.iter().any(|gone| same_name(gone, name)) || reads_listener,
                 "{cli:?}: {name} isn't cleared"
             );
             assert!(
                 !has.iter()
-                    .any(|(set, value)| same(set, name) && *value != named),
+                    .any(|(set, value)| same_name(set, name) && *value != named),
                 "{cli:?}: {name} names something else"
             );
         }
@@ -835,7 +838,7 @@ fn only_a_walled_start_names_the_listener_as_its_proxy() {
         let has = set(&outside);
         for name in proxies.iter().chain(&cleared) {
             assert!(
-                !has.iter().any(|(set, _)| same(set, name)),
+                !has.iter().any(|(set, _)| same_name(set, name)),
                 "{cli:?}: {name} is set"
             );
         }
@@ -871,7 +874,10 @@ fn every_name_a_start_sets_is_in_the_kept_list() {
         ];
         for start in starts {
             for (name, _) in set(&start) {
-                assert!(names.contains(&name.as_str()), "{name} is set and not kept");
+                assert!(
+                    names.iter().any(|kept| same_name(kept, &name)),
+                    "{name} is set and not kept"
+                );
             }
         }
     }
