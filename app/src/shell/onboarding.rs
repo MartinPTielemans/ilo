@@ -192,7 +192,7 @@ impl Switch {
 }
 
 /// The card fades from its window at the end, on the scroll edge's curve.
-const END_FADE: f32 = 0.2;
+const END_FADE: f32 = t::END_FADE;
 
 /// The account isn't signed in, only waiting perhaps for the sign-in window, as the core said last,
 /// or before it has said.

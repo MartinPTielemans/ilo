@@ -2549,6 +2549,10 @@ progress-motion = 0.5
 step-fade = 0.2
 picture-fade = 0.24
 still-fade = 0.15
+# The card's fade from its window as its last step is left, on the scroll edge's curve.
+end-fade = 0.2
+# A button's opacity under the pointer.
+button-hover = 0.9
 # The entry (§2): a plate of this size and corners in the display's middle, holding the knot,
 # which draws itself over `entry-draw`; at `entry-grow`'s start the plate grows to the card over
 # its seconds, on ARRIVE, the knot settling to the Welcome's; the rest fades in over
