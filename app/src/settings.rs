@@ -6219,11 +6219,17 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6235,6 +6241,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,
