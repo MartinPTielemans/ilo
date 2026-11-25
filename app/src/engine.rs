@@ -529,14 +529,6 @@ impl Browser for Engine {
         list_captures(cx);
     }
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        unsafe { bc::bc_hover_kinds() as u32 }
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        unsafe { bc::bc_set_hover_kinds(kinds as c_int) };
-    }
-
     fn trash(&self, path: &str, _: &mut App) -> bool {
         CString::new(path).is_ok_and(|path| unsafe { platform::host_trash(path.as_ptr()) })
     }

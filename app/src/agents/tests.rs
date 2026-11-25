@@ -3265,6 +3265,25 @@ fn every_tool_and_step_is_in_one_class() {
     assert_eq!(acts, super::access::ACTS);
 }
 
+/// No tool lists or reads the user's downloads: the sidebar's plate of recent downloads and the
+/// Library's Downloads are the user's own, and an agent's only word of one is the activity log's
+/// line for a file its own page started.
+#[test]
+fn no_tool_reads_the_downloads() {
+    let every: Vec<String> = ["claude-code", "task-1"]
+        .into_iter()
+        .flat_map(tools::names)
+        .chain(tools::STEPS.map(String::from))
+        .collect();
+    assert!(!every.is_empty());
+    for name in &every {
+        assert!(
+            !name.contains("download") && !name.contains("librar"),
+            "{name} would read the downloads"
+        );
+    }
+}
+
 /// Lowered mid-task, the next act above the new tier is refused, the log keeps the change, and the
 /// task's refusals are settled by it.
 #[gpui::test]

@@ -279,10 +279,6 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/folder.svg"),
     ),
     (
-        "icons/folder-ellipsis.svg",
-        include_bytes!("../../assets/icons/folder-ellipsis.svg"),
-    ),
-    (
         "icons/folder-open.svg",
         include_bytes!("../../assets/icons/folder-open.svg"),
     ),
@@ -571,6 +567,18 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/rotate-cw.svg"),
     ),
     (
+        "icons/row-folder.svg",
+        include_bytes!("../../assets/icons/row-folder.svg"),
+    ),
+    (
+        "icons/row-folder-ellipsis.svg",
+        include_bytes!("../../assets/icons/row-folder-ellipsis.svg"),
+    ),
+    (
+        "icons/row-folder-open.svg",
+        include_bytes!("../../assets/icons/row-folder-open.svg"),
+    ),
+    (
         "icons/save.svg",
         include_bytes!("../../assets/icons/save.svg"),
     ),
@@ -763,6 +771,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/triangle.svg"),
     ),
     (
+        "icons/triangle-alert.svg",
+        include_bytes!("../../assets/icons/triangle-alert.svg"),
+    ),
+    (
         "icons/type.svg",
         include_bytes!("../../assets/icons/type.svg"),
     ),
@@ -925,11 +937,33 @@ mod tests {
     }
 
     /// The glyphs that keep their own stroke: Arc's measured nav glyphs, the window buttons' and
-    /// the loading ring, and the Library's cards, which has one solid.
+    /// the loading ring, the Library's cards, which has one solid, and a folder's on its line.
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
+            || name.starts_with(ROW_FOLDER)
             || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
+    }
+
+    /// What the names of a folder's drawings on its line start with.
+    const ROW_FOLDER: &str = "row-folder";
+
+    /// A folder's line draws Lucide's folder at the line's own lighter stroke, each of its three
+    /// drawings at the same one, so a folder doesn't change weight as it opens or hides folders.
+    #[test]
+    fn a_folders_line_has_its_three_drawings_at_one_stroke() {
+        use crate::tokens::shell::assets::{ICON_GRID, ROW_FOLDER_STROKE};
+        let stroke = format!("stroke-width=\"{ROW_FOLDER_STROKE}\"");
+        let viewbox = format!("viewBox=\"0 0 {ICON_GRID} {ICON_GRID}\"");
+        for (open, elided) in [(false, false), (false, true), (true, false)] {
+            let path = super::super::swap::folder_glyph(open, elided);
+            assert!(path.starts_with(&format!("icons/{ROW_FOLDER}")), "{path}");
+            let svg = Assets.load(path).unwrap().expect(path);
+            let svg = std::str::from_utf8(&svg).unwrap();
+            for want in [stroke.as_str(), viewbox.as_str(), "fill=\"none\""] {
+                assert!(svg.contains(want), "{path}: needs {want}");
+            }
+        }
     }
 
     /// One family: every other glyph is an outline on Lucide's grid at the one stroke, with round
