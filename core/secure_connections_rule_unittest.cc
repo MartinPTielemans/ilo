@@ -67,6 +67,83 @@ TEST(SecureConnectionsRuleTest, TheHandBacksEntryHasAnActionOfItsOwn) {
   EXPECT_STRNE(kHandedBackAction, kEntryAction);
 }
 
+// An open's road: the tab strip starts the held tab's page as Navigate inserts the tab, and the
+// open's own start after it finds the page started and makes no load, which wipes nothing. The
+// open has the load the insert's start made, once.
+TEST(SecureConnectionsRuleTest, AnOpenHasTheLoadItsTabsInsertStarted) {
+  Started kept;
+  Ask(kept);
+  Keep(kept, /*tab=*/6, /*load=*/41);
+  Keep(kept, /*tab=*/6, /*load=*/0);
+  EXPECT_EQ(TakeFor(kept, 6), 41);
+  EXPECT_EQ(TakeFor(kept, 6), 0);
+}
+
+// A start no open asked for, as a tab's that a page opened or one that runs after the open is
+// over, keeps nothing for any open to read.
+TEST(SecureConnectionsRuleTest, AStartOutsideAnOpenKeepsNoLoad) {
+  Started kept;
+  Keep(kept, /*tab=*/6, /*load=*/41);
+  EXPECT_EQ(TakeFor(kept, 6), 0);
+  Ask(kept);
+  Keep(kept, /*tab=*/6, /*load=*/41);
+  EXPECT_EQ(TakeFor(kept, 6), 41);
+  Keep(kept, /*tab=*/8, /*load=*/43);
+  Ask(kept);
+  EXPECT_EQ(TakeFor(kept, 8), 0);
+}
+
+// An open that never read its load, as one whose tab was gone before it could, leaves none for
+// the next open, of that tab or another.
+TEST(SecureConnectionsRuleTest, ALoadIsItsOwnOpensOnly) {
+  Started kept;
+  Ask(kept);
+  Keep(kept, /*tab=*/6, /*load=*/41);
+  Ask(kept);
+  EXPECT_EQ(TakeFor(kept, 6), 0);
+  EXPECT_EQ(TakeFor(kept, 7), 0);
+}
+
+// An open reads only the load of the tab it made, and one it didn't read is gone with it.
+TEST(SecureConnectionsRuleTest, AnOpenHasNoOtherTabsLoad) {
+  Started kept;
+  Ask(kept);
+  Keep(kept, /*tab=*/6, /*load=*/41);
+  EXPECT_EQ(TakeFor(kept, 7), 0);
+  EXPECT_EQ(TakeFor(kept, 6), 0);
+}
+
+// Both of an open's answers hang on that load: that its tab couldn't open, where its own page is
+// the one stopped, and that its page went on, where the page it opened left for one that is.
+TEST(SecureConnectionsRuleTest, AnOpenWithItsTabsLoadIsToldItsPageNeverOpenedOrWentOn) {
+  Started started;
+  Ask(started);
+  Keep(started, /*tab=*/6, /*load=*/41);
+  Keep(started, /*tab=*/6, /*load=*/0);
+  Asked kept = {.load = TakeFor(started, 6), .opened = true};
+  const Asked job = TakenBy(kept, /*waits=*/true);
+  ASSERT_TRUE(AskedFor(job, 41));
+  EXPECT_STREQ(NotOpened(job.opened), "The tab couldn't open.");
+  EXPECT_FALSE(AskedFor(job, 42));
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true,
+                        {.went = false, .waits = true, .asked = job}),
+            AtClose::kWentOn);
+}
+
+// An open that read no load, as one whose only start was its own after the insert's, hears
+// neither: its wait is told the tab's end alone.
+TEST(SecureConnectionsRuleTest, AnOpenWithNoLoadIsToldOnlyItsTabsEnd) {
+  Started started;
+  Ask(started);
+  Keep(started, /*tab=*/6, /*load=*/0);
+  Asked kept = {.load = TakeFor(started, 6), .opened = true};
+  const Asked job = TakenBy(kept, /*waits=*/true);
+  EXPECT_FALSE(AskedFor(job, 41));
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true,
+                        {.went = false, .waits = true, .asked = job}),
+            AtClose::kTabEnded);
+}
+
 // The app asks an open's or a navigate's wait right after the call, so the wait has its load.
 TEST(SecureConnectionsRuleTest, TheWaitAfterAnOpenOrANavigateHasItsLoad) {
   Asked kept = {.load = 7, .opened = true};

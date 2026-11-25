@@ -62,6 +62,28 @@ struct Asked {
   bool opened = false;
 };
 
+// The load an agent's open started in the tab it made, kept from the start that made it until
+// that open reads it. The tab is made held, and its tab strip starts its page as Navigate inserts
+// it: the start is over before the open that called Navigate can ask it for the navigation, and
+// the open's own start after it finds the page started and makes none. Kept only while an open
+// asks, |asked|, so it is that open's alone: read once, and gone when the open is over.
+struct Started {
+  bool asked = false;
+  uint64_t tab = 0;
+  int64_t load = 0;
+};
+
+// An open begins: whatever was kept goes, so it reads no load from before it.
+void Ask(Started& kept);
+
+// A start of |tab|'s page made |load|, 0 if it made none. Kept only for an open that asks, so a
+// start outside one keeps nothing, and one that made none leaves what an earlier start kept.
+void Keep(Started& kept, uint64_t tab, int64_t load);
+
+// The open ends: the load kept for |tab|, the tab it made, 0 if none was or the one kept is
+// another tab's. Nothing is kept after, whichever it was, and nothing is until the next open asks.
+int64_t TakeFor(Started& kept, uint64_t tab);
+
 // What the next job in the tab has of |kept|, which is left empty either way: all of it if the job
 // |waits| for a page to settle, as the app asks right after its open or its navigate, and nothing
 // if it is any other job. So a load is one job's at most, and no later job has an older load's.
