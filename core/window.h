@@ -464,16 +464,19 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // A copy of |contents| in |browser|, one of the window's, not shown, with its tab's name, icon and
   // mute. Returns its id.
   bc_id CloneInto(BrowserWindowInterface& browser, content::WebContents& contents);
-  // |split_with| is the tab whose page opened it to show beside it, or 0.
+  // |split_with| is the tab whose page opened it to show beside it, or 0. |made_for| is the Space
+  // it was made for, or 0 (MadeFor in window.cc).
   void ReportTabOpened(bc_id tab,
                        bc_id opener,
                        bool foreground,
                        bc_id split_with,
                        std::optional<bc_rect> popup,
-                       bool popup_placed);
-  // The Space a tab opened by |opener|, or by nothing for 0, goes to: its opener's, else the one
-  // the window shows.
-  Space* SpaceForOpened(bc_id opener) const;
+                       bool popup_placed,
+                       bc_id made_for);
+  // The Space the tab of |contents| goes to, opened by |opener|, or by nothing for 0, and made for
+  // the Space |made_for|, or none for 0, by the rule (agent_space_rule::ListedIn). Null if it has
+  // nowhere to go.
+  Space* SpaceForOpened(content::WebContents* contents, bc_id opener, bc_id made_for) const;
   // Opens the tab |params| asks for, behind, with nothing loaded until it's first shown.
   content::WebContents* OpenBehind(NavigateParams& params);
   // Moves the pages of |tab| and its split view into this window's Browsers from the windows
@@ -599,6 +602,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   bc_id split_with_ = 0;
   // The agent's tab whose page opens the tab the tab strip adds next (AdjustNavigate), or 0.
   bc_id agent_opener_ = 0;
+  // The tab in an agent's Space whose page opens the tab the tab strip adds next, where nothing
+  // has made that tab the Space's yet (AdjustNavigate), or 0.
+  bc_id agents_source_ = 0;
   // What the page asked of the pop-up the navigation being made opens, until its tab is inserted.
   std::optional<bc_rect> popup_;
   bool popup_placed_ = false;

@@ -1,5 +1,6 @@
-// What a page in an agent's Space is refused, apart so browser_core_unittests tests the rule alone.
-// The answer is where the page is and nothing else: no page and no agent's call says which.
+// What a page in an agent's Space is refused, and which Space lists a tab a page or the browser
+// opened, apart so browser_core_unittests tests the rules alone. The answer is where the page is
+// and nothing else: no page and no agent's call says which.
 
 #ifndef BROWSER_CORE_AGENT_SPACE_RULE_H_
 #define BROWSER_CORE_AGENT_SPACE_RULE_H_
@@ -35,6 +36,38 @@ bool Refuses(Ask ask, const Tab& tab);
 // Whether the page's menu has its row that opens a link in a preview, for a link that could open
 // in one (|web_link|): never where the click itself would open none.
 bool MenuHasLinkPreviewRow(bool web_link, const Tab& tab);
+
+// A tab a page or the browser opened, as its window comes to list it.
+struct Opened {
+  // It was made for a Space, which every tab a page in an agent's Space opens is for that Space
+  // from its making, and that Space is still there.
+  bool made_for_a_space = false;
+  bool its_space_is_there = false;
+  // Its opener is in a Space of the user's now.
+  bool opener_in_users_space = false;
+  // The window it opened in shows a Space of the user's.
+  bool window_shows_users_space = false;
+  // Its profile has a Space of the user's.
+  bool profile_has_users_space = false;
+};
+
+// Where its window lists it.
+enum class Listed {
+  kInTheSpaceItWasMadeFor,
+  kInItsOpenersSpace,
+  kInTheSpaceShown,
+  // The first Space of the user's in its profile.
+  kInTheUsersFirstSpace,
+  // Nowhere: it's closed.
+  kClosed,
+};
+
+// A tab made for a Space is listed there, or closed once that Space is gone: where its opener is by
+// then says nothing, so a tab an agent's page opened is never listed in a Space of the user's. Any
+// other is listed in a Space of the user's, its opener's first, then the one the window shows, then
+// its profile's first, and never in an agent's, whichever the window shows and wherever its opener
+// has gone: closed if its profile has none.
+Listed ListedIn(const Opened& opened);
 
 }  // namespace browser_core::agent_space_rule
 

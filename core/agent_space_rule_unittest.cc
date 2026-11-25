@@ -50,5 +50,43 @@ TEST(AgentSpaceRuleTest, ThePageMenuHasTheLinkPreviewRowForAWebLinkWhereTheClick
   EXPECT_FALSE(MenuHasLinkPreviewRow(/*web_link=*/false, {.agents = false, .held = false}));
 }
 
+TEST(AgentSpaceRuleTest, ATabMadeForASpaceIsListedThere) {
+  // Wherever its opener is by then, and whichever Space the window shows.
+  EXPECT_EQ(Listed::kInTheSpaceItWasMadeFor, ListedIn({.made_for_a_space = true,
+                                                       .its_space_is_there = true,
+                                                       .opener_in_users_space = true,
+                                                       .window_shows_users_space = true,
+                                                       .profile_has_users_space = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWhoseSpaceIsGoneIsClosed) {
+  EXPECT_EQ(Listed::kClosed, ListedIn({.made_for_a_space = true,
+                                       .its_space_is_there = false,
+                                       .opener_in_users_space = true,
+                                       .window_shows_users_space = true,
+                                       .profile_has_users_space = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabAUsersPageOpenedIsListedInItsOpenersSpace) {
+  EXPECT_EQ(Listed::kInItsOpenersSpace, ListedIn({.opener_in_users_space = true,
+                                                  .window_shows_users_space = false,
+                                                  .profile_has_users_space = true}));
+}
+
+// One with no opener, or whose opener is in an agent's Space by now.
+TEST(AgentSpaceRuleTest, ATabWithNoOpenerOfTheUsersIsListedInTheUsersSpaceTheWindowShows) {
+  EXPECT_EQ(Listed::kInTheSpaceShown,
+            ListedIn({.window_shows_users_space = true, .profile_has_users_space = true}));
+}
+
+// The window shows an agent's Space: the tab isn't the agent's for that.
+TEST(AgentSpaceRuleTest, ATabOpenedWhileTheWindowShowsAnAgentsSpaceIsListedInTheUsersFirst) {
+  EXPECT_EQ(Listed::kInTheUsersFirstSpace, ListedIn({.profile_has_users_space = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNoSpaceOfTheUsersToGoToIsClosed) {
+  EXPECT_EQ(Listed::kClosed, ListedIn({}));
+}
+
 }  // namespace
 }  // namespace browser_core::agent_space_rule
