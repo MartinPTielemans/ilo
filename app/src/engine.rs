@@ -1473,11 +1473,6 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
-    #[cfg(target_os = "windows")]
-    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
-        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
-    }
-
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -2140,10 +2135,6 @@ impl Browser for Engine {
 
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         settings::set_sidebar_right(right, cx);
-    }
-
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        settings::set_top_bar(on, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {

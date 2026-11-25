@@ -28,7 +28,6 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
-use super::ShowStarted;
 use super::agent_bar;
 use super::page_ends::StripStop;
 use super::{
@@ -163,8 +162,11 @@ pub(super) enum PageWord {
     NeedsYou,
     /// The user took it over: the bar's title on that page.
     Driving,
-    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
+    /// Its task waits at a refused step or broke off, or the user holds it for a task that went
+    /// on.
     Paused,
+    /// The user stopped its task: every page of it says so.
+    Stopped,
 }
 
 impl PageWord {
@@ -175,6 +177,7 @@ impl PageWord {
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
             PageWord::Paused => "Paused",
+            PageWord::Stopped => "Stopped",
         }
     }
 }
@@ -478,20 +481,7 @@ impl Shell {
         {
             self.show_task(agent, cx);
         }
-        // The composer's ↩ shows the task it started, as its Space has no page to stay on; ⌘T's
-        // ask over a page leaves the page, and its card comes in at the top of Today.
-        let started = |card: &&Card| match &self.show_started {
-            Some(ShowStarted::Asked(home)) => card.home == *home && !was.contains(&card.agent),
-            Some(ShowStarted::Task(agent)) => card.agent == *agent,
-            None => false,
-        };
-        if let Some(card) = self.task_cards.iter().find(started) {
-            let (agent, home) = (card.agent.clone(), card.home);
-            self.show_started = None;
-            if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
-                self.show_task(agent, cx);
-            }
-        }
+        self.show_started_task(Some(was.as_slice()), cx);
         cx.notify();
     }
 
@@ -853,13 +843,14 @@ impl Shell {
         }
     }
 
-    /// What `tab` is to `card`'s task now: its word, of the five a task's page has, and whether
+    /// What `tab` is to `card`'s task now: its word, of the six a task's page has, and whether
     /// it has the outline. A tile in the rail and the card read this one answer, so a page's word
     /// and its outline never disagree. While the task works, each of its pages says Working and the
     /// outline alone marks the one it's in; Done is a page's word only once the task is done, as a
     /// page it left may be come back to. At a handoff the outline is on the page that needs the
     /// user. A page the user took over is theirs, one it handed them and went on from is Paused, as
-    /// are a stopped task's; a stopped or done task has no outline.
+    /// is one where it waits at a refused step or broke off; every page of a task the user stopped
+    /// says Stopped. A stopped or done task has no outline.
     pub(super) fn page_mark(&self, card: &Card, tab: u64) -> PageMark {
         let mark = |word, outline| PageMark { word, outline };
         match self.held_why(tab) {
@@ -879,9 +870,8 @@ impl Shell {
                 mark(PageWord::Working, in_it)
             }
             Word::Done => mark(PageWord::Done, false),
-            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => {
-                mark(PageWord::Paused, false)
-            }
+            Word::Stopped => mark(PageWord::Stopped, false),
+            Word::NeedsYou | Word::Interrupted | Word::AtLimit => mark(PageWord::Paused, false),
         }
     }
 

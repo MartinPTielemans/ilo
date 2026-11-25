@@ -8,7 +8,7 @@
 //! the list's last row (task_cards.rs), so Tab's round stays as short as it was. An agent's page
 //! the user doesn't hold never gets the keyboard from the ring: its stop is the strip's words,
 //! which name the page as the agent's, and Take Over is its own stop. Where there's no row to ring
-//! (Little ilo, the top bar, a hidden sidebar, full screen, the Library, a page another window or
+//! (Little ilo, a hidden sidebar, full screen, the Library, a page another window or
 //! Peek shows) the app doesn't take the keyboard, and the page wraps.
 
 use std::time::Duration;
@@ -311,7 +311,6 @@ impl Shell {
         };
         let room = !self.sidebar_hidden
             && !self.page_fullscreen
-            && !self.top_bar
             && self.little().is_none()
             && self.library.is_none()
             && self.onboarding.is_none();

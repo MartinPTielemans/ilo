@@ -12,7 +12,7 @@ use gpui::{
 use super::commands::{ShellHandle, bar_commands};
 use super::header::nav_places;
 use super::{
-    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
+    CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
 use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
@@ -112,7 +112,7 @@ fn the_header_is_in_bs_order_on_the_right(_: &mut TestAppContext) {
         let left = nav_places(240., full_screen, false);
         let right = nav_places(240., full_screen, true);
         let sidebar = left[0].unwrap();
-        assert_eq!(right[0], Some(240. - sidebar - NAV_SIZE));
+        assert_eq!(right[0], Some(240. - sidebar - CONTROLS_PLATE));
         let navs = |places: [Option<f32>; 4]| places[1..].iter().flatten().copied().collect();
         let (left_navs, right_navs): (Vec<f32>, Vec<f32>) = (navs(left), navs(right));
         assert_eq!(left_navs.len(), right_navs.len());
@@ -120,7 +120,7 @@ fn the_header_is_in_bs_order_on_the_right(_: &mut TestAppContext) {
         assert!(right_navs.windows(2).all(|pair| pair[0] < pair[1]));
         // As far from the page: the last one's right from the column's right edge on the left,
         // the first one's left from its left edge on the right.
-        let to_page = 240. - (left_navs.last().unwrap() + NAV_SIZE);
+        let to_page = 240. - (left_navs.last().unwrap() + CONTROLS_PLATE);
         assert_eq!(right_navs[0], to_page);
     }
 }

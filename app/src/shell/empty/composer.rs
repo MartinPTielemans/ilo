@@ -11,7 +11,7 @@ use gpui::{
     Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
-use crate::agents::task::{Card, Dot};
+use crate::agents::task::{Card, Dot, Word};
 use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
@@ -356,6 +356,37 @@ impl Shell {
             return;
         }
         self.show_started = agent.map(ShowStarted::Task);
+    }
+
+    /// The composer's ↩ shows the task it started in the page's place, as its Space has no page to
+    /// stay on; ⌘T's ask over a page leaves the page, and its card comes in at the top of Today.
+    /// The card comes before the window hears of the task's Space, which the core tells after the
+    /// call that made it, so until then the start waits for that Space, by its task. `was`, the
+    /// cards before these, tells the new ones while the Agents haven't said which task it started.
+    pub(in crate::shell) fn show_started_task(
+        &mut self,
+        was: Option<&[SharedString]>,
+        cx: &mut Context<Self>,
+    ) {
+        let started = |card: &&Card| match &self.show_started {
+            Some(ShowStarted::Asked(home)) => {
+                card.home == *home && was.is_some_and(|was| !was.contains(&card.agent))
+            }
+            Some(ShowStarted::Task(agent)) => card.agent == *agent,
+            None => false,
+        };
+        let Some(card) = self.task_cards.iter().find(started) else {
+            return;
+        };
+        let (agent, home, space) = (card.agent.clone(), card.home, card.space);
+        if space != 0 && self.task_space(space).is_none() {
+            self.show_started = Some(ShowStarted::Task(agent));
+            return;
+        }
+        self.show_started = None;
+        if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
+            self.show_task(agent, cx);
+        }
     }
 
     /// Puts the composer's level back to Work on pages, and its model back to Settings'.
@@ -844,7 +875,8 @@ impl Shell {
     }
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full
-    /// ink (or its status, with no steps this turn), over a plate naming the site of its last
+    /// ink (or its status, with no steps this turn; a stopped task's last finished step alone,
+    /// or nothing), over a plate naming the site of its last
     /// page; a task that has reached none ends after its words. A click opens it.
     fn recent_card(
         &self,
@@ -863,6 +895,14 @@ impl Shell {
         });
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.steps.is_empty() {
+            // A stopped task says only its last finished step, or nothing after its title.
+            _ if card.word == Word::Stopped => (card
+                .steps
+                .last()
+                .cloned()
+                .map(|step| (step, false))
+                .into_iter())
+            .collect(),
             true => vec![(card.status.clone(), true)],
             false => {
                 let last = card.steps.len() - 1;

@@ -85,6 +85,7 @@ fn conversation(steps: usize) -> Conversation {
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
@@ -1319,6 +1320,152 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The line of a task the user stopped says the pages it held then by their count alone, and with
+/// none, no count (Z17). It names nothing, so no page's or site's words stand in it, and it has
+/// nothing to press.
+#[gpui::test]
+fn the_users_stop_says_its_pages_by_their_count_alone(cx: &mut TestAppContext) {
+    let said = |pages| super::words::head(&IloKind::YouStopped { pages }, "Claude");
+    assert_eq!(said(0), ("· You stopped it".into(), None));
+    assert_eq!(said(1), ("· You stopped it · 1 page".into(), None));
+    assert_eq!(said(3), ("· You stopped it · 3 pages".into(), None));
+
+    let (shell, _host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 3 },
+            settled: true,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let (_, laid, _) = ilo_words(&view, cx);
+    assert_eq!(laid.text(), "ilo · You stopped it · 3 pages");
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_drawn.borrow().is_empty()),
+        "the line of the user's stop drew a button"
+    );
+}
+
+/// The stopped line of an outside agent's task offers its pages back until they're handed back:
+/// `Hand Back`, its one button, which gives the agent pages again and so takes no press until the
+/// line has stood a moment. Once it has, one press hands them back, and no key does.
+#[gpui::test]
+fn the_stopped_lines_hand_back_takes_no_press_until_it_has_stood(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 2 },
+            settled: false,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let back = (7, IloButton::PagesBack);
+    let (at, _) = ilo_button(&view, back, cx).expect("Hand Back wasn't drawn");
+    assert_eq!(super::words::button(IloButton::PagesBack), "Hand Back");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.ilo_drawn.borrow().len()),
+        1,
+        "the stopped line has one button"
+    );
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert!(
+        !host.take().iter().any(|line| line.contains("PagesBack")),
+        "a press as the line came handed the pages back"
+    );
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    view.update(cx, |view, _| {
+        view.ilo_drawn.borrow_mut().insert(back, (at, long_ago));
+    });
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert_eq!(
+        host.take()
+            .into_iter()
+            .filter(|line| line.contains("PagesBack"))
+            .collect::<Vec<_>>(),
+        vec!["task task-1 PagesBack".to_string()],
+    );
+    // Stood as long as it has, no key presses it.
+    for keys in ["enter", "space", "tab enter", "cmd-enter"] {
+        cx.simulate_keystrokes(keys);
+    }
+    assert!(
+        !host.take().iter().any(|line| line.contains("PagesBack")),
+        "a key handed the pages back"
+    );
+}
+
+/// The Focus command's keys reach the stopped line's Hand Back as they do any ilo line's button,
+/// under the same wait as its click: ↩ presses it only once the keys have been there a moment
+/// and the button has stood where it is.
+#[gpui::test]
+fn the_focus_keys_press_hand_back_only_once_it_has_stood(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 2 },
+            settled: false,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("PagesBack"))
+            .collect()
+    };
+    host.take();
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key as the keys came"
+    );
+    // The keys have been there long enough, the button hasn't stood.
+    let keys_waited = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+            keys.last -= crate::agents::tier::PROTECT * 2;
+        });
+    };
+    keys_waited(&view, cx);
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since = std::time::Instant::now();
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key before it had stood"
+    );
+    keys_waited(&view, cx);
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(pressed(&host), ["task task-1 PagesBack"]);
+}
+
 /// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
 /// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
 /// as the user's own and nothing else of the line drawn as a name.
@@ -1484,6 +1631,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             from: Tier::Work,
             to: Tier::Full,
         },
+        IloKind::YouStopped { pages: 0 },
+        IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
             left: LeftOut::Folder("Trip".into()),
         },
@@ -1544,6 +1693,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TabBack { .. }
             | IloKind::SignedIn { .. }
             | IloKind::TierChanged { .. }
+            | IloKind::YouStopped { .. }
             | IloKind::StartedWithout { .. }
             | IloKind::KeptAt { .. }
             | IloKind::SetBack { .. }
@@ -2189,6 +2339,7 @@ fn a_task_that_takes_no_reply_offers_start_again_in_its_fields_place(cx: &mut Te
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     };
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -2237,6 +2388,7 @@ fn ended(kind: IloKind) -> Conversation {
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     }
 }
@@ -2745,6 +2897,56 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
         1,
         "Take Over left the live line between steps"
     );
+}
+
+/// While the task waits at a refused or a handed step, or on its own question, no live line
+/// stands, as ilo's line with its own buttons is the last over the field; on a page the user took
+/// over it says they're driving, with Hand Back, which goes as the ilo line's does. Never Take
+/// Over or working then, whatever step its trace has under way.
+#[gpui::test]
+fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
+    use crate::agents::task::Live;
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let yours = |site: Option<&str>| Live::Yours {
+        tab: 30,
+        site: site.map(Into::into),
+    };
+    for live in [Live::Refused, Live::Handed, Live::Asked, yours(None)] {
+        let talk = Conversation {
+            live: live.clone(),
+            ..conversation(3)
+        };
+        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+        assert_eq!(chips, 0, "Take Over stood on the live line at {live:?}");
+        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
+        assert_eq!(
+            hand_back.is_some(),
+            matches!(live, Live::Yours { .. }),
+            "{live:?}"
+        );
+    }
+    assert_eq!(super::words::live(&Live::Refused), None);
+    assert_eq!(super::words::live(&Live::Handed), None);
+    assert_eq!(
+        super::words::live(&yours(None)).as_deref(),
+        Some("You're driving")
+    );
+    assert_eq!(
+        super::words::live(&yours(Some("maat.pt"))).as_deref(),
+        Some("You're driving maat.pt")
+    );
+    let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get().unwrap());
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which

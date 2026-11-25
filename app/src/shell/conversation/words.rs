@@ -3,6 +3,7 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
+use crate::agents::task::Live;
 use crate::agents::task::ilo::{
     HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
 };
@@ -18,6 +19,28 @@ pub const STOP: &str = "Stop";
 /// access, until the next step starts.
 pub fn working(agent: &str) -> String {
     format!("{agent} is working")
+}
+
+/// A task the user stopped, as the last line of its log says it.
+const YOU_STOPPED: &str = "You stopped it";
+
+/// The live line's button while the user has the task's page.
+pub const HAND_BACK: &str = "Hand Back";
+
+/// The live line's words in a state other than working, one entry each, or None for no line:
+/// waiting at a refused or a handed step, ilo's line with its own buttons is the last over the
+/// field (the lead, 20:22Z).
+pub fn live(live: &Live) -> Option<String> {
+    match live {
+        Live::Working => None,
+        Live::Refused | Live::Handed => None,
+        Live::Yours { site: None, .. } => Some("You're driving".into()),
+        Live::Yours {
+            site: Some(site), ..
+        } => Some(format!("You're driving {site}")),
+        // The question's own line says it, with its answers.
+        Live::Asked => None,
+    }
 }
 
 /// A line's words after the mark: ilo's own, then the name it takes from a page or a site, if it
@@ -46,6 +69,14 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
+        // The pages it held then, by their count alone (Z17).
+        IloKind::YouStopped { pages } => (
+            match crate::agents::tools::pages_counted(*pages) {
+                Some(pages) => format!("· {YOU_STOPPED} · {pages}"),
+                None => format!("· {YOU_STOPPED}"),
+            },
+            None,
+        ),
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
         IloKind::Helpers { limit, .. } => (
             match (*limit, crate::tokens::agents::helpers::MOST) {
@@ -212,6 +243,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
+        IloKind::YouStopped { .. } => None,
         IloKind::Helpers { .. } => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
@@ -243,7 +275,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
         IloButton::AnySite => "Any site",
-        IloButton::HandBack => "Hand Back",
+        IloButton::HandBack | IloButton::PagesBack => "Hand Back",
         IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",

@@ -1,15 +1,15 @@
-<!-- The header's sidebar glyph (ours), drawn in points: 18.5 × 14.5 with 1.75 pt strokes, its centre 0.25 right of and below the button's, as Arc 1.170's glyph measures. -->
+<!-- The first row's sidebar glyph (ours), drawn in points in its box of 18: 15 × 12 with 1.5 pt strokes, its stripe a third in. -->
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  width="24"
-  height="24"
-  viewBox="0 0 24 24"
+  width="18"
+  height="18"
+  viewBox="0 0 18 18"
   fill="none"
   stroke="currentColor"
-  stroke-width="1.75"
+  stroke-width="1.5"
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  <rect width="16.75" height="12.75" x="3.875" y="5.875" rx="2.75" />
-  <path d="M10 5.875v12.75" />
+  <rect width="13.5" height="10.5" x="2.25" y="3.75" rx="2.5" />
+  <path d="M6.75 3.75v10.5" />
 </svg>

@@ -78,9 +78,9 @@ if [ "$active" != 1 ]; then
   echo "skip: history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# The header's buttons, centred 23.5 below the window's top.
-back_button="138 24"
-forward_button="172 24"
+# The header's buttons, centred 24 below the window's top.
+back_button="158 24"
+forward_button="182 24"
 reload_button="206 24"
 
 go_from_bar example.com
