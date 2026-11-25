@@ -3919,6 +3919,86 @@ fn a_run_ends_at_a_click_whose_tab_closed_as_its_page_went_on_to_http(cx: &mut T
     );
 }
 
+/// A key, Enter after a type's text or a choice in a select that went, whose tab closed the same
+/// way: the core's object is the same as a click's, and the step hears the words that name no
+/// click, a result as a click's is.
+#[gpui::test]
+fn a_step_thats_no_click_whose_tab_closed_as_its_page_went_on_to_http_is_told_it_went(
+    cx: &mut TestAppContext,
+) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let outline = page_done(&agents, &browser, snapshot, size_picker(false, 1), cx).text;
+    let size = outline.split("combobox \"Size\" [").nth(1).unwrap();
+    let size = size.split(']').next().unwrap();
+    let steps = [
+        ("press_key", json!({ "tab": 20, "key": "Tab" })),
+        (
+            "type",
+            json!({ "tab": 20, "ref": size, "text": "M", "submit": true }),
+        ),
+        ("select", json!({ "tab": 20, "ref": size, "option": "M" })),
+    ];
+    for (tool, arguments) in steps {
+        let answer = call(&agents, "claude-code", tool, arguments, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        let closed = json!({ "closed": "not_secure" }).to_string();
+        agents.update(cx, |agents, cx| {
+            agents.page_done(request, closed.clone(), None, cx)
+        });
+        let told = answer.recv().unwrap();
+        assert_eq!(
+            told.text,
+            "The step went through. The page then went on to a site with no secure connection, \
+             which ilo doesn't open for a task, so the tab closed. Don't repeat the step.",
+            "{tool}"
+        );
+        assert!(
+            !told.error,
+            "{tool} went and was answered as one that didn't"
+        );
+        agents.update(cx, |agents, cx| {
+            let ended = "The agent's session with the tab ended.".to_string();
+            agents.page_done(request, ended, Some(Failure::Other), cx);
+        });
+        assert!(answer.try_recv().is_err(), "{tool} answered twice");
+    }
+}
+
+/// A run of steps ends at such a key too, by what the app read in the core's answer and not by
+/// the words it then says.
+#[gpui::test]
+fn a_run_ends_at_a_key_whose_tab_closed_as_its_page_went_on_to_http(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, snapshot, size_picker(false, 1), cx);
+    let steps = json!({ "tab": 20, "steps": [
+        { "action": "scroll" },
+        { "action": "press_key", "key": "Tab" },
+        { "action": "scroll" },
+    ] });
+    let answer = call(&agents, "claude-code", "run_steps", steps, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, size_picker(false, 1), None, cx)
+    });
+    let asked = browser.pages.borrow().len();
+    let closed = json!({ "closed": "not_secure" }).to_string();
+    let ran = page_done(&agents, &browser, answer, closed, cx);
+    assert_eq!(
+        ran.text,
+        "Ran 2 steps.\n1. Scrolled down.\n2. The step went through. The page then went on to a \
+         site with no secure connection, which ilo doesn't open for a task, so the tab closed. \
+         Don't repeat the step."
+    );
+    assert!(!ran.error, "the run was answered as one that failed");
+    assert_eq!(
+        browser.pages.borrow().len(),
+        asked,
+        "the run went on in a tab that is gone"
+    );
+}
+
 /// The page an open opened went on by itself to a site with no secure connection, with no page
 /// behind it, while the open still waited, and the core closed the tab: the open hears it wasn't
 /// opened, in the app's words for the core's value, which name no tab.

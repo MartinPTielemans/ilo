@@ -1102,6 +1102,8 @@ pub const NOT_SECURE: &str = "Not opened: no secure connection";
 /// to be done again.
 pub const CLOSED_NOT_SECURE: &str = "not_secure";
 pub const WENT_ON_CLICKED: &str = "The click went through. Its page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the click.";
+/// The same for a step that isn't a click: Enter after a type, a key or a choice in a select.
+pub const WENT_ON_STEPPED: &str = "The step went through. The page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the step.";
 /// What an open is told whose page did so while the open still waited for it: its tab is closed,
 /// so the answer names none.
 pub const WENT_ON_NOT_OPENED: &str = "Not opened: the page went on to a site with no secure connection, which ilo doesn't open for a task.";

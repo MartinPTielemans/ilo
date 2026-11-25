@@ -385,6 +385,9 @@ pub struct ToolResult {
     /// page's words, here and where it leaves for the agent, so only the app's own note is ever
     /// one: the user's line and the log go by it.
     pub notes: Option<&'static notes::Note>,
+    /// Its step went, and the core then closed its tab as the page went on to a site with no
+    /// secure connection: a run of steps ends at it, as the steps after it have no tab.
+    pub closed: bool,
 }
 
 impl ToolResult {
@@ -396,6 +399,7 @@ impl ToolResult {
             image: None,
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -406,6 +410,7 @@ impl ToolResult {
             image: None,
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -424,6 +429,7 @@ impl ToolResult {
             image: Some(jpeg),
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -682,6 +688,9 @@ struct Acting {
     wait: Option<WaitText>,
     /// Its call's entry in the log, which says so if its answer carries a site's notes, or 0.
     entry: u64,
+    /// Whether its step is a click, which the answer names if its tab closed as its page went on
+    /// to a site with no secure connection.
+    clicked: bool,
 }
 
 /// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
@@ -2696,6 +2705,7 @@ impl Agents {
             opened_tabs: vec![],
             wait: None,
             entry: 0,
+            clicked: false,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -2745,10 +2755,10 @@ impl Agents {
                         let so_far = run_so_far(&run.done);
                         let why = format!("Step {n} failed: {}{so_far}", answer.text);
                         _ = run.reply.send(ToolResult::error(why));
-                    } else if run.steps.is_empty() || answer.text == tools::WENT_ON_CLICKED {
-                        // A click whose tab closed as its page went on to http is the run's last
+                    } else if run.steps.is_empty() || answer.closed {
+                        // A step whose tab closed as its page went on to http is the run's last
                         // step too: the ones after it have no tab, and failing there would read as
-                        // a run to do again, click and all.
+                        // a run to do again, that step and all.
                         let done = run.done.iter().map(|note| format!("{note}\n"));
                         let done: String = done.collect();
                         let last = match (&answer.image, answer.text.is_empty()) {
@@ -3957,6 +3967,7 @@ impl Agents {
             opened_tabs: vec![],
             wait,
             entry,
+            clicked: page == PageAction::Click,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -4243,6 +4254,7 @@ impl Agents {
             opened_tabs,
             wait,
             entry,
+            clicked,
             ..
         }) = self.acting.remove(&request)
         else {
@@ -4322,12 +4334,19 @@ impl Agents {
             return self.advance(cx);
         }
         let tree: Value = serde_json::from_str(&text).unwrap_or_default();
-        // Its click went, and the page then went on by itself to one that answers only over http,
+        // Its step went, and the page then went on by itself to one that answers only over http,
         // with none behind it, so the core closed the tab: a result in the words that has, as the
-        // click isn't to be done again, and no outline, as the tab is gone.
+        // step isn't to be done again, and no outline, as the tab is gone.
         if tree["closed"] == tools::CLOSED_NOT_SECURE {
             self.cleared.remove(&tab);
-            _ = reply.send(ToolResult::text(tools::WENT_ON_CLICKED));
+            let went = match clicked {
+                true => tools::WENT_ON_CLICKED,
+                false => tools::WENT_ON_STEPPED,
+            };
+            _ = reply.send(ToolResult {
+                closed: true,
+                ..ToolResult::text(went)
+            });
             return self.advance(cx);
         }
         let nodes = tree["nodes"]
@@ -4389,6 +4408,7 @@ impl Agents {
                             opened_tabs,
                             wait: Some(wait),
                             entry,
+                            clicked,
                         };
                         let after = LOOK_EVERY.min(until.saturating_duration_since(now));
                         return self.look_again(acting, after, cx);
@@ -5634,6 +5654,7 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
         image: None,
         kind: kind.filter(|_| error),
         notes: None,
+        closed: false,
     });
 }
 
