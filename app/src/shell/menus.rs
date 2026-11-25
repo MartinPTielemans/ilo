@@ -540,13 +540,13 @@ impl Shell {
         );
     }
 
-    /// The look of the window's menus: the Space's window's, dark or light, with its accent under
-    /// the row the pointer or the keys are on.
+    /// The look of the window's menus: the Space's window's, dark or light, and its accent, which
+    /// capture's markup marks what's chosen in.
     pub fn menu_look(&self) -> Look {
         let palette = self.palette_of(self.space);
         Look {
             light: palette.tone == Tone::Light,
-            highlight: Highlight::of(&palette),
+            accent: Highlight::of(&palette),
         }
     }
 

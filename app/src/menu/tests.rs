@@ -13,7 +13,6 @@ use super::{
     CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X,
     Request, Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
 };
-use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
 
 /// Seven points a character, near enough to SF's 13 pt for where things go.
@@ -270,7 +269,10 @@ fn a_menu_opens_at_the_pointer_and_flips_where_the_screen_ends() {
         "no narrower than the least"
     );
     // Six rows and two lines, inside the padding.
-    assert_eq!(f32::from(root.size.height), 4. + 7. * 24. + 2. * 9. + 4.);
+    assert_eq!(
+        f32::from(root.size.height),
+        PADDING + 7. * 24. + 2. * 9. + PADDING
+    );
 
     let menu = lay_out(&tab_menu(), at(1200., 780.), area(), &width_of);
     let root = level_of(&menu, None);
@@ -303,7 +305,7 @@ fn the_menus_window_sits_on_whole_points_round_its_shadow() {
             .levels
             .iter()
             .fold(menu.levels[0].bounds, |all, level| all.union(&level.bounds));
-        let reach = Elevation::Popover.reach();
+        let reach = crate::elevation::menu_reach();
         assert!(
             origin.x <= union.left() - px(reach.sides) && origin.y <= union.top() - px(reach.above)
         );
@@ -353,8 +355,8 @@ fn a_submenu_opens_beside_its_row_and_on_the_left_where_the_right_has_no_room() 
         "over its parent's edge by 4"
     );
     // Its first row is level with the row that opened it.
-    let row_top = 100. + 4. + 4. * 24. + 9.;
-    assert_eq!(sub.top(), px(row_top - 4.));
+    let row_top = 100. + PADDING + 4. * 24. + 9.;
+    assert_eq!(sub.top(), px(row_top - PADDING));
 
     let menu = lay_out(&tab_menu(), at(1000., 100.), area(), &width_of);
     let root = level_of(&menu, None);
@@ -651,7 +653,7 @@ fn the_menu_takes_the_pointer_on_its_panels_and_not_in_their_shadows(cx: &mut Te
         2,
         "the tab menu and its Move to submenu: {panels:?}"
     );
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window = Bounds::new(point(px(0.), px(0.)), frame.size);
     for panel in panels {
         assert!(
@@ -741,9 +743,9 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
     // Press and release on Duplicate, in the window's terms, which start left of the menu and
     // above it by the room its shadow takes.
     let chosen = show_menu(cx);
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window_at = point(px(100. - reach.sides), px(100. - reach.above));
-    let duplicate = point(px(150.), px(100. + 85. + 12.)) - window_at;
+    let duplicate = point(px(150.), px(100. + PADDING + 81. + 12.)) - window_at;
     cx.cx.update(|cx: &mut App| {
         super::pointer(Pointer::Released, point(px(100.), px(100.)) - window_at, cx);
         assert!(super::pointer(Pointer::Moved, duplicate, cx));
@@ -821,7 +823,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
         .update(|cx| super::open(host.clone(), cx))
         .expect("no window for the menu");
     let cx = &mut VisualTestContext::from_window(window.into(), cx);
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window_at = point(px(100. - reach.sides), px(100. - reach.above));
     let copy = point(px(150.), px(100. + PADDING + 12.)) - window_at;
     let click = |alt: Modifiers, cx: &mut VisualTestContext| {
@@ -883,10 +885,16 @@ fn a_pop_ups_menu_opens_with_its_choice_over_the_buttons_title() {
         button.x,
         "the title's left on the button's"
     );
-    assert_eq!(row.origin.y, button.y, "the row's top on the button's text");
+    // A menu of choices has quiet rows, whose titles sit lower in them than a command row's.
+    let lower = (super::QUIET_ROW - super::ROW) / 2.;
+    assert_eq!(
+        row.origin.y + px(lower),
+        button.y,
+        "the row's title on the button's text"
+    );
     assert_eq!(
         root.bounds.origin.y,
-        button.y - px(PADDING + super::ROW),
+        button.y - px(PADDING + super::QUIET_ROW + lower),
         "Default above it"
     );
 
@@ -1122,11 +1130,15 @@ fn contrast(a: u32, b: u32) -> f32 {
 }
 
 /// Every label a menu draws reads at 4.5:1 against what it's on, in both looks, which are all a
-/// theme picks of the menu, as the panel is opaque over it, and on the highlight of any Space's
-/// accent, pressed or not. Dimmed items are exempt, as WCAG's rule exempts what can't be used.
+/// theme picks of the menu, as the panel is opaque over it: anywhere down its glass's light, and on
+/// the plate under the pointer, pressed or not (#4090). Capture's markup reads on the highlight of
+/// any Space's accent. Dimmed items are exempt, as WCAG's rule exempts what can't be used.
 #[test]
 fn every_label_reads_at_4_5_to_1_in_both_looks() {
-    use super::{DESTRUCTIVE_FILL, DESTRUCTIVE_LABEL, Highlight, PRESSED};
+    use super::{
+        DARK_TOP_LIGHT, DARK_TOP_LIGHT_END, DESTRUCTIVE_FILL, DESTRUCTIVE_LABEL, Highlight,
+        LIGHT_TOP_LIGHT, LIGHT_TOP_LIGHT_END, PRESSED,
+    };
     use crate::{
         palette::{Palette, Tone},
         theme::{Appearance, Theme},
@@ -1142,14 +1154,36 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
         },
     ] {
         let palette = look.palette();
-        let panel = palette.fill >> 8;
-        for (what, color) in [
-            ("label", palette.label),
-            ("shortcut", palette.secondary),
-            ("destructive", palette.destructive),
+        let lights = match look.light {
+            true => [LIGHT_TOP_LIGHT, LIGHT_TOP_LIGHT_END],
+            false => [DARK_TOP_LIGHT, DARK_TOP_LIGHT_END],
+        };
+        let opaque = |ground: u32| (ground << 8) | 0xff;
+        let fill = palette.fill >> 8;
+        for panel in [
+            fill,
+            over(lights[0], palette.fill),
+            over(lights[1], palette.fill),
         ] {
-            let ratio = contrast(over(color, palette.fill), panel);
-            assert!(ratio >= 4.5, "{:?}'s {what} is {ratio:.2}:1", look.light);
+            for (what, color) in [
+                ("label", palette.label),
+                ("shortcut", palette.secondary),
+                ("destructive", palette.destructive),
+            ] {
+                let ratio = contrast(over(color, opaque(panel)), panel);
+                assert!(ratio >= 4.5, "{:?}'s {what} is {ratio:.2}:1", look.light);
+            }
+            let plate = Highlight::plate(look.light);
+            let label = crate::theme::packed(plate.label);
+            for (what, fill) in [("plate", plate.fill), ("pressed plate", plate.pressed)] {
+                let fill = crate::theme::packed(fill) << 8 | (fill.a * 255.).round() as u32;
+                let ratio = contrast(label, over(fill, opaque(panel)));
+                assert!(
+                    ratio >= 4.5,
+                    "{:?}'s {what} label is {ratio:.2}:1",
+                    look.light
+                );
+            }
         }
         let ratio = contrast(
             over(DESTRUCTIVE_LABEL, DESTRUCTIVE_FILL),

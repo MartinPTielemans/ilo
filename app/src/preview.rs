@@ -12,9 +12,11 @@ use std::{
 };
 
 use browser::account::{self, Account};
+use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
+use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
@@ -2489,9 +2491,13 @@ fn task_space(id: u64) -> SpaceEntry {
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
 /// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
-/// (#3220).
+/// (#3220). PREVIEW_TASK's bench stands on its page the same way, with no ring.
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
-    let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
+    let bench = std::env::var_os("PREVIEW_TASK").is_some();
+    let Some(stop) = std::env::var("PREVIEW_TASK_RING")
+        .ok()
+        .or(bench.then(|| "none".to_string()))
+    else {
         return;
     };
     // Tabs after the strip's first stop, the task's card.
@@ -2503,7 +2509,8 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
         "stop" => Some(4),
         _ => None,
     };
-    let tab = FIRST_TASK + 300;
+    // The bench's page is its conversation's.
+    let tab = FIRST_TASK + if bench { 200 } else { 300 };
     let agent: SharedString = format!("task-{FIRST_TASK}").into();
     cx.spawn(async move |cx| {
         // After the conversation the card's click opens.
@@ -2654,7 +2661,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
         TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),
     ];
-    Conversation {
+    let mut talk = Conversation {
         agent,
         name: "Claude".into(),
         title: title.into(),
@@ -2666,7 +2673,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
-            items,
+            items: items.clone(),
         })],
         tabs: vec![
             (FIRST_TASK + 200, "tickets.example".into()),
@@ -2679,7 +2686,106 @@ fn task_conversation(agent: SharedString) -> Conversation {
         open: None,
         answers: Vec::new(),
         writing: false,
-    }
+        tier: Default::default(),
+    };
+    bench_task(&mut talk, items);
+    talk
+}
+
+/// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
+/// one of the states ilo's own lines are made for, from made-up data: working, refused,
+/// off-limits, yours, tab-back, signed-in or raised.
+fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
+    let Ok(state) = std::env::var("PREVIEW_TASK") else {
+        return;
+    };
+    let tab = FIRST_TASK + 200;
+    let done = |key, items: &[TraceItem]| {
+        Line::Trace(Trace {
+            key,
+            running: false,
+            took: Some(40),
+            items: items.to_vec(),
+        })
+    };
+    let working = |key: usize, title: &str| {
+        Line::Trace(Trace {
+            key,
+            running: true,
+            took: None,
+            items: vec![TraceItem::Step(TraceStep {
+                key,
+                glyph: "icons/mouse-pointer-2.svg",
+                title: title.to_string().into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+            })],
+        })
+    };
+    let ilo = |key, kind, settled| Line::Ilo(IloLine { key, kind, settled });
+    let line = |key, kind| ilo(key, kind, false);
+    let before = &items[..items.len() - 1];
+    let stopped = |why, at: &str, count| IloKind::Stopped {
+        tab,
+        at: at.to_string().into(),
+        why,
+        tier: Tier::Work,
+        count,
+    };
+    talk.progress = "".into();
+    // It stands on its one page, beside it.
+    talk.tabs.truncate(1);
+    talk.lines = match state.as_str() {
+        "refused" => vec![
+            done(0, before),
+            Line::Said("Two seats in row 12 are in the basket. Placing the order is the last step.".into()),
+            line(100, stopped(Why::Order, "Place order", 2)),
+        ],
+        "off-limits" => vec![
+            done(0, before),
+            line(100, stopped(Why::Fenced, "seatmap.example", 1)),
+        ],
+        "yours" => vec![
+            done(0, before),
+            Line::Said("tickets.example wants you to sign in before it shows the seats. I'll carry on once you hand the tab back.".into()),
+            line(100, IloKind::Yours { tab }),
+        ],
+        "tab-back" => vec![
+            done(0, before),
+            Line::Said("I need the seat map back to pick two seats together.".into()),
+            line(100, IloKind::TabBack { tab: FIRST_TASK + 201 }),
+        ],
+        "signed-in" => vec![
+            done(0, before),
+            line(
+                100,
+                IloKind::SignedIn {
+                    tab,
+                    site: "tickets.example".into(),
+                    with: SignedInWith::Saved("ada@example.com".into()),
+                },
+            ),
+            working(10, "Reading this page"),
+        ],
+        "raised" => {
+            talk.tier = Tier::Full;
+            vec![
+                done(0, before),
+                ilo(100, stopped(Why::Order, "Place order", 1), true),
+                line(
+                    101,
+                    IloKind::TierChanged {
+                        from: Tier::Work,
+                        to: Tier::Full,
+                    },
+                ),
+                working(10, "Clicking “Place order”"),
+            ]
+        }
+        _ => vec![done(0, before), working(10, "Reading this page")],
+    };
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -2979,6 +3085,14 @@ fn main() {
                 preview_pictures(Pictures::CommandLine(state), cx);
                 return;
             }
+            // PREVIEW_ASSISTANTS=start or signed-in shows Settings › Agents' Your assistant, its
+            // rows in each state before a sign-in and while and after it fails, or signed in and
+            // signing out, with the same rows as Settings draws (#4100).
+            if let Ok(state) = std::env::var("PREVIEW_ASSISTANTS") {
+                let signed_in = state == "signed-in";
+                preview_pictures(Pictures::Assistants { signed_in }, cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -3053,7 +3167,10 @@ fn main() {
                     // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
-                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    let tasks = std::env::var("PREVIEW_TASKS").ok().or_else(|| {
+                        // The bench's states show the working task's conversation.
+                        std::env::var_os("PREVIEW_TASK").map(|_| "open".to_string())
+                    });
                     if tasks.is_some() {
                         spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
                     }
@@ -3428,7 +3545,12 @@ fn main() {
                             let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .update(cx, |shell, cx| {
+                                        if std::env::var_os("PREVIEW_TASK").is_some() {
+                                            shell.set_talk_beside(true, cx);
+                                        }
+                                        shell.show_task(agent.into(), cx)
+                                    })
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
@@ -4617,6 +4739,8 @@ enum Pictures {
     Favorites(browser::shell::FavoritesScope),
     /// Agents' first row, its apps that connect, and the ilo command's row under them.
     CommandLine(CommandLine),
+    /// Your assistant's rows in their states, `signed_in` or before (#4100).
+    Assistants { signed_in: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -4728,7 +4852,7 @@ impl gpui::Render for PicturesPage {
         let section = match self.shown {
             Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance(_) => Section::General,
-            Pictures::CommandLine(_) => Section::Agents,
+            Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4984,6 +5108,93 @@ impl gpui::Render for PicturesPage {
                     (Some("Apps that connect"), clients),
                     (Some("Command line"), vec![command]),
                 ]
+            }
+            Pictures::Assistants { signed_in } => {
+                use browser::agents::ready::Ready;
+                use browser::agents::runner::Cli;
+                use browser::agents::sign_in::{Row, shown};
+                use browser::settings_rows::{another_agent_row, assistant_row};
+                let row = |cli, ready, plan: Option<&str>, row: Row, marked| {
+                    let shown = shown(cli, ready, plan, &row);
+                    assistant_row(
+                        &look,
+                        cli,
+                        &shown,
+                        marked,
+                        a11y,
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        Rc::new(|_, _, _| {}),
+                    )
+                };
+                // Where the parity sheet waits for the rows to be drawn.
+                let another = || {
+                    another_agent_row(&look, a11y, |_, _| {})
+                        .relative()
+                        .child(drawn("assistant rows".into(), self.logged.clone()))
+                };
+                // A made-up assistant's words, as a failed sign-in shows them.
+                let said = "Your workspace doesn't allow Codex".to_string();
+                match signed_in {
+                    false => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
+                                row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing in"),
+                            vec![row(
+                                Cli::Claude,
+                                Ready::SignedOut,
+                                None,
+                                Row::SigningIn,
+                                false,
+                            )],
+                        ),
+                        (
+                            Some("Failed"),
+                            vec![
+                                row(
+                                    Cli::Codex,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(Some(said)),
+                                    false,
+                                ),
+                                row(
+                                    Cli::Claude,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(None),
+                                    false,
+                                ),
+                            ],
+                        ),
+                    ],
+                    true => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                row(Cli::Codex, Ready::SignedIn, Some("Plus"), Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing out"),
+                            vec![row(
+                                Cli::Codex,
+                                Ready::SignedIn,
+                                Some("Plus"),
+                                Row::SigningOut,
+                                false,
+                            )],
+                        ),
+                    ],
+                }
             }
         };
         let blocks = blocks

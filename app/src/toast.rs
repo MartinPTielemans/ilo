@@ -8,13 +8,12 @@ use std::time::Instant;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString,
-    Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, accesskit::Live, canvas, div, linear_color_stop, linear_gradient,
-    point, prelude::*, px, size, svg,
+    App, Bounds, ClickEvent, Context, FontWeight, Global, Pixels, Point, Role, SharedString, Task,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, accesskit::Live, canvas, div, point, prelude::*, px, size, svg,
 };
 
-use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 
 // Arc's, measured at 2× (docs/ux-spec.md › Toast): 46.5 tall, 8 inside the card's top right
@@ -33,7 +32,6 @@ use crate::tokens::toast::CHIP_X;
 use crate::tokens::toast::KEY_COLOR;
 use crate::tokens::toast::KEY_GAP;
 use crate::tokens::toast::RADIUS;
-use crate::tokens::toast::SHADE;
 use crate::tokens::toast::TEXT_LEFT;
 use crate::tokens::toast::TEXT_RIGHT;
 use crate::tokens::toast::TEXT_SIZE;
@@ -218,8 +216,9 @@ impl Shown {
 
 pub struct Toast {
     host: Rc<dyn Host>,
-    /// The window's colour, which the toast takes, and the palette its text is drawn in.
-    look: Box<dyn Fn(&App) -> (Hsla, Palette)>,
+    /// The palette of the window it shows over, which its text is drawn in. Its fill is what
+    /// floats', the same in every Space (#4090).
+    look: Box<dyn Fn(&App) -> Palette>,
     shown: Option<Shown>,
     /// Whether the host was last told it takes clicks.
     takes_clicks: bool,
@@ -234,11 +233,11 @@ struct ToastWindow(WindowHandle<Toast>);
 impl Global for ToastWindow {}
 
 /// Opens the toast's window, hidden, for `host` to show over the browser window, ahead of time as
-/// the find bar's is. The toast takes `look`'s colour and palette. The host makes the window as
+/// the find bar's is. The toast takes `look`'s palette. The host makes the window as
 /// wide as the page it shows over, and a toast too long for that shortens its words.
 pub fn open(
     host: Rc<dyn Host>,
-    look: impl Fn(&App) -> (Hsla, Palette) + 'static,
+    look: impl Fn(&App) -> Palette + 'static,
     cx: &mut App,
 ) -> Option<WindowHandle<Toast>> {
     let options = WindowOptions {
@@ -660,11 +659,7 @@ impl Render for Toast {
             log!("browser: toast settled");
         }
         let pose = shown.pose();
-        let (fill, palette) = (self.look)(cx);
-        let bottom = Hsla {
-            l: fill.l * SHADE,
-            ..fill
-        };
+        let palette = (self.look)(cx);
         let a11y = window.is_a11y_active();
         let buttons: Vec<_> = (shown.buttons.iter().enumerate())
             .map(|(index, button)| {
@@ -738,11 +733,7 @@ impl Render for Toast {
             .rounded(px(RADIUS))
             .border(px(0.5))
             .border_color(Level::Popover.rim())
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(fill, 0.),
-                linear_color_stop(bottom, 1.),
-            ))
+            .bg(Float::Toast.fill(palette.tone))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
             .text_size(px(TEXT_SIZE))
