@@ -3208,6 +3208,13 @@ connector-x = 7.5
 connector-above = 3.0
 connector-ink = 0.2
 trace-below = 12.0
+# What the assistant itself says in a trace, an opened thought and its note on a step, has one form
+# (spec-thread-stage.md, spec-held-abilities.md part 5): text-2 behind a rule `said-rule` wide at
+# the ink's `said-ink`, `said-gap` before the words; a note is `says-top` under its step's line.
+said-rule = 1.0
+said-ink = 0.2
+said-gap = 8.0
+says-top = 2.0
 # What a line opens to, under its title: a thought's or an error's text, or the page it saw.
 open-top = 2.0
 open-below = 6.0

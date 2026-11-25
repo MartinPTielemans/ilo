@@ -325,6 +325,9 @@ pub struct TraceStep {
     /// The page it acted on, by which the log groups a page's steps under the page; None for a
     /// step off any one page (a thought, a question, a step on several tabs).
     pub page: Option<OnPage>,
+    /// The assistant's own word on why it took the step, made plain, or empty: under its line in
+    /// the opened trace, as the assistant's. Never on a step that failed or was refused.
+    pub says: SharedString,
 }
 
 /// The page a step acted on.
@@ -343,8 +346,10 @@ pub struct OnPage {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Opens {
     Nothing,
-    /// A thought's text, or a failed step's error.
+    /// A failed step's error, or the address a step opened.
     Text(SharedString),
+    /// The assistant's thought, its own words, drawn as the assistant's.
+    Thought(SharedString),
     /// What a look at the page saw.
     Picture(Arc<gpui::Image>),
     /// A turn's same step on several tabs: each tab's line (#1476).
@@ -2412,7 +2417,7 @@ impl Agents {
     /// of its client's session, which its first call that opens or acts on a tab starts. A
     /// run's steps are steps of their own (`trace_step`); its name and its finish aren't steps of
     /// its work.
-    pub(super) fn trace_call(&mut self, call: &super::Call, cx: &mut Context<Self>) {
+    pub(super) fn trace_call(&mut self, call: &super::Call, says: String, cx: &mut Context<Self>) {
         let tool = call.tool.as_str();
         let key = match self.task(&call.agent) {
             Some(_) => call.agent.clone(),
@@ -2424,14 +2429,17 @@ impl Agents {
         if matches!(tool, "title" | "finish" | "run_steps") {
             return;
         }
-        let did = self.did(
-            &call.agent,
-            call.connection,
-            tool,
-            &call.arguments,
-            None,
-            cx,
-        );
+        let did = tools::Did {
+            says,
+            ..self.did(
+                &call.agent,
+                call.connection,
+                tool,
+                &call.arguments,
+                None,
+                cx,
+            )
+        };
         self.trace(&key, call.id, did, call.at, cx);
         // A page opened while the task's helpers work may be one of theirs (#4102).
         if tool == "open_tab"
@@ -2450,6 +2458,7 @@ impl Agents {
         call: u64,
         tab: u64,
         step: &Value,
+        says: String,
         cx: &App,
     ) {
         let Some(key) = self.tracer(agent, call) else {
@@ -2459,7 +2468,10 @@ impl Agents {
             .get("action")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let did = self.did(agent, connection, tool, step, Some(tab), cx);
+        let did = tools::Did {
+            says,
+            ..self.did(agent, connection, tool, step, Some(tab), cx)
+        };
         let now = Instant::now();
         let Some(task) = self.task_mut(&key) else {
             return;
@@ -4512,6 +4524,7 @@ fn helper_began(key: usize, running: bool) -> TraceStep {
         opens: Opens::Nothing,
         under: SharedString::default(),
         page: None,
+        says: "".into(),
     }
 }
 
@@ -4536,6 +4549,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             opens: Opens::Nothing,
             under: SharedString::default(),
             page: on_page(&step.did),
+            says: "".into(),
         };
     }
     let description = match (&step.error, took) {
@@ -4554,9 +4568,8 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         }
         (Some(error), _, _) => Opens::Text(error.clone()),
         (None, Some(picture), _) => Opens::Picture(picture.clone()),
-        (None, None, Some(text)) if opened || step.did.tool == "thought" => {
-            Opens::Text(text.into())
-        }
+        (None, None, Some(text)) if step.did.tool == "thought" => Opens::Thought(text.into()),
+        (None, None, Some(text)) if opened => Opens::Text(text.into()),
         _ => Opens::Nothing,
     };
     // A thought says how long it took in its words (Z15), from 1 s.
@@ -4582,6 +4595,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         .map(|note| note.with().into())
         .unwrap_or_default(),
         page: on_page(&step.did),
+        // The assistant's word on its step, only on one that went as it asked.
+        says: match step.error {
+            None => step.did.says.clone().into(),
+            Some(_) => SharedString::default(),
+        },
     }
 }
 
@@ -4631,6 +4649,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             opens: Opens::Steps(tabs),
             under: SharedString::default(),
             page: None,
+            says: "".into(),
         };
     }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
@@ -4683,6 +4702,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         opens: Opens::Steps(tabs),
         under: SharedString::default(),
         page: None,
+        says: "".into(),
     }
 }
 

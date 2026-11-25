@@ -121,7 +121,7 @@ impl Past {
         sites
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let pages: Vec<Value> = (self.pages.iter())
             .map(|(title, url)| json!({ "title": title, "url": url }))
             .collect();

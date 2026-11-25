@@ -63,11 +63,11 @@ use crate::tokens::shell::conversation::{
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
     PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
-    REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING,
-    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TITLE_SIZE, TOP,
-    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
-    TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH,
-    TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    REPLY_KEY_END, REPLY_RIM, SAID_GAP, SAID_INK, SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND,
+    SHIMMER_PERIOD, SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE,
+    TITLE_LINE, TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
+    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
+    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -1959,7 +1959,10 @@ impl TalkView {
                             line.joined_above = true;
                             self.crossfade(Fold::Step(step.key), &mut line, look);
                             let line = trace_line(look, line).into_any_element();
-                            nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
+                            let line = risen(line, self.motion.came(Key::Step(step.key)), look);
+                            // Its step's note is under its own line, never the task's.
+                            let says = self.says(step, TRACE_GLYPH + TRACE_GAP, look);
+                            nest.child(line).children(says)
                         }
                         HelperRow::Step => {
                             nest.children(self.step_line(step, true, false, look, cx))
@@ -2218,6 +2221,13 @@ impl TalkView {
                     .text_color(palette.gray(SECONDARY))
                     .child(text.clone()),
             ),
+            Opens::Thought(text) => Some(
+                div()
+                    .pl(px(under))
+                    .pt(px(OPEN_TOP))
+                    .pb(px(OPEN_BELOW))
+                    .child(assistant_words(palette, text.clone())),
+            ),
             Opens::Picture(picture) => Some(
                 div()
                     .pl(px(under))
@@ -2249,7 +2259,35 @@ impl TalkView {
                 .child(step.under.clone())
                 .into_any_element()
         });
-        std::iter::once(line).chain(sub).chain(opened).collect()
+        let says = self.says(step, under, look);
+        std::iter::once(line)
+            .chain(sub)
+            .chain(says)
+            .chain(opened)
+            .collect()
+    }
+
+    /// The assistant's own word on why it took `step`, one line under it from `under`, as the
+    /// assistant's, and heard as theirs. None for a step with none.
+    fn says(&self, step: &TraceStep, under: f32, look: &Look) -> Option<gpui::AnyElement> {
+        (!step.says.is_empty()).then(|| {
+            let name =
+                (self.shown.as_ref()).map_or(SharedString::default(), |shown| shown.name.clone());
+            div()
+                .id(("conversation-says", step.key))
+                .when(look.a11y, |says| {
+                    says.role(Role::Label)
+                        .aria_label(words::says(&name, &step.says))
+                })
+                .pl(px(under))
+                .pt(px(SAYS_TOP))
+                .child(
+                    assistant_words(look.palette, step.says.clone())
+                        .whitespace_nowrap()
+                        .truncate(),
+                )
+                .into_any_element()
+        })
     }
 
     /// What was asked, with its page, and the lines after it, then the answers to the question it
@@ -3104,6 +3142,17 @@ fn held_button(
         .font_weight(weight)
         .text_color(ink)
         .child(words.into())
+}
+
+/// What the assistant itself says in a trace, an opened thought or its note on a step: text-2
+/// behind a thin rule, the one form no line of the product's has.
+fn assistant_words(palette: super::Palette, text: SharedString) -> gpui::Div {
+    div()
+        .border_l(px(SAID_RULE))
+        .border_color(palette.text(SAID_INK))
+        .pl(px(SAID_GAP))
+        .text_color(palette.gray(TRACE_NOTE))
+        .child(text)
 }
 
 fn answer_text_3(palette: &super::Palette) -> Hsla {

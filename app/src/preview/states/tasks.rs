@@ -158,6 +158,7 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
             opens: Opens::Nothing,
             under: "".into(),
             page: None,
+            says: "".into(),
         },
         name: HELPER_NAMES[at].into(),
         tab: Some(sites[at].0),
@@ -374,6 +375,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         },
         under: "".into(),
         page: None,
+        says: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -468,6 +470,7 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             opens: Opens::Nothing,
             under: "".into(),
             page: None,
+            says: "".into(),
         })
     };
     let steps = match at {
@@ -538,6 +541,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 opens: Opens::Nothing,
                 under: "".into(),
                 page: None,
+                says: "".into(),
             })],
         })
     };
@@ -798,6 +802,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 opens: Opens::Nothing,
                 under: github.with().into(),
                 page: None,
+                says: "".into(),
             };
             let reading = TraceStep {
                 key: 11,
@@ -809,6 +814,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 opens: Opens::Nothing,
                 under: "".into(),
                 page: None,
+                says: "Looking for the pull requests that wait on a review".into(),
             };
             let trace = Trace {
                 key: 10,

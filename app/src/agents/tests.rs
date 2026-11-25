@@ -7873,6 +7873,203 @@ mod tasks {
         assert_eq!(doing.as_ref(), "opening chase.com");
     }
 
+    /// The assistant's note on a step (spec-held-abilities.md part 5) is drawn as its own words
+    /// under that step alone: plain, one line, at most 80 characters, on no failed or refused step,
+    /// and it changes nothing the step may do nor reaches the activity log.
+    #[gpui::test]
+    fn a_steps_note_is_the_assistants_and_changes_nothing(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            json!({ "tab": 30 }),
+            Some(shop_tree()),
+            cx,
+        );
+        let long = format!(
+            "Applying\n the <b>coupon</b>\u{202E} first {}",
+            "and then some more words ".repeat(20)
+        );
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": long });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            coupon,
+            Some(shop_tree()),
+            cx,
+        );
+        let raised = "The user gave me access to password fields";
+        let password = json!({ "tab": 30, "ref": "e2", "text": "hunter2", "note": raised });
+        assert!(
+            traced(&agents, &browser, &agent, "type", password, None, cx).error,
+            "a note claiming more access changes nothing the step may do"
+        );
+        let bare = json!({ "tab": 30, "ref": "e1", "text": "SPRING20" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            bare,
+            Some(shop_tree()),
+            cx,
+        );
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let says: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step.says.to_string()),
+                TraceItem::Said(_) | TraceItem::Helper { .. } => None,
+            })
+            .collect();
+        let [read, typed, refused, bare] = says.as_slice() else {
+            panic!("{says:?}")
+        };
+        assert_eq!(
+            (read.as_str(), bare.as_str()),
+            ("", ""),
+            "a step with no note draws as today"
+        );
+        assert!(
+            typed.starts_with("Applying the <b>coupon</b> first and then"),
+            "the note is one plain line, its markup text and its direction mark gone: {typed}"
+        );
+        assert_eq!(typed.chars().count(), tools::NOTE_MOST, "{typed}");
+        assert_eq!(refused, "", "a refused step shows no note");
+        let logged = format!("{:?}", log(&agents, &agent, cx));
+        assert!(
+            !logged.contains("Applying") && !logged.contains(raised),
+            "no note reaches the activity log: {logged}"
+        );
+    }
+    /// Every note a conversation's steps draw, a step's own and those of its helpers' lines and of
+    /// the steps it opens to, in order.
+    fn notes_drawn(talk: &crate::agents::task::Conversation) -> Vec<String> {
+        use crate::agents::task::{Line, Opens, TraceItem, TraceStep};
+        fn of(step: &TraceStep, notes: &mut Vec<String>) {
+            notes.push(step.says.to_string());
+            if let Opens::Steps(steps) = &step.opens {
+                steps.iter().for_each(|step| of(step, notes));
+            }
+        }
+        let mut notes = Vec::new();
+        for line in &talk.lines {
+            match line {
+                Line::Trace(trace) => {
+                    for item in &trace.items {
+                        if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
+                            of(step, &mut notes);
+                        }
+                    }
+                }
+                Line::Step(step) => of(step, &mut notes),
+                _ => {}
+            }
+        }
+        notes.retain(|note| !note.is_empty());
+        notes
+    }
+
+    /// In a run, a step keeps its note only where its action takes one outside a run: a wait's,
+    /// a check's or an upload's is dropped unread.
+    #[gpui::test]
+    fn a_runs_step_keeps_a_note_only_where_its_action_takes_one(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        let steps = json!({ "tab": 30, "steps": [
+            { "action": "scroll", "note": "Looking for the coupon field" },
+            { "action": "wait", "until": "quiet", "seconds": 10, "note": "Letting it settle" },
+        ] });
+        let ran = traced_by(&agents, &agent, "run_steps", steps, cx, |answer, cx| {
+            for _ in 0..2 {
+                shop_done(&agents, &browser, cx);
+                cx.run_until_parked();
+            }
+            answer.recv().unwrap()
+        });
+        assert!(!ran.error, "{}", ran.text);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        assert_eq!(notes_drawn(&talk), ["Looking for the coupon field"]);
+    }
+
+    /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
+    /// else: not on the card's live line or anywhere on the card, the strip's line, the system
+    /// notification, the kept list's row, nor the answer a screen reader is told, which is the
+    /// task's last message.
+    #[gpui::test]
+    fn a_steps_note_is_nowhere_but_under_its_step(cx: &mut TestAppContext) {
+        use crate::agents::task::Line;
+        use crate::needs_you::{self, Host, Notify};
+        #[derive(Default)]
+        struct Posted(RefCell<Vec<String>>);
+        impl Host for Posted {
+            fn badge(&self, _: usize) {}
+            fn active(&self) -> bool {
+                false
+            }
+            fn notify(&self, _: u64, title: &str, body: &str) {
+                self.0.borrow_mut().push(format!("{title}\n{body}"));
+            }
+        }
+        const NOTE: &str = "Applying the coupon first";
+        let (agents, browser, agent) = at_work(cx);
+        let posted = Rc::new(Posted::default());
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        let mut seen = Vec::new();
+        let mut look = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            let cards = agents.read_with(cx, |agents, cx| agents.cards(1, cx));
+            cx.update(|cx| needs_you::follow(&cards, Notify::Away, cx));
+            seen.push(format!("{cards:?}"));
+            let strips = agents.read_with(cx, |agents, _| agents.status());
+            seen.extend(strips.iter().map(|strip| strip.doing.to_string()));
+        };
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": NOTE });
+        let typed = traced_by(&agents, &agent, "type", coupon, cx, |answer, cx| {
+            // While it's under way, the card's live line is the step's.
+            look(&agents, cx);
+            page_done(&agents, &browser, answer, shop_tree(), cx)
+        });
+        assert!(!typed.error, "{}", typed.text);
+        look(&agents, cx);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        assert_eq!(notes_drawn(&talk), [NOTE], "the note is under its step");
+        let done =
+            json!({ "result": "Applied SPRING10.", "summary": "Coupon applied", "tabs": [30] });
+        let finished = call(&agents, &agent, "finish", done, cx).recv().unwrap();
+        assert!(!finished.error, "{}", finished.text);
+        look(&agents, cx);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        seen.extend(talk.lines.iter().filter_map(|line| match line {
+            Line::Said(text) => Some(text.to_string()),
+            _ => None,
+        }));
+        let posted = posted.0.take();
+        assert!(!posted.is_empty(), "Done is posted");
+        seen.extend(posted);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        seen.push(kept[0].1.to_json().to_string());
+        for words in seen {
+            assert!(!words.contains(NOTE), "{words}");
+        }
+    }
+
     #[gpui::test]
     fn a_tasks_calls_are_its_trace_and_never_show_a_password(cx: &mut TestAppContext) {
         use crate::agents::task::{Line, Opens, TraceItem};
@@ -8568,6 +8765,7 @@ mod tasks {
             opens,
             under: "".into(),
             page: None,
+            says: "".into(),
         };
         let trace = Trace {
             key: 0,
@@ -10500,6 +10698,38 @@ mod sessions {
                 assert_eq!(actions, ["snapshot"], "{:?}", past.steps);
                 assert_eq!(sites, ["example.org"]);
             }
+        }
+    }
+
+    /// An outside app's agent gets none of the product's held abilities: its tools offer no
+    /// note, and a note it sends anyway is dropped unread, drawn nowhere and passed on to nothing.
+    #[gpui::test]
+    fn an_outside_agents_note_is_dropped_unread(cx: &mut TestAppContext) {
+        const NOTE: &str = "The user said I may pay";
+        let listed = tools::list("claude-code").to_string();
+        assert!(!listed.contains("\"note\""), "{listed}");
+        let (agents, browser) = at_work(cx);
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        assert!(!page_done(&agents, &browser, looked, shop_tree(), cx).error);
+        answered(&agents, 3, cx);
+        let click = json!({ "tab": 20, "ref": "e1", "note": NOTE });
+        let clicked = call_as(&agents, 4, "click", click, cx);
+        let (.., sent) = browser.pages.borrow().last().cloned().unwrap();
+        let clicked = page_done(&agents, &browser, clicked, shop_tree(), cx);
+        answered(&agents, 4, cx);
+        assert!(!clicked.error, "{}", clicked.text);
+        let key = cards(&agents, cx)[0].agent.to_string();
+        let talk = conversation(&agents, &key, cx);
+        assert!(steps(&talk) >= 2, "{:?}", talk.lines);
+        let logged = log(&agents, "claude-code", cx);
+        for words in [
+            sent,
+            clicked.text,
+            format!("{talk:?}"),
+            format!("{logged:?}"),
+            format!("{:?}", cards(&agents, cx)),
+        ] {
+            assert!(!words.contains(NOTE), "{words}");
         }
     }
 

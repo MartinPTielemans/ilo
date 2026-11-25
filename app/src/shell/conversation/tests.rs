@@ -68,6 +68,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         opens: Opens::Nothing,
         under: "".into(),
         page: None,
+        says: "".into(),
     }
 }
 

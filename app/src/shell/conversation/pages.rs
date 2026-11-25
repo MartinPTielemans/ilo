@@ -120,6 +120,7 @@ mod tests {
                 site: site.to_string().into(),
                 went,
             }),
+            says: "".into(),
         })
     }
 
