@@ -488,6 +488,15 @@ impl Account {
         &self.state
     }
 
+    /// How many devices the account has, once the core has listed them since Sync showed: none
+    /// while it hasn't, as the list waits empty for its answer.
+    pub fn device_count(&self) -> Option<usize> {
+        self.devices
+            .as_ref()
+            .map(Vec::len)
+            .filter(|&count| count > 0)
+    }
+
     /// Asks the core again how sync is keeping up, as Settings shows the account and as the core
     /// says a sync cycle changed it.
     pub fn read_activity(&mut self, cx: &mut Context<Self>) {

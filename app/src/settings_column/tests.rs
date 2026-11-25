@@ -75,6 +75,12 @@ fn plate_y(section: Section, height: f32) -> f32 {
         return height - SIDEBAR_BOTTOM - CHROMIUM_ROW - FOOT_ROW / 2.;
     }
     let mut y = TITLE_ROW + SEARCH_HEIGHT + SEARCH_AFTER;
+    for each in Section::TOP {
+        if each == section {
+            return y + ROW / 2.;
+        }
+        y += ROW;
+    }
     for group in Section::GROUPS {
         y += HEADING;
         for &each in group {
@@ -96,6 +102,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     assert_eq!(
         names,
         [
+            "Overview",
             "General",
             "Window",
             "Privacy",
@@ -733,9 +740,9 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("up");
     }
     settle(cx);
-    assert_eq!(scroll(cx).0, 0., "↑ to General left it above the list");
+    assert_eq!(scroll(cx).0, 0., "↑ to Overview left it above the list");
     press("enter", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::Overview);
 }
 
 /// The owner's groups, each under its heading, and no page of appearance settings: what it held

@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -293,6 +294,8 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The loose ends Overview's ✕ put away, from the profile's folder.
+    put_away: browser::settings_overview::PutAway,
     /// Made when Import & Export first shows, so the other browsers' files are read only once the
     /// user asks.
     import: Option<Entity<ImportView>>,
@@ -1185,6 +1188,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            put_away: browser::settings_overview::PutAway::load(crate::profile_dir()),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
@@ -6306,6 +6310,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
+            Section::Overview => self.overview(cx),
             Section::General => {
                 let profiles = profiles();
                 let general = self.general(&profiles, accent, cx);
