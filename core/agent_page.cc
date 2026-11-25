@@ -29,6 +29,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/handed.h"
@@ -1010,7 +1011,37 @@ void AgentPage::ReadTrees(
 }
 
 void AgentPage::Click() {
-  Press(/*focused=*/false);
+  // Only a page refused its lists and pickers is told what a click landed on, so a click on any
+  // other reads nothing more. Read before the press, which may take the element away.
+  const agent_space_rule::Tab tab = RuleTabOf(&GetWebContents());
+  if (!agent_permission_rule::RefusesPagePopup(agent_permission_rule::PagePopup::kWindow, tab) &&
+      !agent_permission_rule::RefusesPagePopup(agent_permission_rule::PagePopup::kSystemMenu,
+                                               tab)) {
+    Press(/*focused=*/false);
+    return;
+  }
+  Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(job_->element)),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, agent_space_rule::Tab tab,
+              const base::DictValue* described) {
+             if (!page || !page->job_) {
+               return;
+             }
+             if (const base::DictValue* node = described ? described->FindDict("node") : nullptr) {
+               const std::string* tag = node->FindString("nodeName");
+               const std::optional<std::string> type = AttributeOf(*node, "type");
+               const std::optional<std::string> size = AttributeOf(*node, "size");
+               page->job_->shut = agent_permission_rule::ShutFieldClicked(
+                   {.tag = tag ? *tag : std::string_view(),
+                    .type = type ? *type : std::string_view(),
+                    .multiple = AttributeOf(*node, "multiple").has_value(),
+                    .size = size ? *size : std::string_view()},
+                   tab);
+             }
+             page->Press(/*focused=*/false);
+           },
+           weak_factory_.GetWeakPtr(), tab),
+       SlotOfElement(job_->element));
 }
 
 void AgentPage::Press(bool focused) {
@@ -2673,6 +2704,9 @@ void AgentPage::ReadContents(base::ListValue nodes,
   }
   if (choosing_ == Choosing::kChosen && shows_) {
     answer.Set("chosen", chosen_name_);
+  }
+  if (job_ && job_->shut != agent_permission_rule::ShutField::kNone) {
+    answer.Set("shut", agent_permission_rule::ShutWord(job_->shut));
   }
   // The ids of elements in frames of their own are doubles, written as the integers they are.
   std::optional<std::string> json = base::WriteJsonWithOptions(

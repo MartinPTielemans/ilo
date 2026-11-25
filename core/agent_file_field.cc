@@ -12,6 +12,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/file_dialog.h"
@@ -275,15 +276,8 @@ bool AgentFileField::PageMayOpen(content::WebContents* contents, int kind) {
   }
   LOG(ERROR) << "browser: page file dialog " << tab << " kind " << kind
              << " refused: an agent's tab";
-  if (Host().agent_activity) {
-    const bc_agent_activity entry = {
-        .agent = agent->id.c_str(),
-        .tab = tab,
-        .action = kind == 1 ? "file_dialog file_input" : "file_dialog file_system_access",
-        .refused = "Agents can't use system file dialogs, so ilo told the page it was cancelled.",
-    };
-    Host().agent_activity(Host().context, &entry);
-  }
+  // The entry every refusal of the user's own has in an agent's Space, one for the document.
+  NoteRefused(agent_permission_rule::Kind::kFilePicker, contents);
   return false;
 }
 

@@ -21,6 +21,7 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "browser_core/agent_file_field_rule.h"
+#include "browser_core/agent_permission_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
@@ -112,6 +113,8 @@ class AgentPage : public content::WebContentsObserver,
     // Whether requests the page made were still open then, or had only just ended, though it was
     // neither loading nor changing, as a page that polls or sends beacons keeps them (#2355).
     bool requests = false;
+    // A click's: the field it landed on whose list or picker a click doesn't open on this page.
+    agent_permission_rule::ShutField shut = agent_permission_rule::ShutField::kNone;
     // A Fill's: the user's files, whether they go in, and who hears whether they did, in place of
     // the agent.
     std::vector<std::string> files;

@@ -8,6 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "chrome/browser/media/router/media_router_feature.h"
@@ -15,7 +16,9 @@
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "chrome/browser/ui/media_router/media_router_ui.h"
 #include "components/media_router/browser/media_router_metrics.h"
+#include "components/media_router/browser/presentation/start_presentation_context.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/presentation/presentation.mojom.h"
 
 namespace browser_core {
 
@@ -83,6 +86,13 @@ void CastDialog::Close() {
 }
 
 // static
+void CastDialog::CloseFor(content::WebContents* contents) {
+  if (Shown() && Shown()->initiator() == contents) {
+    Shown()->HideMediaRouterDialog();
+  }
+}
+
+// static
 void CastDialog::To(bc_id tab, const char* id) {
   CastDialog* dialog = Shown();
   if (!dialog || !dialog->ui_ || !id || Tab::IdOf(dialog->initiator()) != tab) {
@@ -116,6 +126,26 @@ CastDialog::~CastDialog() {
 
 bool CastDialog::IsShowingMediaRouterDialog() const {
   return !!ui_;
+}
+
+bool CastDialog::ShowMediaRouterDialogForPresentation(
+    std::unique_ptr<media_router::StartPresentationContext> context) {
+  // Before the engine brings the tab to the front for its list.
+  if (NoCast(initiator())) {
+    // The page hears what it does when the user closes the list without choosing.
+    context->InvokeErrorCallback(blink::mojom::PresentationError(
+        blink::mojom::PresentationErrorType::PRESENTATION_REQUEST_CANCELLED, "Dialog closed."));
+    return false;
+  }
+  return MediaRouterDialogController::ShowMediaRouterDialogForPresentation(std::move(context));
+}
+
+bool CastDialog::ShowMediaRouterDialog(
+    media_router::MediaRouterDialogActivationLocation activation_location) {
+  if (NoCast(initiator())) {
+    return false;
+  }
+  return MediaRouterDialogController::ShowMediaRouterDialog(activation_location);
 }
 
 void CastDialog::CreateMediaRouterDialog(media_router::MediaRouterDialogActivationLocation) {

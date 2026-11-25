@@ -1433,6 +1433,9 @@ typedef struct bc_host {
   // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
   // and "busy": true if the page hadn't settled when the action stopped waiting for it.
   // and after SELECT, "chosen": the name of the option it chose, if the field then shows it.
+  // and after CLICK, on a page in an agent's Space the user doesn't hold, "shut": "select",
+  // "date_time" or "color" if it landed on a select that drops its list down, a date or time field
+  // or a color field, whose list or picker a click doesn't open there.
   // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
   // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
   // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
