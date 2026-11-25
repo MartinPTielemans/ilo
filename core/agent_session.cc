@@ -142,6 +142,7 @@ bool HandBack(bc_id tab) {
   }
   // Where the user left a tab they handed the agent is where its history is theirs up to.
   handed::BoundHistory(tab);
+  handed::PassedOn(tab);
   Blur(tab);
   // A print preview the user opened while they held the tab doesn't stay over a thread's page.
   ClosePrintPreview(Tab::FromId(tab));

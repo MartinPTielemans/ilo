@@ -118,8 +118,12 @@ void CloseTabDialogs(content::WebContents* contents);
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
 // |contents|, if it's in an agent's Space: once per document and kind, however often the page
 // asks, and after the task that refused it, since the app takes no entry inside a call of its own
-// into the core.
-void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* frame);
+// into the core. |cancelled_question| for a question taken before it was put to the user, whose
+// entry has a reason of its own in one state (agent_permission_rule::EntryReason) and is made
+// once more for it.
+void NoteRefused(agent_permission_rule::Kind kind,
+                 content::RenderFrameHost* frame,
+                 bool cancelled_question = false);
 void NoteRefused(agent_permission_rule::Kind kind, content::WebContents* contents);
 
 }  // namespace browser_core

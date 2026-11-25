@@ -23,6 +23,19 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
   }
 }
 
+bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed) {
+  const bool call = kind == Kind::kCamera || kind == Kind::kMicrophone;
+  const bool users = handed.handed && handed.on_given_origin && tab.held && handed.users_press;
+  return Refuses(kind, tab) && !(call && users);
+}
+
+bool RefusesStatus(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed) {
+  const bool kept = (kind == Kind::kCamera && handed.camera) ||
+                    (kind == Kind::kMicrophone && handed.microphone);
+  return RefusesAsk(kind, tab, handed) &&
+         !(kept && handed.handed && handed.on_given_origin && handed.call_document);
+}
+
 const char* CodeWord(Kind kind) {
   switch (kind) {
     case Kind::kCamera:
@@ -227,10 +240,21 @@ bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab) {
   return !site_storage && Refuses(Kind::kFileHandle, tab);
 }
 
-bool EntriesMade::First(Kind kind) {
+const char* EntryReason(bool cancelled_question,
+                        Kind kind,
+                        const agent_space_rule::Tab& tab,
+                        const Handed& handed) {
+  const bool call = kind == Kind::kCamera || kind == Kind::kMicrophone;
+  const bool users = tab.agents && tab.held && handed.handed && handed.on_given_origin &&
+                     handed.users_press;
+  return cancelled_question && call && users ? kEntryReasonUsersHold : kEntryReason;
+}
+
+bool EntriesMade::First(Kind kind, std::string_view reason) {
+  std::bitset<kKinds>& made = reason == kEntryReasonUsersHold ? users_hold_made_ : made_;
   const size_t at = static_cast<size_t>(kind);
-  const bool first = !made_.test(at);
-  made_.set(at);
+  const bool first = !made.test(at);
+  made.set(at);
   return first;
 }
 

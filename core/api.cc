@@ -749,6 +749,11 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
 }
 
 bool bc_tab_take_back(bc_id tab) {
+  // Theirs by their own press, which a tab they hold already isn't made: a hold made for them, as
+  // at a handoff, stays what it is until they hand the tab back.
+  if (!browser_core::IsHeld(tab)) {
+    browser_core::handed::TakenOver(tab);
+  }
   browser_core::Hold(tab);
   return browser_core::EndTabSession(tab, BC_AGENT_SESSION_TAKEN_BACK);
 }

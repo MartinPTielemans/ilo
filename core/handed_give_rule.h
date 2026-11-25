@@ -10,8 +10,9 @@ namespace browser_core::handed_give_rule {
 // A tab as the give finds it. A tab in a split view is given and leaves the split, a pinned tab is
 // given and its pin is kept for its way back (handed.h), a favorite is given and a tab without a
 // page keeps its tile, one with a Picture in Picture window is given and the window closes
-// (bc_tab_give_to_agent), and one whose page is being told the location is given as it is. None of
-// those is asked here.
+// (bc_tab_give_to_agent), and one whose page is being told the location is given as it is. So is
+// one whose page is using the camera or the microphone: the call goes on with the tab, and what
+// its page may have of either from there is agent_permission_rule's. None of those is asked here.
 struct Tab {
   // In a Space of the user's that the Spaces list has, or a favorite: not an agent's, and not a
   // window's own, as a private window's is.
@@ -30,7 +31,8 @@ struct Tab {
   bool stands_in = false;
   // At an http or https page in Chromium's engine, the only pages an agent may act in.
   bool web_page = false;
-  // Its page is using the camera or the microphone: a call isn't handed over by a slip.
+  // Its page is using the camera or the microphone. Neither refuses it: a tab in a call is one
+  // the user hands over as they hand any other.
   bool camera = false;
   bool microphone = false;
   // Its page is sharing the screen, a window or another tab: what's on the user's screen isn't an
@@ -52,7 +54,7 @@ struct Tab {
   bool files = false;
 };
 
-// Whether |tab| is given. Each of them alone refuses it.
+// Whether |tab| is given. Each of them but the camera and the microphone alone refuses it.
 bool MayGive(const Tab& tab);
 
 }  // namespace browser_core::handed_give_rule

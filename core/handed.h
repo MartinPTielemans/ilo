@@ -16,6 +16,8 @@
 #include "browser_core/handed_history.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
+#include "content/public/browser/weak_document_ptr.h"
+#include "url/origin.h"
 
 namespace browser_core::handed {
 
@@ -47,6 +49,18 @@ struct Mark {
   bc_id tile = 0;
   // The history it had then, which stays the user's.
   handed_history::Bound history;
+  // What its page's asks for the camera and the microphone are answered by
+  // (agent_permission_rule.h): the origin its page was on at the give, whether the user holds it
+  // by a press of their own (TakenOver) and not by a hold made for them, and which of the two its
+  // page was using as it last passed into the agent's hands (PassedOn), with the document that
+  // page was: the call is that document's, and a new one in the tab has none. The core alone sets
+  // them, from what it reads itself, and they go with the mark: none is saved, synced, logged or
+  // told to an agent.
+  url::Origin given_on;
+  bool users_press = false;
+  bool camera = false;
+  bool microphone = false;
+  content::WeakDocumentPtr call_in;
 };
 
 // What's kept of |tab| as it leaves |from|, a Space of the user's, for an agent's: all but its
@@ -55,6 +69,16 @@ Mark Leaving(const Space& from, bc_id tab);
 
 // |tab| was given to an agent, and |left| is what Leaving made of it before it went.
 void Given(bc_id tab, Mark left);
+
+// The user took |tab| over by a press of their own (bc_tab_take_back) and holds it from here.
+// Nothing for a tab that isn't handed.
+void TakenOver(bc_id tab);
+
+// |tab| passed into the agent's hands: at the give, and each time the user hands it back. It's no
+// longer the user's by their own press, and what its page uses of the camera and the microphone
+// then is the call that goes with it, on the origin it was given on: one the user started while
+// they held it too, and one they ended no longer.
+void PassedOn(bc_id tab);
 
 // Whether |tab| keeps the tile of a favorite an agent has (Mark::tile), so has no page and gets
 // none: what Tab::Wake asks, the one place a tab without a page gets it, so whatever shows or loads

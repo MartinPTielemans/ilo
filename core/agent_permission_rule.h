@@ -79,11 +79,64 @@ inline constexpr size_t kKinds = static_cast<size_t>(Kind::kLeftAsToday) + 1;
 // as a tab of theirs does.
 bool Refuses(Kind kind, const agent_space_rule::Tab& tab);
 
+// A tab of the user's that an agent has (handed.h), as a frame in it asks for the camera or the
+// microphone. The core reads each of these itself: no page and no agent's call sets one.
+struct Handed {
+  // An agent has it from the user. A page an agent opened itself is never one.
+  bool handed = false;
+  // The frame that asks and the tab's page are both on the origin the tab's page was on at the
+  // give, to the scheme, the host and the port. A page the agent took the tab to elsewhere is as
+  // one it opened, until the tab is back there, and another site's frame in the page is no part
+  // of what the user gave.
+  bool on_given_origin = false;
+  // The user took the tab over by a press of their own. A hold made for them, at a handoff or for
+  // a passkey, isn't one: an agent's own call makes a handoff.
+  bool users_press = false;
+  // The tab's page was using the camera, or the microphone, as the tab last passed into the
+  // agent's hands: at the give, and each time the user handed it back.
+  bool camera = false;
+  bool microphone = false;
+  // The tab's page is the document it was then. A new document in the tab's main frame has no
+  // call that came with the tab, on whatever origin it is.
+  bool call_document = false;
+};
+
+// Whether a page in |tab| is refused its ask for |kind|. As Refuses, but for the camera and the
+// microphone in a handed tab the user took over by their own press, on the origin it was given
+// on: there the ask is answered by what the profile has saved for the site, as in a tab of theirs,
+// so the camera they turn on in a call they handed over comes on. They are asked nothing for it:
+// the question of a site they never allowed is taken as any other (TakesRequest). Pan-tilt-zoom,
+// the screen and every other kind are Refuses' in every state.
+bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
+
+// Whether a page in |tab| has its permission for |kind| read as refused, which is what a call
+// under way is ended by when a setting of its site changes. As RefusesAsk, and read as saved too
+// for a device the page was using as the tab last passed into the agent's hands, on the origin it
+// was given on and while the page is that document still: a call the user handed over ends when
+// they block its site, as in a tab of theirs, and at no other change. Nothing starts by this
+// read: a page's ask is RefusesAsk's, whatever the status says.
+bool RefusesStatus(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
+
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one
 // code for every kind. The app words the entry from the kind; neither is ever shown.
 inline constexpr char kEntryAction[] = "request_permission ";
 inline constexpr char kEntryReason[] = "agent_space";
 const char* CodeWord(Kind kind);
+
+// The reason of one entry apart: a question for the camera or the microphone was cancelled in a
+// handed tab the user holds by their own press, on the origin it was given on. Their site is set
+// to ask, and they are asked nothing for a page an agent has, so their way on is to take the tab
+// back, which the app offers under this entry and no other. The app reads the code and shows it
+// nowhere.
+inline constexpr char kEntryReasonUsersHold[] = "agent_space_users_hold";
+
+// The reason of the entry of a refusal of |kind|, which came by a question cancelled
+// (|cancelled_question|, TakesRequest) or by a refusal before any question. The one code for
+// every kind and state but that one.
+const char* EntryReason(bool cancelled_question,
+                        Kind kind,
+                        const agent_space_rule::Tab& tab,
+                        const Handed& handed);
 
 // Whether a handle on a file or a folder made for a page in |tab| is refused. One in the site's
 // own storage is no file of the user's and is the page's in any tab; any other is refused in an
@@ -96,14 +149,17 @@ bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab);
 bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& tab);
 
 // The kinds a document's refusals have an entry for: one per document and kind, however often the
-// page asks.
+// page asks. An entry with kEntryReasonUsersHold counts apart, so a page refused while the agent
+// drove it still has that entry once the user takes the tab over.
 class EntriesMade {
  public:
-  // Whether this is the document's first refusal of |kind|, which makes its entry.
-  bool First(Kind kind);
+  // Whether this is the document's first refusal of |kind| with |reason|, EntryReason's, which
+  // makes its entry.
+  bool First(Kind kind, std::string_view reason = kEntryReason);
 
  private:
   std::bitset<kKinds> made_;
+  std::bitset<kKinds> users_hold_made_;
 };
 
 // What becomes of a question the browser was about to put to the user for a page.
