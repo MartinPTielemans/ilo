@@ -101,6 +101,14 @@ fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTe
     shown_with(card(), cx)
 }
 
+/// The id of the last picture of `tab`'s page the conversation asked the host for.
+fn picture_asked(host: &Recorder, tab: u64) -> u64 {
+    let asked = host.task_pictures.borrow();
+    let last = asked.iter().rev().find(|(each, _)| *each == tab);
+    last.map(|&(_, request)| request)
+        .unwrap_or_else(|| panic!("no picture of tab {tab} was asked for, only {asked:?}"))
+}
+
 /// As `shown`, with `card` for task-1's.
 fn shown_with(
     card: Card,
@@ -790,7 +798,7 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(1)), cx)
     });
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_asked(&host, 30);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
@@ -3340,7 +3348,7 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
         pages: vec![30],
         ..card()
     };
-    let (shell, _, cx) = shown_with(card.clone(), cx);
+    let (shell, host, cx) = shown_with(card.clone(), cx);
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(1)), cx)
     });
@@ -3348,7 +3356,7 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
         shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
     };
     assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_asked(&host, 30);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     assert_eq!(
