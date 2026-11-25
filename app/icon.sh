@@ -13,6 +13,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 xcrun swiftc -O ../icon-outline.swift -o "$tmp/icon-outline"
 "$tmp/icon-outline" ../assets/brand/knot.svg "$name.icon/Assets/knot.svg"
+# The same shape with its curves as lines, and the two smaller drawings' shapes, for what fills
+# only polygons: the Windows icons' script draws each size from the one that is its own. They
+# are committed as the layer is, since that script runs where there is no Xcode.
+for drawing in knot knot-32 knot-16; do
+  "$tmp/icon-outline" "../assets/brand/$drawing.svg" "outline/$drawing.svg" lines
+done
 xcrun actool "$name.icon" --compile "$tmp" --platform macosx --minimum-deployment-target 26.0 \
   --app-icon "$name" --output-partial-info-plist "$tmp/partial.plist" > /dev/null
 cp "$tmp/Assets.car" "$tmp/$name.icns" .

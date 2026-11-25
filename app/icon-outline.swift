@@ -5,13 +5,18 @@
 // drawing's mask does, and joins the over-passes on: one filled shape, no point of the drawing
 // moved.
 //
-// usage: icon-outline <knot.svg> <layer.svg>
+// With `lines` the round joins' curves are written as lines, for what can fill only polygons (the
+// Windows icons' script). The two smaller drawings are outlined that way too; the smallest has no
+// mask, as its cord passes over nothing, so nothing is cut from it and its loops are holes in one
+// piece, which the even-odd fill leaves open.
+//
+// usage: icon-outline <knot.svg> <layer.svg> [lines]
 import CoreGraphics
 import Foundation
 
 let args = CommandLine.arguments
-guard args.count == 3 else {
-  print("usage: icon-outline <knot.svg> <layer.svg>")
+guard args.count == 3 || (args.count == 4 && args[3] == "lines") else {
+  print("usage: icon-outline <knot.svg> <layer.svg> [lines]")
   exit(2)
 }
 let svg = try! String(contentsOfFile: args[1], encoding: .utf8)
@@ -50,12 +55,15 @@ func lines(_ text: String) -> [Line] {
   }
 }
 
-// The mask's strokes are the gaps; after it come the cord, then the over-passes.
+// The mask's strokes are the gaps; after it come the cord, then the over-passes. A drawing with no
+// mask is the cord alone.
 let parts = svg.components(separatedBy: "</defs>")
-precondition(parts.count == 2, "no mask in the drawing")
-let gaps = lines(parts[0])
-let drawn = lines(parts[1])
-precondition(!gaps.isEmpty && drawn.count > 1, "no cord with its over-passes in the drawing")
+precondition(parts.count <= 2, "more than one mask in the drawing")
+let gaps = parts.count == 2 ? lines(parts[0]) : []
+let drawn = lines(parts[parts.count - 1])
+precondition(
+  gaps.isEmpty ? drawn.count == 1 : drawn.count > 1,
+  "neither a cord with its mask and over-passes nor a cord alone")
 
 // SVG's defaults, which the drawing leaves as they are: butt ends, a miter join limited at 4.
 func outline(_ line: Line) -> CGPath {
@@ -80,7 +88,9 @@ var place = CGAffineTransform.identity
   .translatedBy(x: -canvas / 2, y: -canvas / 2)
   .scaledBy(x: canvas / 232, y: canvas / 232).translatedBy(x: 34.8, y: 32.8)
   .scaledBy(x: 1.3533, y: 1.3533)
-let placed = shape.copy(using: &place)!
+// A tenth of a point of the 1024 is under what any size the icon is drawn at can show.
+let whole = shape.copy(using: &place)!
+let placed = args.count == 4 ? whole.flattened(threshold: 0.1) : whole
 
 var d = ""
 var pieces = 0
