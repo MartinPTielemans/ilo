@@ -319,7 +319,7 @@ for each in $steps; do
       # ⌘[ goes back a step, and that step's way on comes back to the last, resting again on Start
       # Browsing, whose ↩ ends the card.
       send key '[' cmd
-      expect '^browser: onboarding left 7 via back-key$' "dark: ⌘[ didn't go back from the last step"
+      expect '^browser: onboarding left 7$' "dark: ⌘[ didn't go back from the last step"
       step_settled "$before_last" "dark: ⌘[ at the last step didn't come back to step $before_last"
       pass_step "$before_last" "dark: "
       step_settled 7 "dark: the last step didn't come again after step $before_last"
@@ -452,11 +452,11 @@ expect '^browser: import suggests https://news\.example\.org/ https://mail\.exam
 expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
   "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
 expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"
-await '^browser: onboarding left 3 via import$' || fail "favorites: the import didn't go on from its step"
+await '^browser: onboarding left 3$' || fail "favorites: the import didn't go on from its step"
 step_settled 3b "favorites: the step after the import wasn't Your favorites"
 capture_step favorites
 skip_step 3b
-expect '^browser: onboarding left 3b via skip$' "favorites: Skip didn't leave the step"
+expect '^browser: onboarding left 3b$' "favorites: Skip didn't leave the step"
 # The look goes back to the system's, as the light and dark passes set ilo's own, for the runs after.
 send menu "$(cased 'Appearance › Automatic')"
 expect '^browser: appearance automatic$' \
