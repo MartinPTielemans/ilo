@@ -91,6 +91,22 @@ bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& ta
   return any_to_offer && Refuses(Kind::kClientCertificate, tab);
 }
 
+DownloadAnswer AnswersDownloadQuestion(DownloadQuestion question,
+                                       const agent_space_rule::Tab& tab) {
+  if (!tab.agents || tab.held) {
+    return DownloadAnswer::kLeft;
+  }
+  switch (question) {
+    case DownloadQuestion::kUsersSaveAs:
+      return DownloadAnswer::kLeft;
+    case DownloadQuestion::kUsersSetting:
+      return DownloadAnswer::kGoesOn;
+    case DownloadQuestion::kPlaceUnusable:
+      return DownloadAnswer::kCancelled;
+  }
+  return DownloadAnswer::kLeft;
+}
+
 bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab) {
   return !site_storage && Refuses(Kind::kFileHandle, tab);
 }

@@ -10,6 +10,8 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
+#include "chrome/browser/download/download_confirmation_reason.h"
+#include "chrome/browser/download/download_target_determiner_delegate.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/sync/base/data_type.h"
@@ -405,5 +407,15 @@ CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRende
 // passes before its dialog is made. |by_users_command| says the browser's own Print command
 // started it, not the page. One refused ends as a restricted preview does, and its page goes on.
 extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_users_command);
+
+// chrome/browser/download/chrome_download_manager_delegate.cc: whether the core takes Chrome's
+// question of where |download|'s file goes, asked first in
+// ChromeDownloadManagerDelegate::RequestConfirmation, before any sheet is made for it. One taken
+// the core has answered through |callback|.
+extern bool (*g_browser_core_takes_download_question)(
+    download::DownloadItem* download,
+    const base::FilePath& suggested_path,
+    DownloadConfirmationReason reason,
+    DownloadTargetDeterminerDelegate::ConfirmationCallback* callback);
 
 #endif  // BROWSER_CORE_HOOKS_H_

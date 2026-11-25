@@ -157,6 +157,39 @@ TEST(AgentPermissionRule, ALoadWithNoCertificateToOfferGoesOnInAnyTab) {
   EXPECT_FALSE(RefusesClientCertificate(/*any_to_offer=*/false, kHeld));
 }
 
+constexpr DownloadQuestion kDownloadQuestions[] = {
+    DownloadQuestion::kUsersSaveAs,
+    DownloadQuestion::kUsersSetting,
+    DownloadQuestion::kPlaceUnusable,
+};
+
+TEST(AgentPermissionRule, AUsersTabIsAskedWhereADownloadGoes) {
+  for (DownloadQuestion question : kDownloadQuestions) {
+    EXPECT_EQ(AnswersDownloadQuestion(question, kUsers), DownloadAnswer::kLeft);
+  }
+}
+
+TEST(AgentPermissionRule, ADownloadInAnAgentsSpaceGoesOnWhereTheUsersSettingWouldAsk) {
+  EXPECT_EQ(AnswersDownloadQuestion(DownloadQuestion::kUsersSetting, kAgents),
+            DownloadAnswer::kGoesOn);
+}
+
+TEST(AgentPermissionRule, ADownloadInAnAgentsSpaceIsCancelledWhereItsPlaceCantTakeIt) {
+  EXPECT_EQ(AnswersDownloadQuestion(DownloadQuestion::kPlaceUnusable, kAgents),
+            DownloadAnswer::kCancelled);
+}
+
+TEST(AgentPermissionRule, TheUsersOwnSaveAsIsTheirsInAnAgentsSpace) {
+  EXPECT_EQ(AnswersDownloadQuestion(DownloadQuestion::kUsersSaveAs, kAgents),
+            DownloadAnswer::kLeft);
+}
+
+TEST(AgentPermissionRule, AHeldTabIsAskedWhereADownloadGoes) {
+  for (DownloadQuestion question : kDownloadQuestions) {
+    EXPECT_EQ(AnswersDownloadQuestion(question, kHeld), DownloadAnswer::kLeft);
+  }
+}
+
 TEST(AgentPermissionRule, AUsersTabIsAskedAsEver) {
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/false, kUsers), Taken::kNo);
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/true, kUsers), Taken::kNo);

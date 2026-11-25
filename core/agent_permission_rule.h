@@ -110,6 +110,32 @@ enum class Taken {
 // answers no question for a page a thread holds.
 Taken TakesRequest(bool link_handler_offer, const agent_space_rule::Tab& tab);
 
+// Why Chrome would ask the user where a download's file goes.
+enum class DownloadQuestion {
+  // The user's own command to save something under a name of their choosing.
+  kUsersSaveAs,
+  // The user's setting to be asked where each download goes.
+  kUsersSetting,
+  // The place it would go can't take it: not writable, full, or its name too long.
+  kPlaceUnusable,
+};
+
+// What becomes of that question.
+enum class DownloadAnswer {
+  // Chrome's, asked as in any tab.
+  kLeft,
+  // The download goes on to the place Chrome suggested, with nothing asked.
+  kGoesOn,
+  // The download is cancelled.
+  kCancelled,
+};
+
+// A user's tab, and one of an agent's Space the user holds, is asked as ever. For a page in an
+// agent's Space the user doesn't hold nothing is asked: a download the user's setting alone would
+// ask about goes where Chrome suggested, and one whose place can't take it is cancelled. The
+// user's own command is theirs in any tab.
+DownloadAnswer AnswersDownloadQuestion(DownloadQuestion question, const agent_space_rule::Tab& tab);
+
 }  // namespace browser_core::agent_permission_rule
 
 #endif  // BROWSER_CORE_AGENT_PERMISSION_RULE_H_

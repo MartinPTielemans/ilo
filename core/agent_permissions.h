@@ -5,7 +5,10 @@
 #ifndef BROWSER_CORE_AGENT_PERMISSIONS_H_
 #define BROWSER_CORE_AGENT_PERMISSIONS_H_
 
+#include "base/files/file_path.h"
 #include "browser_core/agent_permission_rule.h"
+#include "chrome/browser/download/download_confirmation_reason.h"
+#include "chrome/browser/download/download_target_determiner_delegate.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/public/browser/global_routing_id.h"
 
@@ -64,6 +67,15 @@ void ClosePrintPreview(content::WebContents* contents);
 // of the chooser for one of the user's: a page in an agent's Space the user doesn't hold, where
 // the user has any to offer, with its entry at the tab.
 bool NoClientCertificate(content::WebContents* contents, bool any_to_offer);
+
+// Chrome's question of where |download|'s file goes, asked before any sheet is made for it:
+// whether the core took it, which it does for a download of a page in an agent's Space the user
+// doesn't hold. One taken is answered through |callback| at once: on to |suggested_path| where
+// only the user's setting would ask, cancelled where that place can't take it.
+bool TakesDownloadQuestion(download::DownloadItem* download,
+                           const base::FilePath& suggested_path,
+                           DownloadConfirmationReason reason,
+                           DownloadTargetDeterminerDelegate::ConfirmationCallback* callback);
 
 // Closes what Chrome drew over the page in |contents| as a tab's dialog, a certificate chooser
 // among them, if the page is in an agent's Space the user doesn't hold, as Chrome closes them

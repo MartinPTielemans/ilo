@@ -11,12 +11,14 @@
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "chrome/browser/download/download_confirmation_result.h"
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/request_type.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/document_user_data.h"
+#include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -24,6 +26,7 @@
 #include "content/public/browser/web_ui_controller.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 
 namespace browser_core {
 
@@ -256,6 +259,35 @@ bool NoClientCertificate(content::WebContents* contents, bool any_to_offer) {
   }
   NoteRefused(Kind::kClientCertificate, contents->GetOutermostWebContents());
   return true;
+}
+
+bool TakesDownloadQuestion(download::DownloadItem* download,
+                           const base::FilePath& suggested_path,
+                           DownloadConfirmationReason reason,
+                           DownloadTargetDeterminerDelegate::ConfirmationCallback* callback) {
+  using agent_permission_rule::DownloadAnswer;
+  using agent_permission_rule::DownloadQuestion;
+  // Chrome asks for a reason of its own beyond these only where the place it picked failed it.
+  DownloadQuestion question = DownloadQuestion::kPlaceUnusable;
+  if (reason == DownloadConfirmationReason::SAVE_AS) {
+    question = DownloadQuestion::kUsersSaveAs;
+  } else if (reason == DownloadConfirmationReason::PREFERENCE) {
+    question = DownloadQuestion::kUsersSetting;
+  }
+  switch (agent_permission_rule::AnswersDownloadQuestion(
+      question, RuleTabOf(content::DownloadItemUtils::GetWebContents(download)))) {
+    case DownloadAnswer::kLeft:
+      return false;
+    case DownloadAnswer::kGoesOn:
+      // Chrome's answer for a path the user was shown nothing of.
+      std::move(*callback).Run(DownloadConfirmationResult::CONTINUE_WITHOUT_CONFIRMATION,
+                               ui::SelectedFileInfo(suggested_path));
+      return true;
+    case DownloadAnswer::kCancelled:
+      std::move(*callback).Run(DownloadConfirmationResult::CANCELED, ui::SelectedFileInfo());
+      return true;
+  }
+  return false;
 }
 
 void CloseTabDialogs(content::WebContents* contents) {
