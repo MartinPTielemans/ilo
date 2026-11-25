@@ -295,6 +295,19 @@ fn sorts(body: &str) -> String {
     format!("echo '{said}'")
 }
 
+#[test]
+fn two_runs_made_back_to_back_have_two_folders() {
+    let (first, second) = (Run::new(CAP).unwrap(), Run::new(CAP).unwrap());
+    let folders = [first.folder.clone(), second.folder.clone()];
+    assert_ne!(folders[0], folders[1]);
+    assert!(folders.iter().all(|folder| folder.is_dir()));
+    drop((first, second));
+    assert!(
+        folders.iter().all(|folder| !folder.exists()),
+        "each goes with its run"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_run_hands_the_list_and_reads_the_folders() {
