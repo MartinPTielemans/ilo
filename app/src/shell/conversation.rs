@@ -710,8 +710,10 @@ impl TalkView {
                     (old.lines.iter())
                         .any(|line| matches!(line, Line::Ilo(line) if line.key == key))
                 };
+                // Not the line of the user's own Stop: a task they stopped isn't told at all.
+                let told = |line: &IloLine| !matches!(line.kind, IloKind::YouStopped { .. });
                 let came = conversation.lines.iter().rev().find_map(|line| match line {
-                    Line::Ilo(line) if !had(line.key) => Some(line),
+                    Line::Ilo(line) if !had(line.key) && told(line) => Some(line),
                     _ => None,
                 });
                 if let Some(line) = came {

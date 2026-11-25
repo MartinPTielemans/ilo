@@ -416,6 +416,39 @@ fn a_stopped_task_and_one_working_again_arent_told(cx: &mut TestAppContext) {
     assert_eq!(tellings(&shell, cx).1, None);
 }
 
+/// Nor is the line of the user's own Stop told as it comes while the conversation shows: it's a
+/// group of its words to read where it stands, with its button, and a line of ilo's that comes
+/// with it is still told.
+#[gpui::test]
+fn the_line_of_the_users_stop_isnt_told(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    reader(&shell, cx);
+    talk(&shell, conversation(1), cx);
+    let you_stopped = |key: usize| {
+        Line::Ilo(IloLine {
+            key,
+            kind: IloKind::YouStopped { pages: 2 },
+            settled: false,
+        })
+    };
+
+    talk(&shell, with(1, vec![you_stopped(8)]), cx);
+    assert_eq!(told(&shell, cx), [] as [&str; 0]);
+    assert_eq!(tellings(&shell, cx).0, None);
+    assert!(
+        (named(Role::Group, cx).iter()).any(|group| group.ends_with("You stopped it · 2 pages")),
+        "the line isn't there to read"
+    );
+    assert_eq!(named(Role::Button, cx)[0], "Hand Back");
+
+    talk(&shell, with(1, vec![refused(), you_stopped(9)]), cx);
+    let said = told(&shell, cx);
+    let [said] = said.as_slice() else {
+        panic!("one telling: {said:?}");
+    };
+    assert!(!said.contains("You stopped it"), "{said}");
+}
+
 /// Under a page watched over its conversation, where no line of it is drawn, the task is told by
 /// its state and its line isn't.
 #[gpui::test]
