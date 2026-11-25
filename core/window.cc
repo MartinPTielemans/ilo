@@ -1596,7 +1596,7 @@ bc_id Window::TakeTab(bc_id tab) {
 }
 
 // static
-void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
+void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
   Space* from = Space::Holding(tab);
   Space* to = Space::FromId(space);
   // No tab moves into an agent's Space, which would put it in the agent's reach, unless the user
@@ -1645,7 +1645,7 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   }
   // No window goes with a tab the user gives an agent: the agent's Space isn't theirs to be taken
   // to by a give.
-  FollowMove(tab, moved, from->id(), space, next, /*follows=*/!to_agent);
+  FollowMove(tab, moved, from->id(), space, next, follows && !to_agent);
   // A tile is an agent's tab's alone (TileRule), so a page still in one, live or parked, leaves it
   // with the agent's Space. Nothing if a window took it as it followed the tab.
   if (from->agent()) {
@@ -1761,7 +1761,11 @@ bool Window::DeleteSpace(bc_id space) {
         if ((*it)->IsPinned(tab)) {
           (*it)->Unpin(tab);
         }
-        MoveToSpace(tab, (*other)->id());
+        // Into another profile it goes as a new tab without its page (CopyToProfile), and no
+        // window goes with it: the address is one the thread chose, and loads with that
+        // profile's logins only once the user shows the tab themselves.
+        MoveToSpace(tab, (*other)->id(), /*to_agent=*/false,
+                    /*follows=*/(*other)->profile() == (*it)->profile());
       }
     }
   }

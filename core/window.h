@@ -195,8 +195,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Chrome's active tab does to another window, and its old Space shows next what it would once the
   // tab closed. Into another profile's Space it goes as a new tab, as bc_tab_move_to_space says.
   // Into an agent's Space only |to_agent|, as the user gives the agent the tab
-  // (bc_tab_give_to_agent), and then nowhere else.
-  static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false);
+  // (bc_tab_give_to_agent), and then nowhere else; no window goes with it then, nor unless
+  // |follows|.
+  static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false, bool follows = true);
   // Moves |folder|, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
   // as bc_folder_move_to_space says: a window showing one of its tabs goes with it, as with
   // MoveToSpace, and into another profile's Space each tab goes as a new one. Never into an agent's
