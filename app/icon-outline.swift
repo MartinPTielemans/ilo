@@ -94,17 +94,27 @@ let placed = args.count == 4 ? whole.flattened(threshold: 0.1) : whole
 
 var d = ""
 var pieces = 0
+var last = ""
 func n(_ v: CGFloat) -> String { String(format: "%.2f", v) }
 placed.applyWithBlock { element in
   let p = element.pointee.points
+  func at(_ i: Int) -> String { "\(n(p[i].x)) \(n(p[i].y))" }
   switch element.pointee.type {
   case .moveToPoint:
     pieces += 1
-    d += "M\(n(p[0].x)) \(n(p[0].y))"
-  case .addLineToPoint: d += "L\(n(p[0].x)) \(n(p[0].y))"
-  case .addQuadCurveToPoint: d += "Q\(n(p[0].x)) \(n(p[0].y)) \(n(p[1].x)) \(n(p[1].y))"
+    last = at(0)
+    d += "M" + last
+  case .addLineToPoint:
+    // Where two of the shapes met, the union can leave their point twice in a row: an edge with
+    // no length, the one trace of a join in the outline. It is written once.
+    if at(0) != last { d += "L" + at(0) }
+    last = at(0)
+  case .addQuadCurveToPoint:
+    last = at(1)
+    d += "Q\(at(0)) \(last)"
   case .addCurveToPoint:
-    d += "C\(n(p[0].x)) \(n(p[0].y)) \(n(p[1].x)) \(n(p[1].y)) \(n(p[2].x)) \(n(p[2].y))"
+    last = at(2)
+    d += "C\(at(0)) \(at(1)) \(last)"
   case .closeSubpath: d += "Z"
   @unknown default: break
   }
