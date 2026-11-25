@@ -36,6 +36,7 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/favorites.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/launch_space_rule.h"
 #include "browser_core/profiles.h"
@@ -291,7 +292,10 @@ SavedTab SaveTab(content::WebContents& contents) {
   return tab;
 }
 
-SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today) {
+SavedSpace SaveSpace(const Space& space,
+                     bc_id shown,
+                     std::vector<bc_id>* today,
+                     bool handed_as_users) {
   SavedSpace to;
   to.name = space.name();
   to.node = space.node();
@@ -313,10 +317,25 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
     const Space::Node* node = space.NodeOf(id);
     return node ? *node : Space::Node();
   };
+  // Its Today tabs with those the user handed an agent out of it, each where it would come back.
+  std::vector<bc_id> today_rows = space.today();
+  if (handed_as_users && !space.agent()) {
+    for (const auto& [tab, mark] : handed::All()) {
+      if (mark.home == space.id()) {
+        today_rows.insert(today_rows.begin() + handed::PlaceAmong(space, today_rows, mark.node),
+                          tab);
+      }
+    }
+  }
   for (auto [ids, tabs] : {std::pair(&space.pinned_rows(), &to.pinned),
-                           std::pair(&space.today(), &to.today)}) {
+                           std::pair(&std::as_const(today_rows), &to.today)}) {
     bc_id above = 0;
     for (bc_id id : *ids) {
+      const handed::Mark* mark = handed_as_users ? handed::Of(id) : nullptr;
+      // The user's, saved with the Space it left.
+      if (mark && space.agent()) {
+        continue;
+      }
       if (space.IsFolder(id)) {
         to.folders.push_back({.name = space.FolderName(id),
                               .icon = space.FolderIcon(id),
@@ -334,6 +353,15 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
         continue;
       }
       tab.session_storage = saving->SessionStorageId();
+      if (mark) {
+        // A Today tab by itself at the node it kept, whatever the agent made of it in its Space.
+        tab.node = mark->node;
+        tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
+        above = id;
+        to.today.push_back(std::move(tab));
+        ++index;
+        continue;
+      }
       if (id == shown) {
         to.shown = index;
       }
@@ -414,7 +442,8 @@ Saved Collect() {
         break;
       }
     }
-    SavedSpace& to = saved.spaces.emplace_back(SaveSpace(*space, shown));
+    SavedSpace& to = saved.spaces.emplace_back(
+        SaveSpace(*space, shown, /*today=*/nullptr, /*handed_as_users=*/true));
     if (auto favorite = favorites.find(shown); favorite != favorites.end()) {
       to.shown_favorite = favorite->second;
     }

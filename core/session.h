@@ -120,8 +120,14 @@ struct SavedSpace {
 };
 
 // |space|, where a window shows |shown|, without its shown favorite unless that's one of its own.
-// Puts the Today tabs it saved in |today| if it isn't null.
-SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today = nullptr);
+// Puts the Today tabs it saved in |today| if it isn't null. With |handed_as_users|, as the session
+// is saved, a tab the user handed an agent (handed.h) is saved as theirs still: left out of the
+// agent's Space, and in the Space it left, a Today tab where it would come back, on the page it's
+// at. So a session that ends with a tab handed brings it back as the user's.
+SavedSpace SaveSpace(const Space& space,
+                     bc_id shown,
+                     std::vector<bc_id>* today = nullptr,
+                     bool handed_as_users = false);
 
 // Makes |saved| a Space in the profile in the directory |profile|, its tabs unloaded in |window|
 // and waiting for that profile if it's still loading (Tab::Restore), with the id |id|, a deleted
