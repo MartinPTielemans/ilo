@@ -809,6 +809,9 @@ pub struct Agents {
     socket: PathBuf,
     bridge: Vec<String>,
     on: bool,
+    /// Whether other apps' agents may connect while agents are on (#4260), which the server's
+    /// threads read: off for a new profile.
+    others: server::Others,
     agents: Vec<Agent>,
     /// The agents' tokens, which the server's threads read.
     tokens: server::Tokens,
@@ -1034,6 +1037,7 @@ impl Agents {
             socket,
             bridge,
             on: false,
+            others: Arc::default(),
             agents: Vec::new(),
             tokens: Arc::default(),
             server: None,
@@ -1154,10 +1158,20 @@ impl Agents {
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        // Settings saved before other apps' agents had a switch of their own let them in while
+        // agents were on, which they keep, once: saved, the switch is the user's from then on.
+        let others = saved.get("other_apps").and_then(Value::as_bool);
+        self.others.store(
+            others.unwrap_or(self.on),
+            std::sync::atomic::Ordering::SeqCst,
+        );
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if others.is_none() && self.on {
+            self.save();
+        }
         if self.on {
             self.start(cx);
         }
@@ -1212,6 +1226,45 @@ impl Agents {
         self.notes_off = !on;
         self.save();
         cx.notify();
+    }
+
+    /// Whether other apps' agents may connect while agents are on: Settings › Other apps' switch,
+    /// and first run's, which the user alone sets. A task from the command bar doesn't hang on it.
+    pub fn other_apps(&self) -> bool {
+        self.others.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Sets Settings › Other apps' switch. Off, an app's agent that connects is answered as it is
+    /// with agents off, and each one's sessions end as they do when agents go off, their pages by
+    /// the same rule; the apps stay connected, listed as they are.
+    pub fn set_other_apps(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.other_apps() {
+            return;
+        }
+        self.others.store(on, std::sync::atomic::Ordering::SeqCst);
+        if !on {
+            self.end_other_apps(cx);
+        }
+        self.save();
+        cx.notify();
+    }
+
+    /// Ends every session of the user's connected apps' agents as `stop` ends every agent's, with
+    /// their connections closed, the server running on for the command bar's tasks.
+    fn end_other_apps(&mut self, cx: &mut Context<Self>) {
+        let apps: Vec<Client> = self.agents.iter().map(|agent| agent.client).collect();
+        for client in apps {
+            let agent = client.id();
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(agent, None, cx);
+            if let Some((server, _)) = &self.server {
+                server.disconnect(agent);
+            }
+            if self.live.remove(agent) {
+                self.browser.disconnected(agent, cx);
+                self.note(agent, 0, "disconnected", "", "");
+            }
+        }
     }
 
     /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
@@ -1612,6 +1665,9 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
+            // A hello the server read before the user turned other apps' agents off, from a
+            // connection that's closing: nothing of it shows.
+            Event::Hello { agent, .. } if !self.may_connect(&agent) => {}
             Event::Hello {
                 agent,
                 client,
@@ -2342,10 +2398,17 @@ impl Agents {
         }
     }
 
-    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    /// Whether the agent's connections are taken: any but another app's while the user has other
+    /// apps' agents off.
+    fn may_connect(&self, agent: &str) -> bool {
+        Client::from_id(agent).is_none() || self.other_apps()
+    }
+
+    /// Whether the agent may call tools: a client the user connected, while other apps' agents are
+    /// on, or a task not dropped.
     fn may_call(&self, agent: &str) -> bool {
         match Client::from_id(agent) {
-            Some(client) => self.is_connected(client),
+            Some(client) => self.is_connected(client) && self.other_apps(),
             None => is_task(agent) && self.task(agent).is_some(),
         }
     }
@@ -5169,7 +5232,8 @@ impl Agents {
             return;
         }
         let (events, mut handed) = futures::channel::mpsc::unbounded();
-        match server::Server::start(&self.socket, self.tokens.clone(), events) {
+        let (tokens, others) = (self.tokens.clone(), self.others.clone());
+        match server::Server::start(&self.socket, tokens, others, events) {
             Ok(server) => {
                 // check.sh reads this line.
                 log!("browser: agents server on {}", server.path().display());
@@ -5253,6 +5317,7 @@ impl Agents {
         });
         let saved = json!({
             "on": self.on,
+            "other_apps": self.other_apps(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,
