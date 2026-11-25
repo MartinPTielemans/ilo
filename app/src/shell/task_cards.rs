@@ -28,24 +28,24 @@ use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
-    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, canvas, div, point,
-    prelude::*, px, rgb,
+    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels, Role,
+    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, accesskit::Live,
+    canvas, div, point, prelude::*, px, rgb,
 };
 
-use super::ShowStarted;
 use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
 use super::{
-    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
-    PLATE_INSET, PLATE_RADIUS, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TITLE,
-    TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate, selected_plate, title,
+    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV_RADIUS, PLATE_HEIGHT, PLATE_INSET,
+    PLATE_RADIUS, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TITLE, TITLE_END_INSET,
+    TITLE_GAP, What, cubic_bezier, dashed_plate, selected_plate, title,
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
+use crate::needs_you::Told;
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
@@ -61,6 +61,7 @@ use crate::tokens::shell::task::{
     STATUS_LINE, STOPPED,
 };
 use crate::tokens::shell::{FAVICON_DRAWN, MEDIA_BUTTON};
+use crate::tokens::shell::{FOOT_ROW, ICON_INK, LIBRARY_BUTTON};
 use crate::tokens::text;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
@@ -223,8 +224,11 @@ pub(super) enum PageWord {
     NeedsYou,
     /// The user took it over: the bar's title on that page, in the title's ink too.
     Driving,
-    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
+    /// Its task waits at a refused step or broke off, or the user holds it for a task that went
+    /// on.
     Paused,
+    /// The user stopped its task: every page of it says so.
+    Stopped,
 }
 
 impl PageWord {
@@ -235,6 +239,7 @@ impl PageWord {
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
             PageWord::Paused => "Paused",
+            PageWord::Stopped => "Stopped",
         }
     }
 }
@@ -630,6 +635,23 @@ impl Default for Foot {
 }
 
 impl Shell {
+    /// What a screen reader says of a task as it comes to need the user or to be done, wherever
+    /// its cursor is, in the words its sidebar line and its notification have: the Mac's
+    /// AccessKit announces a live region's value, and Windows' and Linux's its name (#3236).
+    pub(super) fn task_announcer(&self) -> Option<impl IntoElement + use<>> {
+        let (telling, said) = self.task_told.clone().filter(|_| self.a11y)?;
+        Some(
+            div()
+                .id(("task-told", telling))
+                .absolute()
+                .size_0()
+                .role(Role::Status)
+                .aria_label(said.clone())
+                .aria_value(said)
+                .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite)),
+        )
+    }
+
     /// The Agents' cards, newest first, none of which a private window shows, as it offers no
     /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
@@ -642,9 +664,25 @@ impl Shell {
         let mut waits = false;
         // An ended task kept its group for its pages: it goes as the last of them closes.
         let mut emptied = Vec::new();
+        // What a screen reader is told of a task that came to need the user or to be done.
+        let (mut told, mut answered) = (None, false);
+        let read = self.a11y && self.window_active;
+        let drawn = (read.then(|| self.talk_agent()).flatten())
+            .filter(|_| self.watched_task_page().is_none());
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
             waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
+            // The window in front tells it, and nothing where its notification was posted.
+            if read
+                && was.is_none_or(|was| was.dot != card.dot)
+                && let Some((came, false)) = crate::needs_you::came(&card.agent, cx)
+            {
+                match drawn.as_ref() == Some(&card.agent) {
+                    // Its conversation is drawn: its own line says a need, and the answer a finish.
+                    true => answered |= came == Told::Done && card.replies,
+                    false => told = Some(crate::needs_you::said(card, came)),
+                }
+            }
             if card.finished()
                 && card.pages.is_empty()
                 && was.is_some_and(|was| was.finished() && !was.pages.is_empty())
@@ -689,7 +727,18 @@ impl Shell {
             self.foot.slot = false;
         }
         self.task_cards = cards;
+        self.keep_plates();
         self.area_takes_space();
+        if let Some(said) = told {
+            let telling = self
+                .task_told
+                .as_ref()
+                .map_or(0, |(telling, _)| telling + 1);
+            self.task_told = Some((telling, said.into()));
+        }
+        if answered {
+            self.talk_answered(cx);
+        }
         // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
         // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.
         // It isn't held out, as a task may wait a long while over the page.
@@ -712,20 +761,7 @@ impl Shell {
         {
             self.show_task(agent, cx);
         }
-        // The composer's ↩ shows the task it started, as its Space has no page to stay on; ⌘T's
-        // ask over a page leaves the page, and its card comes in at the foot.
-        let started = |card: &&Card| match &self.show_started {
-            Some(ShowStarted::Asked(home)) => card.home == *home && !was.contains(&card.agent),
-            Some(ShowStarted::Task(agent)) => card.agent == *agent,
-            None => false,
-        };
-        if let Some(card) = self.task_cards.iter().find(started) {
-            let (agent, home) = (card.agent.clone(), card.home);
-            self.show_started = None;
-            if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
-                self.show_task(agent, cx);
-            }
-        }
+        self.show_started_task(Some(was.as_slice()), cx);
         cx.notify();
     }
 
@@ -1056,14 +1092,15 @@ impl Shell {
         }
     }
 
-    /// What `tab` is to `card`'s task now: its word, of the five a task's page has, and whether
+    /// What `tab` is to `card`'s task now: its word, of the six a task's page has, and whether
     /// it has the outline. The row at the sidebar's foot, a tile in the rail and the card all read
     /// this one answer, so a page's word and its outline never disagree. While the task works,
     /// each of its pages says Working and the outline alone marks the one it's in; Done is a
     /// page's word only once the task is done, as a page it left may be come back to. At a handoff
     /// the outline is on the page that needs the user. A page the user took over is theirs, one it
-    /// handed them and went on from is Paused, as are a stopped task's; a stopped or done task has
-    /// no outline.
+    /// handed them and went on from is Paused, as is one where it waits at a refused step or broke
+    /// off; every page of a task the user stopped says Stopped. A stopped or done task has no
+    /// outline.
     pub(super) fn page_mark(&self, card: &Card, tab: u64) -> PageMark {
         let mark = |word, outline| PageMark { word, outline };
         match self.held_why(tab) {
@@ -1083,9 +1120,8 @@ impl Shell {
                 mark(PageWord::Working, in_it)
             }
             Word::Done => mark(PageWord::Done, false),
-            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => {
-                mark(PageWord::Paused, false)
-            }
+            Word::Stopped => mark(PageWord::Stopped, false),
+            Word::NeedsYou | Word::Interrupted | Word::AtLimit => mark(PageWord::Paused, false),
         }
     }
 
@@ -1429,7 +1465,7 @@ impl Shell {
         let bump = self.archive_bump(now);
         (
             1. + (BUMP_SCALE - 1.) * bump,
-            NAV + (BUMP_GLYPH - NAV) * bump,
+            ICON_INK + (BUMP_GLYPH - ICON_INK) * bump,
         )
     }
 
@@ -1441,9 +1477,9 @@ impl Shell {
         let to = Bounds::new(
             point(
                 px(LIBRARY_BACK_INSET),
-                self.viewport.height - px((FOOTER_HEIGHT - NAV_SIZE) / 2. + NAV_SIZE),
+                self.viewport.height - px((FOOTER_HEIGHT + FOOT_ROW) / 2.),
             ),
-            gpui::size(px(NAV_SIZE), px(NAV_SIZE)),
+            gpui::size(px(LIBRARY_BUTTON), px(FOOT_ROW)),
         );
         let flights = self.foot.groups.iter().filter_map(|group| {
             let (since, from) = group.archived?;
@@ -1699,7 +1735,6 @@ impl Shell {
                 plate,
                 group.fill.at(now),
                 f32::from(u8::from(hovered)),
-                false,
             ),
             (false, true) => plate.bg(self.palette.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
@@ -1965,7 +2000,7 @@ impl Shell {
             .pr(px(PAGE_END))
             .rounded(px(PAGE_RADIUS));
         let row = match shown {
-            true => selected_plate(&self.palette, row, 1., 0., false),
+            true => selected_plate(&self.palette, row, 1., 0.),
             false => row,
         };
         let hover = self.palette.hovered_plate();
@@ -2002,7 +2037,7 @@ impl Shell {
         let gray = match word {
             PageWord::NeedsYou | PageWord::Driving => None,
             PageWord::Working => Some(PAGE_WORD_WORKING),
-            PageWord::Done | PageWord::Paused => Some(PAGE_WORD),
+            PageWord::Done | PageWord::Paused | PageWord::Stopped => Some(PAGE_WORD),
         };
         let ink = match gray {
             None => self.palette.text(TITLE),

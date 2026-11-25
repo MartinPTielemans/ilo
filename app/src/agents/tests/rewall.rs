@@ -13,7 +13,7 @@ use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::rewall::{
-    Change, LEFT_OUT_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+    Change, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
 };
 use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
@@ -120,7 +120,12 @@ const FOLDER: &str = "folder";
 
 /// A start's row in the log where it left the task's files out.
 fn started_without(tier: Tier, pages: usize) -> String {
-    format!("{}{LEFT_OUT_LOGGED}", tier::started_logged(tier, pages))
+    let with = tier::StartedWith {
+        pages,
+        left_out: true,
+        ..Default::default()
+    };
+    tier::started_logged(tier, with)
 }
 
 /// The changes of level the log has for the task, oldest first.
@@ -279,7 +284,6 @@ fn starts_from_its_words(args: &[String], first: &str, reply: &str) {
 
 /// A task with files never goes on with a conversation its assistant kept, which it can't reach
 /// inside a wall: a reply after its run went starts it from its own words.
-#[cfg(unix)]
 #[gpui::test]
 fn a_task_with_files_never_goes_on_with_a_kept_conversation(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("unkept", cx);
@@ -329,7 +333,6 @@ fn a_reply_to_a_stopped_task_with_files_starts_it_inside_a_new_wall(cx: &mut Tes
 /// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
 /// of the reply, which starts one inside the lower level's wall from the task's own words. Its
 /// assistant is told nothing of the access, as at any reply that takes a task up.
-#[cfg(unix)]
 #[gpui::test]
 fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("reply", cx);
@@ -574,7 +577,7 @@ fn a_start_the_system_refuses_goes_on_without_its_files(cx: &mut TestAppContext)
     assert_eq!(
         logged(&run, &agent, cx),
         [
-            tier::started_logged(Tier::Work, 0),
+            tier::started_logged(Tier::Work, Default::default()),
             started_without(Tier::Work, 0)
         ]
     );
@@ -677,7 +680,7 @@ fn a_restart_that_cant_start_and_a_run_left_running_are_lines_of_ilos(cx: &mut T
     // The lines are the task's own record: the log has nothing of them from here.
     assert_eq!(
         logged(&run, &agent, cx),
-        [tier::started_logged(Tier::Work, 0)]
+        [tier::started_logged(Tier::Work, Default::default())]
     );
 }
 
@@ -702,6 +705,196 @@ fn files_taken_back_from_a_task_at_rest_end_its_run(cx: &mut TestAppContext) {
     assert!(!walled(&args), "{args:?}");
     assert_eq!(walls.asked().len(), 1);
     assert_eq!(run.state(&agent, cx), State::Working);
+}
+
+/// A folder a live task holds, as Settings › Agents › Folders in use lists it: by the name the
+/// user saw, beside its task's title.
+fn in_use(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String)> {
+    (run.agents).read_with(cx, |agents, _| {
+        (agents.folders_in_use().into_iter())
+            .map(|held| (held.folder.to_string(), held.agent.to_string()))
+            .collect()
+    })
+}
+
+/// Revoke takes a live task's folder at once: Folders in use no longer lists it, its assistant
+/// starts again without it, and the conversation alone says so by the folder's name (J2). The log
+/// has the act with no name in it.
+#[gpui::test]
+fn a_revoked_folder_goes_at_once_and_only_the_conversation_names_it(cx: &mut TestAppContext) {
+    use crate::agents::task::revoke::REVOKED_LOGGED;
+    let (run, walls, agent) = started("revoke", folder(), cx);
+    run.ran(1);
+    assert_eq!(in_use(&run, cx), [(FOLDER.to_string(), agent.clone())]);
+    (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+    assert_eq!(in_use(&run, cx), []);
+    assert!(!stands(&run, &agent, cx).1, "the task has no files left");
+    let (args, first) = run.ran(2);
+    assert!(!walled(&args), "{args:?}");
+    let told = crate::agents::task::revoke::revoked_told(true, false);
+    assert!(first.ends_with(&told), "{first}");
+    assert_eq!(
+        walls.asked().len(),
+        1,
+        "no wall for a task with nothing left"
+    );
+    let revoked = IloKind::Revoked {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [revoked]);
+    // The log has its own words alone, never the folder's name or where it is.
+    let started = tier::started_logged(Tier::default(), Default::default());
+    assert_eq!(logged(&run, &agent, cx), [started.as_str(), REVOKED_LOGGED]);
+    // Nothing to revoke a second time, and no second line.
+    (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+    assert_eq!(lines(&run, &agent, cx).len(), 1);
+}
+
+/// A folder that's no longer where it was ends its grant at the task's start, and the task goes on
+/// without it, saying so once (J6) and not as a wall ilo couldn't put up.
+#[gpui::test]
+fn a_folder_gone_at_the_start_ends_its_grant_and_the_task_goes_on(cx: &mut TestAppContext) {
+    use crate::agents::wall::Refusal;
+    let run = Run::new("gone", cx);
+    let asked: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let put_up: PutUp = {
+        let asked = asked.clone();
+        Rc::new(move |wall: &WallFor| {
+            asked.borrow_mut().push(wall.folder.is_some());
+            match wall.folder {
+                Some(_) => Err(WallRefused::Refused(Refusal::Gone)),
+                None => Ok(Wall::for_test(None)),
+            }
+        })
+    };
+    (run.agents).update(cx, |agents, _| {
+        agents.tasks.files = Given {
+            folder: Some(Granted::for_test()),
+            attached: Some(PathBuf::from("/nonexistent/attached")),
+        };
+        agents.tasks.wall = Some(put_up);
+    });
+    let agent = run.start(Cli::Claude, cx);
+    let (args, _) = run.ran(1);
+    // The attached copies still go inside a wall, without the folder.
+    assert_eq!(*asked.borrow(), [true, false]);
+    assert!(walled(&args), "{args:?}");
+    let gone = IloKind::FolderGone {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [gone]);
+    assert_eq!(in_use(&run, cx), []);
+}
+
+/// Attached files ilo couldn't copy don't go silently: the task starts without them, its line
+/// names the one file (X6c), and the start's entry counts them and says they were left out.
+#[gpui::test]
+fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppContext) {
+    use crate::agents::files::Picked;
+    use crate::agents::task::{AskedOn, Start};
+    let run = Run::new("not-copied", cx);
+    (run.agents).update(cx, |agents, _| agents.tasks.files_available = true);
+    let missing = std::env::temp_dir().join("ilo-test-no-such-dir/seats.pdf");
+    let start = Start {
+        tier: Tier::default(),
+        model: None,
+        pages: Vec::new(),
+        only_added: false,
+        files: Picked {
+            files: vec![missing],
+            folder: None,
+        },
+    };
+    let page = Some(AskedOn {
+        url: "https://www.example.com/trains".into(),
+        title: "Trains to Lisbon".into(),
+    });
+    let agent = (run.agents)
+        .update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, ASKED, page, 1, start, cx)
+        })
+        .expect("started");
+    cx.run_until_parked();
+    run.ran(1);
+    let left = LeftOut::File("seats.pdf".into());
+    assert_eq!(lines(&run, &agent, cx), [IloKind::NotCopied { left }]);
+    let started = tier::started_logged(
+        Tier::default(),
+        tier::StartedWith {
+            files: 1,
+            left_out: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        started,
+        "Started at Work on pages · 1 file · files left out"
+    );
+    assert_eq!(logged(&run, &agent, cx), [started]);
+}
+
+/// What the assistant is told as its folder goes is one of the lead's texts exactly, and none
+/// names a folder, holds a path or gives a reason.
+#[test]
+fn a_revoked_folders_assistant_is_told_the_leads_words_alone() {
+    use crate::agents::task::revoke::revoked_told;
+    const REST: &str = "You can no longer read or change anything in it. Don't try to reach it \
+                        another way: carry on with the rest, and say what you couldn't finish. \
+                        Only the user can give a task a folder.";
+    const STILL: &str = " The files attached to this task are still there.";
+    let user = format!("The user revoked this task's folder. {REST}");
+    let ilo = format!("ilo revoked this task's folder. {REST}");
+    let forms = [
+        (revoked_told(true, false), user.clone()),
+        (revoked_told(true, true), format!("{user}{STILL}")),
+        (revoked_told(false, false), ilo.clone()),
+        (revoked_told(false, true), format!("{ilo}{STILL}")),
+    ];
+    for (told, text) in &forms {
+        assert_eq!(told, text);
+        assert!(
+            !told.contains('/') && !told.contains('\\'),
+            "a path in {told:?}"
+        );
+        assert!(
+            !told.contains('\u{201c}') && !told.contains('"'),
+            "a name in {told:?}"
+        );
+        for why in [
+            "moved",
+            "renamed",
+            "deleted",
+            "ejected",
+            "because",
+            "couldn't find",
+        ] {
+            assert!(!told.contains(why), "a reason in {told:?}");
+        }
+    }
+}
+
+/// The folder's chip under a live task's reply field names the folder the task holds, and its
+/// Revoke is the user's press on Folders in use: the folder goes, and the chip with it.
+#[gpui::test]
+fn the_reply_fields_revoke_takes_the_folder_and_its_chip(cx: &mut TestAppContext) {
+    use crate::agents::task::TaskAction;
+    let (run, _, agent) = started("reply-revoke", folder(), cx);
+    run.ran(1);
+    let shown = |run: &Run, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).and_then(|talk| talk.folder)
+        })
+    };
+    assert_eq!(shown(&run, cx).as_deref(), Some(FOLDER));
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::RevokeFolder, cx)
+    });
+    assert_eq!(in_use(&run, cx), []);
+    assert_eq!(shown(&run, cx), None, "the chip outlived the folder");
+    let revoked = IloKind::Revoked {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [revoked]);
 }
 
 /// A folder's name is the user's, and one place says it: ilo's line in the task's conversation.
@@ -734,7 +927,7 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
     // Each line, made as its test above makes it, with the runs of its task that started
     // outside a wall.
     type Makes = fn(&Run, &Walls, &str, &mut TestAppContext) -> (IloKind, Vec<usize>);
-    let cases: [(&str, bool, Makes); 4] = [
+    let cases: [(&str, bool, Makes); 5] = [
         ("named-start", true, |_, _, _, _| {
             let left = LeftOut::Folder(NAME.into());
             (IloKind::StartedWithout { left }, vec![1])
@@ -773,6 +966,16 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
             });
             let left = LeftOut::Folder(NAME.into());
             (IloKind::NotRestarted { left }, Vec::new())
+        }),
+        // The user's Revoke (J2): its assistant, started again with nothing left to wall, is told
+        // without the name.
+        ("named-revoked", false, |run, _, agent, cx| {
+            run.ran(1);
+            (run.agents).update(cx, |agents, cx| agents.revoke_folder(agent, cx));
+            let revoked = IloKind::Revoked {
+                folder: NAME.into(),
+            };
+            (revoked, vec![2])
         }),
     ];
     let mut notified = 0;
@@ -858,5 +1061,203 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
             assert!(!names(word), "{name}: {word}");
         }
     }
-    assert_eq!(notified, 3);
+    assert_eq!(notified, 4);
+}
+
+/// A task whose files ilo copies, from the user's picks on the `+`, on the stand-in assistant.
+#[cfg(unix)]
+mod copying {
+    use super::*;
+
+    /// A folder the test makes, as the panel would give it: beside the build, as ilo may give that on
+    /// every system the tests run on, where the system's temporary folder is one ilo never gives on
+    /// the Mac.
+    fn real_folder(name: &str) -> PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/ilo-test-folders")
+            .join(format!("{name}-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    /// A task started from ⌘T with `folder` and one attached file, as the user picks them, its copy
+    /// not made yet: nothing has run until the test lets the copy end.
+    fn picked(name: &str, folder: PathBuf, cx: &mut TestAppContext) -> (Run, Walls, String) {
+        picked_as(name, Granted::at_for_test(folder), cx)
+    }
+
+    /// The same with a folder granted as the test made it, which may no longer be itself.
+    fn picked_as(name: &str, folder: Granted, cx: &mut TestAppContext) -> (Run, Walls, String) {
+        use crate::agents::files::Picked;
+        use crate::agents::task::Start;
+        let (run, walls) = (Run::new(name, cx), Walls::default());
+        let file = beside(&run.program, "seats.pdf");
+        std::fs::write(&file, "two seats").unwrap();
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files_available = true;
+            agents.tasks.wall = Some(walls.maker());
+        });
+        let start = Start {
+            tier: Tier::default(),
+            model: None,
+            pages: Vec::new(),
+            only_added: false,
+            files: Picked {
+                files: vec![file],
+                folder: Some(folder),
+            },
+        };
+        let agent = (run.agents)
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, ASKED, None, 1, start, cx)
+            })
+            .expect("started");
+        (run, walls, agent)
+    }
+
+    /// How many times the task's assistant was started.
+    fn starts(run: &Run) -> usize {
+        (1..)
+            .take_while(|n| beside(&run.program, &format!("in.{n}")).exists())
+            .count()
+    }
+
+    fn copies(run: &Run, agent: &str, cx: &mut TestAppContext) -> PathBuf {
+        (run.agents).read_with(cx, |agents, _| {
+            agents.tasks_dir().join(format!("{agent} files"))
+        })
+    }
+
+    /// While ilo copies the files attached to a task, nothing starts its assistant: a Revoke then
+    /// takes the folder, says so, and the task starts once, as the copies end, with its files and
+    /// without the folder.
+    #[gpui::test]
+    fn a_revoke_while_the_files_are_copied_gives_one_start_without_the_folder(
+        cx: &mut TestAppContext,
+    ) {
+        let folder = real_folder("revoked-copying");
+        let (run, walls, agent) = picked("revoke-copying", folder.clone(), cx);
+        (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+        assert_eq!(walls.asked(), [], "a start before the copies ended");
+        cx.run_until_parked();
+        run.ran(1);
+        cx.run_until_parked();
+        assert_eq!(starts(&run), 1, "the task started twice");
+        assert_eq!(walls.asked(), [(Tier::Work, false, true)]);
+        let name = crate::agents::files::shown_name(&folder);
+        assert_eq!(
+            lines(&run, &agent, cx),
+            [IloKind::Revoked {
+                folder: name.into()
+            }]
+        );
+        let started = tier::started_logged(
+            Tier::Work,
+            tier::StartedWith {
+                files: 1,
+                ..Default::default()
+            },
+        );
+        assert!(
+            logged(&run, &agent, cx).contains(&started),
+            "{:?}",
+            logged(&run, &agent, cx)
+        );
+        _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// A change of level while the files are copied is the task's from then on, and its one start
+    /// is at it.
+    #[gpui::test]
+    fn a_level_change_while_the_files_are_copied_gives_one_start_at_it(cx: &mut TestAppContext) {
+        let folder = real_folder("level-copying");
+        let (run, walls, agent) = picked("level-copying", folder.clone(), cx);
+        set(&run, &agent, Tier::Full, cx);
+        assert_eq!(walls.asked(), [], "a wall before the copies ended");
+        cx.run_until_parked();
+        run.ran(1);
+        cx.run_until_parked();
+        assert_eq!(starts(&run), 1, "the task started twice");
+        assert_eq!(walls.asked(), [(Tier::Full, true, true)]);
+        _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// Stop while the files are copied starts nothing, and the copies go.
+    #[gpui::test]
+    fn stop_while_the_files_are_copied_starts_nothing(cx: &mut TestAppContext) {
+        use crate::agents::task::TaskAction;
+        let folder = real_folder("stop-copying");
+        let (run, walls, agent) = picked("stop-copying", folder.clone(), cx);
+        (run.agents).update(cx, |agents, cx| {
+            _ = agents.task_action(&agent, TaskAction::Stop, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!((starts(&run), walls.asked()), (0, vec![]));
+        assert!(!copies(&run, &agent, cx).exists(), "the copies stayed");
+        _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// At the start the folder is checked again by its real path: one moved, or reached through a
+    /// link, since the panel gave it isn't given, and the task starts without it, its line saying so
+    /// by the name the user saw (X6). Its files still go.
+    #[gpui::test]
+    fn a_folder_that_isnt_itself_at_the_start_is_left_out_and_said(cx: &mut TestAppContext) {
+        let real = real_folder("linked-real");
+        let link = real.with_file_name(format!("linked-{}", std::process::id()));
+        _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Each was granted while it was the folder, then became a link to one or went.
+        let linked = Granted::was_for_test(link.clone(), &real);
+        let moved = real_folder("moved");
+        let gone = Granted::at_for_test(moved.clone());
+        std::fs::remove_dir(&moved).unwrap();
+        for (case, folder, granted) in [("link", link.clone(), linked), ("moved", moved, gone)] {
+            let (run, walls, agent) = picked_as(&format!("not-itself-{case}"), granted, cx);
+            cx.run_until_parked();
+            run.ran(1);
+            assert_eq!(walls.asked(), [(Tier::Work, false, true)], "{case}");
+            let name = crate::agents::files::shown_name(&folder);
+            let left = LeftOut::Folder(name.into());
+            assert_eq!(
+                lines(&run, &agent, cx),
+                [IloKind::StartedWithout { left }],
+                "{case}"
+            );
+            let started = tier::started_logged(
+                Tier::Work,
+                tier::StartedWith {
+                    files: 1,
+                    left_out: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(logged(&run, &agent, cx), [started], "{case}");
+            assert_eq!(in_use(&run, cx), [], "{case}");
+        }
+        _ = std::fs::remove_file(link);
+        _ = std::fs::remove_dir_all(real);
+    }
+
+    /// ilo's copies of a finished task's files go with its conversation, on Remove and on Remove All.
+    #[gpui::test]
+    fn a_finished_tasks_copies_go_on_remove_and_remove_all(cx: &mut TestAppContext) {
+        for all in [false, true] {
+            let folder = real_folder(&format!("removed-{all}"));
+            let (run, _, agent) = picked(&format!("copies-removed-{all}"), folder.clone(), cx);
+            cx.run_until_parked();
+            run.ran(1);
+            let copies = copies(&run, &agent, cx);
+            let made = std::fs::read_dir(&copies).map_or(0, |copied| copied.count());
+            assert_eq!(made, 1, "no copy made");
+            run.finish(&agent, cx);
+            (run.agents).update(cx, |agents, cx| match all {
+                true => agents.remove_kept_tasks(cx),
+                false => agents.remove_kept_task(&agent, cx),
+            });
+            cx.run_until_parked();
+            assert!(!copies.exists(), "Remove All {all} left the copies");
+            _ = std::fs::remove_dir_all(folder);
+        }
+    }
 }

@@ -4,17 +4,19 @@
 //! keys it takes. Nothing of the tasks is read for the page's first frame, and the bar asks the
 //! core nothing until it's typed in.
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 use gpui::{
-    Bounds, BoxShadow, Context, Entity, FontWeight, Hsla, Pixels, SharedString, Subscription,
-    Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
+    Bounds, BoxShadow, Context, Corners, Entity, FontWeight, Hsla, Pixels, SharedString,
+    Subscription, Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
-use crate::agents::task::{Card, Dot};
+use crate::agents::files::{self, Picked, words as files_words};
+use crate::agents::task::{Card, Dot, Word};
 use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
-use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
+use crate::agents::wall::Granted;
+use crate::command_bar::{self, CommandBar, Given, InPlaceKey};
 use crate::palette::{Palette, Tone};
 use crate::shell::ShowStarted;
 use crate::tokens::shell::composer::*;
@@ -25,6 +27,7 @@ use super::super::{
     commands::{key_name, space_tabs},
     keys::OFF_THE_MAC,
     menus::{MenuAction, MenuEntry},
+    task_area::covering,
 };
 
 /// What the field says in Search.
@@ -72,6 +75,12 @@ pub(in crate::shell) struct Resting {
     pub(in crate::shell) only_added: bool,
     /// Where the `+` chip was last drawn, which its menu hangs from.
     pub(in crate::shell) plus_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The files the user attached and the folder they granted on the `+` menu, for the next
+    /// task alone, and the line saying the panel gave a folder ilo never gives. They go as the
+    /// level does.
+    pub(in crate::shell) files: Vec<PathBuf>,
+    pub(in crate::shell) folder: Option<Granted>,
+    pub(in crate::shell) refused: Option<SharedString>,
 }
 
 /// A page the user added: its tab, which its row in the menu is checked by, its address as it was
@@ -93,33 +102,28 @@ fn hung_under(chip: Option<Bounds<Pixels>>, clicked: gpui::Point<Pixels>) -> gpu
     chip.origin + point(px(CHIP_INSET - names), chip.size.height + px(MENU_DROP))
 }
 
-/// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
-/// it, or Settings'. A pick it no longer offers is its default, as in Settings.
-pub(super) fn next_model(picked: Option<&(SharedString, String)>, agent: &TaskAgent) -> String {
-    let picked = picked.filter(|(on, _)| *on == agent.id).map(|(_, id)| id);
-    let id = picked.unwrap_or(&agent.model_id);
-    match agent.models.iter().any(|(each, _)| each == id) {
-        true => id.clone(),
-        false => String::new(),
-    }
-}
-
-/// What the assistant's chip says: its name and the model the next task starts on, or its Model
-/// menu's first row for its own default.
-pub(super) fn model_words(agent: &TaskAgent, id: &str) -> String {
-    match agent.models.iter().find(|(each, _)| each == id) {
-        Some((_, name)) => format!("{} · {name}", agent.name),
-        None => agent.default_row.to_string(),
-    }
-}
+pub(super) use crate::command_bar::{model_words, next_model};
 
 impl Resting {
-    /// The picks on Ask's line, which hold for the next task alone: its level, model and pages.
+    /// The picks on Ask's line, which hold for the next task alone: its level, model, pages,
+    /// files and folder.
     fn forget_picks(&mut self) {
         self.tier = Tier::default();
         self.model = None;
         self.pages.clear();
         self.only_added = false;
+        self.files.clear();
+        self.folder = None;
+        self.refused = None;
+    }
+
+    /// The files' chip and the folder's, in the order the field draws them after the pages.
+    fn given(&self) -> Vec<Given> {
+        let files = (!self.files.is_empty())
+            .then(|| Given::Files(files_words::files(self.files.len()).into()));
+        let folder = (self.folder.as_ref())
+            .map(|folder| Given::Folder(files::shown_name(folder.root()).into()));
+        files.into_iter().chain(folder).collect()
     }
 }
 
@@ -185,6 +189,9 @@ impl Shell {
             pages: Vec::new(),
             only_added: false,
             plus_chip: Rc::default(),
+            files: Vec::new(),
+            folder: None,
+            refused: None,
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -206,6 +213,11 @@ impl Shell {
         let Some(resting) = &mut self.resting else {
             return false;
         };
+        // The core shows a page the shell hasn't heard of yet, as at launch with a page to open:
+        // the keys are that page's, and open the bar over it (#4268).
+        if self.browser.shown_now() != 0 {
+            return false;
+        }
         resting.wants_keys = Owed::Asked;
         cx.notify();
         true
@@ -264,13 +276,29 @@ impl Shell {
             InPlaceKey::Escape if on_ask => self.set_on_ask(false, window, cx),
             InPlaceKey::Escape => {}
             InPlaceKey::Run => self.run_composed(window, cx),
-            InPlaceKey::DropPage => {
-                if let Some(page) = self
-                    .resting
-                    .as_ref()
-                    .and_then(|resting| resting.pages.last())
-                {
+            // The last chip in the field goes: the folder, then the files one by one, then the
+            // pages.
+            InPlaceKey::DropChip => {
+                let Some(resting) = &self.resting else {
+                    return;
+                };
+                if resting.folder.is_some() {
+                    self.revoke_composer_folder(cx);
+                } else if let Some(file) = resting.files.last().cloned() {
+                    self.drop_file(file, cx);
+                } else if let Some(page) = resting.pages.last() {
                     self.toggle_page(page.tab, cx);
+                }
+            }
+            InPlaceKey::Given(at) => {
+                let Some(resting) = &self.resting else {
+                    return;
+                };
+                let clicked = window.mouse_position();
+                match resting.given().get(at) {
+                    Some(Given::Files(_)) => self.composer_files_menu(clicked, cx),
+                    Some(Given::Folder(_)) => self.composer_folder_menu(clicked, cx),
+                    None => {}
                 }
             }
         }
@@ -343,22 +371,71 @@ impl Shell {
             model,
             pages: resting.pages.iter().map(|page| page.url.clone()).collect(),
             only_added: resting.only_added,
+            files: Picked {
+                files: std::mem::take(&mut resting.files),
+                folder: resting.folder.take(),
+            },
         };
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
-        self.show_started = Some(ShowStarted::Asked(home));
+        self.show_started = Some(ShowStarted::Asked {
+            home,
+            over: self.selected,
+        });
         self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
     }
 
-    /// The Agents' answer to the composer's last ↩: the task it started, whose view alone opens as
-    /// its card comes in, or None, when it started none and no other task's card opens a view.
+    /// ⌘T's ↩ is starting a task from this window's Space, over the tab it shows: as the
+    /// composer's does, its conversation takes that tab's place as its card comes in.
+    pub fn bar_starting(&mut self) {
+        self.show_started = Some(ShowStarted::Asked {
+            home: self.space(),
+            over: self.selected,
+        });
+    }
+
+    /// The Agents' answer to the composer's or ⌘T's last ↩: the task it started, whose view alone
+    /// opens as its card comes in, or None, when it started none and no other task's card opens a
+    /// view.
     pub fn composed_started(&mut self, agent: Option<SharedString>) {
-        if !matches!(self.show_started, Some(ShowStarted::Asked(_))) {
+        let Some(ShowStarted::Asked { over, .. }) = self.show_started else {
+            return;
+        };
+        self.show_started = agent.map(|agent| ShowStarted::Task { agent, over });
+    }
+
+    /// The composer's and ⌘T's ↩ show the task they started in the place of the page they were
+    /// asked over, the empty page or a tab, while it still shows. The card comes before the window
+    /// hears of the task's Space, which the core tells after the call that made it, so until then
+    /// the start waits for that Space, by its task. `was`, the cards before these, tells the new
+    /// ones while the Agents haven't said which task it started.
+    pub(in crate::shell) fn show_started_task(
+        &mut self,
+        was: Option<&[SharedString]>,
+        cx: &mut Context<Self>,
+    ) {
+        let started = |card: &&Card| match &self.show_started {
+            Some(ShowStarted::Asked { home, .. }) => {
+                card.home == *home && was.is_some_and(|was| !was.contains(&card.agent))
+            }
+            Some(ShowStarted::Task { agent, .. }) => card.agent == *agent,
+            None => false,
+        };
+        let Some(card) = self.task_cards.iter().find(started) else {
+            return;
+        };
+        let over = self.show_started.as_ref().map_or(0, ShowStarted::over);
+        let (agent, home, space) = (card.agent.clone(), card.home, card.space);
+        if space != 0 && self.task_space(space).is_none() {
+            self.show_started = Some(ShowStarted::Task { agent, over });
             return;
         }
-        self.show_started = agent.map(ShowStarted::Task);
+        self.show_started = None;
+        if self.selected == over && self.space() == home && self.talk_agent().is_none() {
+            self.show_task(agent, cx);
+        }
     }
 
     /// Puts the composer's level back to Work on pages, and its model back to Settings'.
@@ -422,15 +499,86 @@ impl Shell {
             .collect()
     }
 
-    /// Whether the `+` has anything to offer: a page of the Space's to add. Without one it's
-    /// disabled in its place.
-    pub(in crate::shell) fn plus_offers(&self) -> bool {
-        !self.pages_to_add().is_empty()
+    /// Whether the `+` has anything to offer: files and folders where this system can wall a
+    /// task in with them, or else a page of the Space's to add. Without either it's disabled in
+    /// its place.
+    pub(in crate::shell) fn plus_offers(&self, cx: &gpui::App) -> bool {
+        self.browser.files_available(cx) || !self.pages_to_add().is_empty()
     }
 
-    /// The `+` chip's menu: the Space's pages, those added checked. It's Add a Page's submenu once
-    /// files and folders join it, when the system can wall them off; till then a menu of one row
-    /// would be no menu, so `+` lists the pages itself. With none, the `+` is disabled.
+    /// The `+` chip's menu. Where this system can wall a task in with its files: Add Page, whose
+    /// submenu is the Space's pages, Add Files… and Add Folder…. Till then, the pages alone.
+    pub(in crate::shell) fn composer_plus_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.browser.files_available(cx) {
+            return self.pages_menu(clicked, cx);
+        }
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let chip = resting.plus_chip.get();
+        let added: Vec<u64> = resting.pages.iter().map(|page| page.tab).collect();
+        let pages = self.pages_to_add();
+        let none: MenuAction = Box::new(|_, _| {});
+        let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
+            MenuEntry::new(files_words::ADD_PAGE, !pages.is_empty()),
+            none,
+        )];
+        for (tab, title) in pages {
+            let entry = MenuEntry {
+                page: true,
+                favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
+                ..MenuEntry::named(title, true).checked(added.contains(&tab))
+            };
+            let pick: MenuAction = Box::new(move |shell, cx| shell.toggle_page(tab, cx));
+            items.push((entry.under(0), pick));
+        }
+        let add_files: MenuAction = Box::new(|shell, cx| shell.add_files(cx));
+        let add_folder: MenuAction = Box::new(|shell, cx| shell.add_folder(cx));
+        items.push((MenuEntry::new(files_words::ADD_FILES, true), add_files));
+        items.push((MenuEntry::new(files_words::ADD_FOLDER, true), add_folder));
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The attached files' chip's menu: each file by its name, checked, as a pick drops it.
+    pub(in crate::shell) fn composer_files_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let items: Vec<(MenuEntry, MenuAction)> = (resting.files.iter().cloned())
+            .map(|file| {
+                let entry = MenuEntry::named(files::shown_name(&file), true).checked(true);
+                let drop: MenuAction = Box::new(move |shell, cx| shell.drop_file(file, cx));
+                (entry, drop)
+            })
+            .collect();
+        self.show_menu(items, clicked, None, cx);
+    }
+
+    /// The folder's chip's menu: its one act, Revoke.
+    pub(in crate::shell) fn composer_folder_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !(self.resting.as_ref()).is_some_and(|resting| resting.folder.is_some()) {
+            return;
+        }
+        let revoke: MenuAction = Box::new(|shell, cx| shell.revoke_composer_folder(cx));
+        let items = vec![(MenuEntry::new(files_words::REVOKE, true), revoke)];
+        self.show_menu(items, clicked, None, cx);
+    }
+
+    /// The `+` chip's menu where files and folders aren't available: the Space's pages, those
+    /// added checked, as a menu of one row (Add Page) would be no menu. With none, the `+` is
+    /// disabled.
     pub(in crate::shell) fn pages_menu(
         &mut self,
         clicked: gpui::Point<Pixels>,
@@ -633,8 +781,10 @@ impl Shell {
             .flat_map(|resting| &resting.pages)
             .map(|page| (page.url.clone().into(), page.title.clone()))
             .collect();
+        let given = (self.resting.as_ref()).map_or_else(Vec::new, Resting::given);
         let field = bar.update(cx, |bar, cx| {
             bar.set_added(added, cx);
+            bar.set_given(given, cx);
             bar.field(fill, window, cx)
         });
         let on_ask = bar.read(cx).on_ask();
@@ -684,7 +834,7 @@ impl Shell {
         };
         let row = command_bar::centered_row_middle(f32::from(self.viewport.height))
             - f32::from(frame.top());
-        let plates = cards.iter().any(|card| card.last_site.is_some());
+        let plates = cards.iter().any(|card| self.plate_of(card).is_some());
         let top = group_top(row, f32::from(frame.size.height), !cards.is_empty(), plates);
         let page = div()
             .size_full()
@@ -768,6 +918,7 @@ impl Shell {
     fn ask_line(&mut self, on_ask: bool, width: f32, cx: &mut Context<Self>) -> gpui::Div {
         let palette = self.palette;
         let line = div()
+            .relative()
             .w(px(width))
             .mt(px(LINE_TOP))
             .h(px(CHIP_HEIGHT))
@@ -798,6 +949,7 @@ impl Shell {
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
         let plus_chip = (self.resting.as_ref()).map(|resting| resting.plus_chip.clone());
+        let refused = (self.resting.as_ref()).and_then(|resting| resting.refused.clone());
         let assistant = (self.resting.as_ref()).and_then(|resting| {
             let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
             Some(model_words(
@@ -806,14 +958,14 @@ impl Shell {
             ))
         });
         // With nothing to add, the + stays in its place, disabled: no click that shows nothing.
-        let offers = self.plus_offers();
+        let offers = self.plus_offers(cx);
         line.child(
             chip()
                 .id("composer-plus")
                 .relative()
                 .when(offers, |chip| {
                     chip.on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                        shell.pages_menu(event.position(), cx)
+                        shell.composer_plus_menu(event.position(), cx)
                     }))
                 })
                 .children(plus_chip.as_ref().map(drawn_at))
@@ -844,11 +996,22 @@ impl Shell {
                 .child(assistant)
                 .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON))
         }))
+        // Under the line, so nothing on it moves.
+        .children(refused.map(|refused| {
+            div()
+                .absolute()
+                .top(px(CHIP_HEIGHT + LINE_TOP))
+                .left(px(CHIP_INSET))
+                .right(px(CHIP_INSET))
+                .child(refused)
+        }))
     }
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full
-    /// ink (or its status, with no steps this turn), over a plate naming the site of its last
-    /// page; a task that has reached none ends after its words. A click opens it.
+    /// ink (or its status, with no steps this turn), over the picture its last page's tile ended
+    /// on. Once over, its one line is a done task's answer's first or, quiet, a stopped one's
+    /// last finished step, if it has one; a task a run before left says when it ended and has
+    /// none. A card with no picture ends after its words. A click opens it.
     fn recent_card(
         &self,
         index: usize,
@@ -856,7 +1019,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette;
-        let state = card.word.alone(&card.name);
+        let state = match &card.ended_at {
+            Some(at) => format!("{} · {at}", card.word.alone(&card.name)).into(),
+            None => card.word.alone(&card.name),
+        };
         let dot = (card.dot == Dot::Working).then(|| {
             div()
                 .flex_none()
@@ -865,9 +1031,15 @@ impl Shell {
                 .bg(rgb(STATUS_AGENT))
         });
         let working = card.dot == Dot::Working;
-        let lines: Vec<(SharedString, bool)> = match card.steps.is_empty() {
-            true => vec![(card.status.clone(), true)],
-            false => {
+        let lines: Vec<(SharedString, bool)> = match card.word {
+            _ if card.ended_at.is_some() => Vec::new(),
+            // A done task says its answer's first line; a stopped one only its last finished
+            // step, quiet, or nothing after its title.
+            Word::Done | Word::Stopped => (card.line.clone().into_iter())
+                .map(|line| (line, card.word == Word::Done))
+                .collect(),
+            _ if card.steps.is_empty() => vec![(card.status.clone(), true)],
+            _ => {
                 let last = card.steps.len() - 1;
                 (card.steps.iter().cloned().enumerate())
                     .map(|(at, step)| (step, working && at == last))
@@ -884,19 +1056,25 @@ impl Shell {
                 })
                 .child(line)
         });
-        let plate = card.last_site.clone().map(|site| {
+        let plate = self.plate_of(&card).map(|picture| {
+            let corners = Corners::all(px(PAGE_RADIUS));
             div()
                 .h(px(PAGE_HEIGHT))
                 .mx(px(PAGE_INSET))
                 .mb(px(PAGE_INSET))
                 .rounded(px(PAGE_RADIUS))
                 .bg(palette.plate(PAGE_FILL))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(STEP_SIZE))
-                .text_color(palette.text(STEP_INK))
-                .child(site)
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let drawn = covering(bounds, picture.size());
+                            (window.paint_image(bounds, drawn, corners, picture.image(), 0, false))
+                                .ok();
+                        },
+                    )
+                    .size_full(),
+                )
         });
         let agent = card.agent.clone();
         div()

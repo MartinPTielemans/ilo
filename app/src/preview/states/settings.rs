@@ -5,8 +5,7 @@ use crate::*;
 /// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
 #[derive(Clone, Copy)]
 pub(crate) enum Pictures {
-    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen,
-    /// and the Top bar under it.
+    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen.
     Appearance {
         appearance: browser::theme::Appearance,
         right: bool,
@@ -55,12 +54,7 @@ pub(crate) fn preview_pictures(shown: Pictures, cx: &mut App) {
     let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
-            let look = browser::settings_rows::Look::settings(true);
-            let search = cx.new(|cx| {
-                browser::text_input::TextInput::new("Search", cx)
-                    .placeholder_color(look.detail)
-                    .caret_color(look.ink)
-            });
+            let search = cx.new(|cx| browser::text_input::TextInput::new("Search", cx));
             PicturesPage {
                 shown,
                 card: Card::default(),
@@ -120,6 +114,11 @@ impl gpui::Render for PicturesPage {
             _ => preview_tone() != Some(Tone::Light),
         };
         let look = Look::settings(dark);
+        // The page's look is this frame's, so its field gets it as the page draws.
+        let colors = look.field();
+        self.search.update(cx, |search, _| {
+            search.set_colors(colors.placeholder, colors.caret, colors.selection)
+        });
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let a11y = window.is_a11y_active();
         let field = browser::settings_search::field(
@@ -130,13 +129,12 @@ impl gpui::Render for PicturesPage {
             cx,
         );
         let section = match self.shown {
-            Pictures::Favorites(_) => Section::TabsAndSidebar,
-            Pictures::Appearance { .. } => Section::Appearance,
+            Pictures::Favorites(_) => Section::TabsAndSpaces,
+            Pictures::Appearance { .. } => Section::Window,
             Pictures::General => Section::General,
-            Pictures::CommandLine(_) | Pictures::Assistants { .. } | Pictures::Models => {
-                Section::Agents
-            }
-            Pictures::SiteNotes { .. } => Section::Agents,
+            Pictures::CommandLine(_) => Section::OtherApps,
+            Pictures::Assistants { .. } | Pictures::Models => Section::Models,
+            Pictures::SiteNotes { .. } => Section::Access,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -147,6 +145,7 @@ impl gpui::Render for PicturesPage {
             None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            settings_column::Version::of(cx),
             a11y,
         );
         let page = cx.entity().downgrade();
@@ -219,17 +218,6 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                let top_bar = frame()
-                    .child(row_text(
-                        &look,
-                        "Top bar",
-                        Some(
-                            "The URL field and the sidebar's buttons in a row across the window's \
-                             top, the page under it. ⇧⌘D turns it on and off."
-                                .into(),
-                        ),
-                    ))
-                    .child(switch("top bar", false));
                 // Transparency under Appearance, at the level kept, as Settings has it (#4129).
                 let transparency = browser::transparency::row(
                     &look,
@@ -254,17 +242,14 @@ impl gpui::Render for PicturesPage {
                 }
                 groups.extend([(
                     Some("Layout"),
-                    vec![
-                        pictured(
-                            &look,
-                            "Sidebar position",
-                            "The side of the window the sidebar, the Library and the \
-                                 window's buttons are on."
-                                .into(),
-                            pair,
-                        ),
-                        top_bar,
-                    ],
+                    vec![pictured(
+                        &look,
+                        "Sidebar position",
+                        "The side of the window the sidebar, the Library and the \
+                             window's buttons are on."
+                            .into(),
+                        pair,
+                    )],
                 )]);
                 groups
             }
@@ -387,7 +372,7 @@ impl gpui::Render for PicturesPage {
                         .child(end(controls))
                 };
                 let master = feature(
-                    Section::Agents.glyph(),
+                    Section::Threads.glyph(),
                     "Let agents use the browser",
                     "On: a connected client reaches the browser through the bridge beside it.",
                     vec![gpui::IntoElement::into_any_element(stop_switch(
@@ -481,6 +466,7 @@ impl gpui::Render for PicturesPage {
                         &shown,
                         marked,
                         a11y,
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
                         gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
                         Rc::new(|_, _, _| {}),
                     )
@@ -626,15 +612,16 @@ impl gpui::Render for PicturesPage {
             .map(|(index, (heading, rows))| {
                 let heading = heading.map(|heading| {
                     div()
-                        .px(px(TEXT_X))
+                        .px(px(browser::tokens::settings::HEADING_X))
                         .mb(px(HEADING_BOTTOM))
-                        .text_size(px(text::SMALL))
+                        .line_height(px(browser::tokens::settings::HEADING_LINE))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(look.heading)
                         .child(heading)
                 });
                 let top = match (index, heading.is_some()) {
-                    (0, _) => FIRST_GROUP,
                     (_, true) => HEADING_TOP,
+                    (0, false) => FIRST_GROUP,
                     (_, false) => GROUP_GAP,
                 };
                 let under = under.filter(|_| index == 0);
@@ -655,7 +642,7 @@ impl gpui::Render for PicturesPage {
                         (rows.into_iter().enumerate()).map(|(at, row)| {
                             match nested.contains(&(index, at)) {
                                 true => (row, NESTED_X),
-                                false => (row, ROW_X),
+                                false => (row, 0.),
                             }
                         }),
                     ))
@@ -679,7 +666,7 @@ impl gpui::Render for PicturesPage {
             div()
                 .mt(px(browser::tokens::settings::LEDE_TOP))
                 .line_height(px(browser::tokens::settings::LEDE_LINE))
-                .text_color(base.opacity(browser::tokens::settings::DETAIL))
+                .text_color(base.opacity(browser::palette::TEXT_SECONDARY))
                 .child(lede)
         });
         let make = general.then(|| {

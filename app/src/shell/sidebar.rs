@@ -21,7 +21,7 @@ use super::{
     REVEAL_OVERSHOOT, REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
     SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
-use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP, NAV_TRAIL, PLUS_INSET};
+use crate::tokens::shell::{FOOTER_HEIGHT, PLUS_INSET};
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
 /// counted again each time it's asked for (Arc 1.171, measured by an outside reverse-engineering,
@@ -56,20 +56,6 @@ impl gpui::Global for SidebarRight {}
 /// Whether Sidebar position is Right.
 pub fn sidebar_right(cx: &gpui::App) -> bool {
     cx.try_global::<SidebarRight>().is_some_and(|right| right.0)
-}
-
-/// Settings › Tabs & Sidebar's Top bar, off by default (#3160): the header's row widens across the
-/// window's top and the URL field moves into it, the card under it. This device's, not synced, as
-/// Sidebar position is, and every window follows at once. A view preference: agents have no call
-/// to change it.
-#[derive(Clone, Copy)]
-pub struct TopBar(pub bool);
-
-impl gpui::Global for TopBar {}
-
-/// Whether Top bar is on.
-pub fn top_bar(cx: &gpui::App) -> bool {
-    cx.try_global::<TopBar>().is_some_and(|on| on.0)
 }
 
 /// `x` across a window `width` wide, measured from the sidebar's side: itself on the left, from the
@@ -201,7 +187,6 @@ impl Shell {
                     }),
                 )
         };
-        let head = NAV_TOP + NAV_SIZE;
         // The reveal's panel is the edge's container there, from its own left.
         let left = match (revealed, self.right) {
             (false, true) => self.column_x(),
@@ -214,10 +199,9 @@ impl Shell {
             .bottom_0()
             .left(px(left))
             .w(px(SIDEBAR_EDGE))
-            .child(part("sidebar-edge-head", NAV_TRAIL, cx).top_0().h(px(head)))
             .child(
                 part("sidebar-edge", SIDEBAR_EDGE, cx)
-                    .top(px(head))
+                    .top_0()
                     .bottom(px(FOOTER_HEIGHT)),
             )
             .child(
@@ -566,9 +550,8 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
-        // A Little ilo window's are over its bar, where the window's own go, as are Windows' at the
-        // top bar's end, which nothing covers.
-        if self.little.is_some() || self.buttons_at_bar_end() {
+        // A Little ilo window's are over its bar, where the window's own go.
+        if self.little.is_some() {
             return WindowButtons {
                 window: true,
                 library: false,
@@ -579,8 +562,7 @@ impl Shell {
             self.library_open,
             self.library_moving(),
             self.library_at_rest(),
-            // The bar keeps them while the sidebar is hidden, as it keeps the header's buttons.
-            self.bar_on() || (!self.sidebar_hidden && self.sidebar_motion.is_none()),
+            !self.sidebar_hidden && self.sidebar_motion.is_none(),
         )
     }
 
@@ -996,7 +978,7 @@ mod tests {
         drag::detents::{row_y, shell_with},
         recorder::Recorder,
     };
-    use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP};
+    use crate::tokens::shell::{FOOTER_HEIGHT, PLUS_INSET, WINDOW_BUTTON_Y};
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
     /// back. Spaces made one after another are told of together. None for the window's first
@@ -1315,7 +1297,7 @@ mod tests {
     fn the_wheel_brings_the_marker_only_for_a_row_wholly_scrolled_out(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
-        cx.simulate_resize(size(px(1000.), px(340.)));
+        cx.simulate_resize(size(px(1000.), px(320.)));
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
@@ -1349,7 +1331,7 @@ mod tests {
         // At the list's top the last row still shows its top: a move past it marks nothing.
         assert_eq!(wheel(cx, 50.), None, "a marker for a row that still shows");
         // Shorter, the row is wholly under the list's bottom at its top.
-        cx.simulate_resize(size(px(1000.), px(300.)));
+        cx.simulate_resize(size(px(1000.), px(280.)));
         shell.update(cx, |shell, cx| shell.set_selected(12, cx));
         draw(&shell, cx);
         let markers: Vec<_> = (0..8).map(|_| wheel(cx, 10.)).collect();
@@ -2108,17 +2090,27 @@ mod tests {
         );
     }
 
-    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 6
-    /// past it, and beside the + the 8 past that.
+    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 10
+    /// past it, and beside the + what's past its plate.
     #[gpui::test]
     fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
         let (shell, _, cx) = edge_window(cx);
-        let header = NAV_TOP + NAV_SIZE / 2.;
-        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., header));
-        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 5., header));
+        let header = WINDOW_BUTTON_Y;
+        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 11., header));
+        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., header));
         let foot = 600. - FOOTER_HEIGHT / 2.;
-        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., foot));
-        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., foot));
+        assert!(!takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET - 1.,
+            foot
+        ));
+        assert!(takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET + 1.,
+            foot
+        ));
     }
 
     /// A drag from the edge that ends over a row's close button, the sidebar stopped at its

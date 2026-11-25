@@ -250,7 +250,7 @@ sign_in_link() {
 }
 sign_in_link "$provider/signin.html?code=abc"
 await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
-await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
+await "^browser: little window $little sign-in done\$" ||
   fail "the callback with a code didn't end the sign-in"
 grep -q "^browser: tab $tab page forgotten\$" "$log" || fail "the sign-in's callback page wasn't forgotten"
 await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
@@ -287,7 +287,9 @@ await "^browser: loaded [0-9]* $callback?code=user\$" || fail "the user's sign-i
 user_sign_in=$(sed -n "s|^browser: loaded \([0-9]*\) $callback?code=user\$|\1|p" "$log" | tail -1)
 send key w cmd
 expect "^browser: tab $user_sign_in closed\$" "⌘W didn't close the user's sign-in tab"
-grep -q "sign-in done at $callback?code=user\$" "$log" && fail "a sign-in in a tab the user opened counted as done"
+# The one sign-in done is the Little ilo window's above, as the line names no address.
+[ "$(grep -c ' sign-in done$' "$log")" = 1 ] ||
+  fail "a sign-in in a tab the user opened counted as done: $(grep ' sign-in done$' "$log" | tail -1)"
 # The Store's MSIX declares http and https in its manifest, not by ilo.iss's command, so Windows
 # activates the package for a link sent to it, and the package's chrome.exe, which names no
 # profile, hands the link to the browser running on the engine's folder (#1427). check-windows.yml

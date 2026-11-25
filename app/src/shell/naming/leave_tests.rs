@@ -112,6 +112,37 @@ fn leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, way: Way) {
     cx.run_until_parked();
 }
 
+/// A name's field stays as the window goes from light to dark and back, and draws its placeholder
+/// in the window's palette each time, not in the one it was made in.
+#[gpui::test]
+fn a_name_field_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::{Appearance, Command};
+    use crate::tokens::shell::FORM_PLACEHOLDER;
+    let (shell, cx, host) = window(cx);
+    rename(&shell, cx, &host, 4);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let field = &shell.renaming.as_ref().expect("the field stays").name;
+            (
+                field.read(cx).placeholder_hsla(),
+                shell.palette.gray(FORM_PLACEHOLDER),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
+}
+
 /// The host says the page took the keyboard as the press in it comes, and the field hears it after
 /// what's queued behind the press: a double-click's second press may have opened a field since. That
 /// field stays, and a press in the page after it opened still ends it (#2260).

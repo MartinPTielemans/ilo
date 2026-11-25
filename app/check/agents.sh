@@ -7,7 +7,7 @@
 # profile's settings and any action agents don't have, whatever the tab, with why in the activity
 # log, and none starts a session. A task's Space, an agent's whose id starts with task-, is never
 # listed either. After a quit, neither comes back as a Space of the user's.
-# Settings › Agents' Connect finds Claude Code's claude where a terminal would, though the browser's
+# Settings › Other apps' Connect finds Claude Code's claude where a terminal would, though the browser's
 # PATH doesn't have it: on Windows where its own installer, winget or npm put it (#1420), on the Mac
 # in ~/.local/bin, which only ~/.zshrc puts on PATH (#1441), run with that PATH, as npm's claude
 # needs it to find node. It gives claude the browser's server whole, which runs and reaches the
@@ -135,7 +135,7 @@ await '^browser: library shown$' || fail "the Library didn't settle open on Agen
 grep -q 'check-new' "$history_file" || fail "the hour-old past task went: $(cat "$history_file")"
 grep -q 'check-old' "$history_file" && fail "the 30-day-old past task stayed: $(cat "$history_file")"
 # A click on its row opens its page: its site, where Claude Code may always act, with Revoke, and its
-# steps. Revoke there takes the answer, as Settings › Agents' does, and Back goes to the list.
+# steps. Revoke there takes the answer, as Settings › Other apps' does, and Back goes to the list.
 session_page=
 if [ "$driven" = 1 ]; then
   at=$(drawn 'library past check-new') || fail "the past task's row wasn't drawn"
@@ -278,7 +278,7 @@ if windows || [ -n "$mac" ]; then
     expect "^browser: settings tab $1\$" "a click on $1 didn't show its tab"
     settings_drew "$1"
   }
-  settings_tab Agents
+  settings_tab 'Other apps'
   # Waits up to 30 s for the calls file $1 to have $2 lines.
   calls_reach() {
     for _ in $(seq 300); do
@@ -330,7 +330,7 @@ PY
     [ "$(grep -c '^browser: agent claude-code hello from check$' "$log")" -gt "$hellos" ] ||
       fail "the server Claude Code got didn't take its token as Claude Code's"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" all || fail "no window to capture"
     click_in_sight "disconnect claude-code"
     expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
@@ -338,7 +338,7 @@ PY
     [ "$(tail -1 "$calls")" = "[\"mcp\",\"remove\",\"--scope\",\"user\",\"$name\"]" ] ||
       fail "Disconnect ran claude with $(tail -1 "$calls")"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
   }
   if windows; then installs="native winget npm"; else installs=native; fi
   for kind in $installs; do
@@ -361,18 +361,18 @@ PY
   expect_late '^browser: agent claude-code connected$' "Connect with $(basename "$standin") didn't connect"
   rm -rf "$native"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   click_in_sight "disconnect claude-code"
   expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
   expect_late "^browser: agent claude-code config kept: Claude Code's claude command isn't installed\.\$" \
     "Disconnect with claude gone didn't say it isn't installed"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   click_in_sight "connect claude-code"
   expect_late "^browser: agent claude-code couldn't connect: Claude Code's claude command isn't installed\.\$" \
     "Connect with no claude didn't say it isn't installed"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" all || fail "no window to capture"
   # The ilo command (#3667), on the Mac: Add links ilo in the run's ~/.local/bin to the program
   # beside the browser's and writes its agent file, only the user's to read, in the profile; ilo
@@ -399,13 +399,13 @@ PY
     help=$(ilo "$bin/ilo" help 2>&1) || fail "ilo help failed ($?): $help"
     case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
     ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
     # The shell no longer puts the folder on PATH: the row gives the line to paste.
     echo 'export PATH="$HOME/.node/bin:$PATH"' > "$home/.zshrc"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     in_sight "ilo-command copy line" || fail "with ~/.local/bin off PATH the row drew no Copy Line"
     ../tools/window-screenshot.sh "$pid" "$out/command-unsearched.png" all ||
       fail "no window to capture"
@@ -477,7 +477,7 @@ EOF
     # row says the command isn't added, and Add puts the entry back.
     python3 -I "$out/user-path.py" restore "$out/user-path.json" || fail "couldn't take the entry off the PATH"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     expect '^browser: agent ilo-command looked: not found$' \
       "with Add's entry taken off the PATH, the row didn't look for it and find it gone: it still says the command is added"
     in_sight "ilo-command add" || fail "with Add's entry taken off the PATH, the row drew no Add"
@@ -491,7 +491,7 @@ EOF
     last=$(python3 -I "$out/user-path.py" last "$out/user-path.json" | tr -d '\r')
     [ "$last" = "$entry" ] || fail "Add again didn't put $entry back last on the user's PATH: its last entry is '$last'"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     expect '^browser: agent ilo-command looked: found$' "with the entry back on the PATH, the row didn't find it"
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
     ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
@@ -693,8 +693,8 @@ EOF
     send menu Settings…
     expect '^browser: settings shown ' "Settings… didn't show Settings"
     settings_drew
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its tab"
+    send clickkey $(drawn "toolbar Models")
+    expect '^browser: settings tab Models$' "a click on Models didn't show its tab"
     for cli in "$1" "$2"; do
       task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
       line="browser: task agent $task_cli is SignedIn at $(cygpath -w "$cli")"
@@ -714,17 +714,30 @@ EOF
       fail "no window to capture"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-    # A task from ⌘T on each, Claude first, as the agent listed first, then Codex, below it.
+    # A task from ⌘T on each: Claude first, as the agent listed first, which the composer starts
+    # on; then Codex, once Settings' mark runs tasks with it, which puts it first.
+    agents="Claude, Codex"
     for cli in "$1" "$2"; do
       task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
       asked="Find a flight on $task_cli"
+      if [ "$task_cli" = codex ]; then
+        send menu Settings…
+        expect '^browser: settings shown ' "Settings… didn't show Settings again"
+        settings_drew
+        # Settings kept its Agents tab while hidden, where it last logged Codex's mark.
+        at=$(drawn "assistant mark codex") || fail "Settings › Agents logged no mark for Codex"
+        send clickkey $at
+        expect '^browser: tasks run on codex$' "a click on Codex's mark didn't run tasks with it"
+        send key w cmd
+        expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+        agents="Codex, Claude"
+      fi
       send key t cmd
       expect '^browser: command bar shown$' "⌘T didn't open the command bar"
       send type "$asked"
       send key tab
       expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
-      expect '^browser: command bar agents: Claude, Codex$' "⇥ didn't list Claude and Codex, signed in"
-      [ "$task_cli" = codex ] && send key down
+      expect "^browser: command bar agents: $agents\$" "⇥ didn't list $agents, signed in, in that order"
       send key return
       expect "^browser: command bar runs a task on $task_cli\$" "↩ didn't run the task on $task_cli"
       expect_late "^browser: task task-[0-9]* on $task_cli asked from space " "the task on $task_cli didn't start"

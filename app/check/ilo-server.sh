@@ -156,18 +156,20 @@ settings_keyboard() {
     return 0
   fi
   if windows; then
-    python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
+    python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" 'Sync & Import' \
+      > /dev/null ||
       fail "Settings couldn't have the keyboard again"
     return 0
   fi
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    swaymsg "[pid=$pid title=\"^Sync\$\"] focus" > /dev/null ||
+    swaymsg "[pid=$pid title=\"^Sync & Import\$\"] focus" > /dev/null ||
       fail "sway couldn't give $on's Settings the keyboard"
     return 0
   fi
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   installed xdotool "giving Settings the keyboard back"
-  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
+  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" \
+    --name '^Sync & Import$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
@@ -271,13 +273,13 @@ start() {
   device "$1"
   await_load
 }
-# Shows Settings › Sync and starts signing in.
+# Shows Settings › Sync & Import and starts signing in.
 open_sign_in() {
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings on $on"
-  send clickkey $(drawn "toolbar Sync")
-  expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab on $on"
-  at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In on $on"
+  send clickkey $(drawn "toolbar Sync & Import")
+  expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab on $on"
+  at=$(drawn "sync sign-in") || fail "Settings › Sync & Import didn't draw Sign In on $on"
   send clickkey $at
   expect '^browser: account SigningIn None$' "Sign In didn't start signing in on $on"
   await 'browser: sync sign-in loaded /authorize$' ||

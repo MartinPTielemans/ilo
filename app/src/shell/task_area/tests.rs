@@ -3,6 +3,7 @@
 
 use std::{
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -12,9 +13,9 @@ use gpui::{
     div, point, px, size,
 };
 
-use super::{Zoom, pushed, watched};
+use super::{PICTURE_WAIT, Zoom, pushed, watched};
 use crate::agents::Status;
-use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::shell::{Command, Folders, Page, PagePicture, Shell, recorder::Recorder};
 use crate::tokens::shell::conversation::ilo::ARM;
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
@@ -202,6 +203,14 @@ fn core_shows_users(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         shell.set_space(1, cx);
         shell.set_selected(tab, cx);
     });
+}
+
+/// The image the watched page is drawn with.
+fn page_image(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Arc<gpui::RenderImage>> {
+    shell.read_with(cx, |shell, _| {
+        let page = shell.task_area.as_ref()?.page.as_ref()?;
+        Some(page.picture.as_ref()?.image())
+    })
 }
 
 /// The watched page's zoom.
@@ -531,7 +540,8 @@ fn a_tasks_sign_in_waits_while_the_user_types(cx: &mut TestAppContext) {
 }
 
 /// With motion, the page zooms out of its thumbnail, laid out out of the window till it's in
-/// place, and back into it from a picture of it as it is.
+/// place, and back into it from a picture of it as it is, the conversation having the keyboard as
+/// the page waits for it.
 #[gpui::test]
 fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -573,9 +583,21 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
         host.shown.borrow().is_empty(),
         "the page stays till its picture comes"
     );
-    shell.update(cx, |shell, cx| shell.page_pictured(request, None, cx));
+    let now = PagePicture::from_bgra(vec![0; 8 * 6 * 4], 8, 6).unwrap();
+    let image = now.image();
+    shell.update(cx, |shell, cx| shell.page_pictured(request, Some(now), cx));
     assert_eq!(*host.shown.borrow(), [1]);
     assert!(matches!(zoom(&shell, cx), Zoom::In(_)), "it zooms back in");
+    assert_eq!(
+        page_image(&shell, cx).map(|shown| Arc::ptr_eq(&shown, &image)),
+        Some(true),
+        "it shrinks from a picture other than the one of it as it is"
+    );
+    // The wait that bounded it ended with the answer.
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(PICTURE_WAIT * 2.));
+    assert!(matches!(zoom(&shell, cx), Zoom::In(_)));
+    assert_eq!(*host.shown.borrow(), [1]);
     set_zoom(&shell, cx, Zoom::In(begun));
     core_shows_users(&shell, cx);
     draw(&shell, cx);
@@ -586,6 +608,71 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
         "drawn as it zooms in"
     );
     set_zoom(&shell, cx, Zoom::In(over));
+    draw(&shell, cx);
+    assert!(shell.read_with(cx, |shell, _| {
+        shell.task_area.as_ref().unwrap().page.is_none()
+    }));
+}
+
+/// A page whose picture of itself as it is never comes, as on a core that didn't answer (#4247),
+/// goes back once it has waited `PICTURE_WAIT`, with the picture it had, the conversation having
+/// had the keyboard from the press. One that comes after is nothing to the area.
+#[gpui::test]
+fn a_page_whose_picture_never_comes_goes_back_at_the_wait(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    let tile = PagePicture::from_bgra(vec![0; 4 * 4], 2, 2).unwrap();
+    let image = tile.image();
+    shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, Some(tile), false, cx)
+    });
+    core_shows_task(&shell, cx, 30);
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::Out(Instant::now() - Duration::from_secs(1)),
+    );
+    draw(&shell, cx);
+    assert_eq!(zoom(&shell, cx), Zoom::Rest);
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
+    assert_eq!(host.take(), ["picture 30", "focus ui"]);
+    let Zoom::Asked(request) = zoom(&shell, cx) else {
+        panic!("{:?}", zoom(&shell, cx));
+    };
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(PICTURE_WAIT * 0.5));
+    assert_eq!(zoom(&shell, cx), Zoom::Asked(request), "it went back early");
+    assert!(host.shown.borrow().is_empty());
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(PICTURE_WAIT * 0.6));
+    assert!(
+        matches!(zoom(&shell, cx), Zoom::In(_)),
+        "it never went back"
+    );
+    assert_eq!(*host.shown.borrow(), [1]);
+    assert_eq!(
+        page_image(&shell, cx).map(|shown| Arc::ptr_eq(&shown, &image)),
+        Some(true),
+        "it went back without the picture it had"
+    );
+    let late = PagePicture::from_bgra(vec![0; 8 * 6 * 4], 8, 6);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, late, cx));
+    assert_eq!(
+        page_image(&shell, cx).map(|shown| Arc::ptr_eq(&shown, &image)),
+        Some(true),
+        "a picture that came after the wait took the place of the one it had"
+    );
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::In(Instant::now() - Duration::from_secs(1)),
+    );
     draw(&shell, cx);
     assert!(shell.read_with(cx, |shell, _| {
         shell.task_area.as_ref().unwrap().page.is_none()
@@ -1146,7 +1233,9 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         title: "Find a flight".into(),
         status: SharedString::default(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -1501,7 +1590,9 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         title: "Find a flight".into(),
         status: status.to_string().into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -1843,7 +1934,9 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         retry: false,
         fix: None,
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(&[])], cx);
@@ -1900,7 +1993,9 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         retry: false,
         fix: None,
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
     };
     let held = |tab: u64| {
         vec![Status {
@@ -2090,7 +2185,9 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         title: "Find a flight".into(),
         status: "Clicking “Tickets”".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),

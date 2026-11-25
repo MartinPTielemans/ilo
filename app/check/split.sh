@@ -112,7 +112,7 @@ read_pages
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # ⌥-click on "+ New Tab" adds one too, as Dia's does.
-send click 100 154 alt
+send click 100 148 alt
 expect '^browser: command add-split via sidebar$' \
   "⌥-click on \"+ New Tab\" didn't run Add Split View"
 expect '^browser: command bar shown$' "⌥-click on \"+ New Tab\" didn't open the command bar"
@@ -854,8 +854,8 @@ rows=$(today)
 y=$(row 2 | cut -d' ' -f2)
 send press $(row 0) alt
 send dragto 110 $(row 0 | cut -d' ' -f2) alt
-send dragto 100 $((y - 15)) alt
-send release 100 $((y - 15)) alt
+send dragto 100 $((y - 13)) alt
+send release 100 $((y - 13)) alt
 expect "^browser: dragged $c copy [0-9][0-9]* to today 0 [0-9][0-9]*\$" \
   "a row let go with ⌥ held didn't drop a copy: $(grep '^browser: dragged' "$log" | tail -1)"
 copy=$(grep "^browser: dragged $c copy " "$log" | tail -1 | cut -d' ' -f5)

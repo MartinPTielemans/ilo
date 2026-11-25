@@ -1,5 +1,6 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
-//! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
+//! user's, each time an agent asks for a tab back, each change of the task's access, each time the
+//! user stops it, and each wall
 //! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
 //! rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
@@ -9,7 +10,7 @@ use std::time::Instant;
 
 use gpui::{App, Context, SharedString};
 
-use super::files::Given;
+use super::files::{Given, Names};
 use super::held;
 use super::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use super::task::rewall::Rewalled;
@@ -33,23 +34,20 @@ struct Shown {
 }
 
 /// The names `files` are shown by: the one place a line takes a folder's or a file's name from,
-/// so nothing else of a line holds one. Until the names the user sees where they give a task its
-/// files are kept beside it, the folder's is its own name on the disk and an attached file has
-/// none, so no line says one.
-fn shown(files: &Given) -> Shown {
-    let folder = (files.folder.as_ref())
-        .and_then(|folder| folder.root().file_name())
-        .map(|name| name.to_string_lossy().into_owned().into());
+/// so nothing else of a line holds one. Each is the name the user saw where they gave the task its
+/// files (`names`), and only for what `files` still has.
+fn shown(names: &Names, files: &Given) -> Shown {
+    let Names { folder, files } = names.kept_for(files);
     Shown {
-        folder,
-        attached: Vec::new(),
+        folder: folder.map(Into::into),
+        attached: files.into_iter().map(Into::into).collect(),
     }
 }
 
-/// What `files` are said as where a line says what a task is without: the folder first, then
-/// the attached files, one by its name and more by their count.
-fn left_out(files: &Given) -> impl Iterator<Item = LeftOut> {
-    let Shown { folder, attached } = shown(files);
+/// What `files` are said as where a line says what a task is without, by the names in `names`:
+/// the folder first, then the attached files, one by its name and more by their count.
+fn left_out(names: &Names, files: &Given) -> impl Iterator<Item = LeftOut> {
+    let Shown { folder, attached } = shown(names, files);
     let attached = match attached.as_slice() {
         [] => None,
         [file] => Some(LeftOut::File(file.clone())),
@@ -60,32 +58,32 @@ fn left_out(files: &Given) -> impl Iterator<Item = LeftOut> {
 
 /// The lines of one wall that wasn't put up, or of what a run left running: none where a line
 /// would have no name to say.
-fn rewalled(came: &Rewalled) -> Vec<IloKind> {
+fn rewalled(came: &Rewalled, names: &Names) -> Vec<IloKind> {
     match came {
-        Rewalled::Stays { at, refused, files } => (shown(files).folder.into_iter())
+        Rewalled::Stays { at, refused, files } => (shown(names, files).folder.into_iter())
             .map(|folder| IloKind::KeptAt {
                 at: *at,
                 refused: *refused,
                 folder,
             })
             .collect(),
-        Rewalled::SetBack { at, refused, files } => (shown(files).folder.into_iter())
+        Rewalled::SetBack { at, refused, files } => (shown(names, files).folder.into_iter())
             .map(|folder| IloKind::SetBack {
                 at: *at,
                 refused: *refused,
                 folder,
             })
             .collect(),
-        Rewalled::WithoutFiles { files } => (left_out(files))
+        Rewalled::WithoutFiles { files } => (left_out(names, files))
             .map(|left| IloKind::StartedWithout { left })
             .collect(),
-        Rewalled::Stopped { files } => (left_out(files))
+        Rewalled::Stopped { files } => (left_out(names, files))
             .map(|left| IloKind::NotRestarted { left })
             .collect(),
         Rewalled::NotRaised { refused } => vec![IloKind::NotRaised { refused: *refused }],
         Rewalled::LeftRunning { files } => {
             // The files the user attached are said as the task's, so need no name.
-            let reach = match (shown(files).folder, files.attached.is_some()) {
+            let reach = match (shown(names, files).folder, files.attached.is_some()) {
                 (Some(folder), true) => Some(Reach::Both(folder)),
                 (Some(folder), false) => Some(Reach::Folder(folder)),
                 (None, true) => Some(Reach::Files),
@@ -112,7 +110,7 @@ pub struct Placed {
 }
 
 /// What a placed line says, from the task's state only.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Happened {
     /// A step in `tab` only the user can do: a hand-off, a sign-in or a passkey.
     Yours { tab: u64 },
@@ -120,13 +118,26 @@ pub enum Happened {
     TabBack { tab: u64 },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// The user revoked the task's folder, `files` (J2).
+    Revoked { files: Given },
+    /// The task's folder, `files`, was no longer where it was, so ilo ended its grant (J6).
+    FolderGone { files: Given },
+    /// ilo couldn't copy the files the user attached, so the task started without them. `files`
+    /// is where the copies were to be.
+    NotCopied { files: Given },
+    /// The user stopped the task, which held `pages` pages then.
+    YouStopped { pages: usize },
 }
 
 impl Happened {
-    fn tab(self) -> Option<u64> {
+    fn tab(&self) -> Option<u64> {
         match self {
-            Happened::Yours { tab } | Happened::TabBack { tab } => Some(tab),
-            Happened::TierChanged { .. } => None,
+            Happened::Yours { tab } | Happened::TabBack { tab } => Some(*tab),
+            Happened::TierChanged { .. }
+            | Happened::YouStopped { .. }
+            | Happened::Revoked { .. }
+            | Happened::FolderGone { .. }
+            | Happened::NotCopied { .. } => None,
         }
     }
 }
@@ -139,10 +150,14 @@ pub(super) fn turn(task: &Task) -> usize {
 }
 
 impl Agents {
-    /// Puts `made` in the conversation of the task `agent`'s act on `connection`, for its call
-    /// `call`, is of.
+    /// Puts `made` in a task's conversation. A line about a page stands where the page is, in
+    /// the task under way that holds it, whichever of its client's connections asked; any other
+    /// in the task `agent`'s act on `connection`, for its call `call`, is of.
     pub(super) fn place(&mut self, agent: &str, connection: u64, call: u64, made: Happened) {
-        let key = (self.acting_task(agent, connection, call)).map(|task| task.agent.clone());
+        let held_by = made.tab().and_then(|tab| self.page_task(agent, tab));
+        let key = held_by
+            .or_else(|| self.acting_task(agent, connection, call))
+            .map(|task| task.agent.clone());
         if let Some(key) = key {
             self.place_in(&key, made);
         }
@@ -159,8 +174,16 @@ impl Agents {
         if made.tab().is_some() && task.placed.iter().any(standing) {
             return;
         }
-        // The task's access changed: the line said so, and it needs nothing of the user.
-        let settled = matches!(made, Happened::TierChanged { .. });
+        // The task's access changed, the user stopped it, or its files changed: the line said
+        // so, and it needs nothing of the user.
+        let settled = matches!(
+            made,
+            Happened::TierChanged { .. }
+                | Happened::YouStopped { .. }
+                | Happened::Revoked { .. }
+                | Happened::FolderGone { .. }
+                | Happened::NotCopied { .. }
+        );
         task.placed.push(Placed {
             kind: made,
             after,
@@ -264,20 +287,43 @@ impl Agents {
             ));
         }
         for (index, placed) in task.placed.iter().enumerate() {
-            let kind = match placed.kind {
+            let kind = match &placed.kind {
                 // Among several pages, it says which the step is on (O1).
                 Happened::Yours { tab } => IloKind::Yours {
-                    tab,
+                    tab: *tab,
                     site: (pages.len() > 1)
-                        .then(|| tier::plain(&site(&self.browser.tab(tab, cx).url)).into()),
+                        .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
                 },
-                Happened::TabBack { tab } => IloKind::TabBack { tab },
-                Happened::TierChanged { from, to } => IloKind::TierChanged { from, to },
+                Happened::TabBack { tab } => IloKind::TabBack { tab: *tab },
+                Happened::TierChanged { from, to } => IloKind::TierChanged {
+                    from: *from,
+                    to: *to,
+                },
+                // None where a line would have no name to say.
+                Happened::Revoked { files } => match shown(&task.names, files).folder {
+                    Some(folder) => IloKind::Revoked { folder },
+                    None => continue,
+                },
+                Happened::FolderGone { files } => match shown(&task.names, files).folder {
+                    Some(folder) => IloKind::FolderGone { folder },
+                    None => continue,
+                },
+                Happened::NotCopied { files } => match left_out(&task.names, files).next() {
+                    Some(left) => IloKind::NotCopied { left },
+                    None => continue,
+                },
+                Happened::YouStopped { pages } => IloKind::YouStopped { pages: *pages },
+            };
+            let settled = match &placed.kind {
+                // An outside agent's task the user stopped offers its pages back, ended as it
+                // is, until they're handed back.
+                Happened::YouStopped { .. } => !Self::offers_pages_back(task),
+                _ => placed.settled || ended,
             };
             let line = IloLine {
                 key: PLACED + index,
                 kind,
-                settled: placed.settled || ended,
+                settled,
             };
             let mark = Mark {
                 after: placed.after,
@@ -289,7 +335,7 @@ impl Agents {
         // What came of a wall stands where it came, as the rest does: after the messages and
         // steps the task had then.
         for (index, came) in task.rewalled.iter().enumerate() {
-            for (nth, kind) in rewalled(&came.what).into_iter().enumerate() {
+            for (nth, kind) in rewalled(&came.what, &task.names).into_iter().enumerate() {
                 let line = IloLine {
                     key: REWALLED + 2 * index + nth,
                     kind,

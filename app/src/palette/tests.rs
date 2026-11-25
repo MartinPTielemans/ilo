@@ -1790,15 +1790,15 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
 ///
 /// At More the ink reads 5.45 on the window's brightest point, which a plate that tells at TELLS
 /// and a title at its bar take between them whole. There the shown plate still tells at TELLS
-/// with its title at its bar, and the pointer's, which tells first and lets its title give, is
-/// ahead of it by 0.02 at most.
+/// with its title at its bar on the colour a screen shows, and the pointer's, which tells first
+/// and lets its title give, is ahead of it by 0.025 at most.
 ///
 /// With a Space's colour the window leaves less than both take, and this holds neither to it.
 #[test]
 fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
     // What the pointer's plate may tell over the shown one at More, where the shown one's title
     // keeps 4.5 and the pointer's doesn't.
-    let ahead_at_more = 0.02;
+    let ahead_at_more = 0.025;
     for level in Transparency::ALL {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
@@ -1899,4 +1899,91 @@ fn the_library_search_placeholder_reads_on_its_field_at_every_level() {
             );
         }
     }
+}
+
+/// The shown row's title reads at text's minimum on its plate as a screen shows it, 8 bits a
+/// channel, at every level, on a dark window with no Space's colour, where the plate's shade is
+/// solved to the least that reads (`solve_selected`): over the window's darkest ground and over
+/// its lightest, a white backdrop with the most a desktop picture lifts the material. Solved on
+/// the unrounded colour, the plate read 4.49 at More once drawn.
+#[test]
+fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
+    for level in Transparency::ALL {
+        set_transparency(level);
+        let palette = Palette::of(None, Tone::Dark);
+        let lifted = palette.window_over_greys(0., 0., 1.);
+        let grounds = fine_window(&palette).into_iter().chain(lifted);
+        for at in grounds {
+            for hover in [0., 1.] {
+                let plate = Rgba::from(palette.shown(hover));
+                let shown = drawn(over(at, plate, plate.a));
+                let reads = contrast(palette.ink, shown);
+                assert!(
+                    reads >= TEXT,
+                    "{level:?} hover {hover}: the title reads {reads:.3} on #{:06x} over #{:06x}",
+                    hex(shown),
+                    hex(at)
+                );
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
+}
+
+/// Every fifth level of each channel, every grey, and the greys' neighbours where Ink and Paper
+/// both fall short of text: the colours a page may report as its own.
+fn page_colours() -> impl Iterator<Item = Rgba> {
+    let levels = || (0..=255u32).step_by(5);
+    let stepped = levels()
+        .flat_map(move |r| levels().flat_map(move |g| levels().map(move |b| r << 16 | g << 8 | b)));
+    let greys = (0..=255u32).map(|grey| grey << 16 | grey << 8 | grey);
+    let near_middle = (100..=140u32).flat_map(|grey| {
+        [(1, 0, 0), (0, 1, 0), (0, 0, 1), (3, 0, 2)]
+            .map(|(r, g, b)| (grey + r) << 16 | (grey + g) << 8 | (grey + b))
+    });
+    stepped.chain(greys).chain(near_middle).map(rgb)
+}
+
+#[test]
+fn text_on_a_pages_own_colour_reads_whatever_the_colour() {
+    for window in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, window);
+        for fill in page_colours() {
+            let on = palette.on_fill(fill);
+            // The dimmest a title, a host's line or a glyph is asked for: the floor carries it.
+            for (ink, bar) in [
+                (on.text(0.), TEXT),
+                (on.gray(0.), gray_text(transparency())),
+                (on.glyph(0.), GLYPH),
+            ] {
+                let (color, alpha) = (Hsla { a: 1., ..ink }.to_rgb(), ink.a);
+                let reads = contrast(drawn(over(fill, color, alpha)), drawn(fill));
+                assert!(
+                    reads >= bar,
+                    "{:06x} on {:06x} at {alpha} reads {reads}, under {bar}",
+                    hex(color),
+                    hex(fill),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_ink_on_a_pages_colour_is_the_colours_alone_not_the_windows() {
+    let (dark, light) = (
+        Palette::of(None, Tone::Dark),
+        Palette::of(None, Tone::Light),
+    );
+    for fill in page_colours() {
+        let (on_dark, on_light) = (dark.on_fill(fill), light.on_fill(fill));
+        assert_eq!(on_dark.ink, on_light.ink, "on {:06x}", hex(fill));
+        assert_eq!(on_dark.tone, on_light.tone, "on {:06x}", hex(fill));
+        // A light ink is a dark page's: the tone its plates and quiet steps follow.
+        let lit = luminance(on_dark.ink) > luminance(fill);
+        assert_eq!(on_dark.tone == Tone::Dark, lit, "on {:06x}", hex(fill));
+    }
+    // Paper on a dark page and Ink on a light one, as the window's own text is.
+    assert_eq!(dark.on_fill(rgb(0x101014)).ink, rgb(PAPER));
+    assert_eq!(dark.on_fill(rgb(0xffffff)).ink, rgb(INK));
 }

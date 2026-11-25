@@ -128,6 +128,7 @@ use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
+use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
 
 #[cfg(test)]
 use crate::tokens::shell::library::FILTER_X;
@@ -2671,7 +2672,7 @@ impl Shell {
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
         let row = plate(self.tab_icon_in(&palette, tab), label);
-        let row = selected_plate(&palette, row, 1., 0., false);
+        let row = selected_plate(&palette, row, 1., 0.);
         div()
             .w(px(CARD_WIDTH
                 - 2. * PLATE_INSET
@@ -2947,7 +2948,10 @@ impl Shell {
             self.browser
                 .set_agent_history(profile, &crate::agent_history::write(&living));
         }
-        self.agent_history = living;
+        // A sort's entry isn't a task, and draws nowhere until it has its words (#4252).
+        self.agent_history = (living.into_iter())
+            .filter(|past| past.sorted.is_none())
+            .collect();
     }
 
     /// Delete on a past task: it goes from Library › Agents and its file.
@@ -3279,9 +3283,12 @@ impl Shell {
             return div().into_any_element();
         };
         let when = crate::agents::local_time(each.at);
-        let under = match each.refused.is_empty() {
+        // Why it was refused, but for a permission the browser refused the page, whose title
+        // says it whole.
+        let refused = crate::agents::tools::refusal_shown(&each.action, &each.refused);
+        let under = match refused.is_empty() {
             true => when,
-            false => format!("{when} · Refused: {}", each.refused),
+            false => format!("{when} · Refused: {refused}"),
         };
         let key = (past.id.clone(), step);
         let opens = !each.url.is_empty();
@@ -4316,8 +4323,9 @@ impl Shell {
             })
             .absolute()
             .left(px(LIBRARY_BACK_INSET))
-            .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
-            .size(px(NAV_SIZE))
+            .bottom(px((FOOTER_HEIGHT - FOOT_ROW) / 2.))
+            .w(px(LIBRARY_BUTTON))
+            .h(px(FOOT_ROW))
             .flex()
             .items_center()
             .justify_center()
@@ -4328,7 +4336,13 @@ impl Shell {
             .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
-                shell.hover_button(command, TipSide::Beside, *hovered, cx);
+                shell.hover_button(
+                    command,
+                    TipSide::Beside,
+                    *hovered,
+                    window.mouse_position(),
+                    cx,
+                );
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
@@ -4343,7 +4357,7 @@ impl Shell {
                 let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
                 svg()
                     .path("icons/library.svg")
-                    .size(px(16.))
+                    .size(px(FOOT_GLYPH))
                     .text_color(self.palette.glyph(alpha))
                     .when(scale != 1., |glyph| {
                         glyph.with_transformation(gpui::Transformation::scale(gpui::size(
@@ -4355,7 +4369,7 @@ impl Shell {
                 button.child(
                     div()
                         .absolute()
-                        .left(px((NAV_SIZE - BUTTON_PROGRESS_WIDTH) / 2.))
+                        .left(px((LIBRARY_BUTTON - BUTTON_PROGRESS_WIDTH) / 2.))
                         .bottom(px(BUTTON_PROGRESS_BOTTOM))
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
@@ -4566,6 +4580,7 @@ mod tests {
             name: "Space 1".into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: Default::default(),
             profile: 0,
             agent: Default::default(),

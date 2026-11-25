@@ -27,6 +27,7 @@ pub fn assistant_row(
     marked: bool,
     a11y: bool,
     menu_at: impl IntoElement,
+    mark_at: impl IntoElement,
     act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
 ) -> gpui::Div {
     use crate::agents::sign_in::Offer;
@@ -72,9 +73,11 @@ pub fn assistant_row(
                         named_check(mark, format!("Run tasks with {name}"), marked)
                     })
                     .size(px(CONTROL_HEIGHT))
+                    .relative()
                     .flex()
                     .items_center()
                     .justify_center()
+                    .child(mark_at)
                     .child(self::mark(look, marked, look.on, look.knob_on))
                     .on_click(move |_, window, cx| act(Act::Mark, window, cx))
             };

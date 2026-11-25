@@ -729,10 +729,6 @@ bool host_window_restored_frame(void* ui_view, double* x, double* y, double* wid
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
 // a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
-// Puts |ui_view|'s window's minimize, maximize and close at its right corner with the sidebar on
-// the left, as the top bar has them (#3160), or back with the sidebar. The UI draws them; the frame
-// offers Snap layouts over maximize where they are.
-void host_set_window_buttons_right(void* ui_view, bool right);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
@@ -762,6 +758,19 @@ void host_show_settings(void);
 // Hides the Settings window, which keeps its place for the next host_show_settings.
 void host_hide_settings(void);
 
+// Makes the window of |first_run_view| first run's window: a window of its own that can't be
+// resized or zoomed, with the system's window buttons, whose close the view answers (Skip Setup).
+// It starts hidden.
+void host_add_first_run(void* first_run_view);
+
+// Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
+// screen the browser window opens on, and takes the launch window down: until first run ends it's
+// the only window on screen.
+void host_show_first_run(void);
+
+// Takes first run's window off screen for good, before the UI closes it.
+void host_close_first_run(void);
+
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
 // Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
 // isn't one: ⌘W on it closes its tab.
@@ -770,21 +779,12 @@ bool host_close_other_window(void);
 // A detent on the trackpad, as a swipe's nearest Space changes.
 void host_detent(void);
 
-// Gives the Dock icon's dot the color it had when the app last quit, kept in |profile_dir|, and
-// follows the user's icon style from now on (dock.mm). For the launch, before the browser starts.
-void host_dock_dot_launch(const char* profile_dir);
-
-// Gives the Dock icon's dot |color|, as 0xRRGGBB, or without |colored| the icon's own green, once
-// it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
-// it. Asked again for the same color, it checks the style again.
-void host_dock_dot(bool colored, uint32_t color);
-
 // Whether the app is the active one, its windows taking the keyboard.
 bool host_app_active(void);
 
 // |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
-// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
-// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// button's overlay on Windows, with the count up to 9 and then 9+, and on Linux the browser
+// windows' urgency hint, with no count. It stays while the app is active, and
 // nothing bounces, flashes or sounds.
 void host_needs_you_badge(int count);
 

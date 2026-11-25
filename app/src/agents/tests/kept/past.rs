@@ -112,7 +112,11 @@ fn only_a_task_brought_back_says_its_assistant_still_has_it(cx: &mut TestAppCont
     run.ran(2);
     name_it(&run, &stopped, "Porto seats", cx);
     act(&run, &stopped, TaskAction::Stop, cx);
-    assert_eq!(run.ilo_lines(&stopped, cx), []);
+    // Its one line is that the user stopped it, which this run alone holds.
+    assert_eq!(
+        run.ilo_lines(&stopped, cx),
+        [IloKind::YouStopped { pages: 0 }]
+    );
 
     quit(&run, cx);
     let next = next(&run, cx);
@@ -178,6 +182,14 @@ fn the_tasks_a_run_before_left_are_listed_by_their_profile(cx: &mut TestAppConte
     for card in &cards {
         assert!(card.replies && card.steps.is_empty() && card.pages.is_empty());
         assert_eq!(card.space, 0);
+        // Its head says when it ended, and no line follows: no run keeps its answer or steps.
+        assert!(card.ended_at.is_some(), "{} says no time", card.title);
+        assert_eq!(
+            (card.line.as_ref(), card.last_tab),
+            (None, None),
+            "{}",
+            card.title
+        );
     }
     assert!((next.agents).read_with(cx, |agents, cx| agents.shown_cards(cx).is_empty()));
 
@@ -262,7 +274,13 @@ pub(crate) fn after_a_quit(title: &str, cx: &mut TestAppContext) -> (Entity<Agen
     next.browser.tabs.borrow_mut().extend(pages);
     // An outside agent's Space is another matter (#1080), and none was left.
     next.browser.agent_spaces.borrow_mut().clear();
+    // Copies of a task's attached files a crash left, after the copy and before the task's end,
+    // go with the rest of the tasks' folder, as their task is no more.
+    let copies = (next.agents).read_with(cx, |agents, _| agents.tasks_dir().join("task-9 files"));
+    std::fs::create_dir_all(&copies).unwrap();
+    std::fs::write(copies.join("seats.pdf"), "two seats").unwrap();
     (next.agents).update(cx, |agents, cx| agents.end_old_tasks(cx));
+    assert!(!copies.exists(), "a crash's copies stayed");
     assert_eq!(*next.browser.deleted.borrow(), [space]);
     assert_eq!(in_space(&next.browser, 1), users);
     assert!(in_space(&next.browser, space).is_empty());

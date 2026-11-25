@@ -132,6 +132,7 @@ impl Shell {
             name: SharedString::default(),
             color: None,
             theme: None,
+            transparency: None,
             icon: SharedString::default(),
             agent: SharedString::default(),
             profile,
@@ -819,9 +820,9 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::RevealTab
                     | Command::Clear
                     | Command::SortBySite
+                    | Command::SortIntoFolders
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
-                    | Command::ToggleTopBar
                     | Command::AddSplit
                     // A private window's Library has its session's downloads; a Little ilo
                     // window has no Library at all.

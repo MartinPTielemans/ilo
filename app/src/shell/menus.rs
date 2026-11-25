@@ -124,7 +124,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(in crate::shell) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
@@ -305,11 +305,13 @@ impl Shell {
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
             (entry, action)
         };
-        let mut items = vec![
-            command(Command::SortBySite),
-            command(Command::Clear),
-            (MenuEntry::line(), Box::new(|_, _| {})),
-        ];
+        let mut items = vec![command(Command::SortBySite)];
+        // Where the broom is drawn, dimmed as it is.
+        if self.browser.broom().is_some() {
+            items.push(command(Command::SortIntoFolders));
+        }
+        items.push(command(Command::Clear));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         let after = items.len();
         items.extend((self.empty_space_items(self.space, cx).into_iter()).map(
             |(entry, action)| {
@@ -332,10 +334,7 @@ impl Shell {
             }),
         )];
         // A private window's Space has no folders, and nothing to change.
-        if self.one_space() {
-            items.push((MenuEntry::line(), Box::new(|_, _| {})));
-            items.push(self.top_bar_item(cx));
-        } else {
+        if !self.one_space() {
             let new_folder =
                 MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
             items.push((
@@ -345,9 +344,6 @@ impl Shell {
                     shell.run(Command::NewFolder, "sidebar", cx)
                 }),
             ));
-            items.push((MenuEntry::line(), Box::new(|_, _| {})));
-            // The window's view, by the sidebar's own items and before the Space's.
-            items.push(self.top_bar_item(cx));
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
@@ -361,17 +357,6 @@ impl Shell {
             );
         }
         items
-    }
-
-    /// Show Top Bar or Hide Top Bar, by whether it's on, with its key: in the sidebar's empty
-    /// space's menu, and the whole of the bar's own, where the way out is seen (#3160).
-    pub(super) fn top_bar_item(&self, cx: &App) -> (MenuEntry, MenuAction) {
-        let title = super::commands::top_bar_title(self.top_bar);
-        let entry = MenuEntry::new(title, true).shortcut(Command::ToggleTopBar, user_keys(cx));
-        (
-            entry,
-            Box::new(|shell, cx| shell.run(Command::ToggleTopBar, "sidebar", cx)),
-        )
     }
 
     /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc
@@ -1121,7 +1106,9 @@ impl Shell {
         markdown: bool,
         cx: &mut Context<Self>,
     ) {
-        let lines: Vec<String> = (self.folder_links(folder).into_iter())
+        let links = self.folder_links(folder);
+        let tabs: Vec<u64> = links.iter().map(|&(tab, _)| tab).collect();
+        let lines: Vec<String> = (links.into_iter())
             .map(|(tab, link)| match markdown {
                 false => link,
                 true => format!("[{}]({link})", markdown_text(&self.title(tab))),
@@ -1132,7 +1119,7 @@ impl Shell {
         } else {
             "Copied All Links"
         };
-        self.copy(&lines.join("\n"), toast, cx);
+        self.copy_from(&tabs, &lines.join("\n"), toast, cx);
     }
 
     /// A folder's Paste URL as New Tab: the clipboard's web link as a tab at the folder's top,
@@ -1754,7 +1741,7 @@ impl Shell {
     /// shown's, or as a Markdown link, as ⌥⇧⌘C does.
     fn copy_link(&mut self, tab: u64, markdown: bool, cx: &mut Context<Self>) {
         if let Some((text, toast)) = self.link_to_copy(tab, markdown) {
-            self.copy(&text, toast, cx);
+            self.copy_from(&[tab], &text, toast, cx);
         }
     }
 

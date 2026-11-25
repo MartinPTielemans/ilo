@@ -44,6 +44,7 @@ use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
     LIGHT_SELECTED_SHADOW_Y,
 };
+use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
@@ -744,10 +745,10 @@ impl Palette {
     /// The selected plate's shade where the one `solve_ground` gave leaves the plate too faint to
     /// tell from the window, which a dark window with no Space's colour does where most comes
     /// through: the least at which the ink still reads on the plate at TEXT, whatever step it
-    /// falls on. It has nothing to spare there, and needs none: that window is its material alone,
-    /// one colour over each backdrop, with no points between to dip. A plate that tells already
-    /// keeps its shade, and so does any with a Space's colour or on a light window, where what
-    /// tells is the plate's shadow.
+    /// falls on, on the colour a screen shows, 8 bits a channel. It has nothing more to spare
+    /// there, and needs none: that window is its material alone, one colour over each backdrop,
+    /// with no points between to dip. A plate that tells already keeps its shade, and so does any
+    /// with a Space's colour or on a light window, where what tells is the plate's shadow.
     fn solve_selected(&self, window: &Window) -> f32 {
         let coarse = self.ground_shades[Ground::Selected as usize];
         if self.tone == Tone::Light || self.shown.is_some() {
@@ -767,7 +768,9 @@ impl Palette {
         }
         // The ink reads more the more shade its plate has, so the least shade lies between one it
         // doesn't read at and one it does: halved until the plate's colour no longer changes.
-        let reads = |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, plate) >= TEXT);
+        // Read on the plate as drawn: one solved to TEXT exactly is under it once it's rounded.
+        let reads =
+            |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, drawn(plate)) >= TEXT);
         let (mut short, mut least) = (0., coarse);
         for _ in 0..12 {
             let middle = (short + least) / 2.;
@@ -934,6 +937,25 @@ impl Palette {
         }
     }
 
+    /// This palette for what lies on `fill`, an opaque colour that isn't the window's, such as a
+    /// page's own under its tab's line: the ink that reads on it, whatever the window's tone, with
+    /// the floors that fill alone asks.
+    pub fn on_fill(&self, fill: Rgba) -> Palette {
+        let ink = ink_on(fill);
+        let floor = |minimum: f32| least_alpha(ink, &[fill], minimum + BETWEEN);
+        Palette {
+            tone: match luminance(ink) > luminance(fill) {
+                true => Tone::Dark,
+                false => Tone::Light,
+            },
+            ink,
+            text_floor: floor(TEXT),
+            glyph_floor: floor(GLYPH),
+            gray_floor: floor(gray_text(transparency())),
+            ..*self
+        }
+    }
+
     /// Ink or Paper at `alpha` on the opaque `fill`, or as much more as text needs to read on it.
     /// The window's floor answers for its material over any backdrop and the plates on it, so on a
     /// dark window it lifts a dim alpha almost to the ink, where the fill under it needs far less.
@@ -977,6 +999,24 @@ impl Palette {
     /// Ink or Paper at `alpha` over the overlay or the dialog, or as much more as a glyph needs.
     pub fn on_overlay_glyph(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.overlay_glyph_floor))
+    }
+
+    /// How strong the quiet ink is here, for a label that's read after the text beside it: pass it
+    /// to `text` or `glyph`, whose floors still hold.
+    pub fn secondary(&self) -> f32 {
+        match self.tone {
+            Tone::Dark => TEXT_SECONDARY,
+            Tone::Light => LIGHT_TEXT_SECONDARY,
+        }
+    }
+
+    /// How strong the quietest ink is here, for what nothing depends on: a count, Clear, a control
+    /// that can't act.
+    pub fn tertiary(&self) -> f32 {
+        match self.tone {
+            Tone::Dark => TEXT_TERTIARY,
+            Tone::Light => LIGHT_TEXT_TERTIARY,
+        }
     }
 
     /// Ink or Paper at `alpha`, as it is: for what needn't read, such as a disabled glyph or a
@@ -1355,6 +1395,11 @@ impl Swatch {
         })
     }
 
+    /// The Space's first colour, the one its gradient starts from.
+    pub fn main(&self) -> Rgba {
+        self.from
+    }
+
     /// The swatch, `size` across, on any of `behind`.
     pub fn draw(&self, size: f32, behind: &[Rgba]) -> Div {
         let gradient = linear_gradient(
@@ -1612,6 +1657,20 @@ fn label_on(color: Rgba) -> Rgba {
     }
 }
 
+/// The ink for text on the opaque `fill`: Ink or Paper, whichever reads more, or where neither
+/// reads as text, on a middle grey, black or white, one of which always does.
+pub fn ink_on(fill: Rgba) -> Rgba {
+    let reads = |ink: Rgba| contrast(ink, fill);
+    let label = label_on(fill);
+    if reads(label) >= TEXT + BETWEEN {
+        label
+    } else if reads(BLACK) >= reads(WHITE) {
+        BLACK
+    } else {
+        WHITE
+    }
+}
+
 /// The least alpha, in 25ths, at which `ink` over each of `grounds` reaches `minimum`; 1 where
 /// none does.
 fn least_alpha(ink: Rgba, grounds: &[Rgba], minimum: f32) -> f32 {
@@ -1678,6 +1737,11 @@ pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
         b: mix(base.b, color.b),
         a: 1.,
     }
+}
+
+/// `color` as a screen shows it, each channel one of 8 bits' 256 levels.
+pub fn drawn(color: Rgba) -> Rgba {
+    rgb(theme::packed(color))
 }
 
 /// WCAG's relative luminance.
