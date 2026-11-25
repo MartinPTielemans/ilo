@@ -120,6 +120,21 @@ inline constexpr char kEntryAction[] = "request_permission ";
 inline constexpr char kEntryReason[] = "agent_space";
 const char* CodeWord(Kind kind);
 
+// The reason of one entry apart: a question for the camera or the microphone was cancelled in a
+// handed tab the user holds by their own press, on the origin it was given on. Their site is set
+// to ask, and they are asked nothing for a page an agent has, so their way on is to take the tab
+// back, which the app offers under this entry and no other. The app reads the code and shows it
+// nowhere.
+inline constexpr char kEntryReasonUsersHold[] = "agent_space_users_hold";
+
+// The reason of the entry of a refusal of |kind|, which came by a question cancelled
+// (|cancelled_question|, TakesRequest) or by a refusal before any question. The one code for
+// every kind and state but that one.
+const char* EntryReason(bool cancelled_question,
+                        Kind kind,
+                        const agent_space_rule::Tab& tab,
+                        const Handed& handed);
+
 // Whether a handle on a file or a folder made for a page in |tab| is refused. One in the site's
 // own storage is no file of the user's and is the page's in any tab; any other is refused in an
 // agent's Space, held or not, as the picker for one is.
@@ -131,14 +146,17 @@ bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab);
 bool RefusesClientCertificate(bool any_to_offer, const agent_space_rule::Tab& tab);
 
 // The kinds a document's refusals have an entry for: one per document and kind, however often the
-// page asks.
+// page asks. An entry with kEntryReasonUsersHold counts apart, so a page refused while the agent
+// drove it still has that entry once the user takes the tab over.
 class EntriesMade {
  public:
-  // Whether this is the document's first refusal of |kind|, which makes its entry.
-  bool First(Kind kind);
+  // Whether this is the document's first refusal of |kind| with |reason|, EntryReason's, which
+  // makes its entry.
+  bool First(Kind kind, std::string_view reason = kEntryReason);
 
  private:
   std::bitset<kKinds> made_;
+  std::bitset<kKinds> users_hold_made_;
 };
 
 // What becomes of a question the browser was about to put to the user for a page.

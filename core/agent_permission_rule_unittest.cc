@@ -246,6 +246,52 @@ TEST(AgentPermissionRule, ADocumentHasOneEntryPerKind) {
   EXPECT_TRUE(next.First(Kind::kCamera));
 }
 
+// A page refused the camera while the agent drove it has one more entry for the question
+// cancelled once the user took the tab over, and one only.
+TEST(AgentPermissionRule, AnEntryForAQuestionCancelledInTheUsersHoldCountsApart) {
+  EntriesMade made;
+  EXPECT_TRUE(made.First(Kind::kCamera));
+  EXPECT_TRUE(made.First(Kind::kCamera, kEntryReasonUsersHold));
+  EXPECT_FALSE(made.First(Kind::kCamera, kEntryReasonUsersHold));
+  EXPECT_FALSE(made.First(Kind::kCamera));
+  EXPECT_FALSE(made.First(Kind::kCamera, kEntryReason));
+  EXPECT_TRUE(made.First(Kind::kMicrophone, kEntryReasonUsersHold));
+  EXPECT_TRUE(made.First(Kind::kMicrophone));
+}
+
+TEST(AgentPermissionRule, AQuestionCancelledInAHandedTabTheUserTookOverHasAReasonOfItsOwn) {
+  EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, Kind::kCamera, kHeld, kTakenOver),
+               kEntryReasonUsersHold);
+  EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, Kind::kMicrophone, kHeld, kTakenOver),
+               kEntryReasonUsersHold);
+  // The app matches it to the letter.
+  EXPECT_STREQ(kEntryReasonUsersHold, "agent_space_users_hold");
+}
+
+// A refusal before any question, a kind that isn't the camera or the microphone, a tab the agent
+// drives or one held at a handoff, a page off the origin it was given on, and a page the agent
+// opened: each alone leaves the entry its one reason.
+TEST(AgentPermissionRule, EveryOtherEntryHasTheOneReason) {
+  ForEveryState([](const Tab& tab, const Handed& handed) {
+    for (size_t at = 0; at < kKinds; ++at) {
+      const Kind kind = KindAt(at);
+      EXPECT_STREQ(EntryReason(/*cancelled_question=*/false, kind, tab, handed), kEntryReason);
+      EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, kind, tab, handed),
+                   IsTheUsersOwnCall(kind, tab, handed) ? kEntryReasonUsersHold : kEntryReason)
+          << at << " " << tab.agents << tab.held << handed.handed << handed.on_given_origin
+          << handed.users_press;
+    }
+  });
+  EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, Kind::kCameraPanTiltZoom, kHeld,
+                           kTakenOver),
+               kEntryReason);
+  EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, Kind::kOther, kHeld, kTakenOver),
+               kEntryReason);
+  const Handed handed_off{.handed = true, .on_given_origin = true};
+  EXPECT_STREQ(EntryReason(/*cancelled_question=*/true, Kind::kCamera, kHeld, handed_off),
+               kEntryReason);
+}
+
 TEST(AgentPermissionRule, AUsersTabKeepsItsHandlesOnFiles) {
   EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/false, kUsers));
   EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/true, kUsers));

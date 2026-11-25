@@ -150,7 +150,8 @@ agent_permission_rule::Handed HandedOf(content::RenderFrameHost* frame) {
           .microphone = mark->microphone};
 }
 
-void Enter(std::string agent, bc_id tab, std::string action) {
+// |reason| is one of the rule's two constants.
+void Enter(std::string agent, bc_id tab, std::string action, const char* reason) {
   if (!Host().agent_activity) {
     return;
   }
@@ -158,7 +159,7 @@ void Enter(std::string agent, bc_id tab, std::string action) {
       .agent = agent.c_str(),
       .tab = tab,
       .action = action.c_str(),
-      .refused = agent_permission_rule::kEntryReason,
+      .refused = reason,
   };
   Host().agent_activity(Host().context, &entry);
 }
@@ -191,7 +192,8 @@ bool TakesPermissionRequest(content::RenderFrameHost* frame,
       // A kind left as today is answered as in any tab until it would ask the user, which no
       // page here does: its question ends as every other's.
       const Kind kind = KindOf(request->GetContentSettingsType());
-      NoteRefused(kind == Kind::kLeftAsToday ? Kind::kOther : kind, frame);
+      NoteRefused(kind == Kind::kLeftAsToday ? Kind::kOther : kind, frame,
+                  /*cancelled_question=*/true);
       request->Cancelled();
       return true;
     }
@@ -374,16 +376,20 @@ void CloseTabDialogs(content::WebContents* contents) {
   }
 }
 
-void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* frame) {
+void NoteRefused(agent_permission_rule::Kind kind,
+                 content::RenderFrameHost* frame,
+                 bool cancelled_question) {
   content::WebContents* contents = content::WebContents::FromRenderFrameHost(frame);
   const Tab* tab = contents ? Tab::FromWebContents(contents->GetOutermostWebContents()) : nullptr;
   const Space* space = tab ? AgentSpaceOf(tab->id()) : nullptr;
   if (!space) {
     return;
   }
+  const char* reason = agent_permission_rule::EntryReason(cancelled_question, kind,
+                                                          RuleTabOf(contents), HandedOf(frame));
   // The page's document, whichever frame of it asks.
   Entries* entries = Entries::GetOrCreateForCurrentDocument(frame->GetOutermostMainFrame());
-  if (!entries->made.First(kind)) {
+  if (!entries->made.First(kind, reason)) {
     return;
   }
   LOG(ERROR) << "browser: permission " << tab->id() << " " << agent_permission_rule::CodeWord(kind)
@@ -391,7 +397,8 @@ void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* fra
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Enter, space->agent()->id, tab->id(),
                                 std::string(agent_permission_rule::kEntryAction) +
-                                    agent_permission_rule::CodeWord(kind)));
+                                    agent_permission_rule::CodeWord(kind),
+                                reason));
 }
 
 void NoteRefused(agent_permission_rule::Kind kind, content::WebContents* contents) {
