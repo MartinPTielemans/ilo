@@ -24,6 +24,7 @@
 #include "browser_core/agent_permission_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/secure_connections_rule.h"
 #include "browser_core/withheld_fields.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -69,6 +70,21 @@ class AgentPage : public content::WebContentsObserver,
             std::vector<std::string> files,
             Lands lands,
             base::OnceCallback<void(bool)> put);
+
+  // The agent's open, if |opened|, or its navigate started the navigation |load| in |contents|, 0
+  // if it started none. The app asks the wait for that page next, a BC_AGENT_PAGE_QUIET, which is
+  // then the load's own job (secure_connections_rule.h).
+  static void Asked(content::WebContents* contents, int64_t load, bool opened);
+  // The page the navigation |load| was to open in |tab| answered only over http and was stopped
+  // (secure_connections.h): the job that asked for that load, running or still queued, is answered
+  // now that it didn't open, with BC_AGENT_FAILURE_NOT_SECURE. Every other job there goes on, as
+  // under any page that leaves: on the page the tab is put back on, or to the tab's end.
+  static void PageTaken(bc_id tab, int64_t load);
+  // The core is about to close |tab| itself, as the page it went on to was stopped with none behind
+  // it, or, not |closing|, has asked and the page still stands, as one being dragged. Only a tab
+  // that goes between the two tells its running job more than the tab's end
+  // (secure_connections_rule::ToldAtClose).
+  static void ClosingNotSecure(bc_id tab, bool closing);
 
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
@@ -120,6 +136,11 @@ class AgentPage : public content::WebContentsObserver,
     std::vector<std::string> files;
     Lands lands;
     base::OnceCallback<void(bool)> put;
+    // The load an open's or a navigate's wait waits on, which its call started.
+    secure_connections_rule::Asked asked;
+    // Whether the step has gone to the page: a click's press, a key's or a typed Enter's, a
+    // select's choice. Set nowhere else, so every other job's stays false.
+    bool sent = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -337,7 +358,9 @@ class AgentPage : public content::WebContentsObserver,
   void Fail(std::string why, bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
   // Answers |job|, which never ran, as the session ended or a dialog keeps its page: the agent with
   // |why|, a Fill as not put.
-  void Owe(Job& job, const std::string& why);
+  void Owe(Job& job,
+           const std::string& why,
+           bc_agent_failure failure = BC_AGENT_FAILURE_NONE);
 
   // FILE_FIELD: describes the job's element for the user's card, which may ask for a file for it
   // only if it's a file input that isn't a folder's, in a frame with a site, and keeps where it is
@@ -427,6 +450,10 @@ class AgentPage : public content::WebContentsObserver,
   std::optional<Job> job_;
   // Whether a download took the job running, so its answer goes nowhere.
   bool taken_ = false;
+  // What Asked said, until the next job takes or drops it.
+  secure_connections_rule::Asked asked_;
+  // Whether the core is closing the tab itself, as ClosingNotSecure says.
+  bool closing_not_secure_ = false;
   // An answer kept while a navigation's download starts, as it may take the job (#1446).
   struct Held {
     uint64_t request;

@@ -545,6 +545,12 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
   // The select has no option with the text asked for.
   BC_AGENT_FAILURE_NO_OPTION = 10,
+  // The page the open or the navigate itself asked for answered only over http and was stopped:
+  // the tab is back on the page it had, or closed if it had none.
+  BC_AGENT_FAILURE_NOT_SECURE = 11,
+  // The page an open opened went on by itself, while the open still waited for it, to one that
+  // answers only over http and was stopped with no page behind it: the tab closed.
+  BC_AGENT_FAILURE_WENT_ON_NOT_SECURE = 12,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
@@ -558,6 +564,10 @@ typedef struct bc_agent_activity {
   const char* refused;
   // A bc_agent_failure value, BC_AGENT_FAILURE_NONE if the agent may act.
   int failure;
+  // The site the entry is about where that isn't the page the tab shows, as of a page that never
+  // opened in it: its host alone, never a path, a query, a port or the name and password an
+  // address can carry. Null for an entry about the tab's own page.
+  const char* site;
 } bc_agent_activity;
 
 // The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
@@ -1439,6 +1449,9 @@ typedef struct bc_host {
   // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
   // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
   // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
+  // A click, a typed Enter, a key or a choice in a select that went, whose page then went on to
+  // one that answers only over http, with no page behind it, so that the tab closed: a JSON
+  // object of its own, {"closed": "not_secure"}.
   // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
   void (*agent_page_done)(void* context,
                           bc_id tab,
@@ -1709,6 +1722,11 @@ typedef struct bc_host {
   // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
   // app is quitting. |answer| lasts only for the call.
   void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
+  // The product's name as the user reads it, for what Chrome shows in words of its own that name
+  // the browser: its warning before http. Null or empty, those keep Chrome's own name. Not a
+  // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
+  // reaches no log line, no page and no agent's answer.
+  const char* product;
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2283,6 +2301,17 @@ BC_EXPORT bool bc_profile_offers_to_save(bc_id profile, int what, bool* offers);
 // Has the profile offer to save |what|, or not, and returns whether it will: not for a profile
 // that isn't loaded, or one a policy sets.
 BC_EXPORT bool bc_profile_set_offers_to_save(bc_id profile, int what, bool offer);
+// Whether |profile| always uses secure connections, as Settings › Privacy has it: on unless the
+// user turned it off. On, a page of a public site is asked for over https first, and one that
+// answers only over http waits behind Chrome's warning for the user's Continue to site, which
+// holds for that site for 15 days. Off, https is still tried first and http follows without a
+// word. A local name, an address on a private network and an address the user typed with http://
+// (bc_tab_open_typed) load as written either way. Sets |on| and returns whether it could: not
+// for a profile that isn't loaded. The user's alone: agents get no path to it.
+BC_EXPORT bool bc_profile_secure_connections(bc_id profile, bool* on);
+// Turns it on or off for |profile| and its private windows, and returns whether it could: not
+// for a profile that isn't loaded, or one a policy sets.
+BC_EXPORT bool bc_profile_set_secure_connections(bc_id profile, bool on);
 // Reads |url|, an http(s) address, with one GET on |profile|'s own session, with no tab, as the
 // site's own page would read it: with the profile's cookies for it and the site as the first
 // party, nothing taken from the HTTP cache or put in it, and no history. Cookies the answer sets
@@ -2317,6 +2346,12 @@ BC_EXPORT double bc_profile_archive_after(bc_id profile);
 // Close Tab still archive them (Arc had no Never; ours, #1636).
 #define BC_ARCHIVE_NEVER -1.0
 BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
+// Whether the profile's windows offer Sort Tabs into Folders, which sends the titles and hosts of a
+// Space's Today tabs to the user's own assistant: on until the user turns it off, and false for a
+// profile that isn't loaded. Kept in the profile's prefs. No agent reads or sets it.
+BC_EXPORT bool bc_profile_sort_tabs(bc_id profile);
+// Sets it, and returns whether it did: not for a profile that isn't loaded.
+BC_EXPORT bool bc_profile_set_sort_tabs(bc_id profile, bool on);
 
 // Copies the profile's notes service, which New Note opens a new document in, into |service| as
 // bc_space_name does: the app's name for it, as bc_profile_set_notes_service was given, or "" for
@@ -2432,7 +2467,9 @@ BC_EXPORT void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* col
 BC_EXPORT bool bc_space_delete(bc_id space);
 
 // Copies up to |capacity| of the Space's Today tabs into |tabs|, top to bottom, and returns how many
-// it has. The ones the user opened are newest first; one a page opened sits under the page's tab.
+// it has: tabs only, never a folder. The ones the user opened are newest first; one a page opened
+// sits under the page's tab, in its today's folder if it's in one. A tab in a today's folder has it
+// in bc_folder_of, and a today's folder's tabs are together, one after another.
 BC_EXPORT size_t bc_space_today(bc_id space, bc_id* tabs, size_t capacity);
 
 // Copies up to |capacity| of the Space's pinned tabs and folders into |tabs|, top to bottom, and
@@ -2453,13 +2490,23 @@ BC_EXPORT bool bc_folder(bc_id id, bool* open);
 // Copies the folder's name into |name| as bc_space_name does.
 BC_EXPORT size_t bc_folder_name(bc_id folder, char* name, size_t capacity);
 
-// The folder holding the pinned tab or folder |id|, else 0.
+// The folder holding the pinned tab or folder |id|, or the today's folder holding the Today tab
+// |id|, else 0. A folder that isn't in bc_space_pinned is a today's folder.
 BC_EXPORT bc_id bc_folder_of(bc_id id);
 
 // Makes an open folder named |name| at |index| in |folder| if it isn't 0, else in the Space's
 // pinned tabs, counted as bc_tab_move counts, or at the end past it. Returns it. Then
 // space_changed.
 BC_EXPORT bc_id bc_folder_create(bc_id space, const char* name, bc_id folder, size_t index);
+
+// Makes an open folder named |name| in the Space's Today tabs, of |tabs|, |count| of them: at least
+// two, each a Today tab of the Space in no folder and no split view. They come together at the
+// first one's place, in their order, every other tab keeping its own. A today's folder holds tabs
+// only, is never empty, going with its last tab, and is kept across a quit and synced. Returns it,
+// or 0, making none, if a tab isn't such a tab, or the Space is an agent's or a private window's.
+// Then space_changed.
+BC_EXPORT bc_id bc_folder_create_today(bc_id space, const char* name, const bc_id* tabs,
+                                       size_t count);
 
 // Then space_changed.
 BC_EXPORT void bc_folder_rename(bc_id folder, const char* name);
@@ -2475,16 +2522,21 @@ BC_EXPORT void bc_folder_set_icon(bc_id folder, const char* icon);
 
 // Makes a copy of the folder under it, in the folder holding it, with its name and icon, and a copy
 // of each pinned tab and folder in it, in their order, each tab with its history, name, icon and
-// pinned URL, unloaded until it's shown. Nothing is shown or loads. Returns the copy, or 0. Then
-// space_changed.
+// pinned URL, unloaded until it's shown. Nothing is shown or loads. Returns the copy, or 0, as for
+// a today's folder. Then space_changed.
 BC_EXPORT bc_id bc_folder_duplicate(bc_id folder);
 
-// Moves the folder, with what's in it, to |index| in |folder| if it isn't 0, else in the pinned
-// tabs, counted as bc_tab_move counts. Not into itself. Then space_changed.
-BC_EXPORT void bc_folder_move(bc_id folder, bc_id to, size_t index);
+// Moves the folder, with what's in it, to |index| in its Space's pinned tabs if |pinned|, inside |to|
+// if it isn't 0, counted as bc_tab_move counts, else among its Today tabs, |to| 0, |index| counting
+// a today's folder and its tabs as one, never inside another today's folder. Not into itself. A
+// today's folder moved to the pinned tabs is a pinned folder, its tabs pinned at the pages they're
+// at; a pinned folder moved to Today is a today's folder, its tabs unpinned and the folders in it
+// flattened into it, in their order. Refused for a Live Folder, an empty folder or an agent's Space
+// moving to Today. Then space_changed.
+BC_EXPORT void bc_folder_move(bc_id folder, bool pinned, bc_id to, size_t index);
 
-// Deletes the folder, leaving what was in it where it was, in the folder that held it. Then
-// space_changed.
+// Deletes the folder, leaving what was in it where it was, in the folder that held it, or loose in
+// Today for a today's folder. Then space_changed.
 BC_EXPORT void bc_folder_delete(bc_id folder);
 
 // Makes an open Live Folder named |name| at the bottom of the Space's pinned tabs, filled from
@@ -4013,6 +4065,9 @@ BC_EXPORT void bc_tab_move_split_to_favorites(bc_id tab, size_t index);
 // unless that's an agent's or doesn't show it, pinned at its favorite's URL in the pinned tabs, and
 // a window showing it keeps showing it; a favorite split leaves whole and is a split there, as it
 // looked. Under BC_FAVORITES_EVERY the site goes from every profile, and its other tabs close.
+// With |pinned| false, |folder| is 0 or a today's folder, which the tab goes into, |index| counting
+// the tabs in it; a Today tab moved out of its today's folder leaves it, and the folder goes with
+// its last tab.
 // Then space_changed and tab_state_changed, and favorites_changed for a favorite.
 BC_EXPORT void bc_tab_move(bc_id tab, bool pinned, bc_id folder, size_t index);
 
@@ -4452,6 +4507,7 @@ BC_EXPORT void bc_clipboard_read_text(void (*done)(void* context, const char* te
                                       void* context);
 
 // Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+// or a today's folder, with its tabs, to the top of |space|'s Today tabs as a today's folder there,
 // as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether
 // they're open, and the tabs their order, pinned URLs, split views and pages. A window showing one
 // of its tabs shows |space| with it. Into another profile's Space each tab goes as a new one, as

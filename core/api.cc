@@ -81,6 +81,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
 #include "browser_core/share.h"
 #include "browser_core/site_controls.h"
@@ -114,6 +115,7 @@
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_capability_type.h"
@@ -231,15 +233,16 @@ Profile* ProfileOf(const browser_core::Window& window) {
 // |typed_http| it's an http address the user wrote out, which loads as written (TypedHttp). With
 // |new_group| the page starts a browsing group of its own, cut from every window the tab's last
 // page opened or was opened by, as a typed load to another site is, and to the same site too.
-void LoadInTab(bc_id id,
-               const GURL& url,
-               ui::PageTransition transition,
-               bool typed_http,
-               bool new_group = false) {
+// Gives the id of the navigation it started, or 0 if it started none in Chromium's page.
+int64_t LoadInTab(bc_id id,
+                  const GURL& url,
+                  ui::PageTransition transition,
+                  bool typed_http,
+                  bool new_group = false) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   if (!tab) {
-    return;
+    return 0;
   }
   // Not a link: the user starts something else in the tab, so closing a tab no longer leads back
   // to where it came from, as Chrome's tab strip forgets on a typed or bookmark navigation.
@@ -247,13 +250,14 @@ void LoadInTab(bc_id id,
   if (space && !ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_LINK)) {
     space->ForgetOpeners();
   }
+  base::WeakPtr<content::NavigationHandle> started;
   browser_core::Tab::FromWebContents(contents)->Load(url, [&] {
     NavigateParams params(tab->GetBrowserWindowInterface(), url, transition);
     params.disposition = WindowOpenDisposition::CURRENT_TAB;
     params.source_contents = contents;
     params.url_typed_with_http_scheme = typed_http;
     if (!new_group) {
-      Navigate(&params);
+      started = Navigate(&params);
       return;
     }
     // Chrome's Navigate has no way to ask for a new group, so the load is the one it would start in
@@ -261,19 +265,25 @@ void LoadInTab(bc_id id,
     content::NavigationController::LoadURLParams load =
         LoadURLParamsFromNavigateParams(contents, &params);
     load.force_new_browsing_instance = true;
-    contents->GetController().LoadURLWithParams(load);
+    started = contents->GetController().LoadURLWithParams(load);
   });
+  return started ? started->GetNavigationId() : 0;
 }
 
 // Loads |url| in the tab itself as a link, a pinned tab going away from its pinned URL, if it may
 // load that way (tab_follow::MayLoad), and returns whether it does. The UI's bc_tab_follow and
 // an agent's bc_agent_navigate both load through it; an agent's starts a new browsing group
-// (|new_group|), so a site it left keeps no hold on its tab through a window it opened.
-bool FollowInTab(bc_id id, const GURL& url, bool new_group) {
+// (|new_group|), so a site it left keeps no hold on its tab through a window it opened. |load|
+// hears the id of the navigation it started, as LoadInTab gives it.
+bool FollowInTab(bc_id id, const GURL& url, bool new_group, int64_t* load = nullptr) {
   if (!browser_core::tab_follow::MayLoad(url) || !browser_core::Window::PageOf(id)) {
     return false;
   }
-  LoadInTab(id, url, browser_core::tab_follow::kTransition, /*typed_http=*/false, new_group);
+  const int64_t started =
+      LoadInTab(id, url, browser_core::tab_follow::kTransition, /*typed_http=*/false, new_group);
+  if (load) {
+    *load = started;
+  }
   return true;
 }
 
@@ -880,11 +890,13 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
   // The agent's from before its page starts, so its first request is an agent's (#2660).
-  content::WebContents* contents = window && profile ? window->OpenHeld(*space, profile, target)
-                                                     : nullptr;
+  int64_t load = 0;
+  content::WebContents* contents =
+      window && profile ? window->OpenHeld(*space, profile, target, &load) : nullptr;
   if (!contents) {
     return 0;
   }
+  browser_core::AgentPage::Asked(contents, load, /*opened=*/true);
   const bc_id tab = browser_core::Tab::IdOf(contents);
   space->Add(tab, /*opener=*/0, /*foreground=*/false);
   browser_core::AgentActed(agent, tab);
@@ -900,7 +912,12 @@ bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
       !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
-  return FollowInTab(tab, target, /*new_group=*/true);
+  int64_t load = 0;
+  if (!FollowInTab(tab, target, /*new_group=*/true, &load)) {
+    return false;
+  }
+  browser_core::AgentPage::Asked(browser_core::Window::PageOf(tab), load, /*opened=*/false);
+  return true;
 }
 
 size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
@@ -1087,6 +1104,14 @@ bool bc_profile_set_offers_to_save(bc_id profile_id, int what, bool offer) {
   return true;
 }
 
+bool bc_profile_secure_connections(bc_id profile, bool* on) {
+  return browser_core::SecureConnections(browser_core::ProfileOrLoad(profile), on);
+}
+
+bool bc_profile_set_secure_connections(bc_id profile, bool on) {
+  return browser_core::SetSecureConnections(browser_core::ProfileOrLoad(profile), on);
+}
+
 void bc_profile_read(bc_id profile,
                      uint64_t read,
                      const char* url,
@@ -1127,6 +1152,14 @@ bool bc_profile_set_archive_after(bc_id profile, double seconds) {
   const std::optional<base::TimeDelta> after =
       seconds == BC_ARCHIVE_NEVER ? std::nullopt : std::optional(base::Seconds(seconds));
   return browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile), after);
+}
+
+bool bc_profile_sort_tabs(bc_id profile) {
+  return browser_core::ProfileSortTabs(LoadedProfile(profile));
+}
+
+bool bc_profile_set_sort_tabs(bc_id profile, bool on) {
+  return browser_core::SetProfileSortTabs(LoadedProfile(profile), on);
 }
 
 size_t bc_profile_notes_service(bc_id profile_id, char* service, size_t capacity) {
@@ -1265,6 +1298,20 @@ bc_id bc_folder_create(bc_id id, const char* name, bc_id folder, size_t index) {
   return space ? space->AddFolder(name ? name : "", folder, index) : 0;
 }
 
+bc_id bc_folder_create_today(bc_id id, const char* name, const bc_id* tabs, size_t count) {
+  browser_core::Space* space = browser_core::Space::FromId(id);
+  // Refused here too: an agent's Space and a private window's hold none. A sort hands no split
+  // view's tab, so none is taken, though a restored folder holds whole ones.
+  if (!space || !tabs || space->agent() || space->own()) {
+    return 0;
+  }
+  std::vector<bc_id> in(tabs, tabs + count);
+  if (std::ranges::any_of(in, [&](bc_id tab) { return space->Panes(tab).size() > 1; })) {
+    return 0;
+  }
+  return space->AddTodayFolder(name ? name : "", in);
+}
+
 void bc_folder_rename(bc_id folder, const char* name) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->RenameFolder(folder, name ? name : "");
@@ -1295,7 +1342,8 @@ void bc_folder_set_icon(bc_id folder, const char* icon) {
 
 bc_id bc_folder_duplicate(bc_id folder) {
   browser_core::Space* space = browser_core::Space::HoldingFolder(folder);
-  if (!space) {
+  // A today's folder's menu has Rename and Delete Folder alone.
+  if (!space || space->IsTodayFolder(folder)) {
     return 0;
   }
   // A copy of the rows, which the copies go in among.
@@ -1348,9 +1396,9 @@ void bc_folder_set_open(bc_id folder, bool open) {
   }
 }
 
-void bc_folder_move(bc_id folder, bc_id to, size_t index) {
+void bc_folder_move(bc_id folder, bool pinned, bc_id to, size_t index) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
-    space->Move(folder, /*pinned=*/true, to, index, &PageUrlOf);
+    space->MoveFolder(folder, pinned, to, index, &PageUrlOf);
   }
 }
 

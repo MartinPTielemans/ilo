@@ -101,11 +101,11 @@ enum At {
     Favorite(usize),
     /// At this index among the pinned tabs and folders in `folder`, or directly in the pinned tabs
     /// for 0, counted as `Browser::move_tab` counts.
-    Pinned {
-        folder: u64,
-        index: usize,
-    },
-    Today(usize),
+    Pinned { folder: u64, index: usize },
+    /// At this index among its Space's Today tabs for `folder` 0, else among the tabs of that
+    /// today's folder. A today's folder is at this index among the Today rows, each today's
+    /// folder's tabs and each split one, as `Browser::move_folder_to_today` counts.
+    Today { folder: u64, index: usize },
 }
 
 /// A folder as it was when it was deleted, to make it again.
@@ -122,6 +122,8 @@ pub(super) struct Folder {
     children: Vec<u64>,
     /// What filled it, if it was a Live Folder, which it's made again as.
     live: Option<LiveSource>,
+    /// Whether it was a today's folder, made again around the same tabs, where they are.
+    today: bool,
 }
 
 /// What a name, an icon or a colour belongs to. A Space's colour comes with the theme it's the
@@ -400,7 +402,7 @@ impl Edit {
             Edit::Return { tab, .. } => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
-                if let At::Pinned { folder, .. } = &mut spot.at {
+                if let At::Pinned { folder, .. } | At::Today { folder, .. } = &mut spot.at {
                     id(folder);
                 }
             }
@@ -468,7 +470,9 @@ impl Edit {
         match self {
             Edit::Restore(_) | Edit::Unsplit { .. } => (0, 0),
             Edit::Put { spot, .. } => match spot.at {
-                At::Favorite(index) | At::Pinned { index, .. } | At::Today(index) => (1, index),
+                At::Favorite(index) | At::Pinned { index, .. } | At::Today { index, .. } => {
+                    (1, index)
+                }
             },
             Edit::Delete(_) | Edit::Split { .. } => (2, 0),
             _ => (1, 0),
@@ -580,7 +584,7 @@ impl Edit {
                 let now = shell.spot_of(tab)?;
                 let was = shell.browser.pinned_url(tab);
                 shell.put(tab, &now, &spot, cx);
-                if !url.is_empty() && !matches!(spot.at, At::Today(_)) {
+                if !url.is_empty() && !matches!(spot.at, At::Today { .. }) {
                     shell.browser.set_pinned_url(tab, &url, cx);
                 }
                 Some(Edit::Put {
@@ -632,7 +636,9 @@ impl Edit {
                     At::Pinned { folder, index } => {
                         shell.browser.move_tab(first, true, folder, index, cx)
                     }
-                    At::Today(index) => shell.browser.move_tab(first, false, 0, index, cx),
+                    At::Today { folder, index } => {
+                        shell.browser.move_tab(first, false, folder, index, cx)
+                    }
                     At::Favorite(_) => {}
                 }
                 Some(Edit::MoveSplit {
@@ -1044,7 +1050,7 @@ impl Shell {
     pub(super) fn close_tab(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
         let closing = self
             .spot_of(tab)
-            .filter(|spot| matches!(spot.at, At::Today(_)));
+            .filter(|spot| matches!(spot.at, At::Today { .. }));
         if closing.is_none()
             && !split
             && let Some(join) = self.join_of(tab)
@@ -1207,13 +1213,17 @@ impl Shell {
     ) {
         let before = self.put_back(tab);
         let was = self.spot_of(tab).map(|spot| spot.at);
-        match self.is_folder(tab) {
-            true => self.browser.move_folder(tab, folder, index, cx),
-            false => self.browser.move_tab(tab, pinned, folder, index, cx),
+        let is_folder = self.is_folder(tab);
+        match (is_folder, pinned) {
+            (true, true) => self.browser.move_folder(tab, folder, index, cx),
+            (true, false) => self.browser.move_folder_to_today(tab, index, cx),
+            (false, _) => self.browser.move_tab(tab, pinned, folder, index, cx),
         }
         let what = match was {
+            // A folder over the divider is no tab pinned or unpinned.
+            _ if is_folder => What::MOVE_TAB,
             Some(At::Favorite(_)) => What::REMOVE_FAVORITE,
-            Some(At::Today(_)) if pinned => What::PIN,
+            Some(At::Today { .. }) if pinned => What::PIN,
             Some(At::Pinned { .. }) if !pinned => What::UNPIN,
             _ => What::MOVE_TAB,
         };
@@ -1457,7 +1467,7 @@ impl Shell {
     /// a Today tab of its Space.
     fn pin_beside(&mut self, tab: u64, with: u64, cx: &mut Context<Self>) -> Option<Edit> {
         let (at, from) = (self.spot_of(tab)?, self.spot_of(with)?);
-        let (At::Pinned { folder, index }, At::Today(_)) = (at.at, from.at) else {
+        let (At::Pinned { folder, index }, At::Today { .. }) = (at.at, from.at) else {
             return None;
         };
         if at.space != from.space {
@@ -1600,7 +1610,10 @@ impl Shell {
                 true => self.browser.move_folder(tab, folder, index, cx),
                 false => self.browser.move_tab(tab, true, folder, index, cx),
             },
-            At::Today(index) => self.browser.move_tab(tab, false, 0, index, cx),
+            At::Today { folder, index } => match self.is_folder_anywhere(tab) {
+                true => self.browser.move_folder_to_today(tab, index, cx),
+                false => self.browser.move_tab(tab, false, folder, index, cx),
+            },
         }
     }
 
@@ -1608,6 +1621,24 @@ impl Shell {
     fn folder_snapshot(&self, folder: u64) -> Option<Edit> {
         let space = self.spaces.iter().find(|space| space.is_folder(folder))?;
         let (name, open) = space.folders.folders.get(&folder)?.clone();
+        // Its tabs stay where they are, loose in Today, once it's deleted.
+        if space.today_folder(folder) {
+            let later = |tab: &u64| space.later(*tab);
+            let children = (space.today.iter().copied())
+                .filter(|&tab| space.folder_of(tab) == folder && !later(&tab))
+                .collect();
+            return Some(Edit::Restore(Folder {
+                id: folder,
+                space: space.id,
+                name,
+                open,
+                container: 0,
+                index: 0,
+                children,
+                live: None,
+                today: true,
+            }));
+        }
         let Spot {
             at: At::Pinned {
                 folder: container,
@@ -1628,6 +1659,7 @@ impl Shell {
             index,
             children,
             live: space.folders.live.get(&folder).copied(),
+            today: false,
         }))
     }
 
@@ -1640,6 +1672,9 @@ impl Shell {
         plain: bool,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
+        if folder.today {
+            return self.restore_today_folder(folder, cx);
+        }
         let live = (folder.live)
             .map(|source| (self.browser).create_live_folder(folder.space, source, &folder.name, cx))
             .filter(|&made| made != 0);
@@ -1668,6 +1703,34 @@ impl Shell {
                 false => self.browser.move_tab(child, true, made, index, cx),
             }
             index += panes;
+        }
+        if !folder.open {
+            self.browser.set_folder_open(made, false, cx);
+        }
+        Some(made)
+    }
+
+    /// Makes today's `folder` again around the tabs it held, with the name it had, which only this
+    /// step kept. The core makes a today's folder of tabs in no split view, so a split it held
+    /// goes back in after, at its place. None, the tabs staying loose, if fewer than two of them
+    /// are single tabs still in Today.
+    fn restore_today_folder(&mut self, folder: &Folder, cx: &mut Context<Self>) -> Option<u64> {
+        let single = |shell: &Self, tab: u64| shell.panes_in(folder.space, tab) == 1;
+        let singles: Vec<u64> = (folder.children.iter().copied())
+            .filter(|&tab| single(self, tab))
+            .collect();
+        let made = self
+            .browser
+            .create_today_folder(folder.space, &folder.name, &singles, cx);
+        if made == 0 {
+            return None;
+        }
+        let mut index = 0;
+        for &tab in &folder.children {
+            if !single(self, tab) {
+                self.browser.move_tab(tab, false, made, index, cx);
+            }
+            index += self.panes_in(folder.space, tab);
         }
         if !folder.open {
             self.browser.set_folder_open(made, false, cx);
@@ -1833,11 +1896,26 @@ impl Space {
     /// `Browser::move_tab` counts: without its split view, whose tabs move with it.
     fn spot_of(&self, tab: u64) -> Option<Spot> {
         let first = self.panes(tab)[0];
-        if let Some(index) = self.today.iter().position(|&each| each == first) {
-            return Some(Spot {
+        let today = |folder, index| {
+            Some(Spot {
                 space: self.id,
-                at: At::Today(index),
-            });
+                at: At::Today { folder, index },
+            })
+        };
+        if self.today_folder(first) {
+            let start = (self.today.iter()).position(|&each| self.folder_of(each) == first)?;
+            return today(0, self.today_rows_in(&self.today[..start]));
+        }
+        if let Some(index) = self.today.iter().position(|&each| each == first) {
+            let folder = self.folder_of(first);
+            let above = self.today[..index].iter();
+            let index = match folder {
+                0 => index,
+                _ => above
+                    .filter(|&&each| self.folder_of(each) == folder)
+                    .count(),
+            };
+            return today(folder, index);
         }
         if !self.pinned.contains(&first) {
             return None;

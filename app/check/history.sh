@@ -10,8 +10,9 @@
 # keyboard on a click on its own pane's page, which never hears it, and a local one over http. One
 # typed with http:// loads over http as written, with no https try and no warning, as in Chrome's
 # address bar. Only what the user typed counts: an agent's open_tab
-# and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
-# at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
+# and navigate, and a link, to an http:// address, are tried over https first. From 157 the agent's
+# page then never opens and has no warning: its tab is put back, the log has the site, and the
+# user's window keeps the keyboard. A right-click on reload lists Reload, Hard
 # Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
 # not another site's, before the page loads again.
 
@@ -228,7 +229,7 @@ upgraded() {
     "$3 didn't come to http://$2/: $(grep "^browser: page $1 " "$log" | tail -1)"
   if [ "$major" -ge 157 ]; then
     # The core's line, which comes at each warning: the app's trouble line comes only when the
-    # tab's trouble changes, and the agent's navigate goes from one warning to the next.
+    # tab's trouble changes.
     expect "browser: tab $1 error -20\$" \
       "$3 to http://$2/ had no warning before http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
   else
@@ -330,35 +331,85 @@ stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, lo
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
 # The agent's open_tab and navigate, in a Space of its own that isn't shown, with the user's tab on
-# a page of the check's own. Then, with the agent's tab at its last load, ⌘L still opens the command
-# bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
-# on Windows (#3164).
+# a page of the check's own. From Chromium 157 a page that answers only over http never opens in
+# an agent's tab: where Chrome's warning before http would come, whose Continue to site is the
+# user's to press, the core shows none, puts the tab back, closed if open_tab just made it and else
+# back on the page it had, and makes one activity entry, which names the site by its host alone.
+# Then ⌘L still opens the command bar in the user's window: an agent's tab never takes the user's
+# keyboard, as its warning took it on Windows (#3164).
 agent_steps() {
-  # The agent's warning is its tab's, which no window shows: it isn't shown in the user's window
-  # either, as Chrome keeps a tab's dialog hidden while its tab is (#3164).
+  # The agent's tab has no warning, and no window shows the tab: the user's window, which shows
+  # the user's tab, has none either (#3164).
   no_agent_dialog() {
     [ "$major" -ge 157 ] || return 0
     send layout
     shown=$(since | sed -n 's/^browser: layout child //p' | head -1)
     [ -z "$shown" ] ||
-      fail "the agent's warning before http, after $1 in its own Space, showed at $shown in the user's window, which shows the user's tab: $(since | grep '^browser: layout' | tr '\n' ' ')"
+      fail "a warning before http, after $1 in the agent's own Space, showed at $shown in the user's window, which shows the user's tab: $(since | grep '^browser: layout' | tr '\n' ' ')"
+  }
+  # The agent's tab $1 was stopped on its way to http://$2/, after an https try, by $3, the
+  # driver's command $4: no warning, and one entry in the log, by the host alone.
+  not_opened() {
+    expect "browser: tab $1 error -20\$" \
+      "$3 to http://$2/ wasn't stopped before http: $(grep "^browser: loaded $1 " "$log" | tail -1)" "$4"
+    [ "$(tls)" -gt "$before" ] || fail "$3 came to http://$2/ without trying https first"
+    expect "browser: tab $1 not secure, not opened: an agent's tab\$" \
+      "the core didn't take the page $3 was stopped at, http://$2/, from Chrome's warning" "$4"
+    entry="^browser: agent activity claude-code $1 open_page site=$2 refused: not_secure\$"
+    expect "$entry" \
+      "the page $3 never opened, http://$2/, had no activity entry: $(grep '^browser: agent activity claude-code ' "$log" | tail -1)" "$4"
+    expect "^browser: agent logged claude-code open_page $2\$" \
+      "the log didn't take the entry of http://$2/, which $3 never opened: $(grep '^browser: agent logged ' "$log" | tail -1)" "$4"
+  }
+  # One entry for each page that never opened, once the steps after it are through: $1 is the tab,
+  # $2 the host and $3 what went there.
+  one_entry() {
+    entries=$(grep -c "^browser: agent activity claude-code $1 open_page site=$2 refused: not_secure\$" "$log" || true)
+    [ "$entries" = 1 ] || fail "the page $3 never opened, http://$2/, has $entries activity entries, not one"
   }
   send agentspace claude-code Claude Code
   expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
   before=$(tls)
   send agentopen claude-code "http://$agent_opened/"
+  opened=$step
   expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
   agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
-  upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
-  no_agent_dialog "its open_tab"
+  if [ "$major" -ge 157 ]; then
+    not_opened "$agent_tab" "$agent_opened" "the agent's open_tab" "$opened"
+    # The tab open_tab made had no page before this one, so it closes.
+    expect "^browser: tab $agent_tab closed\$" \
+      "the tab the agent's open_tab made for http://$agent_opened/, which never opened, stayed open" "$opened"
+    no_agent_dialog "its open_tab"
+    one_entry "$agent_tab" "$agent_opened" "the agent's open_tab"
+    # A tab with a page of the check's own, for the navigate to leave and be put back on.
+    printf '%s' '<title>agent</title>' > "$out/site/agent.html"
+    closed_tab=$agent_tab
+    send agentopen claude-code "http://$nearby:$port/agent.html"
+    expect "^browser: agent claude-code opened [1-9][0-9]*\$" "the agent didn't open http://$nearby:$port/agent.html"
+    agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+    [ "$agent_tab" != "$closed_tab" ] || fail "the agent's second open_tab opened no tab of its own"
+    expect "^browser: loaded $agent_tab http://$nearby:$port/agent\\.html\$" \
+      "the agent's tab didn't load http://$nearby:$port/agent.html: $(grep "^browser: loaded $agent_tab " "$log" | tail -1)"
+  else
+    upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  fi
   before=$(tls)
   send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
+  moved=$step
   expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
     "the core didn't take the agent's navigate to http://$agent_moved/"
-  upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
-  no_agent_dialog "its navigate"
-  agent_at="at Chrome's warning before http"
-  [ "$major" -ge 157 ] || agent_at="loaded over http"
+  if [ "$major" -ge 157 ]; then
+    not_opened "$agent_tab" "$agent_moved" "the agent's navigate" "$moved"
+    # The tab had a page, so it goes back to it, with the page that never opened ahead of it.
+    expect "^browser: page $agent_tab back 0 forward 1 loading 0 http://$nearby:$port/agent\\.html\$" \
+      "the agent's tab wasn't put back on http://$nearby:$port/agent.html after its navigate to http://$agent_moved/ never opened: $(grep "^browser: page $agent_tab " "$log" | tail -1)" "$moved"
+    no_agent_dialog "its navigate"
+    one_entry "$agent_tab" "$agent_moved" "the agent's navigate"
+    agent_at="put back from a page that never opened"
+  else
+    upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+    agent_at="loaded over http"
+  fi
   send key l cmd
   expect '^browser: command bar shown$' "⌘L in the user's window, with the agent's tab $agent_at, didn't open the command bar"
   send key escape

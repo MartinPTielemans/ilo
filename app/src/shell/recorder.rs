@@ -514,6 +514,12 @@ impl Browser for Recorder {
         made
     }
 
+    fn create_today_folder(&self, space: u64, name: &str, tabs: &[u64], _: &mut App) -> u64 {
+        let made = self.make();
+        self.edit(format!("today folder {made} {space} {name} {tabs:?}"));
+        made
+    }
+
     fn rename_folder(&self, folder: u64, name: &str, _: &mut App) {
         self.edit(format!("rename folder {folder} {name}"));
     }
@@ -546,6 +552,11 @@ impl Browser for Recorder {
 
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         self.edit(format!("move folder {folder} {to} {index}"));
+        self.moves.set(self.moves.get() + 1);
+    }
+
+    fn move_folder_to_today(&self, folder: u64, index: usize, _: &mut App) {
+        self.edit(format!("today folder {folder} {index}"));
         self.moves.set(self.moves.get() + 1);
     }
 

@@ -21,6 +21,7 @@
 #include "base/path_service.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
@@ -61,6 +62,7 @@
 #include "browser_core/platform/native_hosts.h"
 #include "browser_core/profiles.h"
 #include "browser_core/search.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
 #include "browser_core/share.h"
 #include "browser_core/sign_in_dialog.h"
@@ -120,7 +122,6 @@
 #include "browser_core/platform/app_library.h"
 #endif
 #if BUILDFLAG(IS_WIN)
-#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/win/win_util.h"
 #include "chrome/common/pref_names.h"
@@ -141,6 +142,18 @@ namespace browser_core {
 namespace {
 
 bc_host g_host;
+
+// The product's name as the user reads it (bc_host's product), kept here alone: the app's
+// pointer needn't last, and g_host has none, so nothing but Chrome's warning before http is
+// handed it.
+std::string& ProductName() {
+  static base::NoDestructor<std::string> name;
+  return *name;
+}
+
+std::u16string ShownProductName() {
+  return base::UTF8ToUTF16(ProductName());
+}
 
 // Whether the app opens |url| from another app. Only pages and files: Chrome strips its own
 // direct-launch scheme first, and any other scheme an app sends is no page to show.
@@ -699,10 +712,15 @@ bool FromEarlierLaunch(bc_id id) {
 // crashed every launch so); that waits for ExtraParts.
 void Install(const bc_host& host) {
   g_host = host;
+  ProductName() = host.product ? host.product : "";
+  g_host.product = nullptr;
+  g_browser_core_product_name = &ShownProductName;
   g_browser_core_supplies_windows = true;
   g_browser_core_adjust_navigate = &Window::AdjustNavigate;
   // A tab's Cast dialog is the app's card, in place of the Views dialog.
   g_browser_core_cast_dialog = &CastDialog::For;
+  // An agent's tab never has Chrome's warning before http, whose Continue to site is the user's.
+  g_browser_core_no_http_warning = &TakesHttpWarning;
   g_browser_core_can_dock_devtools = &Window::CanDockDevTools;
   g_browser_core_update_devtools = &Window::UpdateDevTools;
   g_browser_core_show_devtools = &Window::ShowDevTools;

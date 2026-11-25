@@ -385,6 +385,9 @@ pub struct ToolResult {
     /// page's words, here and where it leaves for the agent, so only the app's own note is ever
     /// one: the user's line and the log go by it.
     pub notes: Option<&'static notes::Note>,
+    /// Its step went, and the core then closed its tab as the page went on to a site with no
+    /// secure connection: a run of steps ends at it, as the steps after it have no tab.
+    pub closed: bool,
 }
 
 impl ToolResult {
@@ -396,6 +399,7 @@ impl ToolResult {
             image: None,
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -406,6 +410,7 @@ impl ToolResult {
             image: None,
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -424,6 +429,7 @@ impl ToolResult {
             image: Some(jpeg),
             kind: None,
             notes: None,
+            closed: false,
         }
     }
 
@@ -682,6 +688,9 @@ struct Acting {
     wait: Option<WaitText>,
     /// Its call's entry in the log, which says so if its answer carries a site's notes, or 0.
     entry: u64,
+    /// Whether its step is a click, which the answer names if its tab closed as its page went on
+    /// to a site with no secure connection.
+    clicked: bool,
 }
 
 /// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
@@ -1588,16 +1597,22 @@ impl Agents {
 
     /// The core checked a call of an agent's on `tab` not made here, as the driver's: an entry
     /// for the log. The calls made here log their own, as the core's report comes while they
-    /// run.
+    /// run. The entry is about the site the core `named`, or with none about the tab's page.
     pub fn checked(
         &mut self,
         agent: &str,
         tab: u64,
         action: &str,
         refused: &str,
+        named: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        let site = site(&self.browser.tab(tab, cx).url);
+        let named = named.map(named_site);
+        if tools::not_secure(action, refused) {
+            // Never by where the tab is, which is the page it's put back on.
+            return self.not_secure(agent, tab, &named.unwrap_or_default(), cx);
+        }
+        let site = named.unwrap_or_else(|| site(&self.browser.tab(tab, cx).url));
         self.note_page(
             agent,
             (self.holder(agent, tab), tab),
@@ -1605,6 +1620,17 @@ impl Agents {
             &site,
             refused,
         );
+        cx.notify();
+    }
+
+    /// The core stopped a page of `host` in the agent's `tab`, which answered only over http, and
+    /// puts the tab back: an entry for the log, by the host the core names, as the tab is leaving
+    /// that page, or by none. It ends no step. The open or the navigate that asked for the page
+    /// hears from the core itself (`Failure::NotSecure`), and any other step under way in the tab
+    /// still goes, so it's never told it didn't.
+    fn not_secure(&mut self, agent: &str, tab: u64, host: &str, cx: &mut Context<Self>) {
+        let by = (self.holder(agent, tab), tab);
+        self.note_page(agent, by, tools::NOT_SECURE_ACTION, host, "");
         cx.notify();
     }
 
@@ -2771,6 +2797,7 @@ impl Agents {
             opened_tabs: vec![],
             wait: None,
             entry: 0,
+            clicked: false,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -2820,7 +2847,10 @@ impl Agents {
                         let so_far = run_so_far(&run.done);
                         let why = format!("Step {n} failed: {}{so_far}", answer.text);
                         _ = run.reply.send(ToolResult::error(why));
-                    } else if run.steps.is_empty() {
+                    } else if run.steps.is_empty() || answer.closed {
+                        // A step whose tab closed as its page went on to http is the run's last
+                        // step too: the ones after it have no tab, and failing there would read as
+                        // a run to do again, that step and all.
                         let done = run.done.iter().map(|note| format!("{note}\n"));
                         let done: String = done.collect();
                         let last = match (&answer.image, answer.text.is_empty()) {
@@ -4029,6 +4059,7 @@ impl Agents {
             opened_tabs: vec![],
             wait,
             entry,
+            clicked: page == PageAction::Click,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -4315,11 +4346,29 @@ impl Agents {
             opened_tabs,
             wait,
             entry,
+            clicked,
             ..
         }) = self.acting.remove(&request)
         else {
             return;
         };
+        // The page it was to open or go to answered only over http, and the core stopped it and put
+        // the tab back or closed it: the step never went, in the words that has, and the agent
+        // learns no more. An open's tab is gone, so its answer names none.
+        if error == Some(Failure::NotSecure) {
+            // It didn't go, so the user's yes for where it was to go goes with it.
+            self.cleared.remove(&tab);
+            _ = reply.send(ToolResult::error(text));
+            return self.advance(cx);
+        }
+        // The page it opened went on by itself to one that answers only over http, with none behind
+        // it, so the core closed the tab while the open still waited: not opened, in the words
+        // that has, which are the app's as they name it.
+        if error == Some(Failure::WentOnNotSecure) {
+            self.cleared.remove(&tab);
+            _ = reply.send(ToolResult::error(tools::WENT_ON_NOT_OPENED));
+            return self.advance(cx);
+        }
         self.went_to(entry, tab, cx);
         // What it did, as a look again for the text it waits for says it too.
         let did_note = note.clone();
@@ -4377,6 +4426,21 @@ impl Agents {
             return self.advance(cx);
         }
         let tree: Value = serde_json::from_str(&text).unwrap_or_default();
+        // Its step went, and the page then went on by itself to one that answers only over http,
+        // with none behind it, so the core closed the tab: a result in the words that has, as the
+        // step isn't to be done again, and no outline, as the tab is gone.
+        if tree["closed"] == tools::CLOSED_NOT_SECURE {
+            self.cleared.remove(&tab);
+            let went = match clicked {
+                true => tools::WENT_ON_CLICKED,
+                false => tools::WENT_ON_STEPPED,
+            };
+            _ = reply.send(ToolResult {
+                closed: true,
+                ..ToolResult::text(went)
+            });
+            return self.advance(cx);
+        }
         let nodes = tree["nodes"]
             .as_array()
             .map(Vec::as_slice)
@@ -4436,6 +4500,7 @@ impl Agents {
                             opened_tabs,
                             wait: Some(wait),
                             entry,
+                            clicked,
                         };
                         let after = LOOK_EVERY.min(until.saturating_duration_since(now));
                         return self.look_again(acting, after, cx);
@@ -5407,6 +5472,11 @@ pub enum Failure {
     Loading,
     PasswordField,
     NoOption,
+    /// The open's or the navigate's own page answered only over http and was stopped.
+    NotSecure,
+    /// The page an open opened went on by itself to one that did, while the open still waited, and
+    /// the tab closed.
+    WentOnNotSecure,
 }
 
 impl Failure {
@@ -5688,6 +5758,7 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
         image: None,
         kind: kind.filter(|_| error),
         notes: None,
+        closed: false,
     });
 }
 
@@ -5918,6 +5989,30 @@ pub fn site(url: &str) -> String {
         None => host.split(':').next().unwrap_or_default(),
     };
     host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// The site an entry of the core's names itself, as `site` gives a page's: a host alone, or
+/// nothing, which the log reads as a page. Anything of an address beside its host, a path, a
+/// query, a port or a name and password, makes it nothing rather than be cut down to one: the
+/// core sends none, so what has one isn't the core's to believe.
+pub fn named_site(named: &str) -> String {
+    let name = |host: &str| {
+        (host.chars()).all(|each| each.is_ascii_alphanumeric() || matches!(each, '.' | '-' | '_'))
+    };
+    let address = |host: &str| {
+        (host
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']')))
+        .is_some_and(|inner| {
+            inner
+                .chars()
+                .all(|each| each.is_ascii_hexdigit() || each == ':')
+        })
+    };
+    match !named.is_empty() && (name(named) || address(named)) {
+        true => named.strip_prefix("www.").unwrap_or(named).to_string(),
+        false => String::new(),
+    }
 }
 
 /// The kinds of page `site` names for a page off the web, whose address it doesn't give.

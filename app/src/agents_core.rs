@@ -573,6 +573,8 @@ pub(crate) fn failure_of(code: std::ffi::c_int) -> Failure {
         bc::bc_agent_failure_BC_AGENT_FAILURE_LOADING => Failure::Loading,
         bc::bc_agent_failure_BC_AGENT_FAILURE_PASSWORD_FIELD => Failure::PasswordField,
         bc::bc_agent_failure_BC_AGENT_FAILURE_NO_OPTION => Failure::NoOption,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_NOT_SECURE => Failure::NotSecure,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_WENT_ON_NOT_SECURE => Failure::WentOnNotSecure,
         _ => Failure::Other,
     }
 }

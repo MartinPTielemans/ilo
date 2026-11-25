@@ -385,8 +385,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
                                 bool when_shown,
                                 bool typed_http);
   // Opens |url| for |profile| in a tab behind, loading at once, that |space| holds before its page
-  // starts (Space::Expect), for the caller to place there.
-  content::WebContents* OpenHeld(Space& space, Profile* profile, const GURL& url);
+  // starts (Space::Expect), for the caller to place there. |load| hears the id of the navigation
+  // its page starts with, or 0 if none started.
+  content::WebContents* OpenHeld(Space& space, Profile* profile, const GURL& url, int64_t* load);
   // Opens |url| in a tab |pinned| opened, as a link opened in front, so it's at the top of the
   // Today tabs, shown if the window shows its Space, and closing it shows |pinned| again. Null as
   // OpenTab.
@@ -457,11 +458,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
     bool split;
     // Whether it was the tab the window showed.
     bool selected;
+    // Its today's folder, among the Clear's folders, else -1.
+    int folder = -1;
   };
   // What one Clear closed, under the id bc_window_clear gave the app.
   struct ClearedTabs {
     bc_id id;
     std::vector<Cleared> tabs;
+    // The today's folders its tabs were in, which go with them and come back with them, kept for
+    // as long as the tabs are.
+    std::vector<SavedFolder> folders;
   };
   Window(bc_id id, const gfx::Rect& bounds, void* ui_view, bool behind);
 

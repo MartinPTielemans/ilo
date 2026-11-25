@@ -47,6 +47,7 @@ class Profile;
 struct NavigateParams;
 
 namespace content {
+class NavigationHandle;
 class RenderFrameHost;
 class RenderWidgetHost;
 class WebContents;
@@ -113,6 +114,15 @@ extern void (*g_browser_core_adjust_navigate)(NavigateParams& params);
 // the Views one. Chrome sets its media router's factory to it once, as the profile starts.
 extern media_router::MediaRouterDialogController* (*g_browser_core_cast_dialog)(
     content::WebContents* contents);
+
+// chrome/browser/ssl/https_only_mode_tab_helper.cc: whether Chrome shows no warning before http
+// for the page of |navigation|, which answered only over http and was stopped in its tab: the
+// core has taken the tab, and puts it back.
+extern bool (*g_browser_core_no_http_warning)(content::NavigationHandle* navigation);
+
+// chrome/browser/ssl/ask_before_http_dialog_controller.cc: the browser's name as the app shows it,
+// for the warning before http where its text names the browser, or empty for Chrome's own.
+extern std::u16string (*g_browser_core_product_name)();
 
 // chrome/browser/devtools/devtools_window.cc: the core docks DevTools in its windows, which have no
 // DevtoolsUIController. Whether |browser|'s window can, and the call as the docked DevTools of

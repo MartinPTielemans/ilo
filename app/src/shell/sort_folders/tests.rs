@@ -166,9 +166,10 @@ fn a_sort_makes_its_folders_and_joins_a_todays_folder_of_its_name(cx: &mut TestA
         "a pinned folder's name makes a new one; a today's folder's, case aside, is joined"
     );
     shell.update(cx, |shell, cx| assert!(shell.undo(cx)));
+    // The today's folder Work, 17 and 18, is one row: it goes back to its place whole.
     assert_eq!(
         host.take_edits(),
-        ["unsort 1 made [70] joined [10, 13] rows [10, 11, 12, 13, 14, 16, 17, 18]"],
+        ["unsort 1 made [70] joined [10, 13] rows [10, 11, 12, 13, 14, 16, 50]"],
         "one step: the new folder goes, the joined tabs leave, the order comes back"
     );
     // The answer isn't kept, so there's nothing to redo.

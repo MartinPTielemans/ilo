@@ -22,6 +22,10 @@ struct SpaceEntity: Equatable, Codable, Sendable {
   var theme: String?
   /// Seconds since 1970.
   var seen: Int64?
+  /// The node key of the today's folder a Today tab is in on the computers, kept and written back
+  /// as it came so a write here never takes the tab out of it there. The app draws no today's
+  /// folder, so it's never read.
+  var todayFolder: String?
 
   /// The node's key: a Today tab's id without its prefix.
   static func key(_ id: String) -> String {
@@ -37,7 +41,7 @@ struct SpaceEntity: Equatable, Codable, Sendable {
     for field in fields {
       switch (field.number, field.value) {
       case (1, .bytes), (3, .bytes), (4, .bytes), (6, .bytes), (7, .bytes), (8, .bytes),
-        (10, .bytes), (11, .bytes):
+        (10, .bytes), (11, .bytes), (13, .bytes):
         guard let text = field.string else {
           understood = false
           continue
@@ -50,7 +54,8 @@ struct SpaceEntity: Equatable, Codable, Sendable {
         case 7: entity.url = text
         case 8: entity.title = text
         case 10: entity.icon = text
-        default: entity.theme = text
+        case 11: entity.theme = text
+        default: entity.todayFolder = text
         }
       case (2, .varint(let value)):
         // A kind this build doesn't know is kept as an unknown field by the computer's parser.
@@ -88,6 +93,7 @@ struct SpaceEntity: Equatable, Codable, Sendable {
     if let icon { writer.string(10, icon) }
     if let theme { writer.string(11, theme) }
     if let seen { writer.int(12, seen) }
+    if let todayFolder { writer.string(13, todayFolder) }
     return writer.bytes
   }
 
