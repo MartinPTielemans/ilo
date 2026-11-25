@@ -8,6 +8,7 @@ use browser::agent_history::{self, Past, Sorted};
 use browser::broom::{self, Folder, Run};
 use browser::shell::Broom;
 use gpui::{Entity, Task};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +29,10 @@ thread_local! {
     static RUNNING: RefCell<Option<Sorting>> = const { RefCell::new(None) };
     /// The windows a sort that moved nothing ended in, each until its timer, which goes with it.
     static FAILED: RefCell<HashMap<bc::bc_id, Task<()>>> = RefCell::default();
+    /// The profiles whose Sort tabs into folders the user turned off in Settings (Z27), by their
+    /// core id. The core keeps no switch of it yet, so it reads as on at launch and a change holds
+    /// while the browser runs.
+    static OFF: RefCell<HashSet<bc::bc_id>> = RefCell::default();
 }
 
 /// A sort under way: the window it was started in, the Space it sorts, and its run.
@@ -119,8 +124,9 @@ fn settle_all(cx: &mut App) {
             let Some(shell) = window.shell.upgrade() else {
                 continue;
             };
-            let space = Some(shell.read(cx).space())
-                .filter(|&space| sorts && window.regular() && shell.read(cx).broom_space(space));
+            let space = Some(shell.read(cx).space()).filter(|&space| {
+                sorts && window.regular() && shell.read(cx).broom_space(space) && !off(space)
+            });
             let now = space.map(|space| answer(window.id, space));
             let was = SHOWN.with_borrow_mut(|shown| match now {
                 Some(now) => shown.insert(window.id, now),
@@ -131,6 +137,35 @@ fn settle_all(cx: &mut App) {
             }
         }
     });
+}
+
+/// Whether `space`'s profile has Sort tabs into folders turned off. Asks the core whose profile it
+/// is only once the user has turned one off, so ⌘T's pass reaches no core call.
+fn off(space: bc::bc_id) -> bool {
+    OFF.with_borrow(|off| !off.is_empty() && off.contains(&unsafe { bc::bc_space_profile(space) }))
+}
+
+/// Whether `profile` sorts tabs into folders, as Settings' switch shows it.
+pub(crate) fn on(profile: bc::bc_id) -> bool {
+    OFF.with_borrow(|off| !off.contains(&profile))
+}
+
+/// Settings' switch for `profile`: off, its windows' brooms go, and a sort under way of one of its
+/// Spaces ends, moving nothing.
+pub(crate) fn set_on(profile: bc::bc_id, on: bool, cx: &mut App) {
+    OFF.with_borrow_mut(|off| match on {
+        true => off.remove(&profile),
+        false => off.insert(profile),
+    });
+    let ending = RUNNING.with_borrow_mut(|running| {
+        running
+            .take_if(|running| !on && unsafe { bc::bc_space_profile(running.space) } == profile)
+            .map(|running| running.run)
+    });
+    if let Some(run) = ending {
+        run.end();
+    }
+    settle_all(cx);
 }
 
 /// What the broom of `window`, showing `space`, shows: one sort runs at a time, so while one does,
