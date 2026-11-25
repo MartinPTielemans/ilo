@@ -937,3 +937,53 @@ fn a_press_ends_a_buttons_tooltip_until_the_pointer_has_left(cx: &mut TestAppCon
     cx.run_until_parked();
     assert!(named(&move_to(cx, &host, x, y)));
 }
+
+/// The Library a click on its button opens covers the button, so the press that ended the
+/// tooltip is kept while the pointer stays on the button's frame, and forgotten at the first move
+/// off it, though the button under the Library isn't hovered: back on it once the Library has
+/// closed, its tooltip comes as any rest's does (#4243).
+#[gpui::test]
+fn a_press_under_the_library_is_forgotten_once_the_pointer_leaves(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+    let (x, y) = (
+        LIBRARY_BACK_INSET + NAV_SIZE / 2.,
+        height - FOOTER_HEIGHT / 2.,
+    );
+    let named = |calls: &[String]| {
+        calls
+            .iter()
+            .any(|call| call.starts_with("tooltip View Library"))
+    };
+    let pressed =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.tip_pressed.get());
+    assert!(named(&move_to(cx, &host, x, y)));
+    cx.simulate_mouse_down(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.library.is_some()),
+        "the click opened no Library"
+    );
+    assert!(pressed(cx).is_some());
+
+    assert!(!named(&move_to(cx, &host, x + 2., y)));
+    assert!(
+        pressed(cx).is_some(),
+        "a move on the frame forgot the press"
+    );
+    move_to(cx, &host, 120., 300.);
+    assert_eq!(
+        pressed(cx),
+        None,
+        "the press outlived the pointer leaving the frame"
+    );
+    move_to(cx, &host, 140., 320.);
+
+    shell.update(cx, |shell, cx| {
+        shell.close_library_now();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(named(&move_to(cx, &host, x, y)));
+}
