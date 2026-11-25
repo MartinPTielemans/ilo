@@ -237,10 +237,21 @@ impl Shell {
         side: TipSide,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let button = button.on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
+            shell.hover_button(command, side, *hovered, window.mouse_position(), cx)
+        }));
+        self.with_tip_frame(button, command, cx)
+    }
+
+    /// The rest of `with_tooltip`, for a button whose own hover handler calls `hover_button`, as
+    /// GPUI takes one hover handler an element.
+    pub(super) fn with_tip_frame(
+        &self,
+        button: Stateful<Div>,
+        command: Command,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         button
-            .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
-                shell.hover_button(command, side, *hovered, window.mouse_position(), cx)
-            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |shell, _, _, cx| {
