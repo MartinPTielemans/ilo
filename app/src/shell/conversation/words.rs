@@ -333,9 +333,19 @@ pub fn button(button: IloButton) -> &'static str {
 }
 
 /// What a line's buttons promise, under them, if anything.
+/// Under Full access, how long it lasts: the behaviours menu's foot, word for word (C3).
 pub fn note(buttons: &[IloButton]) -> Option<&'static str> {
-    (buttons.contains(&IloButton::Raise(Tier::Full)))
-        .then_some("Full access lasts for this thread only.")
+    (buttons.contains(&IloButton::Raise(Tier::Full))).then_some("For this thread only")
+}
+
+/// The quiet line in the reply field's place, if any: on an outside app's session, which `name`
+/// is, where to reply (C2); while Settings › Threads' switch is off, that it is (C1).
+pub fn in_reply_place(replies: bool, threads_off: bool, name: &str) -> Option<String> {
+    match (replies, threads_off) {
+        (false, _) => Some(format!("Reply in {name}.")),
+        (true, true) => Some("Threads are off in Settings › Threads.".to_string()),
+        (true, false) => None,
+    }
 }
 
 /// The reply field's placeholder while its thread is at work (Z-who): typing there steers it.

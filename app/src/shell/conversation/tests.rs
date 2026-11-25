@@ -1365,6 +1365,25 @@ fn the_reply_field_says_steer_while_at_work_and_reply_otherwise(cx: &mut TestApp
     assert_eq!(said, [steer, reply, reply, steer]);
 }
 
+/// The line in the reply field's place says where to reply on an outside app's session, and that
+/// threads are off while they are, and nothing on a thread that takes a reply; the note under Full
+/// access says how long it lasts: the words table's C1 to C3, word for word.
+#[test]
+fn the_reply_fields_place_and_full_accesss_note_say_their_rows() {
+    use super::words::{in_reply_place, note};
+    let session = Some("Reply in Claude Code.".to_string());
+    assert_eq!(in_reply_place(false, false, "Claude Code"), session);
+    assert_eq!(in_reply_place(false, true, "Claude Code"), session);
+    let off = Some("Threads are off in Settings › Threads.".to_string());
+    assert_eq!(in_reply_place(true, true, "Claude Code"), off);
+    assert_eq!(in_reply_place(true, false, "Claude Code"), None);
+    assert_eq!(
+        note(&[IloButton::Raise(Tier::Full)]),
+        Some("For this thread only")
+    );
+    assert_eq!(note(&[IloButton::Raise(Tier::Work)]), None);
+}
+
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
 pub(super) fn stopped_at_order(

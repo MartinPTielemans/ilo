@@ -2702,22 +2702,12 @@ impl TalkView {
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
-    /// With Settings › Agents' Tasks from the command bar off, the line says so in the field's
-    /// place, as the task takes no more.
+    /// With Settings › Threads' switch off, the line says so in the field's place, as the thread
+    /// takes no more.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).tasks_on());
-        let quiet = match (self.replies, tasks_off) {
-            (false, _) => {
-                let name = self
-                    .shown
-                    .as_ref()
-                    .map(|shown| shown.name.clone())
-                    .unwrap_or_default();
-                Some(format!("Talk to {name} where you started it."))
-            }
-            (true, true) => Some("Threads are off in Settings › Agents.".to_string()),
-            (true, false) => None,
-        };
+        let name = (self.shown.as_ref()).map(|shown| shown.name.clone());
+        let quiet = words::in_reply_place(self.replies, tasks_off, &name.unwrap_or_default());
         if let Some(quiet) = quiet {
             return div()
                 .id("conversation-elsewhere")
