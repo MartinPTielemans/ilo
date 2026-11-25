@@ -63,10 +63,16 @@ enum Owed {
 }
 
 impl Shell {
+    /// Whether the card rests on the bar: the Space shows no page, the welcome hasn't the card,
+    /// and the window isn't a Little ilo window's, which keeps its own bar inside it.
+    pub(in crate::shell) fn rests_on_bar(&self) -> bool {
+        self.selected == 0 && !self.welcome && self.little.is_none()
+    }
+
     /// Makes the bar the page rests on as the Space comes to show no page, and drops it as a page
     /// shows, or the welcome takes the card.
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             if self.resting.take().is_some() {
                 log!("browser: resting field dropped");
             }
@@ -104,7 +110,7 @@ impl Shell {
     /// over it (#4140). Whether it did.
     pub(in crate::shell) fn keys_to_resting(&mut self, cx: &mut Context<Self>) -> bool {
         // The field stays until the next frame drops it, so a page shown since isn't one.
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             return false;
         }
         let Some(resting) = &mut self.resting else {
