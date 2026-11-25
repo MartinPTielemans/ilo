@@ -6208,7 +6208,11 @@ bool host_close_other_window(void) {
       !(key.styleMask & NSWindowStyleMaskClosable)) {
     return false;
   }
-  [key performClose:nil];
+  // Closed after the menu's action returns: a GPUI window closing inside it finds the app borrowed
+  // and aborts.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [key performClose:nil];
+  });
   return true;
 }
 
