@@ -56,11 +56,11 @@ use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::form;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
@@ -84,6 +84,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
+
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
 
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
@@ -1087,10 +1093,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
                     return Colors::default();
                 };
                 let settings = settings.read(cx);
-                // The field's "Search" is the rows' grey over the field's own plate, not over a
-                // group's.
+                // The field's "Search" over the field's own plate, not over a group's.
                 Colors {
-                    placeholder: settings.base().opacity(DETAIL).into(),
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
                     ..settings.look.field()
                 }
             })
@@ -1511,7 +1516,7 @@ impl Settings {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(DETAIL))
+                .text_color(self.look.detail)
                 .child(lede)
         });
         let head = div()
@@ -1523,8 +1528,8 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
-                (None, _) => FIRST_GROUP,
                 (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
+                (None, _) => FIRST_GROUP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
@@ -1559,13 +1564,14 @@ impl Settings {
             .children(blocks)
     }
 
-    /// A heading over the group after it, on the text's column.
+    /// A heading over the group after it, 4 in from the groups' edge, as drawn.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
             .relative()
             .child(self.card.mark(heading.clone()))
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
+            .px(px(HEADING_X))
+            .line_height(px(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -1578,7 +1584,7 @@ impl Settings {
             let div = self.flashed(&row.name, row.div);
             match row.nested {
                 true => (div.pl(px(x)), x),
-                false => (div, ROW_X),
+                false => (div, 0.),
             }
         });
         group_lined(&self.look, rows)
@@ -3776,6 +3782,9 @@ impl Settings {
             models.push(Block::Group(self.assistants(agents, cx)));
             models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3910,6 +3919,59 @@ impl Settings {
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            return Vec::new();
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
         ]
     }
 
@@ -6218,11 +6280,17 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6234,6 +6302,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,

@@ -63,6 +63,8 @@ pub(super) struct Recorder {
     pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// The in-place bar's profile is new: it has learned no agent till this goes false.
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Whether it can wall a task in with its files, as `files_available` answers.
+    pub(super) files: std::cell::Cell<bool>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -79,6 +81,8 @@ pub(super) struct Recorder {
     pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// What the broom shows, as `broom` answers: not drawn unless a test says.
+    pub(super) broom: Cell<Option<super::Broom>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
@@ -109,6 +113,11 @@ pub(super) struct Recorder {
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
+    /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
+    pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
+    /// How long a Today tab waits before the archive, as `archive_after` answers, Settings' times
+    /// offered with it; None until a test gives one.
+    pub(super) archive_after: Cell<Option<f64>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
@@ -760,6 +769,14 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn broom(&self) -> Option<super::Broom> {
+        self.broom.get()
+    }
+
+    fn start_broom(&self, _: &mut App) {
+        self.record("start broom".into())
     }
 
     fn link_cards(&self) -> bool {
@@ -1866,6 +1883,10 @@ impl Browser for Recorder {
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
+    }
+
     fn start_task(
         &self,
         agent: &str,
@@ -1886,8 +1907,17 @@ impl Browser for Recorder {
                 if only { " only them" } else { "" }
             ),
         };
+        // Files and a folder by count alone, as nothing names them but the conversation.
+        let files = match start.files.files.len() {
+            0 => String::new(),
+            count => format!(" and {count} files"),
+        };
+        let folder = match start.files.folder.is_some() {
+            true => " and a folder",
+            false => "",
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}{pages}",
+            "start task {agent} {asked} from {home} at {}{model}{pages}{files}{folder}",
             start.tier.label()
         ));
     }
@@ -2157,6 +2187,26 @@ impl Browser for Recorder {
     fn set_daily_count(&self, on: bool, _: &mut App) {
         self.daily_count.set(Some(on));
         self.record(format!("daily count {on}"))
+    }
+
+    fn setting(&self, _: u64, setting: super::Setting, _: &App) -> Option<bool> {
+        self.settings.borrow().get(&setting).copied()
+    }
+
+    fn set_setting(&self, space: u64, setting: super::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+        self.record(format!("setting {space} {setting:?} {on}"))
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get()?, offered))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(Some(seconds));
+        self.record(format!("archive after {space} {seconds}"))
     }
 
     fn close_window(&self, _: &mut App) {

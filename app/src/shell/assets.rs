@@ -115,6 +115,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/bookmark.svg"),
     ),
     (
+        "icons/broom.svg",
+        include_bytes!("../../assets/icons/broom.svg"),
+    ),
+    (
         "icons/brush-cleaning.svg",
         include_bytes!("../../assets/icons/brush-cleaning.svg"),
     ),
@@ -847,6 +851,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/window-windows-restore.svg"),
     ),
     (
+        "icons/working.svg",
+        include_bytes!("../../assets/icons/working.svg"),
+    ),
+    (
         "icons/wrench.svg",
         include_bytes!("../../assets/icons/wrench.svg"),
     ),
@@ -921,7 +929,7 @@ mod tests {
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
-            || ["loading.svg", "spaces.svg"].contains(&name)
+            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
     }
 
     /// One family: every other glyph is an outline on Lucide's grid at the one stroke, with round

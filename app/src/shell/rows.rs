@@ -31,6 +31,7 @@ use super::{
 };
 use super::{
     access::{Accessible, NEW_TAB},
+    broom::Broom,
     drag::in_sidebar,
     return_mark::Bitmap,
     sidebar_keys,
@@ -2103,7 +2104,14 @@ impl Shell {
     pub(super) fn new_tab_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (plus, label) = new_tab_label(&self.palette);
         let line = (!self.today().is_empty()).then(|| {
-            today_line(&self.palette, self.hairline(), self.clear_button(cx)).on_mouse_down(
+            // The broom is drawn exactly when Clear is, and what it shows is the browser's answer.
+            let broom = self.browser.broom();
+            let clear = match broom {
+                Some(Broom::Failed) => self.sort_failed(cx).into_any_element(),
+                _ => self.clear_button(cx).into_any_element(),
+            };
+            let broom = broom.map(|state| self.broom_button(state, cx));
+            today_line(&self.palette, self.hairline(), clear, broom).on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|shell, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();

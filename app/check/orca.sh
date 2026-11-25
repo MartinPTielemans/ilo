@@ -165,7 +165,7 @@ orca_press down
 # ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥ back to the last switch, before the
 # Skip.
 orca_switches=
-for _ in $(seq 10); do
+for _ in $(seq 14); do
   grep -q '^browser: onboarding done$' "$log" && break
   if [ -z "$orca_switches" ] && grep -q '^browser: onboarding step opt-ins' "$log"; then
     orca_switches=1
@@ -178,6 +178,14 @@ for _ in $(seq 10); do
     orca_press tab shift
   fi
   at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
+  # The keys' step, the last, has no Skip: its Return is the way in.
+  if [ "$at" = keys ]; then
+    orca_mark "return keys"
+    send key return
+    expect '^browser: onboarding done$' "Return didn't leave the keys' step"
+    orca_settled
+    continue
+  fi
   orca_mark "skip $at"
   skip_step "$at"
   expect '^browser: onboarding \(step [a-z-]* settled\|done\)$' "Skip didn't leave the $at step"
