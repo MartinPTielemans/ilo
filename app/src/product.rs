@@ -1,6 +1,7 @@
 //! The product's name and mark, from this one place, so the next change of either is one commit.
 //! No other string spells the name out: one a user reads takes `PRODUCT`, as `{PRODUCT}` in a
-//! format string, and a test below fails on one that doesn't. Names in code, ids, files, the
+//! format string or `env!("PRODUCT_NAME")` in a `concat!`, and a test below fails on one that
+//! doesn't. The name itself is in branding/product. Names in code, ids, files, the
 //! data folder and what an assistant is told aren't the product's name as a user reads it, and
 //! keep theirs.
 
@@ -10,8 +11,9 @@ use crate::palette::Palette;
 use crate::tokens::mark::{GHOST, INK, LARGE_FROM, REVEAL, SMALL_BELOW};
 
 /// The product's name as a user reads it: lowercase always, also where a sentence starts, and
-/// never followed by a word for what it is.
-pub const PRODUCT: &str = "woven";
+/// never followed by a word for what it is. From branding/product, so a fork changes one file; a
+/// fixed string takes it as `concat!(…, env!("PRODUCT_NAME"), …)`.
+pub const PRODUCT: &str = env!("PRODUCT_NAME");
 
 const SMALL: &str = "brand/knot-16.svg";
 const MIDDLE: &str = "brand/knot-32.svg";

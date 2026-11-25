@@ -1012,6 +1012,13 @@ material-over-white = 0xa0a0a0
 material-over-grey = 0x585858
 material-over-black = 0x131313
 material-lift = 13.0
+# The material under what floats at its worst for its ink (#4090), at Standard and at More: what
+# the menu's panel implied under its fill in the check VM at 57b22e75d, over a white page in dark
+# (262520 and 252421) and a deep blue one in light (dddcd8 and bbbaba). The material's own tint
+# takes a white page this dark under a float, far from the window's over white. Less takes
+# Standard's; it wasn't measured.
+float-material = 0x3f4140
+float-material-more = 0x2d2d2e
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
@@ -1051,6 +1058,8 @@ light-material-over-white = 0xe9e9e9
 light-material-over-grey = 0xb0b0b0
 light-material-over-black = 0x707070
 light-material-lift = 13.0
+light-float-material = 0x6a7384
+light-float-material-more = 0x60626f
 light-stand-in = 0xebebeb
 light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the
@@ -1794,7 +1803,6 @@ divider-gap = 9.0
 # In the sidebar the line is the New Tab line's own: after its label, to Clear or the line's end,
 # and what's kept ends this far over that line while there are tabs today.
 today-gap = 6.0
-clear-gap = 3.0
 clear-height = 20.0
 # The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
 # line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
@@ -2735,15 +2743,18 @@ rim = 0.5
 # button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
 # lists this many downloads, newest first.
 count = 4
-# The floating level's fill, as a menu's, over the window's own look, and the window's inner line,
-# 1 px, along the whole of its outline, which is the plate and the button's box under it as one
+# The floating level's fill, as a menu's, over the window's own look, and the window's inner line
+# along the whole of its outline, which is the plate and the button's box under it as one
 # shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
 # tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
-# panel's, the near bottom one square where it runs into the button.
+# panel's, the near bottom one square where it runs into the button. The fill and the line are the
+# drawing's floating fill and rim, held here until a menu takes the same: then one source for both.
 fill = 0x3030_36eb
 light-fill = 0xf6f5_f1eb
 rim = 0xffff_ff1a
 light-rim = 0x0000_001f
+# The line's width. It's drawn half of this inside the outline, so all of it lies on the plate.
+line = 1.0
 radius = 16.0
 padding = 6.0
 # The button's own box takes the fill, round at its foot as the window's corner is, and a curve
@@ -3546,6 +3557,129 @@ main-ring = 3.0
 handle = 26.0
 # Ours: the small handles' ring isn't measured; the main one's, scaled.
 handle-ring = 2.0
+
+[theme-panel]
+# A Space's theme, set in the panel that hangs beside its name (P6, the drawing's screen 14), in
+# points from the panel's top left: 300 wide, 12 inside its edges, its parts 12 apart, with no
+# arrow. It hangs 8 right of the sidebar, its top at the name row's top, kept 8 off the browser
+# window's bottom (ours, as the picker's margin).
+width = 300.0
+padding = 12.0
+gap = 12.0
+radius = 16.0
+beside = 8.0
+margin = 8.0
+# The rims, the handles' and chosen dots' rings and the thumbs are white, as drawn; the lines and
+# dots on the bars are the palette's paper.
+white = 0xffffff
+# Its fill is `floating`, the pickers' card, with the Space's colours over it as drawn: the first at
+# this much, fading to the second at this much by 60% of the way across, at 150°.
+tint-from = 0.15
+tint-to = 0.08
+tint-reach = 0.6
+tint-angle = 150.0
+# The head, "Theme" in it 2 in, semibold (the drawing's 590, on our scale).
+head = 26.0
+title-size = 13.0
+# A label row, above the palettes and each bar and for the note: its text 11 high, 2 in. Reset's
+# target is its word and a little round it (ours).
+label = 14.0
+label-size = 11.0
+label-inset = 2.0
+reset-width = 32.0
+# Auto · Light · Dark at the head's right, as drawn: a frame 24 high, 2 inside, rounded 7, in the
+# field plate; three segments 20 high, the chosen one on the tab shown's plate rounded
+# 5, its word medium (the drawing's 510, on our scale). Each is 44 wide (ours: the drawing sizes each by its word, 9 either side,
+# and one width gives each the same target).
+segment-frame = 24.0
+segment-inset = 2.0
+segment-frame-radius = 7.0
+segment-height = 20.0
+segment-width = 44.0
+segment-radius = 5.0
+# The palettes: the row of eight discs 6 under their label, each in a 30 slot, spaced between. A
+# disc is 24 with a faint rim; the chosen one 22, ringed 1.5 in the text colour on its slot.
+palettes-gap = 6.0
+slot = 30.0
+disc = 24.0
+chosen-disc = 22.0
+chosen-ring = 1.5
+disc-rim = 0.15
+# The first disc is no colour, drawn as the drawing's plain one; the rest are a Space's colours, the
+# main first, as many of `palettes` as `palette-colors` says for each. `palette-names` names each
+# disc in the same order, the chosen one's shown at the right of the label.
+no-color = 0xede8df
+palette-colors = [2, 2, 2, 2, 2, 1, 2]
+palettes = [0x7a70f4, 0xe86ba8, 0x5fa9e8, 0x5fcb8d, 0xe5605f, 0xf08a4b, 0x6fa06a, 0xd3c97e, 0xedc95a, 0xe88bb3, 0x6b7088, 0x4a4f8c, 0x17181f]
+palette-names = ["None", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight"]
+# The pad: the colours' handles on the hue they take, going once round from the left edge, and
+# their lightness, from the top down. Its ground and rim as drawn; its dots 10 apart from 13 and 14
+# in, 26 across and 15 down, as strong as drawn; its foot shaded from 40% of the way down.
+pad-width = 276.0
+pad-height = 168.0
+pad-radius = 12.0
+pad-fill = 0x17171b
+pad-rim = 0.08
+dot-pitch = 10.0
+dot-left = 13.0
+dot-top = 14.0
+dots-across = 26.0
+dots-down = 15.0
+dot-size = 3.0
+dot-alpha = 0.45
+shade-from = 0.4
+shade = 0x17171bb8
+# The hue at the pad's left edge in turns, the drawing's green, and the lightness at its top and at
+# its foot (ours: the drawing's handles are its made-up data).
+hue-start = 0.4
+light-top = 0.9
+light-bottom = 0.1
+# The handles and the line between them: the main one 28 ringed 2.5 in white, the others 22 ringed
+# 2, each with a shadow, the line 3 wide.
+line = 3.0
+main-handle = 28.0
+main-ring = 2.5
+handle = 22.0
+handle-ring = 2.0
+handle-shadow = 0x00000080
+# The Points chip and the value field, 8 in from the pad's foot: the chip's discs 14 apart by 6, the
+# chosen one ringed 1.5 in white, then the plus while there's room for a colour; the field 64 wide.
+chip-inset = 8.0
+chip-height = 24.0
+chip-fill = 0x2e2e34
+chip-rim = 0.08
+chip-left = 5.0
+chip-right = 7.0
+chip-dot = 14.0
+chip-gap = 6.0
+chip-ring = 1.5
+plus = 12.0
+plus-stroke = 1.4
+field-width = 64.0
+# The bars: a label row, then 4 under it a track 12 tall across the panel's inside less the label's
+# 2 each side, rimmed as drawn, with a white thumb 20 round on it; 9 between bars.
+bar-gap = 9.0
+bar-label-gap = 4.0
+track = 12.0
+track-rim = 0.08
+thumb = 20.0
+thumb-shadow = 0x00000080
+# Intensity's track, as drawn: the Space's first colour from this much to full by 62% of the way,
+# then the second. With no colour (Open) the bar is dimmed to this and doesn't move.
+intensity-from = 0.12
+intensity-full = 0.62
+dimmed = 0.4
+# Transparency's, as drawn: a solid ground from 8% of the way, darkening to the right, and three
+# dashed lines over it fading in to 62% off-white.
+glass-from = 0x565661
+glass-to = 0x1a1a1e
+glass-solid = 0.08
+glass-lines = 0.62
+# Grain's, as drawn: the field plate with three rows of dots 1.6 round, 5 apart, the middle row a
+# half step along, fading in across it to 85% off-white. Its word reads Off at none.
+grain-dot = 1.6
+grain-pitch = 5.0
+grain-dots = 0.85
 
 [toast]
 height = 46.5

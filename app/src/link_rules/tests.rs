@@ -393,12 +393,12 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
                 RIM + SHORT_PADDING
             ),
             format!(
-                "{} {}: The Space in Front, Work (checked), Home, Little ilo",
+                "{} {}: The Space in Front, Work (checked), Home, Little Window",
                 SPACE_LEFT + CONTROL_PADDING,
                 RIM + SHORT_PADDING
             ),
             format!(
-                "{otherwise_x} {otherwise_y}: The Space in Front (checked), Work, Home, Little ilo"
+                "{otherwise_x} {otherwise_y}: The Space in Front (checked), Work, Home, Little Window"
             ),
         ]
     );
@@ -528,7 +528,7 @@ fn little_ilo_is_the_default_and_a_rules_place() {
     let names = [(WORK, SharedString::from("Work"))];
     assert_eq!(
         rules.describe(&names),
-        "URL contains \"meet.google.com\" → The Space in Front; everything else Little ilo"
+        "URL contains \"meet.google.com\" → The Space in Front; everything else Little Window"
     );
     let little = Rules {
         rules: vec![rule(Condition::Contains, "doc", LITTLE)],
@@ -575,11 +575,11 @@ fn the_pop_ups_pick_little_ilo_and_back(cx: &mut TestAppContext) {
     let menus = host.menus.take();
     let ends = |menu: usize, items: &str| menus[menu].ends_with(&format!(": {items}"));
     assert!(
-        ends(1, "The Space in Front, Work, Home, Little ilo (checked)"),
+        ends(1, "The Space in Front, Work, Home, Little Window (checked)"),
         "{menus:?}"
     );
     assert!(
-        ends(2, "The Space in Front (checked), Work, Home, Little ilo"),
+        ends(2, "The Space in Front (checked), Work, Home, Little Window"),
         "{menus:?}"
     );
     assert_eq!(host.rules().otherwise, LITTLE);

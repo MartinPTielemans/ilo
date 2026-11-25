@@ -210,7 +210,7 @@ pub const ANSWER: Duration = Duration::from_secs(120);
 /// What an install that waited out `ANSWER` says.
 pub const UNANSWERED: &str = concat!(
     "Flatpak asked whether ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " may update itself, and nothing answered."
 );
 
@@ -411,17 +411,20 @@ pub fn question(state: Option<&State>, retries: bool) -> Question {
                 action: "Restart".into(),
                 cancel: "Later".into(),
                 ..notice(
-                    concat!("A new version of ", env!("APP_NAME"), " is ready"),
-                    concat!("Restart ", env!("APP_NAME"), " to use it.").into(),
+                    concat!("A new version of ", env!("PRODUCT_NAME"), " is ready"),
+                    concat!("Restart ", env!("PRODUCT_NAME"), " to use it.").into(),
                 )
             };
         }
         Some(State::Installing) => (
-            concat!(env!("APP_NAME"), " is updating"),
+            concat!(env!("PRODUCT_NAME"), " is updating"),
             "Restart to Update shows in the sidebar once the new version is in.".to_string(),
         ),
         Some(State::Failed(error)) => {
-            let failed = notice(concat!(env!("APP_NAME"), " couldn’t update"), error.clone());
+            let failed = notice(
+                concat!(env!("PRODUCT_NAME"), " couldn’t update"),
+                error.clone(),
+            );
             if !retries {
                 return failed;
             }
@@ -434,7 +437,7 @@ pub fn question(state: Option<&State>, retries: bool) -> Question {
         Some(State::Current) | None => (
             "No update yet",
             concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 " looks for one every half hour while it’s open."
             )
             .into(),

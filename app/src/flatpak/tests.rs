@@ -494,7 +494,7 @@ fn what_check_for_updates_says() {
         ];
         words.map(|word| word.to_string())
     };
-    let name = env!("APP_NAME");
+    let name = env!("PRODUCT_NAME");
     let looking = format!("{name} looks for one every half hour while it’s open.");
     assert_eq!(said(None), ["No update yet", &looking, "", "OK"]);
     assert_eq!(said(Some(&State::Current)), said(None));

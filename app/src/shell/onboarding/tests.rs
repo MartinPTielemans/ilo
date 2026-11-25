@@ -1807,7 +1807,7 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     let guide = view.read_with(cx, |view, _| view.guide());
     assert_eq!(
         guide.title,
-        format!("Let {} read Safari.", env!("APP_NAME"))
+        format!("Let {} read Safari.", env!("PRODUCT_NAME"))
     );
     assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
     assert_eq!(guide.corner, crate::import::Corner::Back);

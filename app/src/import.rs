@@ -928,7 +928,7 @@ impl ImportView {
                 .map(Source::name)
                 .unwrap_or_default()
         };
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let (title, line, button, corner) = match &self.step {
             Step::List => (
                 "Bring your stuff".to_string(),
@@ -2178,7 +2178,7 @@ impl ImportView {
     fn no_access(&self, source: usize, again: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let look = &self.look;
         let name = self.sources[source].name();
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let open = self
             .control("import-full-disk-access", "Open System Settings")
             .on_click(cx.listener(|view, _, _, _| view.host.open_full_disk_access()));
@@ -2547,7 +2547,7 @@ impl ImportView {
                     view.add_extension(id, cx);
                 }
             }));
-            let said = format!("{} blocks ads itself", env!("APP_NAME"));
+            let said = format!("{} blocks ads itself", env!("PRODUCT_NAME"));
             rows.push(detailed_row(
                 look,
                 self::listed(&names),
@@ -3227,7 +3227,7 @@ fn access_said(again: bool) -> String {
         false => "Waiting for access…".into(),
         true => format!(
             "Still no access. If you turned it on, quit {app} and open it again.",
-            app = env!("APP_NAME")
+            app = env!("PRODUCT_NAME")
         ),
     }
 }

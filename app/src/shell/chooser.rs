@@ -158,7 +158,10 @@ impl Asked {
     fn note(&self) -> Option<&'static str> {
         match self.scan {
             Scan::Off => Some("Bluetooth is off"),
-            Scan::Denied => Some("ilo needs permission to use Bluetooth"),
+            Scan::Denied => Some(concat!(
+                env!("PRODUCT_NAME"),
+                " needs permission to use Bluetooth"
+            )),
             Scan::Scanning => None,
             Scan::Live | Scan::Stopped => {
                 (!self.rows.iter().any(|row| row.here)).then_some("No compatible devices found")

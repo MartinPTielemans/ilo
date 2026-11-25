@@ -213,7 +213,7 @@ impl Settings {
         let message = format!("Sign out of {name}?");
         let detail = format!(
             "This signs {name} out everywhere you use it, not just in {}.",
-            env!("APP_NAME")
+            env!("PRODUCT_NAME")
         );
         let agents = agents.clone();
         let sign_out = move |cx: &mut App| {

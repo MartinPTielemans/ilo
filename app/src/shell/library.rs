@@ -25,13 +25,13 @@ use super::{
     SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
     URL_BUTTON_SIZE, What,
     access::Accessible,
-    dashed_square,
+    clear_label, dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
     host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
     space_order::{Along, DraggedSpace},
-    split_plate, spring_to, still_clear,
+    split_plate, spring_to,
     task_cards::number as task_number,
     title,
 };
@@ -513,8 +513,8 @@ impl Only {
         match self {
             Only::All => "All",
             Only::Closed => "Closed Tabs",
-            Only::Little => "Little ilo",
-            Only::Tasks => "Tasks",
+            Only::Little => "Little Window",
+            Only::Tasks => "Threads",
             Only::Visited => "Visited",
         }
     }
@@ -1725,17 +1725,17 @@ impl Shell {
                 };
                 match (tabs, tasks) {
                     (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
-                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its thread leaves the archive. {undo} brings it back."),
                     (_, 0) => {
                         format!("Its {tabs} tabs leave the archive. {undo} brings them back.")
                     }
                     (0, _) => {
-                        format!("Its {tasks} tasks leave the archive. {undo} brings them back.")
+                        format!("Its {tasks} threads leave the archive. {undo} brings them back.")
                     }
                     _ => format!(
                         "Its {} and {} leave the archive. {undo} brings them back.",
                         some(tabs, "tab"),
-                        some(tasks, "task")
+                        some(tasks, "thread")
                     ),
                 }
             },
@@ -1814,8 +1814,12 @@ impl Shell {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
             (Section::Spaces, _) => "",
-            (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
-            (Section::Archive, false) if tasks => "No tasks match.",
+            (Section::Archive, true) if tasks => concat!(
+                "Finished threads stay here until ",
+                env!("PRODUCT_NAME"),
+                " quits."
+            ),
+            (Section::Archive, false) if tasks => "No threads match.",
             (Section::Archive, unsearched) => match (self.archive_only(), unsearched) {
                 (Only::Visited, true) => "Pages you visit show here.",
                 (Only::Visited, false) => "No visited pages match.",
@@ -1824,8 +1828,8 @@ impl Shell {
                 (_, true) => "Pages you visit and tabs you close show here.",
                 (_, false) => "No pages match.",
             },
-            (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
-            (Section::Agents, false) => "No tasks match.",
+            (Section::Agents, true) => "Your agents' finished threads stay here for 30 days.",
+            (Section::Agents, false) => "No threads match.",
             (Section::Boosts, true) => {
                 "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
             }
@@ -2250,7 +2254,7 @@ impl Shell {
         let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
-                let clear = still_clear(&palette, space.clears_last(space.shown));
+                let clear = clear_label(&palette, palette.tertiary());
                 divider_box(&palette, self.hairline(), Some(clear)).into_any_element()
             }
             Line::Folder(folder, depth) => {
@@ -2782,7 +2786,7 @@ impl Shell {
         };
         let named = self.library.as_ref().is_some_and(|library| library.named);
         let about = SharedString::from(match tab.little && named {
-            true => format!("Closed {when} in Little ilo · {host}"),
+            true => format!("Closed {when} in a Little Window · {host}"),
             false => format!("Closed {when} · {host}"),
         });
         let pointed = (self.library.as_ref())
@@ -4892,7 +4896,7 @@ mod tests {
                 ("All".into(), true),
                 ("".into(), false),
                 ("Closed Tabs".into(), true),
-                ("Little ilo".into(), true),
+                ("Little Window".into(), true),
                 ("".into(), false),
                 ("Visited".into(), true)
             ]
@@ -4905,7 +4909,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false, false, false, false, false]
         );
-        cx.update(|_, cx| host.choose("Little ilo", cx));
+        cx.update(|_, cx| host.choose("Little Window", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [2]);
 

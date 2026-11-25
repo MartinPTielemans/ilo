@@ -478,7 +478,10 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\).*/\1/')
 height=${content#*x}
 content=${content%x*}
-[ "$child" = "$((content - 320)),$((20 + tall)) 300x32" ] ||
+# Twice the card's inset in from the pane's corner, as find.sh's, the inset being how far the
+# page's right edge is from the window's.
+page_inset=$((content - x - w))
+[ "$child" = "$((content - 300 - 2 * page_inset)),$((tall + 2 * page_inset)) 300x32" ] ||
   fail "the find bar is at ${child:-nowhere}, not at the bottom pane's corner"
 ../tools/window-screenshot.sh "$pid" "$out/split-stacked.png" || fail "no window to capture"
 send key escape

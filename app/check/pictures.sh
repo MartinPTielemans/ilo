@@ -49,6 +49,7 @@ esac
 send place $left 40 $wide 500
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+new_window_bar
 second=$(grep '^browser: window opened ' "$log" | sed -n 2p | cut -d' ' -f4)
 send window 2
 send place $right 40 $wide 500

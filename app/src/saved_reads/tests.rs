@@ -462,7 +462,11 @@ fn a_changed_answer_reads_as_broken() {
     let page = answered(DOWNLOADS, "text/html", b"<html>Sign in</html>");
     assert_eq!(
         broken(outcome(&read, &page)),
-        "The site didn't send data ilo can read."
+        concat!(
+            "The site didn't send data ",
+            env!("PRODUCT_NAME"),
+            " can read."
+        )
     );
 }
 
@@ -744,7 +748,11 @@ fn a_table_inside_a_cell_is_not_the_outer_tables_rows() {
     // Both have the columns, so neither is read.
     assert_eq!(
         broken(table(html)),
-        "2 tables have these columns; ilo can't pick one."
+        concat!(
+            "2 tables have these columns; ",
+            env!("PRODUCT_NAME"),
+            " can't pick one."
+        )
     );
     let found = tables(html);
     assert_eq!(found.len(), 2);
@@ -805,7 +813,11 @@ fn two_tables_with_the_reads_columns_read_as_broken() {
     let html = format!("{one}<p>and</p>{one}");
     assert_eq!(
         broken(table(&html)),
-        "2 tables have these columns; ilo can't pick one."
+        concat!(
+            "2 tables have these columns; ",
+            env!("PRODUCT_NAME"),
+            " can't pick one."
+        )
     );
 }
 

@@ -2214,7 +2214,7 @@ impl TalkView {
                     .unwrap_or_default();
                 Some(format!("Talk to {name} where you started it."))
             }
-            (true, true) => Some("Tasks are off in Settings › Agents.".to_string()),
+            (true, true) => Some("Threads are off in Settings › Agents.".to_string()),
             (true, false) => None,
         };
         if let Some(quiet) = quiet {

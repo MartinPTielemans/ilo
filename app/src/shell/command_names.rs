@@ -39,7 +39,7 @@ impl Command {
             SearchTabs => &["Search Tabs…"],
             NewWindow => &["New Window"],
             NewPrivateWindow => &["New Incognito Window"],
-            NewLittleWindow => &["New Little ilo Window"],
+            NewLittleWindow => &["New Little Window"],
             NewBlankWindow => &["New Blank Window", BLANK_WINDOW_ITEM],
             OpenInMainWindow => &["Open in Main Window"],
             CloseWindow => &["Close Window"],

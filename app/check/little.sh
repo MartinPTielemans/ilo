@@ -564,9 +564,9 @@ send window 1
 send key l cmd shift
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 post click 372 28
-expect "^browser: menu shown $(cased 'All (checked), Closed Tabs, Little ilo, Visited')\$" \
+expect "^browser: menu shown $(cased 'All (checked), Closed Tabs, Little Window, Visited')\$" \
   "a click on the archive's Filter didn't show its menu"
-send choose "$(cased 'Little ilo')"
+send choose "$(cased 'Little Window')"
 expect '^browser: archive filter little$' "choosing Little ilo didn't filter the archive"
 ../tools/window-screenshot.sh "$pid" "$out/little-archive.png" || fail "no window to capture"
 send key l cmd shift
@@ -606,10 +606,10 @@ look_theme() {
   refocus
 }
 look_theme
-send clickkey "$(swatch_x 7)" $swatch_y
-expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue swatch didn't colour the Space"
+send clickkey $(panel_at palette 2)
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue palette didn't colour the Space"
 refocus
-send clickkey 191.3 49
+send clickkey $(panel_at look light)
 expect "^browser: little window for $home looks .*appearance=light" \
   "the Little ilo window didn't take its Space's light theme"
 send key escape
@@ -617,7 +617,7 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 send window "$look_window"
 ../tools/window-screenshot.sh "$pid" "$out/little-light.png" all || fail "no window to capture"
 look_theme
-send clickkey 231.7 49
+send clickkey $(panel_at look dark)
 expect "^browser: little window for $home looks .*appearance=dark" \
   "the Little ilo window didn't take its Space's dark theme"
 send key escape

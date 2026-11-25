@@ -49,7 +49,7 @@ favorites() {
 }
 # One favorite is one tile across the sidebar, 40 tall and 90 below the window's top, under the URL
 # field, and its row of tiles takes the Space's rows 44 down, with the 4 under it.
-tile="114 114"
+tile="114 110"
 tiled_row() {
   echo "100 $(($(row "$1" | cut -d' ' -f2) + 44))"
 }
