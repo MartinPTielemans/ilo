@@ -248,6 +248,45 @@ fn a_session_is_named_by_its_agent_never_by_its_title(cx: &mut TestAppContext) {
     );
 }
 
+/// A thread with no title yet is drawn titled by a tab of the user's. The system's notification
+/// has none of that title, which the system would keep: it reads New Thread in its place, need
+/// and finish alike. What a screen reader is told still says the title as it is drawn, and once
+/// the thread is named its notification has its name.
+#[gpui::test]
+fn an_unnamed_threads_notification_never_has_its_tabs_title(cx: &mut TestAppContext) {
+    const TABS: &str = "Re: your test results";
+    let host = opened(cx);
+    let unnamed = |dot| Card {
+        title: TABS.into(),
+        unnamed: true,
+        ..card("task-1", "Claude", dot)
+    };
+    follow_cards(&[unnamed(Dot::Working)], cx);
+    follow_cards(&[unnamed(Dot::Waiting)], cx);
+    follow_cards(&[unnamed(Dot::Done)], cx);
+    let words = [Word::NeedsYou, Word::Done].map(|word| word.after_name());
+    assert_eq!(
+        posted(&host),
+        words.map(|word| (format!("{NEW_THREAD} · {word}"), String::new()))
+    );
+    assert_eq!(
+        said(&unnamed(Dot::Done), Told::Done),
+        format!("{TABS} · {}", words[1])
+    );
+
+    // Another thread, named by its assistant in those very words: its notification has its name.
+    let named = |dot| Card {
+        title: TABS.into(),
+        ..card("task-2", "Claude", dot)
+    };
+    follow_cards(&[named(Dot::Working)], cx);
+    follow_cards(&[named(Dot::Waiting)], cx);
+    assert_eq!(
+        posted(&host),
+        [(format!("{TABS} · {}", words[0]), String::new())]
+    );
+}
+
 #[gpui::test]
 fn a_tasks_title_goes_on_one_line_and_capped(cx: &mut TestAppContext) {
     let host = opened(cx);
