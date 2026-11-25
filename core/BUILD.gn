@@ -217,6 +217,16 @@ source_set("sync_spaces_newer") {
   public_deps = [ ":sync_spaces_proto" ]
 }
 
+# What sync sends of a tab the user handed an agent, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sync_spaces_handed") {
+  sources = [
+    "sync_spaces_handed.cc",
+    "sync_spaces_handed.h",
+  ]
+  public_deps = [ ":sync_spaces_proto" ]
+}
+
 # Whether a site's arrangement is placed: its file checked against the schema and the record of
 # the one the user made or turned on, apart so browser_core_unittests tests the rule alone.
 source_set("arrangement") {
@@ -1068,6 +1078,7 @@ source_set("browser_core") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_handed",
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
@@ -1448,6 +1459,7 @@ test("browser_core_unittests") {
     "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "sync_spaces_handed_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_trouble_unittest.cc",
     "sync_updates_unittest.cc",
@@ -1515,6 +1527,7 @@ test("browser_core_unittests") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_handed",
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",

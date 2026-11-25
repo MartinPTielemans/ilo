@@ -84,6 +84,11 @@ class HandedBackTest : public testing::Test {
     return nodes;
   }
 
+  // What the session saves of Work's pinned rows while |tab| is away with |left|.
+  Pinned SavedWith(bc_id tab, const Left& left) const {
+    return PinnedWith(*work_, {{.tab = tab, .node = left.node, .pin = *left.pin}});
+  }
+
   size_t RowOf(bc_id row) const {
     return std::ranges::find(work_->pinned_rows(), row) - work_->pinned_rows().begin();
   }
@@ -192,6 +197,46 @@ TEST_F(HandedBackTest, NoRowsNodeChangesWithAGiveAndAReturn) {
     Return(tab, left);
     EXPECT_EQ(Nodes(), before) << tab;
   }
+}
+
+// The session saves a handed pin among the Space's pinned rows where it would be pinned again, so
+// a quit while an agent has it brings it back as the pin it was.
+TEST_F(HandedBackTest, AHandedPinIsSavedWhereItComesBack) {
+  for (bc_id tab : {1, 2, 3, 4, 5, 6}) {
+    const bc_id folder = work_->FolderOf(tab);
+    const Left left = Give(tab);
+    const Pinned saved = SavedWith(tab, left);
+    EXPECT_EQ(saved.rows, (Rows{1, docs_, 2, notes_, 3, 4, 5, 6})) << tab;
+    EXPECT_EQ(saved.folders, (std::map<bc_id, bc_id>{{tab, folder}})) << tab;
+    Return(tab, left);
+    EXPECT_EQ(work_->pinned_rows(), saved.rows) << tab;
+  }
+}
+
+TEST_F(HandedBackTest, HandedPinsOfOneFolderAreSavedInTheirOrder) {
+  const Left two = Give(2);
+  const Left five = Give(5);
+  ASSERT_EQ(work_->pinned_rows(), (Rows{1, docs_, notes_, 3, 4, 6}));
+  for (const std::vector<Held>& held :
+       {std::vector<Held>{{.tab = 2, .node = two.node, .pin = *two.pin},
+                          {.tab = 5, .node = five.node, .pin = *five.pin}},
+        std::vector<Held>{{.tab = 5, .node = five.node, .pin = *five.pin},
+                          {.tab = 2, .node = two.node, .pin = *two.pin}}}) {
+    const Pinned saved = PinnedWith(*work_, held);
+    EXPECT_EQ(saved.rows, (Rows{1, docs_, 2, notes_, 3, 4, 5, 6}));
+    EXPECT_EQ(saved.folders, (std::map<bc_id, bc_id>{{2, docs_}, {5, docs_}}));
+  }
+}
+
+// In the folder that held its folder, past what that one holds, as it would be pinned again.
+TEST_F(HandedBackTest, AHandedPinWhoseFolderIsGoneIsSavedInTheOneThatHeldIt) {
+  const Left left = Give(5);
+  work_->DeleteFolder(docs_);
+  const Pinned saved = SavedWith(5, left);
+  EXPECT_EQ(saved.folders, (std::map<bc_id, bc_id>{{5, 0}}));
+  Return(5, left);
+  EXPECT_EQ(work_->pinned_rows(), saved.rows);
+  EXPECT_EQ(work_->FolderOf(5), 0u);
 }
 
 TEST_F(HandedBackTest, ATodayTabComesBackWhereItWasAndIntoItsSplit) {

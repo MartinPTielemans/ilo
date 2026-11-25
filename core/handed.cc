@@ -156,4 +156,14 @@ size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space
   return handed_back::Among(home, rows, node, [&](bc_id row) { return PlaceOf(home, row); });
 }
 
+handed_back::Pinned PinnedWith(const Space& home) {
+  std::vector<handed_back::Held> held;
+  for (const auto& [tab, mark] : Marks()) {
+    if (mark.home == home.id() && mark.pin) {
+      held.push_back({.tab = tab, .node = mark.node, .pin = *mark.pin});
+    }
+  }
+  return handed_back::PinnedWith(home, held);
+}
+
 }  // namespace browser_core::handed

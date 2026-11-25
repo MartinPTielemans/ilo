@@ -79,6 +79,10 @@ bool MayStep(bc_id tab, int offset);
 // what one of its folders holds, each of them |home|'s own or another handed tab that left it.
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node);
 
+// |home|'s pinned rows with the pinned tabs handed out of it among them, each where it would come
+// back now.
+handed_back::Pinned PinnedWith(const Space& home);
+
 }  // namespace browser_core::handed
 
 #endif  // BROWSER_CORE_HANDED_H_

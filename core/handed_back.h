@@ -7,6 +7,7 @@
 #define BROWSER_CORE_HANDED_BACK_H_
 
 #include <cstddef>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -41,6 +42,25 @@ size_t Among(const Space& home,
              const std::vector<bc_id>& rows,
              const Space::Node& node,
              base::FunctionRef<const syncer::UniquePosition*(bc_id)> place_of);
+
+// A pinned tab handed out of a Space, with what's kept of it.
+struct Held {
+  bc_id tab = 0;
+  Space::Node node;
+  Pin pin;
+};
+
+// A Space's pinned rows with the pinned tabs handed out of it among them.
+struct Pinned {
+  // The pinned tabs and folders, top to bottom, each folder followed by what's in it.
+  std::vector<bc_id> rows;
+  // Each handed one, to the folder it's in there, or 0 for none.
+  std::map<bc_id, bc_id> folders;
+};
+
+// |home|'s pinned rows with each of |held| where Put would pin it now, which is where the session
+// saves it.
+Pinned PinnedWith(const Space& home, const std::vector<Held>& held);
 
 // Puts |tab|, a Today tab of |home| again as a tab moved to a Space is, back where it left with
 // |node|: among the Today tabs, or with |pin| pinned at its address, in the folder that held it

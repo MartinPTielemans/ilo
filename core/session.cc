@@ -317,17 +317,20 @@ SavedSpace SaveSpace(const Space& space,
     const Space::Node* node = space.NodeOf(id);
     return node ? *node : Space::Node();
   };
-  // Its Today tabs with those the user handed an agent out of it, each where it would come back.
+  // Its pinned rows and its Today tabs with those the user handed an agent out of it, each where
+  // it would come back.
+  handed_back::Pinned pinned_rows{.rows = space.pinned_rows()};
   std::vector<bc_id> today_rows = space.today();
   if (handed_as_users && !space.agent()) {
+    pinned_rows = handed::PinnedWith(space);
     for (const auto& [tab, mark] : handed::All()) {
-      if (mark.home == space.id()) {
+      if (mark.home == space.id() && !mark.pin) {
         today_rows.insert(today_rows.begin() + handed::PlaceAmong(space, today_rows, mark.node),
                           tab);
       }
     }
   }
-  for (auto [ids, tabs] : {std::pair(&space.pinned_rows(), &to.pinned),
+  for (auto [ids, tabs] : {std::pair(&std::as_const(pinned_rows.rows), &to.pinned),
                            std::pair(&std::as_const(today_rows), &to.today)}) {
     bc_id above = 0;
     for (bc_id id : *ids) {
@@ -354,11 +357,18 @@ SavedSpace SaveSpace(const Space& space,
       }
       tab.session_storage = saving->SessionStorageId();
       if (mark) {
-        // A Today tab by itself at the node it kept, whatever the agent made of it in its Space.
+        // By itself at the node it kept, whatever the agent made of it in its Space: a Today tab,
+        // or a pinned tab with its pin as it was, at the address it was pinned at.
         tab.node = mark->node;
-        tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
+        if (mark->pin) {
+          tab.pinned_url = mark->pin->url;
+          auto folder = folders.find(pinned_rows.folders[id]);
+          tab.folder = folder == folders.end() ? -1 : folder->second;
+        } else {
+          tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
+        }
         above = id;
-        to.today.push_back(std::move(tab));
+        tabs->push_back(std::move(tab));
         ++index;
         continue;
       }

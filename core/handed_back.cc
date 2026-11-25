@@ -29,6 +29,23 @@ void RejoinSplit(Space& home, bc_id tab, const std::vector<bc_id>& split) {
   home.MoveInSplit(tab, handed_place::InSplit(was_before));
 }
 
+// The folder of |home| a tab that left with |pin| and |node| is pinned in again, 0 for none: the
+// one that held it, or the nearest around that one |home| still has. |by| is the node whose place
+// it takes among what that folder holds: its own, else that of the folder it was in that's gone, so
+// where that folder was.
+bc_id FolderFor(const Space& home,
+                const Pin& pin,
+                const Space::Node& node,
+                const Space::Node*& by) {
+  std::vector<bool> still_there;
+  for (const Pin::Folder& folder : pin.folders) {
+    still_there.push_back(home.IsFolder(folder.id));
+  }
+  const size_t in = handed_place::InFolder(still_there);
+  by = in == 0 ? &node : &pin.folders[in - 1].node;
+  return in < pin.folders.size() ? pin.folders[in].id : 0;
+}
+
 }  // namespace
 
 std::optional<Pin> PinOf(const Space& space, bc_id tab) {
@@ -60,6 +77,44 @@ size_t Among(const Space& home,
   return handed_place::Among(beside);
 }
 
+Pinned PinnedWith(const Space& home, const std::vector<Held>& held) {
+  Pinned with{.rows = home.pinned_rows()};
+  std::map<bc_id, const Space::Node*> nodes;
+  const auto folder_of = [&](bc_id row) {
+    auto handed = with.folders.find(row);
+    return handed == with.folders.end() ? home.FolderOf(row) : handed->second;
+  };
+  const auto place_of = [&](bc_id row) -> const syncer::UniquePosition* {
+    auto handed = nodes.find(row);
+    const Space::Node* its = handed == nodes.end() ? home.NodeOf(row) : handed->second;
+    return its ? &its->position : nullptr;
+  };
+  for (const Held& each : held) {
+    const Space::Node* by = nullptr;
+    const bc_id folder = FolderFor(home, each.pin, each.node, by);
+    // What the folder holds, and where each of those is among the rows.
+    std::vector<bc_id> beside;
+    std::vector<size_t> at;
+    // Past the folder and all that's in it, or past the last row for none.
+    size_t end = with.rows.size();
+    for (size_t i = 0; i < with.rows.size(); ++i) {
+      const bc_id in = folder_of(with.rows[i]);
+      if (in == folder) {
+        beside.push_back(with.rows[i]);
+        at.push_back(i);
+      }
+      if (folder && (with.rows[i] == folder || (in && home.Within(in, folder)))) {
+        end = i + 1;
+      }
+    }
+    const size_t index = Among(home, beside, *by, place_of);
+    with.rows.insert(with.rows.begin() + (index < at.size() ? at[index] : end), each.tab);
+    with.folders[each.tab] = folder;
+    nodes[each.tab] = &each.node;
+  }
+  return with;
+}
+
 void Put(Space& home,
          bc_id tab,
          const Space::Node& node,
@@ -80,22 +135,15 @@ void Put(Space& home,
     }
   }
   if (pin) {
-    std::vector<bool> still_there;
-    for (const Pin::Folder& folder : pin->folders) {
-      still_there.push_back(home.IsFolder(folder.id));
-    }
-    const size_t in = handed_place::InFolder(still_there);
-    const bc_id folder = in < pin->folders.size() ? pin->folders[in].id : 0;
-    // By its own place among what its folder holds, else by the place of the folder it was in
-    // that's gone, among what held that.
-    const Space::Node& by = in == 0 ? node : pin->folders[in - 1].node;
+    const Space::Node* by = nullptr;
+    const bc_id folder = FolderFor(home, *pin, node, by);
     std::vector<bc_id> beside;
     for (bc_id row : home.pinned_rows()) {
       if (row != tab && home.FolderOf(row) == folder) {
         beside.push_back(row);
       }
     }
-    home.Move(tab, /*pinned=*/true, folder, Among(home, beside, by, place_of),
+    home.Move(tab, /*pinned=*/true, folder, Among(home, beside, *by, place_of),
               [&](bc_id) { return pin->url; });
   } else {
     std::vector<bc_id> others = home.today();
