@@ -242,7 +242,8 @@ pub struct TaskAgent {
     pub model: Option<SharedString>,
     /// That model by id, empty for its own default: Settings' Model row.
     pub model_id: String,
-    /// Its Model menu's first row, `{assistant}'s default`, and which model that is where it said.
+    /// Settings' name for its default, `{assistant}'s default` (Y1), which the model trigger shows
+    /// while it's picked, and which model that is where it said. The menu's row is `Default` (D3).
     pub default_row: SharedString,
     pub default_model: Option<SharedString>,
     /// The models it offers after its default, as id and name: the one list Settings' Model row
@@ -322,6 +323,9 @@ const SIGN_IN: &str = "Sign In";
 const SETTINGS: &str = "Settings";
 /// The model menu's search field (Z9).
 const SEARCH_MODELS: &str = "Search models";
+/// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
+/// `{assistant}'s default`.
+const DEFAULT_ROW: &str = "Default";
 const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
@@ -2436,8 +2440,10 @@ impl CommandBar {
     /// The model trigger's menu, under it: each assistant by its own name, then the models it
     /// offers, its default first and the one the thread starts on checked; one at its limit says
     /// when it resets, and one not signed in has Sign In, which starts its own sign-in as
-    /// Settings' does; then Settings › Agents. Over them all a field narrows them as the user
-    /// types, leaving Sign In and Settings whatever is typed; a pick is still one of these rows.
+    /// Settings' does; then Settings › Agents. Each assistant's heading is its name as Settings'
+    /// page has it. Over them all a field narrows them as the user types: an assistant with no
+    /// model matching goes, heading and all, as Sign In does, and Settings stays whatever is
+    /// typed; a pick is still one of these rows.
     fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agents = self.task_agents.clone().unwrap_or_default();
         let (on, chosen) = match self.composer_assistant() {
@@ -2446,8 +2452,15 @@ impl CommandBar {
         };
         let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
         let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
+        // Settings' name for the assistant, so the two never say it differently.
+        let label = |id: &SharedString, name: &SharedString| -> SharedString {
+            match crate::agents::runner::Cli::from_id(id) {
+                Some(cli) => crate::settings_rows::assistant_name(cli).into(),
+                None => name.clone(),
+            }
+        };
         for agent in &agents.agents {
-            items.push(heading(agent.name.clone()));
+            items.push(heading(label(&agent.id, &agent.name)));
             picks.push(ModelPick::Nothing);
             let at_limit = agent
                 .resets
@@ -2457,7 +2470,7 @@ impl CommandBar {
             let default = agent.default_model.as_deref();
             let (ids, entries) = crate::agents::task::model_menu(
                 checked.unwrap_or("\0"),
-                &agent.default_row,
+                DEFAULT_ROW,
                 default,
                 agent.models.clone(),
             );
@@ -2473,14 +2486,14 @@ impl CommandBar {
             }
         }
         for (id, name) in &agents.signed_out {
-            items.push(heading(name.clone()));
+            items.push(heading(label(id, name)));
             picks.push(ModelPick::Nothing);
-            items.push(MenuEntry::named(SIGN_IN, true).kept());
+            items.push(MenuEntry::named(SIGN_IN, true).offer().out());
             picks.push(ModelPick::SignIn(id.clone()));
         }
         items.push(MenuEntry::line());
         picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept());
+        items.push(MenuEntry::named(SETTINGS, true).kept().out());
         picks.push(ModelPick::Settings);
         let bar = cx.entity().downgrade();
         let chosen = Box::new(

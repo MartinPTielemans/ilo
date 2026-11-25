@@ -442,6 +442,8 @@ fn panel_width(
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
+    let out = items.iter().any(|&at| entries[at].out);
+    let chevron = chevron + if out { GAP + OUT_ARROW } else { 0. };
     (2. * (PADDING + ROW_X) + lead + widest + chevron).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
@@ -1040,11 +1042,25 @@ impl Tracking {
     }
 }
 
+/// The ink of `entry`'s title, `lit` or not, on `on_fill` where it's lit: a heading's and an
+/// offer's the secondary ink, as the model menu's not-signed-in Sign In.
+pub(crate) fn title_ink(entry: &MenuEntry, lit: bool, palette: &Palette, on_fill: Rgba) -> Hsla {
+    match (lit, entry.enabled, entry.destructive) {
+        _ if entry.header => rgba(palette.secondary).into(),
+        (true, ..) => on_fill.into(),
+        (false, false, _) => rgba(palette.disabled).into(),
+        (false, true, true) => rgba(palette.destructive).into(),
+        (false, true, false) if entry.offer => rgba(palette.secondary).into(),
+        (false, true, false) => rgba(palette.label).into(),
+    }
+}
+
 /// The items of `entries` a search for `typed` leaves, by index: the field; each row whose title
 /// holds what's typed, ignoring case, and each a search keeps (`MenuEntry::kept`); a heading while
 /// a row under it stays; the lines between what's left; and what's in a kept row's submenu or
-/// takes its place while ⌥ is held. Nothing typed leaves them all. A search that matches nothing
-/// leaves only the field and the kept rows, with no words of its own.
+/// takes its place while ⌥ is held. An offer (`MenuEntry::offer`) goes once anything is typed, so a
+/// heading over offers alone goes with them. Nothing typed leaves them all. A search that matches
+/// nothing leaves only the field and the kept rows, with no words of its own.
 pub(crate) fn narrowed(entries: &[MenuEntry], typed: &str) -> Vec<usize> {
     let typed = typed.trim().to_lowercase();
     if typed.is_empty() {
@@ -1055,7 +1071,10 @@ pub(crate) fn narrowed(entries: &[MenuEntry], typed: &str) -> Vec<usize> {
         .collect();
     let row = |entry: &MenuEntry| !entry.header && !entry.title.is_empty() && !entry.field;
     let matches = |entry: &MenuEntry| {
-        entry.field || (row(entry) && (entry.kept || entry.title.to_lowercase().contains(&typed)))
+        entry.field
+            || (row(entry)
+                && !entry.offer
+                && (entry.kept || entry.title.to_lowercase().contains(&typed)))
     };
     let mut left: Vec<usize> = Vec::new();
     for (k, &at) in root.iter().enumerate() {
@@ -1874,17 +1893,30 @@ impl ContextMenu {
             .h(bounds.size.height);
         if let Some(search) = shown.search.as_ref().filter(|_| entry.field) {
             let line = div().mx(px(ROW_X)).h(px(1.)).bg(rgba(palette.line));
-            // Its text starts where the titles do, past a level of choices' checks.
-            let lead = if lay.checks { CHECK + GAP } else { 0. };
+            // The glyph stands in the checks' column and the text starts where the titles do.
+            let glyph = svg()
+                .path("icons/search.svg")
+                .size(px(SEARCH_GLYPH))
+                .flex_none()
+                .text_color(rgba(palette.secondary));
+            let column = div()
+                .debug_selector(|| "menu-search-glyph".into())
+                .w(px(CHECK))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .child(glyph);
             return (placed.id(("menu-field", item)).flex().flex_col())
                 .child(
                     div()
                         .flex_1()
                         .flex()
                         .items_center()
-                        .pl(px(ROW_X + lead))
+                        .gap(px(GAP))
+                        .pl(px(ROW_X))
                         .pr(px(ROW_X))
                         .text_color(rgba(palette.label))
+                        .child(column)
                         .child(search.field.clone()),
                 )
                 .child(line)
@@ -1903,13 +1935,7 @@ impl ContextMenu {
             true => (rgba(DESTRUCTIVE_FILL), rgba(DESTRUCTIVE_LABEL)),
             false => (highlight.fill, highlight.label),
         };
-        let label: Hsla = match (lit, entry.enabled, entry.destructive) {
-            _ if entry.header => rgba(palette.secondary).into(),
-            (true, ..) => on_fill.into(),
-            (false, false, _) => rgba(palette.disabled).into(),
-            (false, true, true) => rgba(palette.destructive).into(),
-            (false, true, false) => rgba(palette.label).into(),
-        };
+        let label = title_ink(entry, lit, &palette, on_fill);
         let secondary: Hsla = match (lit, entry.enabled) {
             (true, _) => on_fill.into(),
             (false, false) => rgba(palette.disabled).into(),
@@ -1919,7 +1945,11 @@ impl ContextMenu {
         let shortcut = entry.shortcut.as_deref().map(keystroke_label);
         let pressed = lit && tracking.pressed;
         let check = lay.checks.then(|| {
-            div().w(px(CHECK)).flex_none().when(entry.checked, |slot| {
+            (div()
+                .debug_selector(move || format!("menu-check {item}"))
+                .w(px(CHECK))
+                .flex_none())
+            .when(entry.checked, |slot| {
                 slot.child(
                     svg()
                         .path("icons/check.svg")
@@ -1960,6 +1990,15 @@ impl ContextMenu {
                     .flex_none()
                     .text_color(secondary)
                     .child(keys.clone())
+                    .into_any_element(),
+            ),
+            (None, false) if entry.out => Some(
+                svg()
+                    .debug_selector(move || format!("menu-out {item}"))
+                    .path("icons/arrow-up-right.svg")
+                    .size(px(OUT_ARROW))
+                    .flex_none()
+                    .text_color(secondary)
                     .into_any_element(),
             ),
             (None, false) => None,

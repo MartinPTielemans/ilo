@@ -10,9 +10,9 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
-    QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held, described,
-    described_held, key_of, lay_out, lay_out_over, narrowed,
+    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, OUT_ARROW, Outcome, PADDING,
+    Pointer, QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held,
+    described, described_held, key_of, lay_out, lay_out_over, narrowed, title_ink,
 };
 use gpui::Focusable as _;
 
@@ -1339,25 +1339,31 @@ fn models() -> Vec<MenuEntry> {
         item("GPT-5"),                      // 6
         item("o4-mini"),                    // 7
         heading("Gemini"),                  // 8
-        item("Sign In").kept(),             // 9
+        item("Sign In").offer().out(),      // 9
         MenuEntry::line(),                  // 10
-        item("Settings").kept(),            // 11
+        item("Settings").kept().out(),      // 11
     ]
 }
 
 /// A search leaves the rows whose titles hold what's typed, in any case, an assistant's name
-/// while one of its models is left, and Sign In and Settings whatever is typed: with no match,
-/// those alone, and no words of the search's own.
+/// while one of its models is left, and Settings whatever is typed. An assistant with no model
+/// left goes, its name with it, and so does a not-signed-in one's Sign In, even when it's what's
+/// typed: with no match, the search and Settings alone, and no words of the search's own.
 #[test]
 fn a_search_narrows_the_rows_to_what_holds_it() {
     let menu = models();
     assert_eq!(narrowed(&menu, ""), (0..menu.len()).collect::<Vec<_>>());
     assert_eq!(narrowed(&menu, "  "), (0..menu.len()).collect::<Vec<_>>());
-    assert_eq!(narrowed(&menu, "o"), [0, 1, 4, 5, 7, 8, 9, 10, 11]);
-    assert_eq!(narrowed(&menu, "HAI"), [0, 1, 3, 8, 9, 10, 11]);
-    assert_eq!(narrowed(&menu, "zzz"), [0, 8, 9, 10, 11]);
+    assert_eq!(narrowed(&menu, "o"), [0, 1, 4, 5, 7, 10, 11]);
+    assert_eq!(narrowed(&menu, "HAI"), [0, 1, 3, 10, 11]);
+    assert_eq!(narrowed(&menu, "zzz"), [0, 11]);
+    assert_eq!(
+        narrowed(&menu, "sign"),
+        [0, 11],
+        "Sign In stayed for its words"
+    );
     // A heading's own name matches nothing: it stays for its rows.
-    assert_eq!(narrowed(&menu, "claude"), [0, 8, 9, 10, 11]);
+    assert_eq!(narrowed(&menu, "claude"), [0, 11]);
     // Without a row a search keeps, no line is left hanging at either end.
     let plain = vec![
         MenuEntry::search("Search"),
@@ -1375,6 +1381,59 @@ fn a_search_narrows_the_rows_to_what_holds_it() {
         "Copy, Paste, Delete",
         "the field isn't a row"
     );
+}
+
+/// A not-signed-in assistant's Sign In is in the secondary ink, as a heading is, and the plate's
+/// ink while it's lit; a model's row is in the label's.
+#[test]
+fn an_offer_is_in_the_secondary_ink() {
+    use gpui::rgba;
+    let palette = Look::dark().palette();
+    let on_fill = rgba(0x123456ff);
+    let menu = models();
+    assert_eq!(
+        title_ink(&menu[9], false, &palette, on_fill),
+        rgba(palette.secondary).into()
+    );
+    assert_eq!(title_ink(&menu[9], true, &palette, on_fill), on_fill.into());
+    assert_eq!(
+        title_ink(&menu[3], false, &palette, on_fill),
+        rgba(palette.label).into()
+    );
+}
+
+/// The search's glyph stands in the checks' column, centred on the check before the model the
+/// thread starts on, and the out arrow stands after Sign In's and Settings' titles, at the row's
+/// right, and after no model's. GPUI records where an element was drawn only in a debug build.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_search_glyph_is_in_the_checks_column_and_the_out_arrow_at_the_right(
+    cx: &mut TestAppContext,
+) {
+    let (_, _, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let mut menu = models();
+    menu[3].checked = true;
+    show_items(menu, cx);
+    let glyph = cx
+        .debug_bounds("menu-search-glyph")
+        .expect("the search has no glyph");
+    let check = cx.debug_bounds("menu-check 3").expect("Haiku has no check");
+    assert_eq!(glyph.center().x, check.center().x);
+    assert_eq!(glyph.size.width, px(CHECK));
+    for (out, check) in [
+        ("menu-out 9", "menu-check 9"),
+        ("menu-out 11", "menu-check 11"),
+    ] {
+        let arrow = (cx.debug_bounds(out)).unwrap_or_else(|| panic!("no {out}"));
+        let check = cx.debug_bounds(check).unwrap();
+        assert!(arrow.origin.x > check.right() + px(100.), "{arrow:?}");
+        assert_eq!(arrow.size.width, px(OUT_ARROW));
+    }
+    assert!(cx.debug_bounds("menu-out 3").is_none(), "a model went out");
 }
 
 /// Shows `items` at (100, 100) and returns how it closed once it does.
@@ -1449,9 +1508,7 @@ fn the_arrows_and_return_pick_while_the_cursor_is_in_the_search(cx: &mut TestApp
     );
     assert_eq!(
         rows,
-        [
-            "Claude", "Sonnet", "ChatGPT", "o4-mini", "Gemini", "Sign In", "", "Settings"
-        ]
+        ["Claude", "Sonnet", "ChatGPT", "o4-mini", "", "Settings"]
     );
     cx.simulate_keystrokes("space");
     assert_eq!(
@@ -1480,7 +1537,7 @@ fn the_arrows_and_return_pick_while_the_cursor_is_in_the_search(cx: &mut TestApp
     let chosen = show_items(models(), cx);
     cx.simulate_keystrokes("z z z");
     let (_, rows) = searched(window, cx).unwrap();
-    assert_eq!(rows, ["Gemini", "Sign In", "", "Settings"]);
+    assert_eq!(rows, ["Settings"]);
     cx.simulate_keystrokes("enter");
     assert_eq!(
         chosen.get(),
@@ -1502,10 +1559,7 @@ fn return_and_escape_while_composing_in_the_search_are_the_compositions(cx: &mut
     let chosen = show_items(models(), cx);
     cx.simulate_keystrokes("s");
     let (field, rows) = searched(window, cx).unwrap();
-    assert_eq!(
-        rows,
-        ["Claude", "Sonnet", "Gemini", "Sign In", "", "Settings"]
-    );
+    assert_eq!(rows, ["Claude", "Sonnet", "", "Settings"]);
     cx.update(|window, cx| {
         field.update(cx, |field, cx| {
             field.replace_and_mark_text_in_range(None, "ソ", None, window, cx)
@@ -1516,7 +1570,7 @@ fn return_and_escape_while_composing_in_the_search_are_the_compositions(cx: &mut
     let (_, rows) = searched(window, cx).unwrap();
     assert_eq!(
         rows,
-        ["Claude", "Sonnet", "Gemini", "Sign In", "", "Settings"],
+        ["Claude", "Sonnet", "", "Settings"],
         "the rows narrowed to a composition"
     );
     cx.simulate_keystrokes("enter");
@@ -1539,7 +1593,7 @@ fn return_and_escape_while_composing_in_the_search_are_the_compositions(cx: &mut
     });
     cx.run_until_parked();
     let (_, rows) = searched(window, cx).unwrap();
-    assert_eq!(rows, ["Gemini", "Sign In", "", "Settings"]);
+    assert_eq!(rows, ["Settings"]);
     cx.simulate_keystrokes("escape");
     assert_eq!(chosen.get(), Some(Closed::Otherwise));
     assert_eq!(
