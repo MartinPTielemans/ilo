@@ -15,7 +15,8 @@ use std::f32::consts::FRAC_PI_2;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, FontWeight, Hsla, MouseButton, Pixels, Radians,
-    SharedString, Size, Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
+    SharedString, Size, Task, Transformation, Window, canvas, div, point, prelude::*, px, rgb,
+    size, svg,
 };
 
 use super::{
@@ -36,6 +37,7 @@ use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
+use crate::tokens::shell::task_area::motion::PICTURE_WAIT;
 use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X};
@@ -59,10 +61,9 @@ struct Watched {
     /// Whether `picture` is one this window asked for, and so its own to let go of.
     asked: bool,
     zoom: Zoom,
-    /// The picture of the page as it is, asked as it went back, which takes the place of the one
-    /// it shrinks with when it comes. The zoom never waits on it: a core that doesn't answer
-    /// leaves the page shrinking with the picture it had (#4247).
-    back: Option<u64>,
+    /// While it waits to go back for a picture of itself as it is: the one wait that bounds it,
+    /// which the answer ends by dropping it.
+    waiting: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +72,8 @@ enum Zoom {
     Out(Instant),
     /// In place, filling the area.
     Rest,
+    /// Going back, waiting for the picture asked with this request, of the page as it is.
+    Asked(u64),
     /// Into the thumbnail since then, the Space's page shown again out of the window.
     In(Instant),
 }
@@ -81,7 +84,7 @@ impl Zoom {
         let seconds = |start: Instant| now.saturating_duration_since(start).as_secs_f32();
         match self {
             Zoom::Out(start) => cubic_bezier(0., 0., 0.58, 1., (seconds(start) / OPEN).min(1.)),
-            Zoom::Rest => 1.,
+            Zoom::Rest | Zoom::Asked(_) => 1.,
             Zoom::In(start) => {
                 1. - cubic_bezier(0.42, 0., 1., 1., (seconds(start) / CLOSE).min(1.))
             }
@@ -397,7 +400,7 @@ impl Shell {
                 picture,
                 asked: false,
                 zoom,
-                back: None,
+                waiting: None,
             });
         }
         // check.sh reads this line.
@@ -414,8 +417,8 @@ impl Shell {
         true
     }
 
-    /// Back to the conversation: the page shrinks into its thumbnail at once, with the picture it
-    /// has until one of it as it is now comes.
+    /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
+    /// is now.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
         let still = cx.reduce_motion();
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
@@ -423,7 +426,7 @@ impl Shell {
         };
         let tab = page.tab;
         match page.zoom {
-            Zoom::In(_) => return,
+            Zoom::Asked(_) | Zoom::In(_) => return,
             // Turned around on its way out, it goes back from where it is, with the picture it came
             // with.
             Zoom::Out(_) if !still => {
@@ -437,11 +440,14 @@ impl Shell {
             }
             _ => {
                 let request = next_request();
-                page.back = Some(request);
-                page.zoom = Zoom::In(Instant::now());
-                // Asked before the page leaves the window, which the core's copy holds it in.
+                page.zoom = Zoom::Asked(request);
+                // A core that never answers leaves it going back with the picture it has (#4247).
+                page.waiting = Some(cx.spawn(async move |shell, cx| {
+                    let wait = Duration::from_secs_f32(PICTURE_WAIT);
+                    cx.background_executor().timer(wait).await;
+                    (shell.update(cx, |shell, cx| shell.task_page_unpictured(request, cx))).ok();
+                }));
                 self.browser.page_picture(tab, request, cx);
-                self.show_task_page_away(cx);
             }
         }
         // check.sh reads this line.
@@ -493,7 +499,7 @@ impl Shell {
     pub(super) fn task_page_live(&self) -> Option<u64> {
         let area = self.task_area.as_ref()?;
         let page = area.page.as_ref()?;
-        let live = page.zoom == Zoom::Rest && self.task_core == area.space;
+        let live = matches!(page.zoom, Zoom::Rest | Zoom::Asked(_)) && self.task_core == area.space;
         live.then_some(page.tab)
     }
 
@@ -546,9 +552,9 @@ impl Shell {
         };
         let live = self.task_core == area.space;
         match page.zoom {
-            Zoom::Rest if live && self.page_fullscreen => card,
-            Zoom::Rest if live => watched(card),
-            Zoom::Out(_) | Zoom::Rest => pushed(watched(card), away),
+            Zoom::Rest | Zoom::Asked(_) if live && self.page_fullscreen => card,
+            Zoom::Rest | Zoom::Asked(_) if live => watched(card),
+            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(card), away),
             Zoom::In(_) => pushed(card, away),
         }
     }
@@ -623,7 +629,7 @@ impl Shell {
     }
 
     /// The core answers `request` with a picture of a task's page going back, and says whether the
-    /// request was the area's. The page already shrinks, and shrinks on with it.
+    /// request was the area's.
     pub(super) fn task_pictured(
         &mut self,
         request: u64,
@@ -633,18 +639,37 @@ impl Shell {
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return false;
         };
-        if page.back != Some(request) {
+        if page.zoom != Zoom::Asked(request) {
             return false;
         }
-        page.back = None;
+        page.waiting = None;
         if let Some(picture) = picture {
             if let Some(old) = page.picture.replace(picture).filter(|_| page.asked) {
                 self.stale_pictures.push(old.image());
             }
             page.asked = true;
         }
+        page.zoom = Zoom::In(Instant::now());
+        self.show_task_page_away(cx);
         cx.notify();
         true
+    }
+
+    /// The page waited `PICTURE_WAIT` for the picture `request` asked, which never came: it goes
+    /// back with the picture it has, and one that comes after is nothing to the area.
+    fn task_page_unpictured(&mut self, request: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
+            return;
+        };
+        if page.zoom != Zoom::Asked(request) {
+            return;
+        }
+        page.waiting = None;
+        page.zoom = Zoom::In(Instant::now());
+        // The core's fault (#4253), in the run's log, where the zoom alone wouldn't show it.
+        log!("browser: task page {} back unpictured", page.tab);
+        self.show_task_page_away(cx);
+        cx.notify();
     }
 
     /// A press on the page zooming ends its zoom out at once, for the page itself to take what
@@ -801,7 +826,7 @@ impl Shell {
                     retake = true;
                 }
                 Zoom::Out(_) | Zoom::In(_) => window.request_animation_frame(),
-                Zoom::Rest => {}
+                Zoom::Rest | Zoom::Asked(_) => {}
             }
         }
         if retake {
