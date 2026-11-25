@@ -64,8 +64,14 @@ impl Browser for Engine {
         unsafe { bc::bc_window_select(self.window, tab) };
     }
 
-    fn close(&self, tab: u64, split: bool, _: &mut App) {
-        unsafe { bc::bc_tab_close(tab, split) };
+    fn close(&self, tab: u64, split: bool, cx: &mut App) {
+        // A tab of the user's a thread holds never closes while it's the thread's: their close
+        // of it returns it to their own tabs, which the activity log then says.
+        let returned = browser::agents::global(cx)
+            .is_some_and(|agents| agents.update(cx, |agents, cx| agents.close_returns(tab, cx)));
+        if !returned {
+            unsafe { bc::bc_tab_close(tab, split) };
+        }
     }
 
     fn close_below(&self, tab: u64, _: &mut App) {

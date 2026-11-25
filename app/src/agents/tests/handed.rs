@@ -273,6 +273,15 @@ fn a_handed_tabs_entry_is_its_whole_sentence() {
         tools::step_title(&did, tools::Tense::Done),
         "You returned example.com to your tabs"
     );
+    let did = tools::Did {
+        tool: handed::GIVEN_BACK.into(),
+        site: "example.com".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        tools::step_title(&did, tools::Tense::Done),
+        "example.com returned to your tabs"
+    );
     assert_eq!(handed::entry("open_tab", "www.example.com"), None);
 }
 
@@ -472,4 +481,112 @@ fn a_tab_the_core_cant_put_back_is_still_the_users(cx: &mut TestAppContext) {
         entries(&run, &agent, handed::TAKEN_BACK, cx),
         ["example.com"]
     );
+}
+
+/// A thread's close of a handed tab gives it back: no close reaches the core, the tab is at its
+/// place among the user's on the page it's at, the entry says it returned, and the thread hears
+/// what its close of a page of its own says, then and after. A page it opened closes as ever.
+#[gpui::test]
+fn a_threads_close_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
+    let run = run("handed-close", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let opened = call(
+        &run.agents,
+        &agent,
+        "open_tab",
+        json!({ "url": "https://shop.example/" }),
+        cx,
+    );
+    cx.run_until_parked();
+    drop(opened);
+    let own = *(tabs_of(&run, THREADS).iter())
+        .find(|tab| ![TRAINS.0, SEATS.0].contains(tab))
+        .expect("the page it opened");
+
+    let closed = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    assert!(!closed.error, "{closed:?}");
+    assert_eq!(closed.text, format!("Closed tab {}.", TRAINS.0));
+    // Discarding loses nothing either: the page goes back as it is.
+    let discard = json!({ "tab": SEATS.0, "discard": true });
+    let closed = call(&run.agents, &agent, "close_tab", discard, cx);
+    cx.run_until_parked();
+    let closed = closed.try_recv().expect("answered at once");
+    assert_eq!(closed.text, format!("Closed tab {}.", SEATS.0));
+    assert!(
+        run.browser.closes.borrow().is_empty(),
+        "the core closed one"
+    );
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0, SEATS.0]);
+    for tab in [TRAINS.0, SEATS.0] {
+        assert_eq!(space_of(&run, tab), USERS);
+        assert!(!is_handed(&run, &agent, tab, cx));
+    }
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["example.com", "tickets.example"]
+    );
+    assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
+    let later = answered(&run, &agent, "read_page", TRAINS.0, cx);
+    assert!(later.error);
+    assert!(
+        later
+            .text
+            .starts_with(&format!("The agent closed tab {}.", TRAINS.0)),
+        "{later:?}"
+    );
+
+    let closed = answered(&run, &agent, "close_tab", own, cx);
+    assert_eq!(closed.text, format!("Closed tab {own}."));
+    assert_eq!(space_of(&run, own), 0);
+    assert_eq!(entries(&run, &agent, handed::GIVEN_BACK, cx).len(), 2);
+}
+
+/// remove_tab on a handed tab its agent pinned gives it back as its close does, with the close's
+/// answer: it's unpinned for the user and never closed.
+#[gpui::test]
+fn a_remove_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
+    let run = run("handed-remove", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    let pin = |cx: &mut TestAppContext, action: &'static str| {
+        let (reply, answer) = mpsc::channel();
+        run.agents.update(cx, |agents, cx| {
+            agents.pin(&agent, 0, action, TRAINS.0, reply, cx)
+        });
+        cx.run_until_parked();
+        answer.try_recv().expect("answered at once")
+    };
+    assert!(!pin(cx, "pin_tab").error);
+    let removed = pin(cx, "remove_tab");
+    assert!(!removed.error, "{removed:?}");
+    assert_eq!(removed.text, format!("Closed tab {}.", TRAINS.0));
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0]);
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["example.com"]
+    );
+}
+
+/// The user's own close of a tab a thread holds of theirs returns it instead: it's theirs again,
+/// open, and the entry says they returned it. Any other tab is theirs to close as ever.
+#[gpui::test]
+fn the_users_close_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
+    let run = run("handed-user-close", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    let closes = |cx: &mut TestAppContext, tab: u64| {
+        (run.agents).update(cx, |agents, cx| agents.close_returns(tab, cx))
+    };
+    assert!(!closes(cx, SEATS.0) && !closes(cx, 10) && !closes(cx, 99));
+    assert!(run.browser.returned.borrow().is_empty());
+    assert!(closes(cx, TRAINS.0));
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com"]
+    );
+    assert_eq!(
+        answered(&run, &agent, "read_page", TRAINS.0, cx).text,
+        handed::RETURNED
+    );
+    assert!(!closes(cx, TRAINS.0));
 }

@@ -4865,6 +4865,9 @@ impl Agents {
             _ = reply.send(refused.into());
             return;
         }
+        if action == "remove_tab" && self.close_gives_back(agent, tab, &reply, cx) {
+            return;
+        }
         self.current.insert((agent.into(), connection), tab);
         let answer = match (action, pinned) {
             ("pin_tab", true) => format!("Tab {tab} is pinned already."),
@@ -5047,6 +5050,9 @@ impl Agents {
         if let Err(refused) = self.may_act(agent, tab, "close_tab", cx) {
             let act = act_of(agent, connection, call, tab, reply);
             return self.refuse(act, &site, refused, cx);
+        }
+        if self.close_gives_back(agent, tab, &reply, cx) {
+            return;
         }
         // The agent's own tab, discarded while its page is asked, doesn't wait for the page. Nor
         // does one whose page shows its dialog, which can't answer before it's gone (#3536).

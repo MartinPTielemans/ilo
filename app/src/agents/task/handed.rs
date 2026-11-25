@@ -5,15 +5,19 @@
 //! tabs a thread holds is kept in memory alone: never in the kept list, which holds nothing of a
 //! user's tab.
 
+use std::sync::mpsc;
+
 use gpui::{App, Context};
 
-use crate::agents::{Agents, TabInfo, site, tools};
+use crate::agents::{Agents, Gone, TabInfo, ToolResult, held, site, tools};
 
 /// The activity log's entry of a tab the user handed to a thread, as the log file names it. The
 /// app's own give alone makes one, so the entry says who did it.
 pub const HANDED: &str = "tab_handed";
 /// The entry of a handed tab the user returned to their own tabs.
 pub const TAKEN_BACK: &str = "tab_taken_back";
+/// The entry of a handed tab its thread gave back: by closing it, or by being no longer under way.
+pub const GIVEN_BACK: &str = "tab_given_back";
 
 /// What a call on a tab the user returned to their own tabs is answered, and all its assistant
 /// hears of the return.
@@ -23,8 +27,10 @@ pub const RETURNED: &str =
 /// Who returns a handed tab to the user's tabs, which its entry says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum By {
-    /// The user, by Return to Your Tabs.
+    /// The user, by Return to Your Tabs, or by their own close of it.
     User,
+    /// Its thread, which closed it or is no longer under way.
+    Thread,
 }
 
 /// The user's tabs picked for a message: the tabs of the composer's chips at the user's send, and
@@ -82,6 +88,7 @@ pub fn entry(action: &str, site: &str) -> Option<String> {
     match action {
         HANDED => Some(format!("You moved {site} to the thread")),
         TAKEN_BACK => Some(format!("You returned {site} to your tabs")),
+        GIVEN_BACK => Some(format!("{site} returned to your tabs")),
         _ => None,
     }
 }
@@ -222,10 +229,12 @@ impl Agents {
         let site = site(&self.browser.tab(tab, cx).url);
         let space = self.browser.space_of(tab, cx);
         // The user's own hold on it ends with it: the tab is theirs, with nothing to hand back.
-        self.let_go(tab, crate::agents::held::Event::Returned, cx);
+        self.let_go(tab, held::Event::Returned, cx);
         self.forget_page(tab);
         match by {
             By::User => self.returned_by_user(agent, tab),
+            // Its thread knows why its own page went, and the core ends what it was doing there.
+            By::Thread => {}
         }
         // Where the core can't put it back, as when the Space it left is gone, it's a tab of
         // today in a Space of the user's.
@@ -235,17 +244,49 @@ impl Agents {
         }
         let entry = match by {
             By::User => TAKEN_BACK,
+            By::Thread => GIVEN_BACK,
         };
         self.note_page(agent, (0, tab), entry, &site, "");
         cx.notify();
         true
     }
 
+    /// The user closes `tab`. One a thread holds of theirs never closes while it's the thread's:
+    /// their close of it is their return of it, on the page it's at. Whether it was one, so nothing
+    /// is to close.
+    pub fn close_returns(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+        let held = &self.tasks.handed.held;
+        let Some(agent) = (held.iter().find(|each| each.tab == tab)).map(|each| each.agent.clone())
+        else {
+            return false;
+        };
+        self.return_tab(&agent, tab, By::User, cx)
+    }
+
+    /// `agent`'s close of `tab`, by close_tab or remove_tab. One it holds of the user's never
+    /// closes while it's the thread's: the close gives it back, on the page it's at, and the
+    /// thread hears what its close of a page of its own says. Whether it was one.
+    pub(in crate::agents) fn close_gives_back(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        reply: &mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.return_tab(agent, tab, By::Thread, cx) {
+            return false;
+        }
+        // A later call on it hears what one on a page the agent closed does.
+        self.went(tab, agent, Gone::Itself);
+        _ = reply.send(ToolResult::text(format!("Closed tab {tab}.")));
+        true
+    }
+
     /// The user returned `tab` from `agent`'s thread: every call on it from here is answered so,
     /// those under way too, which are dropped.
     fn returned_by_user(&mut self, agent: &str, tab: u64) {
-        self.went(tab, agent, crate::agents::Gone::Returned);
-        let gone = || crate::agents::ToolResult::error(RETURNED);
+        self.went(tab, agent, Gone::Returned);
+        let gone = || ToolResult::error(RETURNED);
         for (_, reading) in self.reading.extract_if(|_, reading| reading.tab == tab) {
             _ = reading.reply.send(gone());
         }
@@ -280,7 +321,7 @@ impl Agents {
             }
             self.forget_handed_of(&agent, tab);
             let site = site(&self.browser.tab(tab, cx).url);
-            self.let_go(tab, crate::agents::held::Event::Returned, cx);
+            self.let_go(tab, held::Event::Returned, cx);
             self.forget_page(tab);
             self.returned_by_user(&agent, tab);
             self.note_page(&agent, (0, tab), TAKEN_BACK, &site, "");
@@ -291,7 +332,6 @@ impl Agents {
     /// Whether `tab` is one the user returned to their own tabs from `agent`'s thread, and hasn't
     /// handed to a thread since.
     pub(in crate::agents) fn returned_from(&self, agent: &str, tab: u64) -> bool {
-        use crate::agents::Gone;
         matches!(self.gone.get(&tab), Some((whose, Gone::Returned)) if whose == agent)
     }
 
