@@ -520,7 +520,7 @@ impl Shell {
                 Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 // Left out, as the agents' switch is, in a build without the agents' server.
-                Step::Assistant => self.browser.agents(cx).is_some(),
+                Step::Assistant => self.browser.threads(cx).is_some(),
                 Step::OptIns => opt_ins,
                 Step::Tidy => tidy.is_some(),
                 Step::Private => private,
@@ -806,7 +806,7 @@ impl Shell {
 
     /// Looks for the assistants' programs, once a showing of their step, only with agents on.
     fn onboarding_look(&mut self, cx: &mut Context<Self>) {
-        let agents_on = self.browser.agents(cx) == Some(true);
+        let agents_on = self.browser.threads(cx) == Some(true);
         let Some(onboarding) = self.onboarding.as_mut() else {
             return;
         };
@@ -1054,7 +1054,7 @@ impl Shell {
                 )
             }
             Switch::CrashReports => self.browser.crash_reports(cx),
-            Switch::OtherApps => match self.browser.agents(cx)? {
+            Switch::OtherApps => match self.browser.threads(cx)? {
                 true => self.browser.other_apps(cx),
                 false => None,
             },
@@ -1101,7 +1101,7 @@ impl Shell {
     /// off, Settings › Agents' one switch, set at once as the step's other switches are. The
     /// opt-ins' step comes or goes as other apps' agents' row does with it.
     pub(super) fn onboarding_agents(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.browser.agents(cx) != Some(!on) {
+        if self.browser.threads(cx) != Some(!on) {
             return;
         }
         log!(
@@ -1111,7 +1111,7 @@ impl Shell {
         let (browser, shell) = (self.browser.clone(), cx.entity());
         // Outside this update, as the host reads the shell as it turns agents off.
         cx.defer(move |cx| {
-            browser.set_agents(on, cx);
+            browser.set_threads(on, cx);
             shell.update(cx, |shell, cx| {
                 shell.onboarding_plan_opt_ins(cx);
                 shell.onboarding_look(cx);
@@ -1493,7 +1493,7 @@ impl Shell {
         // Taller than its room, the list scrolls in it, and the foot stays where every step has it.
         // Just the browser folds the assistants' rows away for its line.
         let assistants = (step == Step::Assistant).then(|| {
-            let rows = match self.browser.agents(cx) == Some(true) {
+            let rows = match self.browser.threads(cx) == Some(true) {
                 true => self.assistant_rows(step, colors, cx),
                 // The drawing's, as the words table has none for it.
                 false => div()
@@ -1915,7 +1915,7 @@ impl Shell {
     fn agents_rows(&self, colors: Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let agents = self.browser.agents(cx) == Some(true);
+        let agents = self.browser.threads(cx) == Some(true);
         let a11y = self.a11y;
         // The drawing's names, as the words table has none for them.
         let rows =

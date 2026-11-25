@@ -1051,8 +1051,8 @@ impl Agents {
         if session && asks {
             return (None, None);
         }
-        // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && asks {
+        // With threads off nothing more is asked of a task; an answer still lets one finish.
+        if !self.threads() && asks {
             return (None, None);
         }
         match action {
@@ -1389,7 +1389,7 @@ impl Agents {
                 State::Working => page_steps(task),
                 _ => Vec::new(),
             },
-            retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
+            retry: matches!(task.state, State::Limit { .. }) && self.threads(),
             fix: match (&task.state, task.cli) {
                 (
                     State::Failed {
@@ -1404,7 +1404,7 @@ impl Agents {
 
     /// The CLIs ⌘T's ask lists: those signed in, as last learned, the default first.
     pub fn ask_agents(&self) -> Vec<AskAgent> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
@@ -1428,7 +1428,7 @@ impl Agents {
 
     /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
     pub fn signed_out_agents(&self) -> Vec<Cli> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         (Cli::ALL.into_iter())
@@ -1467,7 +1467,30 @@ impl Agents {
 
     /// Learns again whether each CLI is installed and signed in, off the UI thread, unless it's
     /// learning already. Once a show: Settings › Agents and ⌘T's ask call it as they first show.
+    /// Nothing of an assistant's program runs while the inside switch is off: then a row's state
+    /// is looked up only at the user's click (`look_up_assistant`).
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
+        if self.threads() {
+            self.look_for(Cli::ALL.to_vec(), cx);
+        }
+    }
+
+    /// Learns whether `cli` alone is installed and signed in, at the user's click on its row, as
+    /// Models has it while the inside switch is off.
+    pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        self.look_for(vec![cli], cx);
+    }
+
+    /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
+    /// ending: every assistant while the inside switch is on, else that one alone.
+    pub(super) fn look_after_click(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        match self.threads() {
+            true => self.look_for_task_agents(cx),
+            false => self.look_up_assistant(cli, cx),
+        }
+    }
+
+    fn look_for(&mut self, clis: Vec<Cli>, cx: &mut Context<Self>) {
         if self.tasks.looking {
             self.tasks.look_again = true;
             return;
@@ -1475,7 +1498,9 @@ impl Agents {
         self.tasks.looking = true;
         let clients = self.clients.clone();
         let looked = cx.background_spawn(async move {
-            Cli::ALL.map(|cli| (cli, clients.look_for_task_cli(cli)))
+            (clis.into_iter())
+                .map(|cli| (cli, clients.look_for_task_cli(cli)))
+                .collect::<Vec<_>>()
         });
         cx.spawn(async move |agents, cx| {
             let found = looked.await;
@@ -1535,7 +1560,7 @@ impl Agents {
     }
 
     fn sorter(&self) -> Option<&Found> {
-        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+        if !self.threads() || self.tasks.default != Some(Cli::Claude) {
             return None;
         }
         let found = self.tasks.found.get(&Cli::Claude)?;
@@ -1647,7 +1672,7 @@ impl Agents {
             .filter_map(|url| added_address(url))
             .collect();
         let asked = asked.trim();
-        if asked.is_empty() || !self.tasks_on() {
+        if asked.is_empty() || !self.threads() {
             return None;
         }
         // A private window starts no task, whichever way it was asked: agents get no path into

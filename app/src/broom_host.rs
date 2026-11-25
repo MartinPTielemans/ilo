@@ -117,9 +117,16 @@ pub(crate) fn can_be(cx: &App) -> bool {
         && browser::agents::global(cx).is_some_and(|agents| agents.read(cx).sorts())
 }
 
-/// What the Agents know changed, such as Claude Code signing out or tasks turning off: the brooms
-/// follow, with no pass.
+/// What the Agents know changed, such as Claude Code signing out or the inside switch turning
+/// off: the brooms follow, with no pass, and a sort under way that can no longer run ends, its
+/// program's whole group with it, moving nothing.
 pub(crate) fn agents_changed(cx: &mut App) {
+    if !can_be(cx) {
+        let ending = RUNNING.with_borrow_mut(Option::take);
+        if let Some(sorting) = ending {
+            sorting.run.end();
+        }
+    }
     settle_all(cx);
 }
 

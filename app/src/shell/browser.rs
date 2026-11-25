@@ -1152,14 +1152,14 @@ pub trait Browser {
         None
     }
     fn set_crash_reports(&self, _on: bool, _cx: &mut App) {}
-    /// Whether agents may use the browser, as Settings' switch has it, or None in a build without
-    /// the agents' server.
-    fn agents(&self, _cx: &App) -> Option<bool> {
+    /// Whether the product's own threads run, the inside switch as Settings › Threads has it, or
+    /// None in a build without the agents' server.
+    fn threads(&self, _cx: &App) -> Option<bool> {
         None
     }
-    fn set_agents(&self, _on: bool, _cx: &mut App) {}
-    /// Whether other apps' agents may connect while agents are on, as Settings › Other apps'
-    /// switch has it, or None in a build without the agents' server.
+    fn set_threads(&self, _on: bool, _cx: &mut App) {}
+    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
+    /// it, whatever the inside one says, or None in a build without the agents' server.
     fn other_apps(&self, _cx: &App) -> Option<bool> {
         None
     }

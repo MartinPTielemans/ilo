@@ -44,9 +44,12 @@ fn server_waiting(token_wait: Duration) -> (Server, Tokens, UnboundedReceiver<Ev
     )
 }
 
-/// Other apps' agents on, as the user may have them.
-fn on() -> Others {
-    Arc::new(AtomicBool::new(true))
+/// Both switches on, the product's own threads and other apps' agents, as the user may have them.
+fn on() -> Switches {
+    Switches {
+        threads: Arc::new(AtomicBool::new(true)),
+        others: Arc::new(AtomicBool::new(true)),
+    }
 }
 
 /// How long a bounded client's read waits for the server.
@@ -663,11 +666,11 @@ fn with_other_apps_off_an_apps_agent_is_answered_as_with_agents_off() {
         ("terminal".into(), "ilo-command".into()),
         ("own".into(), "task-1".into()),
     ]);
-    let others = on();
+    let switches = on();
     let (events, mut handed) = futures::channel::mpsc::unbounded();
-    let server = Server::listen(&socket(), tokens, others.clone(), events, TOKEN_WAIT).unwrap();
+    let server = Server::listen(&socket(), tokens, switches.clone(), events, TOKEN_WAIT).unwrap();
     let mut open = Client::connect(&server);
-    others.store(false, Ordering::SeqCst);
+    switches.others.store(false, Ordering::SeqCst);
     open.send(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
     assert_eq!(open.read(), None, "an app's connection answered once off");
 
@@ -971,4 +974,100 @@ fn done_waits_for_the_calls_before_it() {
             "done didn't wait for {tool}"
         );
     }
+}
+
+/// A connection's kind is the agent id its token maps to, and nothing else: a task's id is inside,
+/// an app's is outside, and any other is neither, which no switch lets in.
+#[test]
+fn a_kind_is_the_agent_id_alone() {
+    assert_eq!(side("task-12"), Some(Side::Inside));
+    for neither in [
+        "task-", "task-1a", "xtask-1", "task--1", "", "Task-1", "ilo",
+    ] {
+        assert_eq!(side(neither), None, "{neither:?}");
+    }
+    for client in super::super::clients::Client::ALL {
+        assert_eq!(side(client.id()), Some(Side::Outside), "{}", client.id());
+    }
+}
+
+/// What a connection's first line says of itself besides its token changes nothing: an app's
+/// token naming a task is still an app's, and a task's naming an app still a task's.
+#[test]
+fn a_connections_kind_is_its_tokens_alone() {
+    let tokens: Tokens = Arc::default();
+    tokens.lock().unwrap().extend([
+        (TOKEN.to_string(), "claude-code".to_string()),
+        ("own".into(), "task-1".into()),
+    ]);
+    let switches = on();
+    switches.threads.store(false, Ordering::SeqCst);
+    let (events, _handed) = futures::channel::mpsc::unbounded();
+    let server = Server::listen(&socket(), tokens, switches.clone(), events, TOKEN_WAIT).unwrap();
+    let first = |token: &str, says: Value| {
+        let mut client = Client::open(&server);
+        let mut line = json!({ "token": token });
+        line.as_object_mut()
+            .unwrap()
+            .extend(says.as_object().unwrap().clone());
+        client.ask(line)
+    };
+    let as_task = json!({ "client": "task-1", "kind": "inside", "agent": "task-1" });
+    assert_eq!(first(TOKEN, as_task), json!({ "ok": true }), "inside off");
+    let as_app = json!({ "client": "claude-code", "kind": "outside", "agent": "claude-code" });
+    assert_ne!(
+        first("own", as_app.clone()),
+        json!({ "ok": true }),
+        "inside off"
+    );
+    switches.threads.store(true, Ordering::SeqCst);
+    switches.others.store(false, Ordering::SeqCst);
+    assert_eq!(first("own", as_app), json!({ "ok": true }), "outside off");
+    let as_task = json!({ "client": "task-1", "kind": "inside" });
+    assert_ne!(first(TOKEN, as_task), json!({ "ok": true }), "outside off");
+}
+
+/// Over both switches each way: a task's token is let in only with the inside switch on, an
+/// app's only with the outside one on, an id of neither kind and an unknown token never. A
+/// task's connection open as the inside switch goes off is answered no more.
+#[test]
+fn a_task_token_is_inside_only() {
+    let tokens: Tokens = Arc::default();
+    tokens.lock().unwrap().extend([
+        (TOKEN.to_string(), "claude-code".to_string()),
+        ("own".into(), "task-1".into()),
+        ("odd".into(), "task-x".into()),
+    ]);
+    let switches = on();
+    let (events, _handed) = futures::channel::mpsc::unbounded();
+    let server = Server::listen(&socket(), tokens, switches.clone(), events, TOKEN_WAIT).unwrap();
+    let ok = json!({ "ok": true });
+    for (threads, others) in [(true, true), (true, false), (false, true), (false, false)] {
+        switches.threads.store(threads, Ordering::SeqCst);
+        switches.others.store(others, Ordering::SeqCst);
+        let let_in = |token: &str| Client::with(&server, token).1 == ok;
+        let state = format!("threads {threads}, others {others}");
+        assert_eq!(let_in("own"), threads, "a task's token, {state}");
+        assert_eq!(let_in(TOKEN), others, "an app's token, {state}");
+        assert!(!let_in("odd"), "neither kind, {state}");
+        assert!(!let_in("unknown"), "an unknown token, {state}");
+    }
+    switches.threads.store(true, Ordering::SeqCst);
+    switches.others.store(true, Ordering::SeqCst);
+    let (mut own, answer) = Client::with(&server, "own");
+    assert_eq!(answer, ok);
+    let (mut app, answer) = Client::with(&server, TOKEN);
+    assert_eq!(answer, ok);
+    switches.threads.store(false, Ordering::SeqCst);
+    own.send(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
+    assert_eq!(
+        own.read(),
+        None,
+        "a task's connection answered with the inside switch off"
+    );
+    app.send(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }));
+    assert!(
+        app.read().is_some(),
+        "an app's connection ended with the inside switch"
+    );
 }

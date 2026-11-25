@@ -588,7 +588,7 @@ fn agents_running(
     // Other apps' agents on, as the agents of most tests are the user's connected apps: a new
     // profile's off is other_apps.rs's.
     agents.update(cx, |agents, _| {
-        (agents.others).store(true, std::sync::atomic::Ordering::SeqCst)
+        (agents.switches.others).store(true, std::sync::atomic::Ordering::SeqCst)
     });
     agents
 }
@@ -734,12 +734,13 @@ fn shown(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Option<Question> {
 fn agents_are_off_until_the_user_turns_them_on(cx: &mut TestAppContext) {
     let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
     let agents = agents(&browser, &configs, None, cx);
-    assert!(!agents.read_with(cx, |agents, _| agents.is_on()));
+    agents.update(cx, |agents, cx| agents.set_other_apps(false, cx));
+    assert!(!agents.read_with(cx, |agents, _| agents.listening()));
     assert!(agents.read_with(cx, |agents, _| agents.server.is_none()));
     let socket = agents.read_with(cx, |agents, _| agents.socket.clone());
     assert!(server::connect(&socket).is_err());
 
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -748,7 +749,7 @@ fn agents_are_off_until_the_user_turns_them_on(cx: &mut TestAppContext) {
     }
     assert!(server::connect(&socket).is_ok());
 
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(false, cx));
     assert!(agents.read_with(cx, |agents, _| agents.server.is_none()));
     #[cfg(unix)]
     assert!(!socket.exists());
@@ -829,7 +830,9 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
         };
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, found)];
         let agents = agents(&browser, &configs, None, cx);
+        // The assistants' look runs only with the inside switch on.
         agents.update(cx, |agents, cx| {
+            agents.set_threads(true, cx);
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
@@ -862,7 +865,7 @@ fn providers_found(
         agents.tasks.found.insert(Cli::Claude, found);
     });
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.tasks_on(), "the page is drawn with tasks off");
+        assert!(!agents.threads(), "the page is drawn with threads off");
         let listed = agents.providers().into_iter();
         listed
             .map(|(cli, row, model)| (cli, row.offer, model))
@@ -904,8 +907,9 @@ fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
     );
 }
 
-/// With agents never turned on, nothing looks for an assistant until Models opens: each row reads
-/// Checking… with nothing offered, and opening Models looks once and says what it found.
+/// With the inside switch off, nothing of an assistant's program runs at launch or as Models
+/// opens: each row reads Checking… with nothing offered, and a click on a row looks that one up
+/// alone. With the switch on, opening Models looks once for every one and says what it found.
 #[gpui::test]
 fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
     use crate::agents::ready::{Found, Ready};
@@ -923,17 +927,48 @@ fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(configs.looks.load(Ordering::SeqCst), 0, "nothing looked");
     let before = agents.read_with(cx, |agents, _| {
-        assert!(!agents.tasks_on());
+        assert!(!agents.threads());
         let listed = agents.providers().into_iter();
         listed.map(|(_, row, _)| row.offer).collect::<Vec<_>>()
     });
     assert_eq!(before, vec![Offer::Nothing; Cli::ALL.len()]);
-    agents.update(cx, |agents, cx| agents.models_shown(cx));
+    agents.update(cx, |agents, cx| {
+        agents.models_shown(cx);
+        agents.look_for_clients(cx);
+        agents.task_ask_shown(cx);
+    });
     cx.run_until_parked();
     assert_eq!(
         configs.looks.load(Ordering::SeqCst),
-        Cli::ALL.len(),
-        "one look"
+        0,
+        "Models, Other apps and the bar ran nothing with threads off"
+    );
+    agents.update(cx, |agents, cx| agents.look_up_assistant(Cli::Claude, cx));
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 1, "the row clicked");
+    let clicked = agents.read_with(cx, |agents, _| {
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, _)| (cli, row.offer))
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        clicked.contains(&(Cli::Claude, Offer::SignIn)),
+        "{clicked:?}"
+    );
+    assert!(
+        clicked.contains(&(Cli::Codex, Offer::Nothing)),
+        "{clicked:?}"
+    );
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.models_shown(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        1 + Cli::ALL.len(),
+        "one look for every one"
     );
     let after = agents.read_with(cx, |agents, _| {
         let listed = agents.providers().into_iter();
@@ -959,15 +994,19 @@ fn models_sign_in_with_agents_off_turns_nothing_on(cx: &mut TestAppContext) {
     assert_eq!(started, vec![Cli::Claude]);
     assert_eq!(configs.looks.load(Ordering::SeqCst), 0);
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+        assert!(!agents.threads(), "threads stay off");
     });
     let heard = configs.sign_ins.lock().unwrap()[0].1.clone();
     let done = crate::agents::sign_in::Heard::Ended(crate::agents::sign_in::Ended::Done);
     heard.unbounded_send(done).unwrap();
     cx.run_until_parked();
-    assert_eq!(configs.looks.load(Ordering::SeqCst), Cli::ALL.len());
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        1,
+        "the row signed in to, alone"
+    );
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+        assert!(!agents.threads(), "threads stay off");
     });
 }
 
@@ -1844,12 +1883,12 @@ fn disconnect_ends_the_agents_sessions_and_forgets_its_token(cx: &mut TestAppCon
     assert!(answer.error);
 }
 
-/// Turning agents off ends every live agent's sessions and answers the calls waiting, and keeps
-/// the agents connected for when it's on again.
+/// Turning other apps' agents off ends every live one's sessions and answers the calls waiting,
+/// and keeps the apps connected for when it's on again.
 #[gpui::test]
 fn turning_agents_off_ends_their_sessions(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     let waiting = call(
         &agents,
         "claude-code",
@@ -1857,14 +1896,14 @@ fn turning_agents_off_ends_their_sessions(cx: &mut TestAppContext) {
         json!({ "tab": 20 }),
         cx,
     );
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_other_apps(false, cx));
     assert!(waiting.recv().is_err());
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
     assert!(agents.read_with(cx, |agents, _| agents.is_connected(Client::ClaudeCode)));
 }
 
-/// What's saved: the switch and each agent's token, in a file only the user can read, which a
-/// later launch loads, starting the server if it was on.
+/// What's saved: the switches and each agent's token, in a file only the user can read, which a
+/// later launch loads, starting the server if either was on.
 #[gpui::test]
 fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
@@ -1874,7 +1913,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     let agents = agents(&browser, &configs, Some(path.clone()), cx);
     agents.update(cx, |agents, cx| agents.connect(Client::Codex, cx));
     cx.run_until_parked();
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     let saved = std::fs::read_to_string(&path).unwrap();
     #[cfg(unix)]
     {
@@ -1882,18 +1921,18 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(false, cx));
 
     let later = self::agents(&browser, &configs, None, cx);
     later.update(cx, |agents, cx| agents.load(&saved, cx));
-    assert!(later.read_with(cx, |agents, _| agents.is_on() && agents.server.is_some()));
+    assert!(later.read_with(cx, |agents, _| agents.threads() && agents.server.is_some()));
     assert!(later.read_with(cx, |agents, _| agents.is_connected(Client::Codex)));
     let token = configs.connected.lock().unwrap()[0].1.token.clone();
     let tokens = later.read_with(cx, |agents, _| agents.tokens.lock().unwrap().clone());
     assert_eq!(tokens.get(&token).map(String::as_str), Some("codex"));
     later.update(cx, |agents, cx| agents.load("", cx));
     assert!(
-        later.read_with(cx, |agents, _| !agents.is_on()),
+        later.read_with(cx, |agents, _| !agents.listening()),
         "a lost file left agents on"
     );
     std::fs::remove_dir_all(dir).ok();
@@ -6502,7 +6541,7 @@ mod tasks {
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             let found = Found {
                 ready: Ready::SignedIn,
                 program,
@@ -6537,7 +6576,7 @@ mod tasks {
         let saved = std::fs::read_to_string(path).unwrap_or_default();
         agents.update(cx, |agents, cx| {
             agents.load(&saved, cx);
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             for cli in Cli::ALL {
                 let found = Found {
                     ready: Ready::SignedIn,
@@ -6584,9 +6623,9 @@ mod tasks {
         assert!(sort(cx).is_none(), "signed out");
         assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
         set_found(&agents, Ready::SignedIn, cx);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
-        assert!(sort(cx).is_none(), "tasks off");
-        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(false, cx));
+        assert!(sort(cx).is_none(), "threads off");
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         agents.update(cx, |agents, cx| {
             let found = Found {
                 ready: Ready::SignedIn,
@@ -6688,9 +6727,9 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
-    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
-    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
-    /// apps that connect, and on again it's as it was.
+    /// The inside switch off: ⌘T's ask lists no agent, no thread starts, and one at its limit
+    /// offers no Retry and takes no reply or retry; other apps' agents work on, and on again a
+    /// thread starts.
     #[gpui::test]
     fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -6700,10 +6739,13 @@ mod tasks {
             task.state = State::Limit { resets: None };
         });
         assert!(card_of(&agents, cx).retry);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.update(cx, |agents, cx| {
+            agents.set_other_apps(true, cx);
+            agents.set_threads(false, cx);
+        });
         agents.read_with(cx, |agents, _| {
-            assert!(agents.is_on(), "tasks off turned agents off");
-            assert!(!agents.tasks_on());
+            assert!(agents.listening(), "threads off turned other apps off");
+            assert!(!agents.threads());
             assert!(
                 agents.ask_agents().is_empty(),
                 "⌘T's ask still lists agents"
@@ -6731,12 +6773,13 @@ mod tasks {
             agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
             State::Limit { .. }
         ));
-        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
         assert!(card_of(&agents, cx).retry);
     }
 
-    /// With tasks off, a reply to the agent's ask still answers it, so the task can finish.
+    /// The inside switch off ends a thread as Stop does: its ask under way has its answer, a
+    /// reply after reaches nothing, its token goes and its connection closes.
     #[gpui::test]
     fn with_tasks_off_a_reply_still_answers_the_ask(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -6746,11 +6789,30 @@ mod tasks {
         });
         let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
         let asked = call(&agents, &agent, "ask", ask, cx);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        let token = agents.read_with(cx, |agents, _| {
+            agents.task(&agent).unwrap().token().to_string()
+        });
+        agents.update(cx, |agents, cx| agents.set_threads(false, cx));
+        assert!(
+            asked.recv().map_or(true, |answer| answer.error),
+            "the ask went on"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert!(matches!(agents.task(&agent).unwrap().state, State::Stopped));
+            assert!(!agents.tokens.lock().unwrap().contains_key(&token));
+        });
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
         agents.update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
         });
-        assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached a thread with threads off"
+        );
     }
 
     #[gpui::test]
@@ -10044,7 +10106,7 @@ mod tasks {
         assert_eq!(listed, [Cli::Codex, Cli::Claude]);
         agents.update(cx, |agents, cx| {
             agents.tasks.found.get_mut(&Cli::Codex).unwrap().ready = Ready::SignedOut;
-            agents.set_on(false, cx);
+            agents.set_threads(false, cx);
         });
         assert!(
             agents
@@ -10081,7 +10143,7 @@ mod tasks {
         };
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "haiku", cx);
         });
         // Till Claude lists its own, ilo's names for them, its default naming none.
@@ -10140,7 +10202,7 @@ mod tasks {
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "sonnet", cx);
             for unlisted in ["Sonnet", "opus --verbose", "claude-sonnet", " sonnet"] {
                 agents.set_task_model(Cli::Claude, unlisted, cx);
@@ -10176,7 +10238,7 @@ mod tasks {
             ..Start::default()
         };
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "sonnet", cx);
         });
         let picked = agents.update(cx, |agents, cx| {
@@ -12321,7 +12383,7 @@ mod sessions {
     #[gpui::test]
     fn stop_closes_the_clients_connections_and_their_cards(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
-        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         let (socket, token) = agents.read_with(cx, |agents, _| {
             let tokens = agents.tokens.lock().unwrap();
             let token = tokens.iter().find(|(_, agent)| *agent == "claude-code");
@@ -13072,6 +13134,7 @@ mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
 mod sign_ins;
+mod switches;
 mod uploads;
 mod went_to;
 

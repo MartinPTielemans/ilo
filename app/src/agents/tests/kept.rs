@@ -88,7 +88,7 @@ impl Run {
         let saved = std::fs::read_to_string(&path).unwrap_or_default();
         agents.update(cx, |agents, cx| {
             agents.load(&saved, cx);
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             for cli in Cli::ALL {
                 let found = Found {
                     ready: Ready::SignedIn,

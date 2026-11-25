@@ -390,7 +390,7 @@ impl Shell {
         let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
         // Just the browser's sidebar is tabs only, with no thread at work or chip about one.
-        let scene = match step == Step::Assistant && self.browser.agents(cx) != Some(true) {
+        let scene = match step == Step::Assistant && self.browser.threads(cx) != Some(true) {
             true => picture::Scene::default(),
             false => picture::Scene::of(step),
         };
@@ -406,7 +406,7 @@ impl Shell {
 
     /// Whether ⌘T starts threads here: the agents' and their tasks' switches are on.
     fn threads_on(&self, cx: &gpui::App) -> bool {
-        crate::agents::global(cx).is_some_and(|agents| agents.read(cx).tasks_on())
+        crate::agents::global(cx).is_some_and(|agents| agents.read(cx).threads())
     }
 
     /// The keys step's rows, a key each with what it does, as the app's keys are now, and its

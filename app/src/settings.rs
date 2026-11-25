@@ -3843,10 +3843,11 @@ impl Settings {
     /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
-        let on = agents.read(cx).is_on();
+        let on = agents.read(cx).threads();
         let switch = {
             let agents = agents.clone();
-            let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_threads(on, cx));
             self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
         };
         let model = agents.read(cx);
@@ -3869,52 +3870,21 @@ impl Settings {
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Asking your own Claude from ⌘T and letting an app connect are two trust decisions, so
-        // tasks have their switch under agents', shown while agents are on.
-        let tasks_on = agents.read(cx).tasks_on();
-        let tasks = on.then(|| {
-            let switch = {
-                let agents = agents.clone();
-                let set = move |on, cx: &mut App| {
-                    agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
-                };
-                self.toggle(
-                    "agent tasks",
-                    "Tasks from the command bar",
-                    tasks_on,
-                    set,
-                    accent,
-                    cx,
-                )
-            };
-            let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
-            let bar = shell::keystroke_label("cmd-t");
-            let line = match tasks_on {
-                true => format!("{tab} in {bar} gives what you typed to Claude or Codex here."),
-                false => format!("Off: {tab} in {bar} makes no task. Apps that connect still can."),
-            };
-            nested(setting(
-                look,
-                "Tasks from the command bar",
-                Some(line.into()),
-                vec![switch],
-            ))
-        });
-        // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
-        let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
+        // Under the inside switch, while it's on: whether a finished one is kept (#4105).
+        let keeps = on.then(|| self.kept_tasks(agents, accent, cx));
         // And under that, each one kept, which is the list of what is.
-        let kept = match on && tasks_on {
+        let kept = match on {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
+        let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
         models.push(Block::Group(self.assistants(agents, cx)));
         models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-        if tasks_on {
+        if on {
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));

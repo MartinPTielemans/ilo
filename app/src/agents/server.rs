@@ -46,8 +46,38 @@ pub(super) const END: &str = r#"{"end":true}"#;
 /// connects and disconnects agents.
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
-/// Whether other apps' agents may connect, which the UI thread sets as the user does (#4260).
-pub type Others = Arc<AtomicBool>;
+/// The user's two switches, which the UI thread sets as the user does and the server's threads
+/// read (#4260): neither touches the other.
+#[derive(Clone, Default)]
+pub struct Switches {
+    /// The product's own threads, each connecting with its task's token.
+    pub threads: Arc<AtomicBool>,
+    /// Other apps' agents, each connecting with the token of an app the user connected.
+    pub others: Arc<AtomicBool>,
+}
+
+/// Which kind of agent a connection is, told by its token alone: by the agent id the app wrote
+/// beside the token it gave, never by anything the connecting side says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    /// One of the product's own threads.
+    Inside,
+    /// An app the user connected, driving the browser from outside.
+    Outside,
+}
+
+/// The kind `agent` is: a task's id is inside, an app's outside, and anything else neither, which
+/// is refused.
+pub fn side(agent: &str) -> Option<Side> {
+    match (
+        super::is_task_id(agent),
+        super::clients::Client::from_id(agent),
+    ) {
+        (true, _) => Some(Side::Inside),
+        (false, Some(_)) => Some(Side::Outside),
+        (false, None) => None,
+    }
+}
 
 /// The protocol versions the server speaks, newest first.
 pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -75,7 +105,7 @@ struct Shared {
     path: PathBuf,
     stopped: AtomicBool,
     tokens: Tokens,
-    others: Others,
+    switches: Switches,
     token_wait: Duration,
     /// The connections open, by a number of their own, from 1: the UI takes 0 for no connection's.
     connections: Mutex<HashMap<u64, Connection>>,
@@ -99,10 +129,10 @@ impl Server {
     pub fn start(
         path: &Path,
         tokens: Tokens,
-        others: Others,
+        switches: Switches,
         events: UnboundedSender<Event>,
     ) -> io::Result<Server> {
-        Server::listen(path, tokens, others, events, TOKEN_WAIT)
+        Server::listen(path, tokens, switches, events, TOKEN_WAIT)
     }
 
     /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
@@ -111,7 +141,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
-        others: Others,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -131,7 +161,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
-            others,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -149,7 +179,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
-        others: Others,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -158,7 +188,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
-            others,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -616,10 +646,16 @@ impl Shared {
         self.tokens.lock().unwrap().get(token).cloned()
     }
 
-    /// Whether `agent` is another app's while the user has other apps' agents off. Its token says
-    /// which: the user's connected apps have their app's id, a task's own start its task's.
+    /// Whether `agent` is refused: one of the product's own threads while the user has threads
+    /// off, an app's while they have other apps' agents off, whatever the other switch says, and
+    /// one of neither kind always. Its token says which: the apps the user connected have their
+    /// app's id, a thread's own start its task's.
     fn refused(&self, agent: &str) -> bool {
-        !self.others.load(Ordering::SeqCst) && super::clients::Client::from_id(agent).is_some()
+        match side(agent) {
+            Some(Side::Inside) => !self.switches.threads.load(Ordering::SeqCst),
+            Some(Side::Outside) => !self.switches.others.load(Ordering::SeqCst),
+            None => true,
+        }
     }
 
     /// Connection `number` began answering a message, or wrote its answer: a stopped one closes
