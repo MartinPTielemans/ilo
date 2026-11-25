@@ -517,6 +517,13 @@ impl Agents {
         self.return_tab(&agent, tab, By::User, cx)
     }
 
+    /// The user moves `tab` to a Space of theirs, on the product's own UI. One a thread holds of
+    /// theirs is returned first, as by Return to Your Tabs, so the move is of a tab of their own.
+    /// Whether it was one.
+    pub fn move_returns(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+        self.close_returns(tab, cx)
+    }
+
     /// `agent`'s close of `tab`, by close_tab or remove_tab. One it holds of the user's never
     /// closes while it's the thread's: the close gives it back, on the page it's at, and the
     /// thread hears what its close of a page of its own says. Whether it was one.
@@ -553,8 +560,9 @@ impl Agents {
     }
 
     /// A tab left `space`, which now has `tabs`. One a thread of that Space held of the user's and
-    /// that is still open went to a Space of the user's by their own move, which returns it as
-    /// Return to Your Tabs does: the core has taken it back already.
+    /// that is still open is the user's again: the core has taken it back already. Who moved it
+    /// isn't known here, so its entry names nobody. The user's own roads return it themselves
+    /// first, and say so (`close_returns`, `move_returns`).
     pub(in crate::agents) fn handed_left(
         &mut self,
         space: u64,
@@ -577,8 +585,7 @@ impl Agents {
             let site = site(&self.browser.tab(tab, cx).url);
             self.let_go(tab, held::Event::Returned, cx);
             self.forget_page(tab);
-            self.returned_by_user(&agent, tab);
-            self.note_page(&agent, (0, tab), TAKEN_BACK, &site, "");
+            self.note_page(&agent, (0, tab), GIVEN_BACK, &site, "");
             cx.notify();
         }
     }

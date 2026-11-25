@@ -82,7 +82,12 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_duplicate(tab) }
     }
 
-    fn move_to_space(&self, tab: u64, space: u64, _: &mut App) {
+    fn move_to_space(&self, tab: u64, space: u64, cx: &mut App) {
+        // A tab of the user's a thread holds is returned by their own move of it, which the
+        // activity log then says, and moves as any tab of theirs.
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.move_returns(tab, cx));
+        }
         unsafe { bc::bc_tab_move_to_space(tab, space) };
     }
 

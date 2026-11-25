@@ -435,8 +435,10 @@ fn a_tab_the_user_holds_goes_back_with_its_hold(cx: &mut TestAppContext) {
     assert_eq!(space_of(&run, SEATS.0), USERS);
 }
 
-/// A handed tab the user moved to a Space of theirs by another road is returned as by the press,
-/// with the core not asked again; one that closed is no longer the thread's, and has no return.
+/// A handed tab that left the thread's Space by a road nobody flagged, as the core's own or a
+/// deleted Space, is the user's again with the core not asked again, and its entry names nobody:
+/// only a road of the app's that knows the user did it says so. A call on it hears no word of
+/// the user either. One that closed is no longer the thread's, and has no return.
 #[gpui::test]
 fn a_handed_tab_that_left_by_another_road_is_the_users(cx: &mut TestAppContext) {
     let run = run("handed-left", cx);
@@ -450,11 +452,12 @@ fn a_handed_tab_that_left_by_another_road_is_the_users(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert!(!is_handed(&run, &agent, TRAINS.0, cx));
     assert!(run.browser.returned.borrow().is_empty());
+    assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
     assert_eq!(
-        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
         ["example.com"]
     );
-    assert_eq!(
+    assert_ne!(
         answered(&run, &agent, "read_page", TRAINS.0, cx).text,
         handed::RETURNED
     );
@@ -467,8 +470,35 @@ fn a_handed_tab_that_left_by_another_road_is_the_users(cx: &mut TestAppContext) 
     });
     cx.run_until_parked();
     assert!(!is_handed(&run, &agent, SEATS.0, cx));
-    assert_eq!(entries(&run, &agent, handed::TAKEN_BACK, cx).len(), 1);
+    assert_eq!(entries(&run, &agent, handed::GIVEN_BACK, cx).len(), 1);
     assert!(run.browser.returned.borrow().is_empty());
+}
+
+/// The user's own move of a handed tab, on the product's own UI, returns it first and says the
+/// user did: the move is then of a tab of theirs. A tab no thread holds moves as ever.
+#[gpui::test]
+fn the_users_move_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
+    let run = run("handed-user-move", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    let moves = |cx: &mut TestAppContext, tab: u64| {
+        (run.agents).update(cx, |agents, cx| agents.move_returns(tab, cx))
+    };
+    assert!(!moves(cx, SEATS.0) && !moves(cx, 10) && !moves(cx, 99));
+    assert!(moves(cx, TRAINS.0));
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com"]
+    );
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+    assert_eq!(
+        answered(&run, &agent, "read_page", TRAINS.0, cx).text,
+        handed::RETURNED
+    );
+    // The core's report of the move that follows finds nothing of the thread's to say.
+    (run.agents).update(cx, |agents, cx| agents.space_changed(THREADS, cx));
+    assert_eq!(entries(&run, &agent, handed::TAKEN_BACK, cx).len(), 1);
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
 }
 
 /// Where the core can't put a tab back, as when the Space it left is gone, the return still takes
