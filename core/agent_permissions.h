@@ -88,6 +88,11 @@ bool TakesDownloadQuestion(download::DownloadItem* download,
 // Space the user doesn't hold, whoever asked, the page or a command. Notes the refusal.
 bool NoCast(content::WebContents* contents);
 
+// Whether the page in |contents| is refused the question whether to add an extension, asked
+// before the question is put on a window: a page in an agent's Space the user doesn't hold, so
+// that no agent's click puts one on the user's window. Notes the refusal.
+bool NoExtensionInstall(content::WebContents* contents);
+
 // Closes what Chrome drew over the page in |contents| as a tab's dialog, a certificate chooser
 // among them, and the list of devices to cast it to, if the page is in an agent's Space the user
 // doesn't hold, as Chrome closes them when a page is left: where the user's hold of a tab ends and

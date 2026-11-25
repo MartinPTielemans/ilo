@@ -306,6 +306,14 @@ bool NoCast(content::WebContents* contents) {
   return true;
 }
 
+bool NoExtensionInstall(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kExtensionInstall, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kExtensionInstall, contents->GetOutermostWebContents());
+  return true;
+}
+
 void CloseTabDialogs(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kClientCertificate, RuleTabOf(contents))) {
     return;

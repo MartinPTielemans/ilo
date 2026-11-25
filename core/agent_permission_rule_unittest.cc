@@ -31,12 +31,13 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
 }
 
 // The user holding the tab changes these answers: their own copy writes the clipboard, and a
-// print, the choice of a certificate and of a device to cast to are theirs to make.
+// print, the choice of a certificate and of a device to cast to and the answer to an extension's
+// install are theirs to make.
 TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
     if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
-        kind == Kind::kCast) {
+        kind == Kind::kCast || kind == Kind::kExtensionInstall) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -150,6 +151,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoDevicesToCastTo) {
 // While the user holds the tab its page casts as one of theirs, by their command or its own ask.
 TEST(AgentPermissionRule, AHeldTabIsShownTheDevicesToCastTo) {
   EXPECT_FALSE(Refuses(Kind::kCast, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabAsksWhetherToAddAnExtension) {
+  EXPECT_FALSE(Refuses(Kind::kExtensionInstall, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceAsksNothingOfAnExtensionsInstall) {
+  EXPECT_TRUE(Refuses(Kind::kExtensionInstall, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kExtensionInstall), "extension_install");
+}
+
+// While the user holds the tab the question is theirs, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabAsksWhetherToAddAnExtension) {
+  EXPECT_FALSE(Refuses(Kind::kExtensionInstall, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {

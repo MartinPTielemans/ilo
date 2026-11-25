@@ -13,6 +13,7 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
     case Kind::kPrint:
     case Kind::kClientCertificate:
     case Kind::kCast:
+    case Kind::kExtensionInstall:
       return tab.agents && !tab.held;
     default:
       return tab.agents;
@@ -85,6 +86,8 @@ const char* CodeWord(Kind kind) {
       return "client_certificate";
     case Kind::kCast:
       return "cast";
+    case Kind::kExtensionInstall:
+      return "extension_install";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";

@@ -56,6 +56,8 @@ enum class Kind {
   kClientCertificate,
   // The list of the user's devices to cast to, which a page asks for as much as the user does.
   kCast,
+  // The question whether to add an extension, which is put on the user's window.
+  kExtensionInstall,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
