@@ -745,9 +745,16 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .saved_login = browser_core::SavedLoginFits(contents),
           .device_or_location = UsesDeviceOrLocation(contents),
           .files = contents && contents->HasFileSystemAccessHandles(),
+          // Chrome says a video is in Picture in Picture at a media card too, which is no window.
+          .picture_in_picture = contents && (contents->HasPictureInPictureDocument() ||
+                                             (contents->HasPictureInPictureVideo() &&
+                                              !browser_core::CardShowsVideo(contents))),
       })) {
     return false;
   }
+  // A card's video ends with the give, before the tab is an agent's: a page in an agent's Space
+  // has no Picture in Picture, at a card either (agent_space_rule.h).
+  browser_core::EndCardVideo(tab);
   const bool moved = browser_core::arrange_rule::GiveToAgent(
       [&] {
         if (browser_core::Arrange* arrange =
