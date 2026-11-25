@@ -16,12 +16,6 @@ pub const MARK: &str = PRODUCT;
 pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
 
-/// The live line while no step is under way: between steps, and after Hand Back or a change of
-/// access, until the next step starts.
-pub fn working(agent: &str) -> String {
-    format!("{agent} is working")
-}
-
 /// The assistant's own words as a screen reader is told them, the first line of its answer: the
 /// mark before them is the app's, and spoken only, so nothing an assistant writes is heard as a
 /// line of the product's.

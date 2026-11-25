@@ -49,12 +49,11 @@ use crate::tokens::command_bar::CHOICES_MENU_DROP;
 use crate::tokens::mark::INK as MARK_INK;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
-    ARM, BELOW as ILO_BELOW, COMPOSER_TOP, GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL,
-    HELD_BUTTON_HOVER, HELD_BUTTON_RADIUS, HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X,
-    HELD_BUTTONS_GAP, HELD_GAP, HELD_NOTE, HELD_NOTE_LINE, HELD_ON_PRIMARY, HELD_PRIMARY,
-    HELD_REASON, HELD_REASON_LINE, HELD_TOP, INK as ILO_INK, LIGHT_HELD_BUTTON_FILL,
-    LIGHT_HELD_ON_PRIMARY, LIGHT_HELD_PRIMARY, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
-    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+    ARM, BELOW as ILO_BELOW, GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL, HELD_BUTTON_HOVER,
+    HELD_BUTTON_RADIUS, HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X, HELD_BUTTONS_GAP,
+    HELD_GAP, HELD_NOTE, HELD_NOTE_LINE, HELD_ON_PRIMARY, HELD_PRIMARY, HELD_REASON,
+    HELD_REASON_LINE, HELD_TOP, INK as ILO_INK, LIGHT_HELD_BUTTON_FILL, LIGHT_HELD_ON_PRIMARY,
+    LIGHT_HELD_PRIMARY, NOTE_INK, NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::panel;
@@ -2779,94 +2778,6 @@ impl TalkView {
             .child(self.choices(&form, look, cx))
     }
 
-    /// The live line over the reply field while the task works: the step under way, else
-    /// `{assistant} is working`, never a finished or refused step, with Take Over at its end
-    /// while the agent is on a page. Beside the page, the trace's own step line is it, and on the
-    /// page the strip has Take Over. While the task waits on the user or the user has its page,
-    /// it says what `words::live` gives for that, never working: on a page the user took over,
-    /// with Hand Back, which goes as the ilo line's Hand Back does.
-    fn live(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
-        let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
-        if look.beside || look.standing {
-            return None;
-        }
-        let palette = look.palette;
-        let working = shown.live == Live::Working;
-        let step = under_way(&shown.lines).filter(|_| working);
-        let words: SharedString = match step {
-            Some(step) => step.title.clone(),
-            None if working => words::working(&shown.name).into(),
-            None => words::live(&shown.live)?.into(),
-        };
-        let hand_back = match shown.live {
-            Live::Yours { tab, .. } => {
-                let drawn = self.hand_back_drawn.clone();
-                let chip = page_chip(palette, "conversation-hand-back", words::HAND_BACK, None)
-                    .relative()
-                    .child(
-                        canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full(),
-                    )
-                    .on_click(
-                        cx.listener(move |view, _, _, cx| view.act(TaskAction::HandBack(tab), cx)),
-                    );
-                Some(chip)
-            }
-            _ => None,
-        };
-        // Read by whoever walks there, and never told as it changes (#4244).
-        let read = look.a11y.then(|| words.clone());
-        let text = match (step.is_some(), look.shimmer(self.made)) {
-            (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
-            _ => div()
-                .text_color(palette.text(TRACE_TITLE))
-                .child(words)
-                .into_any_element(),
-        };
-        let drawn = self.take_over_drawn.clone();
-        let take_over = shown.on.filter(|_| working).map(|tab| {
-            page_chip(palette, "conversation-take-over", words::TAKE_OVER, None)
-                .relative()
-                .child(
-                    canvas(
-                        move |bounds, _, _| drawn.borrow_mut().push(bounds),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-                )
-                .on_click(
-                    cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
-                )
-        });
-        Some(
-            div()
-                .id("conversation-live")
-                .flex_none()
-                .mb(px(COMPOSER_TOP))
-                .flex()
-                .items_center()
-                .gap(px(BUBBLE_X))
-                .child(
-                    div()
-                        .id("conversation-live-words")
-                        .when_some(read, |live, read| live.role(Role::Label).aria_label(read))
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(text),
-                )
-                .children(take_over)
-                .children(hand_back),
-        )
-    }
-
     /// The composer's row under its field, the bar's own (choices.rs): the thread's level, which
     /// opens its menu (#4094), the folder it holds (#4101), its model, which opens its assistant's
     /// models where its program takes another for the next message and is plain words elsewhere,
@@ -4486,12 +4397,6 @@ impl Render for TalkView {
                     .child(self.rail(true, &look, cx))
             }))
             .child(middle)
-            .children(
-                (self.replies && self.in_field().is_none())
-                    .then(|| self.live(&look, cx))
-                    .flatten()
-                    .map(|live| shut(foot(on_column(live.into_any_element())))),
-            )
             .children(
                 (standing && self.replies && self.in_field().is_none())
                     .then(|| self.page_row(&look, cx))

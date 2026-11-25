@@ -3140,38 +3140,49 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     assert_eq!(listed(cx), None, "folded, it still listed them");
 }
 
-/// In the one view the live line stands over the reply field with Take Over at its end, and
-/// names the step under way only: once that step has ended, as at Hand Back, or was refused, it
-/// says the assistant is working, until the next step starts (c, h).
+/// The stage shows no page, so no page's row stands over its composer: the step under way is the
+/// log's last line, and a tile is the way to a page and its Take Over. Whether the thread works on
+/// a page or the user took it over, the stage draws neither Take Over nor Hand Back there.
 #[gpui::test]
-fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppContext) {
-    let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(3)), cx)
-    });
+fn the_stage_has_no_page_row_over_its_composer(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    let draw = |cx: &mut VisualTestContext| {
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| view.take_over_drawn.borrow().clone())
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
     };
-    let chips = draw(cx);
-    assert_eq!(
-        chips.len(),
-        1,
-        "Take Over stands once, on the live line: {chips:?}"
-    );
-    let reply = view
-        .read_with(cx, |view, _| view.reply_drawn.get())
-        .expect("the reply field");
-    assert!(
-        chips[0].bottom() <= reply.top(),
-        "the live line isn't over the reply field: {chips:?} {reply:?}"
-    );
-    host.take();
-    cx.simulate_click(chips[0].center(), Modifiers::none());
-    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+    for live in [Live::Working, yours] {
+        let talk = Conversation {
+            live: live.clone(),
+            ..conversation(3)
+        };
+        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
+        assert_eq!(talk.on, Some(30), "the thread isn't on a page");
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |view, cx| {
+            view.take_over_drawn.borrow_mut().clear();
+            view.hand_back_drawn.set(None);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+        assert_eq!(
+            chips, 0,
+            "Take Over stood over the stage's composer at {live:?}"
+        );
+        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
+        assert_eq!(
+            hand_back, None,
+            "Hand Back stood over the stage's composer at {live:?}"
+        );
+    }
+}
 
+/// The panel's page row names the step under way only: once that step has ended, as at Hand
+/// Back, or was refused, none is; while the task waits on the user it says nothing, and on a page
+/// the user took over that they're driving.
+#[test]
+fn the_page_row_names_only_the_step_under_way() {
     let said = |talk: &Conversation| super::under_way(&talk.lines).map(|step| step.title.clone());
     assert_eq!(
         said(&conversation(3)).as_deref(),
@@ -3187,48 +3198,10 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
     row.failed = true;
     its_trace(&mut refused).items[2] = TraceItem::Step(row);
     assert_eq!(said(&refused), None);
-    assert_eq!(super::words::working("Claude"), "Claude is working");
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(refused), cx));
-    assert_eq!(
-        draw(cx).len(),
-        1,
-        "Take Over left the live line between steps"
-    );
-}
-
-/// While the task waits at a refused or a handed step, or on its own question, no live line
-/// stands, as ilo's line with its own buttons is the last over the field; on a page the user took
-/// over it says they're driving, with Hand Back, which goes as the ilo line's does. Never Take
-/// Over or working then, whatever step its trace has under way.
-#[gpui::test]
-fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
-    let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(3)), cx)
-    });
-    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let yours = |site: Option<&str>| Live::Yours {
         tab: 30,
         site: site.map(Into::into),
     };
-    for live in [Live::Refused, Live::Handed, Live::Asked, yours(None)] {
-        let talk = Conversation {
-            live: live.clone(),
-            ..conversation(3)
-        };
-        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
-        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
-        assert_eq!(chips, 0, "Take Over stood on the live line at {live:?}");
-        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
-        assert_eq!(
-            hand_back.is_some(),
-            matches!(live, Live::Yours { .. }),
-            "{live:?}"
-        );
-    }
     assert_eq!(super::words::live(&Live::Refused), None);
     assert_eq!(super::words::live(&Live::Handed), None);
     assert_eq!(
@@ -3239,10 +3212,6 @@ fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestA
         super::words::live(&yours(Some("maat.pt"))).as_deref(),
         Some("You're driving maat.pt")
     );
-    let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get().unwrap());
-    host.take();
-    cx.simulate_click(hand_back.center(), Modifiers::none());
-    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which

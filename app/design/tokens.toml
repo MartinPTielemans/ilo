@@ -3460,10 +3460,6 @@ held-note-line = 16.0
 # line comes or moves under the pointer, as Chromium's permission prompts do: an agent decides when
 # such a line comes, and the user's press may have been meant for what was there before.
 arm = 0.5
-# The live line is the trace's step under way, on the page the task stands on, with Take over at
-# the column's end.
-# It stands `composer-top` over the composer.
-composer-top = 6.0
 
 [shell.conversation.panel]
 # The panel beside a page (spec-thread-stage.md, screens 5 and 6), standing in the stage's header
