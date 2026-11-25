@@ -5,8 +5,8 @@
 use super::kept::Run;
 use super::*;
 use crate::agents::runner::Cli;
-use crate::agents::task::Start;
 use crate::agents::task::handed::{self, Picked};
+use crate::agents::task::{Start, TaskAction};
 
 /// The user's Space, and a thread's, the first the browser makes.
 const USERS: u64 = 1;
@@ -74,6 +74,35 @@ fn entries(run: &Run, agent: &str, action: &str, cx: &mut TestAppContext) -> Vec
 fn listed(run: &Run, agent: &str, cx: &mut TestAppContext) -> String {
     let answer = call(&run.agents, agent, "list_tabs", json!({}), cx);
     answer.try_recv().expect("list_tabs answers at once").text
+}
+
+/// The tabs of `space`, in their order.
+fn tabs_of(run: &Run, space: u64) -> Vec<u64> {
+    let tabs = run.browser.tabs.borrow();
+    (tabs.iter().filter(|each| each.1 == space))
+        .map(|each| each.0)
+        .collect()
+}
+
+fn is_handed(run: &Run, agent: &str, tab: u64, cx: &mut TestAppContext) -> bool {
+    run.agents
+        .read_with(cx, |agents, _| agents.is_handed(agent, tab))
+}
+
+/// The user's press of Return to Your Tabs on `tab` in `agent`'s thread.
+fn press_return(run: &Run, agent: &str, tab: u64, cx: &mut TestAppContext) {
+    run.agents.update(cx, |agents, cx| {
+        agents.task_action(agent, TaskAction::ReturnTab(tab), cx);
+    });
+    cx.run_until_parked();
+}
+
+/// What `tool` on `tab` is answered at once.
+fn answered(run: &Run, agent: &str, tool: &str, tab: u64, cx: &mut TestAppContext) -> ToolResult {
+    let arguments = json!({ "tab": tab, "ref": "e1", "reason": "To carry on." });
+    let answer = call(&run.agents, agent, tool, arguments, cx);
+    cx.run_until_parked();
+    answer.try_recv().expect("answered at once")
 }
 
 /// The tabs the user picked are the thread's pages from the send: given by the core in the chips'
@@ -235,5 +264,212 @@ fn a_handed_tabs_entry_is_its_whole_sentence() {
             "You moved www.example.com to the thread"
         );
     }
+    let did = tools::Did {
+        tool: handed::TAKEN_BACK.into(),
+        site: "example.com".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        tools::step_title(&did, tools::Tense::Done),
+        "You returned example.com to your tabs"
+    );
     assert_eq!(handed::entry("open_tab", "www.example.com"), None);
+}
+
+/// Return to Your Tabs takes a handed tab back at once, mid-step: the call under way on it hears
+/// the tab is the user's again, the core puts it back where it left, its entry says the user did
+/// it, and from then every call that names it, an ask for it too, hears the same and reaches no
+/// page. The thread's other tabs stay its own.
+#[gpui::test]
+fn return_to_your_tabs_takes_the_tab_back_mid_step(cx: &mut TestAppContext) {
+    let run = run("handed-return", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let reading = call(
+        &run.agents,
+        &agent,
+        "read_page",
+        json!({ "tab": TRAINS.0 }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(reading.try_recv().is_err(), "the read is under way");
+    let reads = run.browser.reads.borrow().len();
+
+    press_return(&run, &agent, TRAINS.0, cx);
+    let answer = reading.try_recv().expect("the read under way is answered");
+    assert!(answer.error);
+    assert_eq!(answer.text, handed::RETURNED);
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0]);
+    assert_eq!(tabs_of(&run, USERS), [10, TRAINS.0]);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com"]
+    );
+    for tool in ["read_page", "click", "snapshot", "ask_for_tab", "close_tab"] {
+        let answer = answered(&run, &agent, tool, TRAINS.0, cx);
+        assert!(answer.error, "{tool}: {answer:?}");
+        assert_eq!(answer.text, handed::RETURNED, "{tool}");
+    }
+    assert_eq!(run.browser.reads.borrow().len(), reads);
+    assert!(run.browser.pages.borrow().is_empty(), "the core acted");
+    assert_eq!(tabs_of(&run, USERS), [10, TRAINS.0]);
+    assert!(!listed(&run, &agent, cx).contains(TRAINS.2));
+    // The other is the thread's still, and comes back to its own place when its turn comes.
+    assert!(is_handed(&run, &agent, SEATS.0, cx));
+    assert_eq!(space_of(&run, SEATS.0), THREADS);
+    // A second press on a tab that's the user's does nothing.
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0]);
+    assert_eq!(entries(&run, &agent, handed::TAKEN_BACK, cx).len(), 1);
+    press_return(&run, &agent, SEATS.0, cx);
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert!(tabs_of(&run, THREADS).is_empty());
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com", "tickets.example"]
+    );
+}
+
+/// Only a tab the thread holds of the user's is returned: a page it opened itself, a tab of the
+/// user's it never had and a tab handed to another thread are left as they are, with no entry.
+#[gpui::test]
+fn only_a_handed_tab_is_returned(cx: &mut TestAppContext) {
+    let run = run("handed-return-own", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    let other = send(&run, ASKED, USERS, &[SEATS.0], cx).expect("started");
+    let opened = call(
+        &run.agents,
+        &agent,
+        "open_tab",
+        json!({ "url": "https://shop.example/" }),
+        cx,
+    );
+    cx.run_until_parked();
+    drop(opened);
+    let own = *(tabs_of(&run, THREADS).iter())
+        .find(|tab| **tab != TRAINS.0)
+        .expect("the page it opened");
+    for tab in [own, 10, SEATS.0, 99] {
+        let before = space_of(&run, tab);
+        press_return(&run, &agent, tab, cx);
+        assert_eq!(space_of(&run, tab), before, "tab {tab}");
+    }
+    assert!(run.browser.returned.borrow().is_empty());
+    assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
+    assert!(entries(&run, &other, handed::TAKEN_BACK, cx).is_empty());
+    assert!(is_handed(&run, &other, SEATS.0, cx));
+}
+
+/// A handed tab the user took over and handed back is the thread's still. Returned while they
+/// hold it, the hold ends with it: the call that waited on it hears the tab is the user's, the
+/// return's entry is the one entry, and nothing is handed back to the thread.
+#[gpui::test]
+fn a_tab_the_user_holds_goes_back_with_its_hold(cx: &mut TestAppContext) {
+    let run = run("handed-return-held", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let held = |cx: &mut TestAppContext, tab: u64| {
+        run.agents
+            .read_with(cx, |agents, _| agents.held.contains_key(&tab))
+    };
+    (run.agents).update(cx, |agents, cx| agents.take_over(&agent, TRAINS.0, cx));
+    assert!(held(cx, TRAINS.0));
+    run.agents
+        .update(cx, |agents, cx| agents.hand_back(TRAINS.0, cx));
+    cx.run_until_parked();
+    assert!(!held(cx, TRAINS.0) && is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(space_of(&run, TRAINS.0), THREADS);
+    assert!(run.browser.returned.borrow().is_empty());
+
+    (run.agents).update(cx, |agents, cx| agents.take_over(&agent, TRAINS.0, cx));
+    let asked = call(
+        &run.agents,
+        &agent,
+        "ask_for_tab",
+        json!({ "tab": TRAINS.0, "reason": "To book it." }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(asked.try_recv().is_err(), "the ask waits on the user");
+    let before = run
+        .agents
+        .read_with(cx, |agents, _| agents.activity(&agent).count());
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert!(!held(cx, TRAINS.0));
+    assert_eq!(asked.try_recv().expect("answered").text, handed::RETURNED);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    let after = run
+        .agents
+        .read_with(cx, |agents, _| agents.activity(&agent).count());
+    assert_eq!(after, before + 1, "the return's entry and no other");
+
+    // A step the thread handed to the user, on its other tab.
+    let handed_off = call(
+        &run.agents,
+        &agent,
+        "hand_off",
+        json!({ "tab": SEATS.0, "reason": "Sign in." }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+    press_return(&run, &agent, SEATS.0, cx);
+    assert_eq!(
+        handed_off.try_recv().expect("answered").text,
+        handed::RETURNED
+    );
+    assert!(!held(cx, SEATS.0));
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+}
+
+/// A handed tab the user moved to a Space of theirs by another road is returned as by the press,
+/// with the core not asked again; one that closed is no longer the thread's, and has no return.
+#[gpui::test]
+fn a_handed_tab_that_left_by_another_road_is_the_users(cx: &mut TestAppContext) {
+    let run = run("handed-left", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    for each in run.browser.tabs.borrow_mut().iter_mut() {
+        if each.0 == TRAINS.0 {
+            each.1 = USERS;
+        }
+    }
+    (run.agents).update(cx, |agents, cx| agents.space_changed(THREADS, cx));
+    cx.run_until_parked();
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert!(run.browser.returned.borrow().is_empty());
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com"]
+    );
+    assert_eq!(
+        answered(&run, &agent, "read_page", TRAINS.0, cx).text,
+        handed::RETURNED
+    );
+    assert!(is_handed(&run, &agent, SEATS.0, cx));
+
+    (run.browser.tabs.borrow_mut()).retain(|each| each.0 != SEATS.0);
+    run.agents.update(cx, |agents, cx| {
+        agents.space_changed(THREADS, cx);
+        agents.tab_closed(SEATS.0, cx);
+    });
+    cx.run_until_parked();
+    assert!(!is_handed(&run, &agent, SEATS.0, cx));
+    assert_eq!(entries(&run, &agent, handed::TAKEN_BACK, cx).len(), 1);
+    assert!(run.browser.returned.borrow().is_empty());
+}
+
+/// Where the core can't put a tab back, as when the Space it left is gone, the return still takes
+/// it from the thread: it's a tab of a Space of the user's.
+#[gpui::test]
+fn a_tab_the_core_cant_put_back_is_still_the_users(cx: &mut TestAppContext) {
+    let run = run("handed-return-nowhere", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    run.browser.not_returned.borrow_mut().insert(TRAINS.0);
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com"]
+    );
 }

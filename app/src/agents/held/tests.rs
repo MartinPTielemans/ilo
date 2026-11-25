@@ -81,8 +81,12 @@ impl World {
         }
         let left =
             before != Life::Free && (life == Life::Free || (before.waits() && !life.waits()));
-        let noted_per_agent = matches!(event, Event::Stop { .. } | Event::Gone { .. });
-        if left && !noted_per_agent {
+        // The agent's own entry says a stop or a going, and a return's says the return.
+        let noted_elsewhere = matches!(
+            event,
+            Event::Stop { .. } | Event::Gone { .. } | Event::Returned
+        );
+        if left && !noted_elsewhere {
             assert!(
                 actions.has(Actions::NOTE) && !event.way().is_empty(),
                 "{event:?} let the tab go from {before:?} without a log entry saying how"
@@ -215,6 +219,15 @@ impl World {
                 if CORE_LETS_GO {
                     w.acting = false;
                 }
+            });
+        }
+        if self.tab == Place::Agents && !self.unheard {
+            // A tab of theirs they had handed to A: the app ends the hold as it asks the core for
+            // the return, and hears of the move after.
+            go("the user returns it to their tabs", &|w| {
+                w.app(Event::Returned);
+                assert_eq!(w.waiting, None, "a return left a call waiting");
+                (w.tab, w.unheard, w.acting) = (Place::Users, true, false);
             });
         }
         if self.tab != Place::Agents {

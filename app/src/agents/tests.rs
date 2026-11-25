@@ -79,6 +79,10 @@ struct Made {
     /// order given; and those the core refuses to give, as a test says.
     given: RefCell<Vec<(u64, u64, usize)>>,
     not_given: RefCell<HashSet<u64>>,
+    /// The tabs the core returned to the place they left, in order; and those it can't return,
+    /// as one whose Space is gone, as a test says.
+    returned: RefCell<Vec<u64>>,
+    not_returned: RefCell<HashSet<u64>>,
 }
 
 impl Made {
@@ -415,6 +419,38 @@ impl Browser for Made {
         let place = tabs[..at].iter().filter(|each| each.1 == from).count();
         self.given.borrow_mut().push((tab, from, place));
         tabs[at].1 = space;
+        true
+    }
+
+    /// As the core's: a tab given, in an agent's Space still, goes back to its place in the
+    /// Space it left.
+    fn return_tab(&self, tab: u64, _: &mut App) -> bool {
+        let agents = self.agent_spaces.borrow();
+        let mut tabs = self.tabs.borrow_mut();
+        let given = self.given.borrow();
+        let Some(&(_, from, place)) = given.iter().rev().find(|each| each.0 == tab) else {
+            return false;
+        };
+        let held = |each: &(u64, u64, &str, &str)| {
+            each.0 == tab && agents.values().any(|own| *own == each.1)
+        };
+        let Some(at) = tabs.iter().position(held) else {
+            return false;
+        };
+        if self.not_returned.borrow().contains(&tab) {
+            return false;
+        }
+        let mut back = tabs.remove(at);
+        back.1 = from;
+        // Before the tab of that Space that is at its place now, or after its last.
+        let after = (tabs.iter().enumerate())
+            .filter(|(_, each)| each.1 == from)
+            .map(|(index, _)| index)
+            .nth(place);
+        let last = tabs.iter().rposition(|each| each.1 == from);
+        let to = after.or(last.map(|last| last + 1)).unwrap_or(tabs.len());
+        tabs.insert(to, back);
+        self.returned.borrow_mut().push(tab);
         true
     }
 

@@ -12,6 +12,20 @@ use crate::agents::{Agents, TabInfo, site, tools};
 /// The activity log's entry of a tab the user handed to a thread, as the log file names it. The
 /// app's own give alone makes one, so the entry says who did it.
 pub const HANDED: &str = "tab_handed";
+/// The entry of a handed tab the user returned to their own tabs.
+pub const TAKEN_BACK: &str = "tab_taken_back";
+
+/// What a call on a tab the user returned to their own tabs is answered, and all its assistant
+/// hears of the return.
+pub const RETURNED: &str =
+    "The user returned this tab to their own tabs. You can no longer access it.";
+
+/// Who returns a handed tab to the user's tabs, which its entry says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum By {
+    /// The user, by Return to Your Tabs.
+    User,
+}
 
 /// The user's tabs picked for a message: the tabs of the composer's chips at the user's send, and
 /// the Space the window showed then. It rides the message it was picked for and nothing else.
@@ -67,6 +81,7 @@ pub fn entry(action: &str, site: &str) -> Option<String> {
     let site = tools::stopped_site(site);
     match action {
         HANDED => Some(format!("You moved {site} to the thread")),
+        TAKEN_BACK => Some(format!("You returned {site} to your tabs")),
         _ => None,
     }
 }
@@ -187,6 +202,119 @@ impl Agents {
             ordered.extend(tabs.iter().filter(|each| each.id == *tab).cloned());
         }
         told(&ordered)
+    }
+
+    /// Returns `tab`, which `agent`'s thread holds of the user's, to the user's tabs, at the place
+    /// it left and on the page it's at now, at once: a hold the user has on it ends, a call under
+    /// way on it is answered that the tab is gone, and the activity log says who returned it.
+    /// Whether it was the thread's to return.
+    pub(in crate::agents) fn return_tab(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        by: By,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // No longer the thread's from here, whatever the core's report of the move then asks.
+        if !self.forget_handed_of(agent, tab) {
+            return false;
+        }
+        let site = site(&self.browser.tab(tab, cx).url);
+        let space = self.browser.space_of(tab, cx);
+        // The user's own hold on it ends with it: the tab is theirs, with nothing to hand back.
+        self.let_go(tab, crate::agents::held::Event::Returned, cx);
+        self.forget_page(tab);
+        match by {
+            By::User => self.returned_by_user(agent, tab),
+        }
+        // Where the core can't put it back, as when the Space it left is gone, it's a tab of
+        // today in a Space of the user's.
+        if !self.browser.return_tab(tab, cx) && space != 0 {
+            let users = self.browser.user_space(space);
+            self.browser.move_tab(tab, users, cx);
+        }
+        let entry = match by {
+            By::User => TAKEN_BACK,
+        };
+        self.note_page(agent, (0, tab), entry, &site, "");
+        cx.notify();
+        true
+    }
+
+    /// The user returned `tab` from `agent`'s thread: every call on it from here is answered so,
+    /// those under way too, which are dropped.
+    fn returned_by_user(&mut self, agent: &str, tab: u64) {
+        self.went(tab, agent, crate::agents::Gone::Returned);
+        let gone = || crate::agents::ToolResult::error(RETURNED);
+        for (_, reading) in self.reading.extract_if(|_, reading| reading.tab == tab) {
+            _ = reading.reply.send(gone());
+        }
+        for (_, acting) in self.acting.extract_if(|_, acting| acting.tab == tab) {
+            _ = acting.reply.send(gone());
+        }
+        for (_, act) in self.describing.extract_if(|_, act| act.tab == tab) {
+            _ = act.reply.send(gone());
+        }
+    }
+
+    /// A tab left `space`, which now has `tabs`. One a thread of that Space held of the user's and
+    /// that is still open went to a Space of the user's by their own move, which returns it as
+    /// Return to Your Tabs does: the core has taken it back already.
+    pub(in crate::agents) fn handed_left(
+        &mut self,
+        space: u64,
+        tabs: &[u64],
+        cx: &mut Context<Self>,
+    ) {
+        let left: Vec<(String, u64)> = (self.tasks.handed.held.iter())
+            .filter(|each| !tabs.contains(&each.tab))
+            .filter(|each| {
+                self.task(&each.agent)
+                    .is_some_and(|task| task.space == space)
+            })
+            .map(|each| (each.agent.clone(), each.tab))
+            .collect();
+        for (agent, tab) in left {
+            if self.browser.space_of(tab, cx) == 0 {
+                continue;
+            }
+            self.forget_handed_of(&agent, tab);
+            let site = site(&self.browser.tab(tab, cx).url);
+            self.let_go(tab, crate::agents::held::Event::Returned, cx);
+            self.forget_page(tab);
+            self.returned_by_user(&agent, tab);
+            self.note_page(&agent, (0, tab), TAKEN_BACK, &site, "");
+            cx.notify();
+        }
+    }
+
+    /// Whether `tab` is one the user returned to their own tabs from `agent`'s thread, and hasn't
+    /// handed to a thread since.
+    pub(in crate::agents) fn returned_from(&self, agent: &str, tab: u64) -> bool {
+        use crate::agents::Gone;
+        matches!(self.gone.get(&tab), Some((whose, Gone::Returned)) if whose == agent)
+    }
+
+    /// What the app keeps of `tab` as a page of an agent's goes with it: the agent's own pin of it,
+    /// the names its outline gave the page's elements, and its being the tab a call that names
+    /// none acts on.
+    fn forget_page(&mut self, tab: u64) {
+        self.pins.remove(&tab);
+        self.refs.remove(&tab);
+        self.current.retain(|_, last| *last != tab);
+    }
+
+    /// `tab` is no longer one `agent`'s thread holds. Whether it was.
+    fn forget_handed_of(&mut self, agent: &str, tab: u64) -> bool {
+        let held = &mut self.tasks.handed.held;
+        let before = held.len();
+        held.retain(|each| !(each.tab == tab && each.agent == agent));
+        held.len() != before
+    }
+
+    /// `tab` closed: no thread holds it.
+    pub(in crate::agents) fn forget_handed(&mut self, tab: u64) {
+        self.tasks.handed.held.retain(|each| each.tab != tab);
     }
 
     /// Whether `tab` is one `agent`'s thread holds of the user's.

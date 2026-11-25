@@ -766,6 +766,9 @@ pub enum TaskAction {
     /// Revoke on the folder's chip under the reply field: only the user's press takes a folder
     /// back, as on Settings › Agents › Folders in use.
     RevokeFolder,
+    /// Return to Your Tabs on a tab the user handed to the thread: it's theirs again, for good.
+    /// Only the user's press does it.
+    ReturnTab(u64),
 }
 
 /// What the composer starts a task with beside what was asked: the user's picks on its line, which
@@ -1113,6 +1116,7 @@ impl Agents {
             TaskAction::PagesBack => self.pages_back(agent, cx),
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
             TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
+            TaskAction::ReturnTab(tab) => _ = self.return_tab(agent, tab, handed::By::User, cx),
         }
         (None, None)
     }

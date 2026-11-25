@@ -300,6 +300,9 @@ pub trait Browser {
     /// pages until it goes back (bc_tab_give_to_agent). Whether it moved: the core refuses the
     /// tabs it never gives, whatever asks. The user's send alone calls it (task/handed.rs).
     fn give_tab(&self, tab: u64, space: u64, cx: &mut App) -> bool;
+    /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
+    /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
+    fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
@@ -1929,6 +1932,13 @@ impl Agents {
             at,
             ..
         } = call;
+        // A tab of the user's they returned to their own tabs: a call that names it hears so,
+        // whatever its tool, an ask for it back too, before anything of the call is looked at.
+        let named = tools::tabs_named(&arguments);
+        if named.iter().any(|tab| self.returned_from(&agent, *tab)) {
+            _ = reply.send(Refused::new(task::handed::RETURNED).into());
+            return;
+        }
         match tool.as_str() {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
@@ -3034,6 +3044,7 @@ impl Agents {
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);
+        self.forget_handed(tab);
         self.let_go(tab, held::Event::Closed, cx);
     }
 
@@ -3089,6 +3100,7 @@ impl Agents {
         for tab in moved {
             self.left(tab, Gone::Moved);
         }
+        self.handed_left(space, &tabs, cx);
         if self.held.is_empty() {
             return;
         }
@@ -5607,6 +5619,7 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Moved => ToolResult::error(format!(
             "The user moved tab {tab} to a Space of their own. It's theirs now."
         )),
+        held::Event::Returned => ToolResult::error(task::handed::RETURNED),
         _ => ToolResult::failed(tools::Kind::Stopped, STOPPED),
     }
 }
@@ -5904,6 +5917,8 @@ enum Gone {
     Download,
     /// It closed as the agent removed this tab, it or one of its split, from its pinned tabs.
     Removed(u64),
+    /// The user returned it, a tab of theirs they had handed to the thread, to their own tabs.
+    Returned,
 }
 
 impl Gone {
@@ -5932,6 +5947,8 @@ impl Gone {
                 "Tab {tab} closed with its split view, as the agent removed tab {removed} from its \
                  pinned tabs."
             ),
+            // The plain answer, and nothing to carry on with: the page is the user's.
+            Gone::Returned => return task::handed::RETURNED.into(),
         };
         format!("{went} To carry on, open the page again with open_tab.")
     }

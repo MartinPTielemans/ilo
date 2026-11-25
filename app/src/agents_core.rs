@@ -336,6 +336,10 @@ impl Browser for Core {
         unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }
 
+    fn return_tab(&self, tab: u64, _: &mut App) -> bool {
+        unsafe { bc::bc_tab_return_from_agent(tab) }
+    }
+
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
         let users = |space: u64| {
