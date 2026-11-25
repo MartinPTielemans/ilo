@@ -375,6 +375,17 @@ unsafe extern "C" {
     );
     #[cfg(target_os = "macos")]
     pub fn host_set_menu_glass(panels: *const f64, count: usize, light: bool);
+    #[cfg(target_os = "macos")]
+    pub fn host_set_glass(
+        view: *mut c_void,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+        opacity: f64,
+        light: bool,
+    ) -> bool;
     pub fn host_hide_menu_window();
     pub fn host_menu_area(ui_view: *mut c_void, in_reveal: bool, area: *mut f64);
     pub fn host_show_site_controls(
