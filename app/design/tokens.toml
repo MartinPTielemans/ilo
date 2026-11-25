@@ -2035,6 +2035,10 @@ beside-gap = 10.0
 # The nav glyphs keep Arc's 1.75 pt in 24 and the window buttons their 1.3 in 14, so those files
 # are the only ones that differ (ours, drawn on Lucide's grid with round ends).
 icon-stroke = 2.25
+# A folder's glyph on its line in the sidebar, which the redesign draws 16 with a stroke of 1.3:
+# 1.95 on the grid. Its three drawings (closed, open, with dots) are the only Lucide outlines not
+# at icon-stroke.
+row-folder-stroke = 1.95
 # The grid Lucide draws on and every outline here shares.
 icon-grid = 24.0
 bar-length = 11.4

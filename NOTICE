@@ -40,7 +40,8 @@ zoom-out; and camera's path, drawn as
 Capture's pointer, in
 app/platform/mac/host.mm; at commit 7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke
 width is 2.25 where Lucide's is 2 (app/design/tokens.toml); palette's four dots and key-round's one
-lose their fill; folder-ellipsis is folder with three dots of ours in it.
+lose their fill; row-folder and row-folder-open are folder and folder-open at a stroke of 1.95, and
+row-folder-ellipsis is that folder with three dots of ours in it.
 
   ISC License
 
