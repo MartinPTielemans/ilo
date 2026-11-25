@@ -50,6 +50,10 @@ pub use crate::tokens::palette::{
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
 use crate::tokens::shell::{DROP, LIGHT_UNPAINTED, UNPAINTED};
+use crate::tokens::site_controls::{
+    TILE_BOTTOM as SITE_CONTROLS_TILE_BOTTOM, TILE_TOP as SITE_CONTROLS_TILE_TOP,
+    TINT as SITE_CONTROLS_TINT,
+};
 use crate::transparency::Transparency;
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
@@ -1209,6 +1213,10 @@ impl Palette {
             .iter()
             .map(|&at| over(at, self.ink, TARGET_PLATE))
             .collect();
+        // A switch's or the shield's glyph, on Site Controls' tile tinted with the accent: on a
+        // window dark enough, the accent that reads on the window is too dark for it.
+        let tiles = [SITE_CONTROLS_TILE_TOP, SITE_CONTROLS_TILE_BOTTOM]
+            .map(|plate| over(self.overlay, self.ink, plate));
         let passes = |c: Rgba| {
             contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
                 && contrast(c, self.overlay) >= GLYPH
@@ -1220,6 +1228,9 @@ impl Palette {
                 && target
                     .iter()
                     .all(|&at| contrast(c, over(at, c, TARGET_ACCENT)) >= GLYPH + BETWEEN)
+                && tiles
+                    .iter()
+                    .all(|&at| contrast(c, over(at, c, SITE_CONTROLS_TINT)) >= GLYPH)
         };
         nearest(main, passes).unwrap_or(self.ink)
     }
