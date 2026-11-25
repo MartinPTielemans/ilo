@@ -1168,6 +1168,12 @@ pub trait Browser {
         None
     }
     fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    /// Whether other apps' agents may connect while agents are on, as Settings › Other apps'
+    /// switch has it, or None in a build without the agents' server.
+    fn other_apps(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {
@@ -1181,7 +1187,8 @@ pub trait Browser {
     }
     fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
     /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
-    /// and the times Settings offers it, in its order; None before the profile has loaded.
+    /// and the times Settings offers it, in its order; None before the profile has loaded. A
+    /// thread's card done and seen goes after as long; below 0 is Never.
     fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
         None
     }

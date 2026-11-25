@@ -2149,6 +2149,96 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
 }
 
+/// A click that landed on a select, a date or time field or a color field of an agent's page, whose
+/// list or picker a click doesn't open there, is told what to do instead: once, after the click's
+/// usual answer and before the page. The core names the field; a click it names none for, and a
+/// word the app doesn't know, are told nothing more.
+#[gpui::test]
+fn a_click_is_told_when_it_landed_on_a_list_that_stays_shut(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let form = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Ticket" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "combobox" }, "name": { "value": "Status" },
+          "backendDOMNodeId": 61 },
+    ]});
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, form.to_string(), cx);
+    let mut clicked = |shut: Option<&str>, busy: bool| {
+        let mut tree = form.clone();
+        if let Some(field) = shut {
+            tree["shut"] = json!(field);
+        }
+        if busy {
+            tree["busy"] = json!(true);
+        }
+        let click = json!({ "tab": 20, "ref": "e1" });
+        let answer = call(&agents, "claude-code", "click", click, cx);
+        let result = page_done(&agents, &browser, answer, tree.to_string(), cx);
+        assert!(!result.error, "{}", result.text);
+        result.text
+    };
+    let usual = "Clicked combobox “Status”.";
+    let lines = [
+        (
+            "select",
+            "A click doesn't open this list. Use select with the option's text.",
+        ),
+        (
+            "date_time",
+            "A click doesn't open a calendar here. Type the date or time into the field.",
+        ),
+        (
+            "color",
+            "This color field can't be set by a click or by typing. If it has to be set, hand the \
+             tab to the user with hand_off.",
+        ),
+    ];
+    for (field, line) in lines {
+        let text = clicked(Some(field), false);
+        assert!(text.starts_with(&format!("{usual} {line}\n\n")), "{text}");
+        assert_eq!(text.matches(line).count(), 1, "{text}");
+    }
+    // After everything the click's answer says of the page, too.
+    let text = clicked(Some("select"), true);
+    assert!(
+        text.starts_with(&format!("{usual} {BUSY} {}\n\n", lines[0].1)),
+        "{text}"
+    );
+    for shut in [None, Some("slider"), Some("")] {
+        let text = clicked(shut, false);
+        assert!(text.starts_with(&format!("{usual}\n\n")), "{text}");
+        for (_, line) in lines {
+            assert!(!text.contains(line), "{text}");
+        }
+    }
+}
+
+/// A click on a tab the user holds never reaches the page, so it is told none of the lines for a
+/// list that stays shut: there the list opens, for the user.
+#[gpui::test]
+fn a_held_tabs_click_is_told_nothing_of_a_shut_list(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let pages = browser.pages.borrow().len();
+    let click = json!({ "tab": 20, "ref": "e1" });
+    let refused = call(&agents, "claude-code", "click", click, cx)
+        .recv()
+        .unwrap();
+    assert!(refused.error);
+    assert_eq!(refused.text, HELD);
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "the click reached the page"
+    );
+    for field in ["select", "date_time", "color"] {
+        assert!(!refused.text.contains(shut_line(field).unwrap()));
+    }
+}
+
 /// A tab open_tab opened stays open though its page then fails, as one still loading does, so the
 /// answer names it for the agent to look at later; another action's failure is the core's alone
 /// (#1461).

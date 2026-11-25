@@ -261,6 +261,8 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    /// Other apps' agents' switch, off to begin with.
+    other_apps: Cell<bool>,
     daily_count: Cell<bool>,
     /// Settings' switches first run shows too, each as it starts, on; and a tab's wait before the
     /// archive, Settings' 12 hours.
@@ -1225,8 +1227,9 @@ impl Browser for Fake {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
-    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
-    // a click doesn't change: nothing here sorts.
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
     fn broom(&self) -> Option<Broom> {
         match states::var("PREVIEW_BROOM").ok()?.as_str() {
             "idle" => Some(Broom::Idle),
@@ -2094,6 +2097,14 @@ impl Browser for Fake {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        Some(self.other_apps.get())
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(on);
+    }
+
     fn daily_count(&self, _: &App) -> Option<bool> {
         Some(self.daily_count.get())
     }
@@ -2715,6 +2726,11 @@ fn main() {
                 );
                 return;
             }
+            // PREVIEW_THREADS=on or off shows Settings › Threads' first row, its switch so.
+            if let Ok(state) = states::var("PREVIEW_THREADS") {
+                preview_pictures(Pictures::Threads { on: state == "on" }, cx);
+                return;
+            }
             // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
             if states::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
                 preview_pictures(Pictures::General, cx);
@@ -2837,7 +2853,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
@@ -2890,6 +2906,7 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        other_apps: Cell::new(false),
                         daily_count: Cell::new(false),
                         settings: RefCell::default(),
                         archive_after: Cell::new(12. * 3600.),
@@ -4192,6 +4209,7 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
+                other_apps: Default::default(),
                 daily_count: Default::default(),
                 settings: Default::default(),
                 archive_after: Default::default(),

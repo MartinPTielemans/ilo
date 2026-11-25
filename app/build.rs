@@ -115,6 +115,7 @@ fn native(root: &Path, header: &Path, os: &str) {
             host.file("platform/mac/host.mm")
                 .file("platform/mac/drive.mm")
                 .file("platform/mac/menu_window.mm")
+                .file("platform/mac/glass.mm")
                 .file("platform/mac/emoji.mm")
                 .file("platform/mac/needs_you.mm")
                 .file("platform/mac/updates.mm")

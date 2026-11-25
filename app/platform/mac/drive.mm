@@ -107,6 +107,9 @@
 //                                         <w>x<h>" or "none", and whether it's full screen, as
 //                                         "browser: layout full screen <0|1>"
 //   state                                 nothing, for the done line's report
+//   reopen                                sends the app the reopen Apple Event, as a click on
+//                                         the Dock's icon or a second launch does, through
+//                                         AppKit's handler to the app's delegate
 //   title [<text>]                        logs the key window's title, as "browser: key window
 //                                         titled <title>", such as a window of Chrome's. With
 //                                         <text>, once the title has it, for up to 10 s, as a
@@ -572,8 +575,13 @@ void AddDisplay(unsigned width, unsigned height, bool main, void (^done)(void)) 
 // The browser window the window command picked, from 0.
 size_t g_driven = 0;
 
-// The browser window driven, once it's on screen.
+// First run's window while it's on screen, at a new profile's first launch or played again from
+// Help over a browser window, since the user's input goes there then; else the browser window
+// driven, once it's on screen.
 NSWindow* MainWindow() {
+  if (NSWindow* first_run = (__bridge NSWindow*)host_first_run_window()) {
+    return first_run;
+  }
   NSWindow* window = (__bridge NSWindow*)host_browser_window(g_driven);
   return window.visible ? window : nil;
 }
@@ -733,6 +741,34 @@ void MoveIn(NSWindow* target, double x, double y) {
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
   PostMouse(window, NSEventTypeLeftMouseDown, x, y, count, flags);
   PostMouse(window, NSEventTypeLeftMouseUp, x, y, count, flags);
+}
+
+// The window's own close, minimize or zoom button at (x, y), in points from its top-left corner.
+NSButton* TitleButtonAt(NSWindow* window, double x, double y) {
+  for (NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
+    NSButton* button = [window standardWindowButton:kind];
+    if (!button || button.hidden || !button.window) {
+      continue;
+    }
+    NSPoint at = [button convertPoint:NSMakePoint(x, NSHeight(window.frame) - y) fromView:nil];
+    if (NSPointInRect(at, button.bounds)) {
+      return button;
+    }
+  }
+  return nil;
+}
+
+// A left click, or with the window's own button there, that button pressed as a click ends in it:
+// the button tracks a posted click in a loop of its own, after which the done line's event never
+// came, so a check waiting on it hung though the window had closed.
+void ClickOrPress(NSWindow* window, double x, double y, NSEventModifierFlags flags) {
+  if (NSButton* button = TitleButtonAt(window, x, y)) {
+    if (button.enabled) {
+      [button performClick:nil];
+    }
+    return;
+  }
+  Click(window, x, y, 1, flags);
 }
 
 // The modifiers named in the rest of |words|: cmd, shift, alt and ctrl.
@@ -1710,6 +1746,21 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     return false;
   }
+  if (action == "reopen") {
+    // One sent to the app itself goes to its handler at once.
+    NSAppleEventDescriptor* reopen = [NSAppleEventDescriptor
+        appleEventWithEventClass:kCoreEventClass
+                         eventID:kAEReopenApplication
+                targetDescriptor:NSAppleEventDescriptor.currentProcessDescriptor
+                        returnID:kAutoGenerateReturnID
+                   transactionID:kAnyTransactionID];
+    NSError* error = nil;
+    if (![reopen sendEventWithOptions:NSAppleEventSendNoReply timeout:5 error:&error]) {
+      fprintf(stderr, "browser: reopen not sent: %s\n", error.localizedDescription.UTF8String);
+    }
+    done();
+    return true;
+  }
   if (!window) {
     return false;
   }
@@ -1730,7 +1781,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       LogPassed(window, x, y);
     }
     Convert(window, target, &x, &y);
-    Click(target, x, y, 1, Modifiers(words) | walk);
+    ClickOrPress(target, x, y, Modifiers(words) | walk);
     done();
     return true;
   }
@@ -1739,7 +1790,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!NSApp.keyWindow || !(words >> x >> y)) {
       return false;
     }
-    Click(NSApp.keyWindow, x, y, 1, walk);
+    ClickOrPress(NSApp.keyWindow, x, y, walk);
     done();
     return true;
   }

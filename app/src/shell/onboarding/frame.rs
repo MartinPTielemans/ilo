@@ -334,7 +334,15 @@ impl Shell {
                 .children(self.place(step, "back"))
                 .into_any_element()
         });
-        let label = if welcome { "Skip Setup" } else { "Skip" };
+        // The default browser's step asks, so its way on without is Not Now, while the system can
+        // be asked; where it can't, the step's button is Continue.
+        let asks = (self.onboarding.as_ref())
+            .is_some_and(|onboarding| crate::default_browser::offers(onboarding.os, false));
+        let label = match step {
+            Step::Intro => "Skip Setup",
+            Step::DefaultBrowser if asks => "Not Now",
+            _ => "Skip",
+        };
         // check.sh clicks it where it's logged, once the step has come.
         let frame = (self.onboarding.as_ref())
             .filter(|onboarding| onboarding.step == step)
@@ -377,11 +385,15 @@ impl Shell {
     }
 
     /// The picture for `step`: the small browser in the Space's colour, the colour picked at the
-    /// color step once one is.
+    /// color step once one is, its assistant step's thread only with agents on.
     pub(super) fn frame_art(&self, step: Step, colors: Colors, cx: &gpui::App) -> AnyElement {
         let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
-        let scene = picture::Scene::of(step);
+        // Just the browser's sidebar is tabs only, with no thread at work or chip about one.
+        let scene = match step == Step::Assistant && self.browser.agents(cx) != Some(true) {
+            true => picture::Scene::default(),
+            false => picture::Scene::of(step),
+        };
         let rest = match scene.rest {
             true => picture::Rest {
                 threads: self.threads_on(cx),

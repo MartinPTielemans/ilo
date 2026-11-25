@@ -1,23 +1,35 @@
-//! The broom after Clear on the New Tab line (docs/ux-spec.md › Sidebar › Clear divider): what the
-//! browser says of it, and its forms. The shell draws the state it's told and passes the user's
-//! click on: it learns nothing of a sort, gathers nothing for one and keeps no time for it.
+//! The broom before Clear on the New Tab line (docs/ux-spec.md › Sidebar › Clear divider): what
+//! the browser says of it, when it's drawn and its forms. The shell draws the state it's told and
+//! passes the user's click on: it learns nothing of a sort, gathers nothing for one and keeps no
+//! time for it, and whether the glyph shows is read from that state and what the sidebar knows of
+//! the pointer and the keys already.
 
 use std::f32::consts::TAU;
 
 use gpui::{
-    AnyElement, Context, Div, Hsla, MouseButton, Radians, Role, Transformation, accesskit::Live,
-    div, prelude::*, px, svg,
+    AnyElement, App, Context, Div, Hsla, MouseButton, Radians, Role, Transformation,
+    accesskit::Live, div, prelude::*, px, svg,
 };
 
-use super::{CLEAR_HIT_OUT, CLEAR_HOVERED, Shell, access::Accessible, cast::TURN};
+use super::{
+    CLEAR_HIT_OUT, CLEAR_HOVERED, Shell, access::Accessible, cast::TURN, sidebar_keys::NEW_TAB,
+};
 use crate::palette::{Palette, TEXT_PRIMARY};
 use crate::product::PRODUCT;
-use crate::tokens::shell::{BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP};
+use crate::tokens::shell::{BROOM_SIZE, DIVIDER_GAP};
 use crate::tokens::text;
 use crate::tooltip::{Anchor, Tip};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    /// How often the New Tab line with tabs today was built, and the broom it had the last time:
+    /// its state and how much of it was drawn, or None with no glyph.
+    pub(super) static DRAWN: std::cell::Cell<(u32, Option<(Broom, f32)>)> =
+        const { std::cell::Cell::new((0, None)) };
+}
 
 /// What the broom shows, as the browser answers for the Space the window shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,8 +41,8 @@ pub enum Broom {
     /// The last sort changed nothing. Its word stands in Clear's place for as long as the browser
     /// answers this, and a click sorts again.
     Failed,
-    /// Too few Today tabs are outside a folder: the glyph keeps its place, so Clear doesn't shift
-    /// as tabs come and go, and it takes no click.
+    /// Too few Today tabs are outside a folder, or another Space's sort runs: no glyph is drawn
+    /// and no room kept for one, and there is nothing to click.
     NothingToSort,
 }
 
@@ -57,10 +69,30 @@ fn failed_said() -> String {
 pub(super) const FRAME: &str = "broom";
 
 impl Shell {
-    /// The broom on a line that has Clear, live: its glyph, or the ring while it sorts.
+    /// How much of the broom is drawn in `state`, from none to all. Where a click would sort, it
+    /// comes with the pointer over the sidebar, anywhere in it, so it's there before the pointer
+    /// reaches the line, and goes with it, as the URL field's button does and on that fade; at
+    /// once with motion reduced; and it's there while the keys are on the New Tab line, and for
+    /// an assistive app, whose cursor is no pointer. A sort that runs and one that failed show
+    /// whatever the pointer does, and with nothing to sort there is no glyph. Nothing is asked or
+    /// started to tell: this reads what the browser said of the broom and what the sidebar keeps
+    /// of the pointer and the keys.
+    pub(super) fn broom_shown(&self, state: Broom, cx: &App) -> f32 {
+        match state {
+            Broom::Sorting | Broom::Failed => 1.,
+            Broom::NothingToSort => 0.,
+            Broom::Idle if self.keyed == Some(NEW_TAB) => 1.,
+            Broom::Idle if crate::motion::still(cx) => f32::from(u8::from(self.tools_live())),
+            Broom::Idle => self.tools_opacity(),
+        }
+    }
+
+    /// The broom on a line that has Clear, live and `shown` of the way there: its glyph, or the
+    /// ring while it sorts.
     pub(super) fn broom_button(
         &self,
         state: Broom,
+        shown: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let glyph = match state {
@@ -68,13 +100,14 @@ impl Shell {
                 let turned = self.breath.turned(TURN, self.clock.now());
                 working_ring(&self.palette, BROOM_SIZE, turned).into_any_element()
             }
-            _ => glyph(glyph_ink(&self.palette, state, self.broom_hovered)),
+            _ => glyph(glyph_ink(&self.palette, self.broom_hovered)),
         };
         let name = match state {
             Broom::Sorting => SORTING,
             _ => NAME,
         };
-        broom_box(glyph, Some(self.button_frame(FRAME).into_any_element()))
+        broom_box(glyph, self.button_frame(FRAME).into_any_element())
+            .opacity(shown)
             .id("broom")
             .when(self.a11y, |broom| {
                 broom
@@ -133,7 +166,7 @@ impl Shell {
                     .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })
             // After the hairline, which has given way by then, the word does: the label before it
-            // never wraps and the glyph after it keeps its place.
+            // never wraps and the glyph before the word is never squeezed.
             .min_w_0()
             .ml(px(DIVIDER_GAP))
             .h_full()
@@ -150,15 +183,10 @@ impl Shell {
     }
 }
 
-/// The broom where it doesn't change: on the page of a Space beside the one shown, whose Clear
-/// then stands where it will once the Space is the one shown.
-pub(super) fn still_broom(palette: &Palette) -> Div {
-    broom_box(glyph(glyph_ink(palette, Broom::Idle, false)), None)
-}
-
-/// The broom's place on the line: its glyph's box the line's gap after Clear, ending where the
-/// titles do. It takes clicks from where Clear stops taking them to as far past its glyph.
-fn broom_box(glyph: AnyElement, frame: Option<AnyElement>) -> Div {
+/// The broom's place on the line: its glyph's box the line's gap before Clear, where the hairline
+/// ends as far before it. It takes clicks from as far before its glyph to where Clear starts
+/// taking them.
+fn broom_box(glyph: AnyElement, frame: AnyElement) -> Div {
     let out = DIVIDER_GAP - CLEAR_HIT_OUT;
     div()
         .flex_none()
@@ -176,7 +204,7 @@ fn broom_box(glyph: AnyElement, frame: Option<AnyElement>) -> Div {
                 .child(glyph)
                 // In a box of its own over the glyph's: left where it falls, GPUI lays it out
                 // after the glyph.
-                .children(frame.map(|frame| div().absolute().inset_0().child(frame))),
+                .child(div().absolute().inset_0().child(frame)),
         )
 }
 
@@ -188,15 +216,11 @@ fn glyph(ink: Hsla) -> AnyElement {
         .into_any_element()
 }
 
-/// The glyph's ink: the New Tab label's, Clear's lit one under the pointer where a click would
-/// sort, and a part of its own where there's nothing to sort, which needn't read.
-fn glyph_ink(palette: &Palette, state: Broom, hovered: bool) -> Hsla {
-    match state {
-        Broom::NothingToSort => palette
-            .glyph(palette.secondary())
-            .opacity(BROOM_UNAVAILABLE),
-        _ if hovered && state.sorts() => palette.glyph(CLEAR_HOVERED),
-        _ => palette.glyph(palette.secondary()),
+/// The glyph's ink: the New Tab label's, and Clear's lit one while `lit`, under the pointer.
+fn glyph_ink(palette: &Palette, lit: bool) -> Hsla {
+    match lit {
+        true => palette.glyph(CLEAR_HOVERED),
+        false => palette.glyph(palette.secondary()),
     }
 }
 

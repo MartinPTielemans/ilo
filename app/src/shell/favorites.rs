@@ -27,6 +27,7 @@ use crate::palette::{Palette, Tone};
 /// and a list longer already, from before or an import, is kept. A split view counts as one.
 pub(super) const MOST_FAVORITES: usize = 12;
 
+use crate::tokens::palette::SHOWN;
 use crate::tokens::shell::{LIGHT_TILE, SPLIT_TILE_FAVICON};
 
 /// Who shares the favorites, as Settings lists the choices. Each is the core's BC_FAVORITES_ value
@@ -680,8 +681,10 @@ impl Shell {
     }
 
     /// The open tile's fill, ring width and ring: its page's `own` colour where it stands, once
-    /// the page has reported one, a dark one with the hairline a dark page's shape has, and
-    /// otherwise the look its icon's `theme` gives it.
+    /// the page has reported one, and otherwise the look its icon's `theme` gives it. A dark page's
+    /// tile has a hairline of the ink that reads on it, as a dark page's shape has, at the shown
+    /// row's strength: the divider's, which a line running into its page needs no more than,
+    /// leaves a tile among the idle ones too like them.
     pub(super) fn open_look(
         &self,
         own: Option<Rgba>,
@@ -692,7 +695,7 @@ impl Shell {
         };
         let on = self.palette.on_fill(own);
         let ring = match on.tone {
-            Tone::Dark => on.faint(DIVIDER),
+            Tone::Dark => on.faint(SHOWN),
             Tone::Light => Level::Resting.rim_in(&on),
         };
         (own.into(), HAIRLINE, ring)

@@ -65,6 +65,19 @@ pub enum Section {
 }
 
 impl Section {
+    /// What the page is, once, under its heading, where the two kinds of agent need telling apart:
+    /// Models is the user's assistant's, Other apps the outside apps'.
+    pub fn lede(self) -> Option<String> {
+        use crate::product::PRODUCT;
+        match self {
+            Section::Models => Some(format!("What {PRODUCT} runs your threads on.")),
+            Section::OtherApps => Some(format!(
+                "Apps that drive {PRODUCT} from outside, through its command line or MCP."
+            )),
+            _ => None,
+        }
+    }
+
     /// The sidebar's groups, in its order, as the owner drew them.
     pub const GROUPS: [&'static [Section]; 3] = [
         &[
@@ -161,7 +174,6 @@ pub struct Ink {
 
 impl Ink {
     pub fn new(dark: bool) -> Ink {
-        let pick = |dark_one: u32, light_one: u32| rgba(if dark { dark_one } else { light_one });
         let ink = if dark { Tone::Dark } else { Tone::Light }.ink();
         let at = |a: f32| Rgba { a, ..ink };
         Ink {
@@ -179,7 +191,10 @@ impl Ink {
             icon: at(ICON_INK),
             field: at(FIELD_PLATE),
             button: at(BUTTON_PLATE),
-            shown: pick(form::SHOWN, form::LIGHT_SHOWN),
+            shown: match dark {
+                true => rgba(form::SHOWN),
+                false => at(form::LIGHT_SHOWN),
+            },
         }
     }
 }
