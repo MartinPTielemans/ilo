@@ -3,7 +3,7 @@
 
 use gpui::{
     InputEvent as _, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window,
-    size,
+    rgb, size,
 };
 
 use super::Paging as To;

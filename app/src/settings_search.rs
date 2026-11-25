@@ -67,6 +67,8 @@ pub fn bind_keys(cx: &mut App) {
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub section: Section,
+    /// The heading over its group, if it has one.
+    pub group: Option<SharedString>,
     /// The feature whose own setting it is, which the results name after the section.
     pub under: Option<SharedString>,
     pub name: SharedString,
@@ -97,24 +99,23 @@ pub fn also(name: &str) -> &'static [&'static str] {
         ],
         "Show what's new after an update" => &["release notes", "changelog"],
         "Check for updates automatically" => &["auto update", "software update"],
-        "Dock icon takes the Space's color" => &["dock dot"],
-        "Taskbar button takes the Space's color" => &["taskbar dot", "dock dot"],
         "Battery Saver" => &["energy saver", "low power"],
         _ => &[],
     }
 }
 
 /// The entries `typed` finds, in their order: those whose name, other names or keys have its words
-/// at the starts of words, in any order. Only when none does are the rows' lines read, so a word
-/// a setting is named by finds that setting and not every line that mentions it.
+/// at the starts of words, in any order. Only when none does are the rows' lines and their groups'
+/// headings read, so a word a setting is named by finds that setting and not every line that
+/// mentions it.
 pub fn find(typed: &str, entries: &[Entry]) -> Vec<usize> {
     let found = named(typed, entries);
     if !found.is_empty() || typed.trim().is_empty() {
         return found;
     }
-    let lined = |entry: &Entry| {
-        (entry.line.as_deref()).is_some_and(|line| shell::shortcut_found(typed, line, None))
-    };
+    let read =
+        |text: Option<&str>| text.is_some_and(|text| shell::shortcut_found(typed, text, None));
+    let lined = |entry: &Entry| read(entry.line.as_deref()) || read(entry.group.as_deref());
     (0..entries.len())
         .filter(|&index| lined(&entries[index]))
         .collect()

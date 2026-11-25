@@ -11,7 +11,7 @@ use gpui::{
 
 use crate::agents::task::{Card, Dot};
 use crate::agents::tier::Tier;
-use crate::command_bar::PLACEHOLDER_TEXT;
+use crate::command_bar::{Given, PLACEHOLDER_TEXT};
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
     empty::{FADE, MARK_HEIGHT, composer::group_top},
@@ -804,7 +804,7 @@ fn the_plus_with_nothing_to_add_is_disabled(cx: &mut TestAppContext) {
             .center()
     };
     let offers = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.plus_offers())
+        shell.read_with(cx, |shell, cx| shell.plus_offers(cx))
     };
     assert!(!offers(&shell, cx), "the Space's tabs have no page to add");
     let at = plus(&shell, cx);
@@ -1061,6 +1061,46 @@ fn an_empty_space_gives_its_field_the_keyboard_once_the_window_is_key(cx: &mut T
     );
 }
 
+/// A fresh window on an empty Space, with no click: the field the caret is drawn in has the
+/// keyboard, in GPUI and in the window, so ⇥ flips it to Ask. GPUI's focus alone draws the caret,
+/// while the Mac sends a key to its window's first responder, which only the host's hold gives
+/// the UI; a click gives it by itself, so ⇥ reached Ask only after one.
+#[gpui::test]
+fn a_fresh_windows_field_takes_tab_without_a_click(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.take();
+    key_window(cx);
+    assert!(
+        field_focused(&shell, cx),
+        "the key window's field has no keyboard"
+    );
+    assert_eq!(
+        host.take(),
+        ["hold keyboard for page"],
+        "the field took GPUI's focus, but the window's keys weren't given to the UI"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        switch(&shell, cx),
+        (true, "Ask Claude to do something".into()),
+        "⇥ with no click didn't reach the field"
+    );
+}
+
+/// At launch the core can show the window's page before the shell hears of it. The field doesn't
+/// take the window's keys then: they're that page's, which comes in a moment.
+#[gpui::test]
+fn the_field_takes_no_window_keys_from_a_page_the_core_already_shows(cx: &mut TestAppContext) {
+    let (_, cx, host) = window_with_no_tab(cx);
+    host.shown_now.set(1);
+    host.take();
+    key_window(cx);
+    assert!(
+        !host.take().contains(&"hold keyboard for page".to_string()),
+        "the field took the window's keys from the page the core shows"
+    );
+}
+
 /// ⌘T and ⌘L give the field the keyboard and open no bar over it. The sidebar's New Tab and URL
 /// field and Start Again's ask still open the bar, as they did.
 #[gpui::test]
@@ -1102,6 +1142,28 @@ fn cmd_t_and_cmd_l_give_the_field_the_keyboard_and_open_no_bar(cx: &mut TestAppC
         1,
         "Start Again opened no bar"
     );
+}
+
+/// ⌘T pressed before the shell has heard of the page the core shows, as one pressed as the window
+/// comes on screen with a page to open, opens the bar over that page: the field it would have gone
+/// to goes as the page is heard of, and took the key with it (#4268).
+#[gpui::test]
+fn cmd_t_before_the_shown_page_is_heard_of_opens_the_bar(cx: &mut TestAppContext) {
+    use crate::shell::Command;
+    let (shell, cx, host) = window_with_no_tab(cx);
+    key_window(cx);
+    host.shown_now.set(1);
+    for from in ["ui", "page"] {
+        shell.update(cx, |shell, cx| shell.run(Command::NewTab, from, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "⌘T via {from}, with the core showing a page the shell hadn't heard of, opened no bar"
+        );
+        host.bar_open.set(false);
+        shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    }
 }
 
 /// An open overlay keeps the keyboard: ⌘T's field waits for it to close.
@@ -1263,6 +1325,115 @@ fn an_added_page_is_a_chip_in_the_field(cx: &mut TestAppContext) {
     assert!(chips(&shell, cx).is_empty(), "the run left the page's chip");
 }
 
+/// Where files and folders are available, the `+` menu is Add Page, Add Files… and Add Folder…;
+/// the files attached and the folder granted are chips in the field after the pages, ⌫ takes the
+/// last off, and the start gets them, which the record counts and never names. A folder ilo never
+/// gives is said under Ask's line, and nothing is granted.
+#[gpui::test]
+fn files_and_a_folder_are_chips_in_the_field_and_go_with_the_start(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.update(|_, cx| crate::text_input::bind_keys(cx));
+    host.files.set(true);
+    // Not the system's temporary folder, which is under /private on the Mac, where ilo gives none.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("target/ilo-composer-files-{}", std::process::id()));
+    let work = dir.join("Lakeside walk");
+    std::fs::create_dir_all(&work).unwrap();
+    let (map, notes) = (work.join("map.pdf"), work.join("notes.txt"));
+    std::fs::write(&map, "map").unwrap();
+    std::fs::write(&notes, "notes").unwrap();
+
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, cx| shell.plus_offers(cx)),
+        "with no page to add, the + still offers files and folders"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.composer_plus_menu(point(px(0.), px(0.)), cx)
+    });
+    let rows: Vec<(String, bool)> = (host.menus.borrow().last().unwrap().iter())
+        .map(|(title, enabled)| (title.to_string(), *enabled))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Add Page".to_string(), false),
+            ("Add Files…".to_string(), true),
+            ("Add Folder…".to_string(), true),
+        ],
+        "the + menu's rows, Add Page off with no page to add"
+    );
+
+    let given = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let bar = shell.read(cx).resting.as_ref().unwrap().bar.read(cx);
+            (bar.given().iter())
+                .map(|given| match given {
+                    Given::Files(count) => format!("Files {count}"),
+                    Given::Folder(name) => format!("Folder {name}"),
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    shell.update(cx, |shell, cx| {
+        shell.attach_files(vec![map.clone(), notes.clone(), map.clone()], cx);
+        shell.grant_folder(work.clone(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        given(&shell, cx),
+        ["Files 2 files", "Folder Lakeside walk"],
+        "each file once, by count, then the folder by its name"
+    );
+
+    cx.simulate_keystrokes("backspace");
+    cx.run_until_parked();
+    assert_eq!(
+        given(&shell, cx),
+        ["Files 2 files"],
+        "⌫ at the start took the folder off first"
+    );
+    cx.simulate_keystrokes("backspace");
+    cx.run_until_parked();
+    assert_eq!(given(&shell, cx), ["Files 1 file"], "then a file");
+
+    shell.update(cx, |shell, cx| shell.grant_folder("/".into(), cx));
+    let (folder, refused) = shell.read_with(cx, |shell, _| {
+        let resting = shell.resting.as_ref().unwrap();
+        (resting.folder.is_some(), resting.refused.clone())
+    });
+    assert!(!folder, "a folder ilo never gives was granted");
+    assert!(
+        refused.is_some_and(|line| line.starts_with("ilo doesn't give")),
+        "the refusal isn't said under the line"
+    );
+
+    shell.update(cx, |shell, cx| shell.grant_folder(work.clone(), cx));
+    host.take();
+    cx.simulate_input("plan a walk");
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    let started = "start task claude plan a walk from 1 at Work on pages and 1 files and a folder";
+    assert!(
+        calls.contains(&started.to_string()),
+        "the files and the folder didn't reach the task: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.contains("Lakeside") || call.contains("map.pdf")),
+        "a name reached a record: {calls:?}"
+    );
+    assert!(given(&shell, cx).is_empty(), "the run left the chips");
+    let refused = shell.read_with(cx, |shell, _| {
+        shell.resting.as_ref().unwrap().refused.clone()
+    });
+    assert!(refused.is_none(), "the run left the refusal");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A private window starts no task, so its empty page offers none: Search alone, with no switch,
 /// no ⇥ key and no Ask with its line. A window of the profile's offers them.
 #[gpui::test]
@@ -1308,4 +1479,13 @@ fn a_private_window_composes_no_task(cx: &mut TestAppContext) {
         (true, true),
         "⇥ didn't go to Ask in a profile's window"
     );
+}
+
+/// A chip of what the next task is given says its kind alone wherever it's logged: never the
+/// folder's name, nor the count of files (#3656).
+#[test]
+fn a_given_chip_is_logged_by_its_kind_alone() {
+    let folder = Given::Folder("Lakeside walk".into());
+    let files = Given::Files("2 files".into());
+    assert_eq!(format!("{folder:?} {files:?}"), "Folder Files");
 }

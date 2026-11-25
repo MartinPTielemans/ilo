@@ -28,9 +28,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
-    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, canvas, div, point,
-    prelude::*, px, rgb,
+    AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels, Role,
+    ScrollHandle, SharedString, StyledText, TextRun, Window, WindowTextSystem, accesskit::Live,
+    canvas, div, point, prelude::*, px, rgb,
 };
 
 use super::agent_bar;
@@ -45,6 +45,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
+use crate::needs_you::Told;
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
@@ -634,6 +635,23 @@ impl Default for Foot {
 }
 
 impl Shell {
+    /// What a screen reader says of a task as it comes to need the user or to be done, wherever
+    /// its cursor is, in the words its sidebar line and its notification have: the Mac's
+    /// AccessKit announces a live region's value, and Windows' and Linux's its name (#3236).
+    pub(super) fn task_announcer(&self) -> Option<impl IntoElement + use<>> {
+        let (telling, said) = self.task_told.clone().filter(|_| self.a11y)?;
+        Some(
+            div()
+                .id(("task-told", telling))
+                .absolute()
+                .size_0()
+                .role(Role::Status)
+                .aria_label(said.clone())
+                .aria_value(said)
+                .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite)),
+        )
+    }
+
     /// The Agents' cards, newest first, none of which a private window shows, as it offers no
     /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
@@ -646,9 +664,25 @@ impl Shell {
         let mut waits = false;
         // An ended task kept its group for its pages: it goes as the last of them closes.
         let mut emptied = Vec::new();
+        // What a screen reader is told of a task that came to need the user or to be done.
+        let (mut told, mut answered) = (None, false);
+        let read = self.a11y && self.window_active;
+        let drawn = (read.then(|| self.talk_agent()).flatten())
+            .filter(|_| self.watched_task_page().is_none());
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
             waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
+            // The window in front tells it, and nothing where its notification was posted.
+            if read
+                && was.is_none_or(|was| was.dot != card.dot)
+                && let Some((came, false)) = crate::needs_you::came(&card.agent, cx)
+            {
+                match drawn.as_ref() == Some(&card.agent) {
+                    // Its conversation is drawn: its own line says a need, and the answer a finish.
+                    true => answered |= came == Told::Done && card.replies,
+                    false => told = Some(crate::needs_you::said(card, came)),
+                }
+            }
             if card.finished()
                 && card.pages.is_empty()
                 && was.is_some_and(|was| was.finished() && !was.pages.is_empty())
@@ -695,6 +729,16 @@ impl Shell {
         self.task_cards = cards;
         self.keep_plates();
         self.area_takes_space();
+        if let Some(said) = told {
+            let telling = self
+                .task_told
+                .as_ref()
+                .map_or(0, |(telling, _)| telling + 1);
+            self.task_told = Some((telling, said.into()));
+        }
+        if answered {
+            self.talk_answered(cx);
+        }
         // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
         // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.
         // It isn't held out, as a task may wait a long while over the page.

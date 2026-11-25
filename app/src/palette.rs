@@ -343,9 +343,17 @@ impl Float {
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
-    /// Controls and menus. The rest have none under them yet.
+    /// Controls, menus, toasts and zoom HUD. The rest have none under them yet.
     pub fn over_material(self) -> bool {
-        window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
+        window_material()
+            && matches!(
+                self,
+                Float::Menu
+                    | Float::SiteControls
+                    | Float::TabSwitcher
+                    | Float::Toast
+                    | Float::ZoomHud
+            )
     }
 
     /// Its fill in a `tone` window, as drawn on this host, at the app's level whatever the Spaces'
@@ -959,6 +967,25 @@ impl Palette {
         match self.tone {
             Tone::Dark => self.gray(alpha.max(PLATE_GRAY)),
             Tone::Light => self.gray(alpha),
+        }
+    }
+
+    /// This palette for what lies on `fill`, an opaque colour that isn't the window's, such as a
+    /// page's own under its tab's line: the ink that reads on it, whatever the window's tone, with
+    /// the floors that fill alone asks.
+    pub fn on_fill(&self, fill: Rgba) -> Palette {
+        let ink = ink_on(fill);
+        let floor = |minimum: f32| least_alpha(ink, &[fill], minimum + BETWEEN);
+        Palette {
+            tone: match luminance(ink) > luminance(fill) {
+                true => Tone::Dark,
+                false => Tone::Light,
+            },
+            ink,
+            text_floor: floor(TEXT),
+            glyph_floor: floor(GLYPH),
+            gray_floor: floor(gray_text(transparency())),
+            ..*self
         }
     }
 
@@ -1693,6 +1720,20 @@ fn label_on(color: Rgba) -> Rgba {
         ink
     } else {
         paper
+    }
+}
+
+/// The ink for text on the opaque `fill`: Ink or Paper, whichever reads more, or where neither
+/// reads as text, on a middle grey, black or white, one of which always does.
+pub fn ink_on(fill: Rgba) -> Rgba {
+    let reads = |ink: Rgba| contrast(ink, fill);
+    let label = label_on(fill);
+    if reads(label) >= TEXT + BETWEEN {
+        label
+    } else if reads(BLACK) >= reads(WHITE) {
+        BLACK
+    } else {
+        WHITE
     }
 }
 

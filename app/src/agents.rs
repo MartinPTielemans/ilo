@@ -809,6 +809,9 @@ pub struct Agents {
     socket: PathBuf,
     bridge: Vec<String>,
     on: bool,
+    /// Whether other apps' agents may connect while agents are on (#4260), which the server's
+    /// threads read: off for a new profile.
+    others: server::Others,
     agents: Vec<Agent>,
     /// The agents' tokens, which the server's threads read.
     tokens: server::Tokens,
@@ -969,6 +972,23 @@ const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 /// keeps one, while what it shows held still: no reason to wait for it (#2355).
 const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
+/// What a click is told after its usual answer when it landed on a field whose list or picker a
+/// click doesn't open on an agent's page, by the core's word for the field (`"shut"` in the page's
+/// answer), so that the agent doesn't spend steps on a list that stays shut.
+fn shut_line(field: &str) -> Option<&'static str> {
+    match field {
+        "select" => Some("A click doesn't open this list. Use select with the option's text."),
+        "date_time" => {
+            Some("A click doesn't open a calendar here. Type the date or time into the field.")
+        }
+        "color" => Some(
+            "This color field can't be set by a click or by typing. If it has to be set, hand the \
+             tab to the user with hand_off.",
+        ),
+        _ => None,
+    }
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -1034,6 +1054,7 @@ impl Agents {
             socket,
             bridge,
             on: false,
+            others: Arc::default(),
             agents: Vec::new(),
             tokens: Arc::default(),
             server: None,
@@ -1144,6 +1165,26 @@ impl Agents {
             Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
         }))
         .collect();
+        let last = (tasks.get("last").and_then(Value::as_object))
+            .into_iter()
+            .flatten();
+        self.tasks.last = (last.filter_map(|(profile, last)| {
+            let tier = last.get("level").and_then(Value::as_str);
+            // Full access is never kept; a level this build doesn't know starts at the default.
+            let tier = tier
+                .and_then(tier::Tier::from_id)
+                .filter(|tier| *tier != tier::Tier::Full);
+            let model = (last.get("model").and_then(Value::as_array)).and_then(|model| {
+                let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
+                Some((cli, model.get(1)?.as_str()?.to_string()))
+            });
+            let last = task::Last {
+                tier: tier.unwrap_or_default(),
+                model,
+            };
+            Some((profile.clone(), last))
+        }))
+        .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
@@ -1154,10 +1195,20 @@ impl Agents {
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        // Settings saved before other apps' agents had a switch of their own let them in while
+        // agents were on, which they keep, once: saved, the switch is the user's from then on.
+        let others = saved.get("other_apps").and_then(Value::as_bool);
+        self.others.store(
+            others.unwrap_or(self.on),
+            std::sync::atomic::Ordering::SeqCst,
+        );
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if others.is_none() && self.on {
+            self.save();
+        }
         if self.on {
             self.start(cx);
         }
@@ -1212,6 +1263,45 @@ impl Agents {
         self.notes_off = !on;
         self.save();
         cx.notify();
+    }
+
+    /// Whether other apps' agents may connect while agents are on: Settings › Other apps' switch,
+    /// and first run's, which the user alone sets. A task from the command bar doesn't hang on it.
+    pub fn other_apps(&self) -> bool {
+        self.others.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Sets Settings › Other apps' switch. Off, an app's agent that connects is answered as it is
+    /// with agents off, and each one's sessions end as they do when agents go off, their pages by
+    /// the same rule; the apps stay connected, listed as they are.
+    pub fn set_other_apps(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.other_apps() {
+            return;
+        }
+        self.others.store(on, std::sync::atomic::Ordering::SeqCst);
+        if !on {
+            self.end_other_apps(cx);
+        }
+        self.save();
+        cx.notify();
+    }
+
+    /// Ends every session of the user's connected apps' agents as `stop` ends every agent's, with
+    /// their connections closed, the server running on for the command bar's tasks.
+    fn end_other_apps(&mut self, cx: &mut Context<Self>) {
+        let apps: Vec<Client> = self.agents.iter().map(|agent| agent.client).collect();
+        for client in apps {
+            let agent = client.id();
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(agent, None, cx);
+            if let Some((server, _)) = &self.server {
+                server.disconnect(agent);
+            }
+            if self.live.remove(agent) {
+                self.browser.disconnected(agent, cx);
+                self.note(agent, 0, "disconnected", "", "");
+            }
+        }
     }
 
     /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
@@ -1612,6 +1702,9 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
+            // A hello the server read before the user turned other apps' agents off, from a
+            // connection that's closing: nothing of it shows.
+            Event::Hello { agent, .. } if !self.may_connect(&agent) => {}
             Event::Hello {
                 agent,
                 client,
@@ -1666,6 +1759,15 @@ impl Agents {
             _ = call
                 .reply
                 .send(ToolResult::error("This agent isn't connected."));
+            return;
+        }
+        // A call's word for its tool is its client's to choose, and the log and the trace word
+        // an entry from its action. So one that names no tool of the agent's ends here, before
+        // anything is run, shown or kept by that word: no call can leave an entry that reads as
+        // the browser's own or the user's.
+        if !tools::has(&call.agent, &call.tool) {
+            let none = format!("There's no tool {}.", call.tool);
+            _ = call.reply.send(ToolResult::error(none));
             return;
         }
         // A task the user stopped keeps its connection for their next message, so its calls still
@@ -2333,10 +2435,17 @@ impl Agents {
         }
     }
 
-    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    /// Whether the agent's connections are taken: any but another app's while the user has other
+    /// apps' agents off.
+    fn may_connect(&self, agent: &str) -> bool {
+        Client::from_id(agent).is_none() || self.other_apps()
+    }
+
+    /// Whether the agent may call tools: a client the user connected, while other apps' agents are
+    /// on, or a task not dropped.
     fn may_call(&self, agent: &str) -> bool {
         match Client::from_id(agent) {
-            Some(client) => self.is_connected(client),
+            Some(client) => self.is_connected(client) && self.other_apps(),
             None => is_task(agent) && self.task(agent).is_some(),
         }
     }
@@ -4283,6 +4392,13 @@ impl Agents {
                 false => format!("{note} {unsettled}"),
             };
         }
+        // The core names the field only where its list would have stayed shut.
+        if let Some(shut) = tree["shut"].as_str().and_then(shut_line) {
+            note = match note.is_empty() {
+                true => shut.into(),
+                false => format!("{note} {shut}"),
+            };
+        }
         // A choice answers with what the field holds once it shows the option, as the core
         // names it, and else says the page may have undone it.
         if !field.is_empty() {
@@ -5160,7 +5276,8 @@ impl Agents {
             return;
         }
         let (events, mut handed) = futures::channel::mpsc::unbounded();
-        match server::Server::start(&self.socket, self.tokens.clone(), events) {
+        let (tokens, others) = (self.tokens.clone(), self.others.clone());
+        match server::Server::start(&self.socket, tokens, others, events) {
             Ok(server) => {
                 // check.sh reads this line.
                 log!("browser: agents server on {}", server.path().display());
@@ -5234,16 +5351,27 @@ impl Agents {
         let found: serde_json::Map<String, Value> = (self.tasks.found.iter())
             .map(|(cli, found)| (cli.id().into(), found.saved()))
             .collect();
+        let last: serde_json::Map<String, Value> = (self.tasks.last.iter())
+            .map(|(profile, last)| {
+                let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
+                (
+                    profile.clone(),
+                    json!({ "level": last.tier.id(), "model": model }),
+                )
+            })
+            .collect();
         let tasks = json!({
             "on": !self.tasks_off,
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,
+            "last": last,
             "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({
             "on": self.on,
+            "other_apps": self.other_apps(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,

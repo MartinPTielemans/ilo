@@ -7,7 +7,7 @@
 # translate="no" element or an editable region; Use Original puts the page's own back. The page's
 # menu has Translate to English after Cast…, as Arc's has Translate, and then Use Original. The
 # card's Always Translate Spanish translates it and, after a reload, translates it as it comes, until
-# Settings › Features' Remove takes Spanish off. A page in Dutch, a language the user reads
+# Settings › General's Remove takes Spanish off. A page in Dutch, a language the user reads
 # (BROWSER_TRANSLATE_READS), offers none, as Arc offers none for a preferred language.
 # On a Mac with macOS 26, a second launch without the stand-in has Apple's Translation translate the
 # Spanish page to English: its title becomes neither the page's own nor the stand-in's. With no
@@ -122,14 +122,16 @@ expect "^browser: translate card $tab at " "the translated page's mark opened no
 ../tools/window-screenshot.sh "$pid" "$out/translate-always.png" || fail "no window to capture"
 send key escape
 
-# Settings › Features lists Spanish, and Remove takes it off, after which the page asks again.
+# Settings › General lists Spanish, and Remove takes it off, after which the page asks again.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
-send clickkey $(drawn "toolbar Features")
-expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-settings_drew Features
-# At the section's foot, under the card's edge where the screen is short: in_sight scrolls it up.
-in_sight "always translated es" || fail "Settings › Features didn't list Spanish"
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+fi
+settings_drew General
+# At the section's foot, under the card's edge: in_sight scrolls it up, from this show's frame.
+in_sight "always translated es" '^browser: settings drew General$' || fail "Settings › General didn't list Spanish"
 ../tools/window-screenshot.sh "$pid" "$out/translate-settings.png" all || fail "no window to capture"
 send clickkey $at
 expect '^browser: always translate es off$' "Remove didn't take Spanish off"
@@ -206,7 +208,7 @@ echo "ok: a page declaring Spanish got the URL field's mark, whose press opened 
   "Page showed the stand-in's words in the page and its title, leaving code, translate=\"no\" and" \
   "an editable region; Use Original put the page's own back. The page's menu had Translate to" \
   "English after Cast…, then Use Original, each doing so. The card's Always Translate Spanish" \
-  "translated the page and the reloaded page as it came, until Settings › Features' Remove took" \
+  "translated the page and the reloaded page as it came, until Settings › General's Remove took" \
   "Spanish off. A page in Dutch, which the user reads, offered none." \
   "Windows: $out/translate-offer.png, $out/translated.png, $out/translate-menu.png," \
   "$out/translate-always.png, $out/translate-settings.png"

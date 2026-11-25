@@ -80,6 +80,7 @@ impl Command {
             Exit => &["Exit"],
             Clear => &["Clear Today"],
             SortBySite => &["Sort Today Tabs by Site"],
+            SortIntoFolders => &[super::broom::NAME],
             Undo | Redo => &[],
             CopyUrl => &["Copy URL"],
             CopyMarkdownLink => &["Copy URL as Markdown"],

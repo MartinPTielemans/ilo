@@ -7,17 +7,11 @@ use std::rc::Rc;
 
 use gpui::{
     Bounds, BoxShadow, FocusHandle, FontWeight, Pixels, Rgba, ScrollHandle, SharedString,
-    WeakFocusHandle, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgb,
-    rgba,
+    WeakFocusHandle, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgba,
 };
 
-use crate::palette::OVERLAY_DARK;
-use crate::tokens::palette::DIALOG_LIGHT;
-use crate::tokens::settings::{
-    CARD_RIM, CARD_RING, CARD_SHADOW, CARD_SHADOW_BLUR, CARD_SHADOW_Y, FADE, HELD_TITLE,
-    PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
-};
-use crate::tokens::shell::CARD_INSET;
+use crate::tokens::settings::form;
+use crate::tokens::settings::{FADE, HELD_TITLE, PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X};
 
 #[cfg(test)]
 mod tests;
@@ -256,7 +250,7 @@ impl Card {
         })
     }
 
-    /// The card around `page`, light or dark.
+    /// The page's plane around `page`, light or dark.
     pub fn draw(
         &self,
         section: &str,
@@ -284,11 +278,16 @@ impl Card {
         }
         // Drawn again below, in the page's order.
         self.headings.borrow_mut().clear();
-        let fill = if dark {
-            rgb(OVERLAY_DARK)
+        let fill = rgba(if dark {
+            form::OWN_PAGE
         } else {
-            rgb(DIALOG_LIGHT)
-        };
+            form::LIGHT_OWN_PAGE
+        });
+        let line = rgba(if dark {
+            form::PAGE_LINE
+        } else {
+            form::LIGHT_PAGE_LINE
+        });
         let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
         // What this frame shows of the scroll, from the page's last layout: a page whose layout
         // changes under it, as a resize does, is held to its new one only after, and is drawn
@@ -375,28 +374,24 @@ impl Card {
         )
         .absolute()
         .inset_0();
+        // The page's own plane, 8 in from the window's top, right and bottom, its inner line drawn
+        // over its edge (spec-settings.md › The window).
         div()
             .flex_1()
             .min_w_0()
-            .mt(px(CARD_INSET))
-            .mr(px(CARD_INSET))
-            .mb(px(CARD_INSET))
+            .mt(px(form::PANEL_MARGIN))
+            .mr(px(form::PANEL_MARGIN))
+            .mb(px(form::PANEL_MARGIN))
             .relative()
-            // A window of its own, with the browser window's card's corners.
-            .rounded(px(crate::shell::CARD_RADIUS))
+            .rounded(px(form::PANEL_RADIUS))
             .bg(fill)
-            .when(dark, |card| card.border_1().border_color(rgba(CARD_RIM)))
-            .when(!dark, |card| {
-                card.border_1()
-                    .border_color(rgba(CARD_RING))
-                    .shadow(vec![BoxShadow {
-                        color: rgba(CARD_SHADOW).into(),
-                        offset: point(px(0.), px(CARD_SHADOW_Y)),
-                        blur_radius: px(CARD_SHADOW_BLUR),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-            })
+            .shadow(vec![BoxShadow {
+                color: line.into(),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(form::PAGE_LINE_WIDTH),
+                inset: true,
+            }])
             .overflow_hidden()
             .child(at)
             .child(self.follow.before())
