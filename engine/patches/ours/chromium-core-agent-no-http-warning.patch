@@ -1,8 +1,22 @@
-Lets the core keep Chrome's warning before http out of an agent's tab (//browser_core/hooks.h,
-//browser_core/secure_connections.h). The warning is a dialog whose Continue to site loads the
-page over http and remembers the site: the user's to press. Where Chrome would show it, the tab
-helper asks the core first; the core answers for the tab the page is in and, in an agent's, puts
-the tab back itself, so no warning ever exists there. The helper holds no rule of its own.
+Keeps Chrome's warning before http out of an agent's tab, and has its text say the app's name
+for the browser (//browser_core/hooks.h, //browser_core/secure_connections.h). The warning is a
+dialog whose Continue to site loads the page over http and remembers the site: the user's to
+press.
+
+https_only_mode_tab_helper.cc: where Chrome would show the warning, the tab helper asks the core
+first; the core answers for the tab the page is in and, in an agent's, puts the tab back itself,
+so no warning ever exists there. The helper holds no rule of its own.
+
+ask_before_http_dialog_controller.cc: the two paragraphs that name the browser take the name the
+core hands them, the app's, or else the name the text had; and the Learn more link, which opens a
+help page of Chrome's that isn't there, is gone, its place in the text left empty, in every
+language.
+
+security_interstitials_strings.grdp: those two paragraphs get a placeholder where they said
+Chrome, and the one for a private window says "a private window" where it said Incognito mode.
+Nothing else of the text changes. A changed message has no translation, so these three read in
+English in every language while the rest of the dialog stays translated; a new major that rewords
+one fails this hunk, loudly.
 
 --- a/chrome/browser/ssl/https_only_mode_tab_helper.cc
 +++ b/chrome/browser/ssl/https_only_mode_tab_helper.cc
@@ -39,3 +53,98 @@ the tab back itself, so no warning ever exists there. The helper holds no rule o
      auto* tab = tabs::TabInterface::MaybeGetFromContents(
          navigation_handle->GetWebContents());
      if (!tab) {
+--- a/chrome/browser/ssl/ask_before_http_dialog_controller.cc
++++ b/chrome/browser/ssl/ask_before_http_dialog_controller.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <memory>
+ 
+@@ -51,6 +52,10 @@
+ using HttpWarningReason =
+     security_interstitials::https_only_mode::InterstitialReason;
+ 
++// browser_core: the browser's name as the app shows it, for the two
++// paragraphs that name the browser (//browser_core/hooks.h).
++std::u16string (*g_browser_core_product_name)() = nullptr;
++
+ namespace {
+ 
+ inline constexpr char kLearnMoreLink[] =
+@@ -58,12 +63,28 @@
+ 
+ // Helper to create the prompt body view based on the Ask-before-HTTP warning
+ // type.
++// browser_core: the paragraph |message_id|, which names the browser at $2: by
++// the app's name for it, or else by the name the text had.
++ui::DialogModelLabel NamingTheBrowser(
++    int message_id,
++    ui::DialogModelLabel::TextReplacement link) {
++  std::u16string product = g_browser_core_product_name
++                               ? g_browser_core_product_name()
++                               : std::u16string();
++  if (product.empty()) {
++    product = u"Chrome";
++  }
++  return ui::DialogModelLabel::CreateWithReplacements(
++      message_id,
++      {link, ui::DialogModelLabel::CreatePlainText(std::move(product))});
++}
++
+ void AddAskBeforeHttpDialogText(ui::DialogModel::Builder& dialog_model,
+                                 HttpWarningReason warning_reason,
+                                 ui::DialogModelLabel::TextReplacement link) {
+   // Build the dialog text view based on the warning type.
+   if (warning_reason == HttpWarningReason::kSiteEngagementHeuristic) {
+-    auto description_text = ui::DialogModelLabel::CreateWithReplacement(
++    auto description_text = NamingTheBrowser(
+         IDS_ABH_PROMPT_SITE_ENGAGEMENT_PRIMARY_PARAGRAPH, link);
+     dialog_model.AddParagraph(
+         description_text, /*header=*/u"",
+@@ -83,7 +104,7 @@
+     return;
+   } else if (warning_reason ==
+              HttpWarningReason::kTypicallySecureUserHeuristic) {
+-    auto description_text = ui::DialogModelLabel::CreateWithReplacement(
++    auto description_text = NamingTheBrowser(
+         IDS_ABH_PROMPT_TYPICALLY_SECURE_BROWSING_PRIMARY_PARAGRAPH, link);
+     dialog_model.AddParagraph(
+         description_text, /*header=*/u"",
+@@ -482,11 +503,10 @@
+ #endif
+ 
+   // We separately add on the main warning text, including the learn more link.
+-  ui::DialogModelLabel::TextReplacement link = ui::DialogModelLabel::CreateLink(
+-      IDS_ABH_PROMPT_LEARN_MORE_LINK,
+-      base::BindRepeating(
+-          &AskBeforeHttpDialogController::OnHelpCenterLinkClicked,
+-          weak_ptr_factory_.GetWeakPtr()));
++  // browser_core: no Learn more link, which opens a help page of Chrome's that
++  // isn't there: its place in the text stays empty.
++  ui::DialogModelLabel::TextReplacement link =
++      ui::DialogModelLabel::CreatePlainText(std::u16string());
+   security_interstitials::https_only_mode::HttpInterstitialState
+       interstitial_state =
+           ComputeInterstitialState(web_contents(), request_url);
+--- a/components/security_interstitials_strings.grdp
++++ b/components/security_interstitials_strings.grdp
+@@ -556,13 +556,13 @@
+     Learn more about this warning
+   </message>
+   <message name="IDS_ABH_PROMPT_SITE_ENGAGEMENT_PRIMARY_PARAGRAPH" desc="Main paragraph shown in the Ask-before-HTTP warning dialog. This warning is shown when the browser tries to upgrade a navigation to a site to HTTPS but the site does not support HTTPS. The user is seeing this warning because they typically visit HTTPS URLs.">
+-    You usually connect to this site securely, but Chrome couldn’t use a secure connection this time. An attacker might be trying to eavesdrop or modify your network connection. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
++    You usually connect to this site securely, but <ph name="PRODUCT">$2<ex>Chrome</ex></ph> couldn’t use a secure connection this time. An attacker might be trying to eavesdrop or modify your network connection. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
+   </message>
+   <message name="IDS_ABH_PROMPT_TYPICALLY_SECURE_BROWSING_PRIMARY_PARAGRAPH" desc="Main paragraph of the Ask-before-HTTP warning dialog. This warning is shown when the browser tries to upgrade a navigation to a site to HTTPS but the site does not support HTTPS. The user has previously engaged with the HTTPS version of the site.">
+-    You usually connect to sites securely, but Chrome couldn’t use a secure connection this time. An attacker might be trying to eavesdrop or modify your network connection. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
++    You usually connect to sites securely, but <ph name="PRODUCT">$2<ex>Chrome</ex></ph> couldn’t use a secure connection this time. An attacker might be trying to eavesdrop or modify your network connection. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
+   </message>
+   <message name="IDS_ABH_PROMPT_INCOGNITO_PRIMARY_PARAGRAPH" desc="Main paragrpah of the Ask-before-HTTP warning dialog. This warning is shown when the browser tries to upgrade a navigation to a site to HTTPS but the site does not support HTTPS. The user is seeing this warning because they are browsing in Incognito mode.">
+-    You are seeing this warning because this site does not support HTTPS and you are in Incognito mode. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
++    You are seeing this warning because this site does not support HTTPS and you are in a private window. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>
+   </message>
+   <message name="IDS_ABH_PROMPT_ISOLATED_MODE_PRIMARY_PARAGRAPH" desc="Main paragraph of the Ask-before-HTTP warning dialog. This warning is shown when the browser tries to upgrade a navigation to a site to HTTPS but the site does not support HTTPS. The user is seeing this warning because they are browsing in Isolated Mode, an enterprise browsing mode that replaces Incognito mode.">
+     You are seeing this warning because this site does not support HTTPS and you are in Isolated Mode. <ph name="LEARN_MORE">$1<ex>Learn more about this warning</ex></ph>

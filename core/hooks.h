@@ -112,6 +112,10 @@ extern media_router::MediaRouterDialogController* (*g_browser_core_cast_dialog)(
 // tab, and puts it back.
 extern bool (*g_browser_core_no_http_warning)(content::WebContents* contents, const GURL& url);
 
+// chrome/browser/ssl/ask_before_http_dialog_controller.cc: the browser's name as the app shows it,
+// for the warning before http where its text names the browser, or empty for Chrome's own.
+extern std::u16string (*g_browser_core_product_name)();
+
 // chrome/browser/devtools/devtools_window.cc: the core docks DevTools in its windows, which have no
 // DevtoolsUIController. Whether |browser|'s window can, and the call as the docked DevTools of
 // |inspected|, a tab of |browser|, open, lay out again or close.
