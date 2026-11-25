@@ -23,8 +23,11 @@ const KINDS: [(&str, &str); 18] = [
     ("file_handle", "opening your files"),
     ("color_picker", "picking a color from the screen"),
     ("print", "printing"),
-    ("share", "sharing"),
-    ("federated_sign_in", "signing you in with another account"),
+    ("share", "opening the share sheet"),
+    (
+        "federated_sign_in",
+        "signing you in with another site's account",
+    ),
     ("payment", "asking for a payment"),
     ("client_certificate", "asking for a certificate"),
     ("cast", "casting to your devices"),
