@@ -1,6 +1,8 @@
 use super::*;
+use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
 use crate::tokens::palette::{LIGHT_TINT, TINT};
+use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST, LESS};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -102,13 +104,14 @@ fn failures_over(
     }
     check("unselected title", on(palette.text(0.78), &grained), TEXT);
     // A dark window's plate under the pointer tells from the window first, and its title reads
-    // what that leaves: 4.5, at More 4.2, and on a Space's colour, fitted to 4.5 on the bare
-    // window, 3.6 (`a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level`).
-    let under_the_pointer = match (tone, theme, transparency()) {
-        (Tone::Light, ..) => TEXT,
-        (Tone::Dark, Some(_), _) => 3.6,
-        (Tone::Dark, None, Transparency::More) => 4.2,
-        (Tone::Dark, None, _) => TEXT,
+    // what that leaves: 4.5, past the bar's last stretch, where today's More sits, 4.2, and on a
+    // Space's colour, fitted to 4.5 on the bare window, 3.6
+    // (`a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level`).
+    let under_the_pointer = match (tone, theme) {
+        (Tone::Light, _) => TEXT,
+        (Tone::Dark, Some(_)) => 3.6,
+        (Tone::Dark, None) if palette.glass > HOVERED_TITLE_PAST => HOVERED_TITLE,
+        (Tone::Dark, None) => TEXT,
     };
     check(
         "title on hovered plate",
@@ -286,7 +289,7 @@ fn failures_over(
     }
     // The Space's swatch, ringed where its edge doesn't reach 3:1 on the window.
     let swatch = match theme {
-        Some(theme) => Window::of(theme, tone).swatch(),
+        Some(theme) => Window::of(theme, tone, palette.glass).swatch(),
         None => vec![rgb(NO_THEME_ACCENT)],
     };
     let edge = match Palette::swatch_ring_on(theme, window) {
@@ -658,7 +661,7 @@ fn a_theme_only_fades_where_the_ink_needs_it() {
     // The picker's palest swatch, too light for Paper at its own alpha over white.
     let pale = Theme::of_color(0xf0eae5);
     let palette = Palette::of(Some(&pale), Tone::Dark);
-    let window = Window::of(&pale, Tone::Dark);
+    let window = Window::of(&pale, Tone::Dark, START);
     assert_eq!(palette.tint, none.tint, "the pale theme shades the window");
     assert!(
         palette.layer_alpha < window.alpha,
@@ -1230,7 +1233,7 @@ fn secondary_text_reads_at_both_ends_of_each_window() {
 #[ignore]
 fn secondary_text_unlifted() {
     for tone in [Tone::Dark, Tone::Light] {
-        for ground in tone.grounds() {
+        for ground in tone.grounds(tone.tint(START)) {
             let ink = tone.ink();
             let ratio = contrast(over(ground, ink, TEXT_SECONDARY), ground);
             println!("{tone:?} over {:06x}: {ratio:.2}", theme::packed(ground));
@@ -1928,6 +1931,166 @@ fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
         }
     }
     set_transparency(Transparency::Standard);
+}
+
+/// A Space's glass on its bar, from solid to clearest, in hundredths.
+fn bar() -> impl Iterator<Item = f32> {
+    (0..=100).map(|step| step as f32 / 100.)
+}
+
+/// The least gray text reads over `palette`'s window, both backdrops and every glow, less what it
+/// has to hold there.
+fn gray_margin(palette: &Palette) -> f32 {
+    let gray = Rgba::from(palette.gray(0.));
+    let window = fine_window(palette);
+    let worst = (window.iter())
+        .map(|&at| contrast(over(at, gray, gray.a), at))
+        .fold(f32::MAX, f32::min);
+    worst - gray_text_at(palette.glass)
+}
+
+/// The sweep's one excused miss, by the lead's word (2026-11-25): the Library's section label on a
+/// dark window in a colour, where Less sits, reads just under gray's 4.5 there, in today's build
+/// too, which no coarser test saw. No colour moves at Less for it; P6 redraws the Library and
+/// takes this out. It fails the day the label reads 4.5 or more, or less than this.
+const LABEL_AT_LESS: f32 = 4.49;
+const LIBRARY_LABEL: &str = "Library section label, every state";
+
+/// The least the Library's section label reads on `palette`'s `window` in each state it takes.
+fn library_label_reads(palette: &Palette, window: &[Rgba], gray: f32) -> f32 {
+    let (_, label, _, grounds) = states(palette, window, gray)
+        .into_iter()
+        .find(|(name, ..)| format!("{name}, every state") == LIBRARY_LABEL)
+        .expect("the Library's section label is one of the states");
+    let label = Rgba::from(label);
+    (grounds.iter())
+        .map(|&at| contrast(over(at, label, label.a), at))
+        .fold(f32::MAX, f32::min)
+}
+
+/// A Space's glass anywhere on its bar keeps every floor of the window and what lies on it, gray
+/// text at the one where its glass sits, over a black and a white backdrop: a sweep from solid to
+/// clear in hundredths, in Dark and Light, with no colour and with one. The title on a plate under
+/// the pointer may read less past the bar's last stretch, as at today's More, and the Library's
+/// section label is excused at one point (`LABEL_AT_LESS`).
+#[test]
+fn a_spaces_glass_holds_every_floor_across_its_bar() {
+    let colored = Theme::at(0.3, -0.5);
+    let mut failed = Vec::new();
+    for theme in [None, Some(&colored)] {
+        for tone in [Tone::Dark, Tone::Light] {
+            for glass in bar() {
+                let palette = Palette::at(theme, tone, glass);
+                let window = fine_window(&palette);
+                let gray = gray_text_at(glass);
+                let mut failures = failures_over(theme, &palette, &window, gray);
+                if tone == Tone::Dark && theme.is_some() && glass == LESS {
+                    let reads = library_label_reads(&palette, &window, gray);
+                    assert!(
+                        (LABEL_AT_LESS..gray).contains(&reads),
+                        "the Library's section label, Dark, coloured, where Less sits, reads \
+                         {reads:.4}: the miss it was excused for ({LABEL_AT_LESS} to under \
+                         {gray}) has gone or grown; take the exception out or stop"
+                    );
+                    let before = failures.len();
+                    failures.retain(|each| !each.starts_with(LIBRARY_LABEL));
+                    assert_eq!(before - failures.len(), 1, "{failures:#?}");
+                }
+                let colour = if theme.is_some() { "coloured" } else { "none" };
+                failed.extend(
+                    failures
+                        .into_iter()
+                        .map(|each| format!("{tone:?} {colour} {glass}: {each}")),
+                );
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// The least gray text reads on a Space's window at `glass`, over a black and a white backdrop and
+/// every glow.
+fn gray_reads(theme: Option<&Theme>, tone: Tone, glass: f32) -> f32 {
+    gray_margin(&Palette::at(theme, tone, glass)) + gray_text_at(glass)
+}
+
+/// Gray text holds 4.5:1 from solid up to where Less sits, and then what today's levels hold where
+/// they sit, never less than More's.
+#[test]
+fn gray_text_holds_what_todays_level_did_where_it_sits() {
+    for level in Transparency::ALL {
+        assert_eq!(gray_text_at(of_level(level)), gray_text(level), "{level:?}");
+    }
+    assert_eq!(gray_text_at(0.), GRAY_TEXT_LESS);
+    assert!(bar().all(|glass| gray_text_at(glass) >= GRAY_TEXT_MORE));
+    assert!(GRAY_TEXT_LESS >= TEXT, "Less's gray holds 4.5");
+}
+
+/// A Space carried over at today's level is the window it was: its palette at that place on the
+/// bar is the app's at the level.
+#[test]
+fn a_space_at_a_levels_place_is_that_levels_window() {
+    let colored = Theme::at(0.3, -0.5);
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in [None, Some(&colored)] {
+            for tone in [Tone::Dark, Tone::Light] {
+                let app = Palette::of(theme, tone);
+                let space = Palette::at(theme, tone, of_level(level));
+                assert_eq!(app.tint, space.tint, "{level:?} {tone:?}");
+                assert_eq!(app.gray_floor, space.gray_floor, "{level:?} {tone:?}");
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
+}
+
+/// The window shows more of what's behind it the further along the bar its Space's glass is, from
+/// solid at 0.
+#[test]
+fn a_spaces_glass_shows_more_further_along_its_bar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let tints: Vec<f32> = bar()
+            .map(|glass| Palette::at(None, tone, glass).tint.a)
+            .collect();
+        assert_eq!(tints[0], 1., "{tone:?}: solid at 0");
+        assert!(
+            tints.windows(2).all(|step| step[0] > step[1]),
+            "{tone:?}: {tints:?}"
+        );
+    }
+}
+
+/// A window's overlay and dialog fills are the same whatever its Space's glass: a Space's value
+/// changes only the window's glass.
+#[test]
+fn overlay_and_dialog_fills_dont_follow_a_spaces_glass() {
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for glass in [0., START, 1.] {
+            for tone in [Tone::Dark, Tone::Light] {
+                let (overlay, dialog) = tone.overlays();
+                let palette = Palette::at(None, tone, glass);
+                assert_eq!((palette.overlay, palette.dialog), (overlay, dialog));
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
+}
+
+/// What gray text reads at the bar's points under 4.5:1 until the contrast floor, for the DEV.
+#[test]
+#[ignore]
+fn gray_text_under_4_5_on_the_bar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        for glass in [0., of_level(Transparency::Less), START, 1.] {
+            let reads = gray_reads(None, tone, glass);
+            println!(
+                "{tone:?} at {glass}: gray reads {reads:.2}, target {}",
+                gray_text_at(glass)
+            );
+        }
+    }
 }
 
 /// Every fifth level of each channel, every grey, and the greys' neighbours where Ink and Paper

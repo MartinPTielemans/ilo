@@ -118,10 +118,9 @@ impl Shell {
         self.all_favorites.contains(&tab) || self.spaces.iter().any(in_space)
     }
 
-    /// Where the pages above the footer end, over Restart to Update, the players and the tasks'
-    /// plates.
+    /// Where the pages above the footer end, over Restart to Update and the players.
     pub(super) fn list_bottom(&self) -> f32 {
-        self.media_top() + self.foot_height()
+        self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
     /// The room the stack takes at rest, which the list ends over: its open grows over the list,
@@ -144,6 +143,7 @@ impl Shell {
     }
 
     /// Whether the stack is open, or opening.
+    #[cfg(test)]
     pub(super) fn media_open(&self) -> bool {
         self.media_stack.open
     }

@@ -47,6 +47,10 @@ pub(super) fn card() -> Card {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     }
 }
 
@@ -493,8 +497,8 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
     );
 }
 
-/// While its task works every page says Working, where each reads `page_mark`: the rail's tile,
-/// the card's helper lines and the sidebar's row, as a screen reader names it. A page that has
+/// While its task works every page says Working, where each reads `page_mark`: the rail's tile and
+/// the card's helper lines. A page that has
 /// finished loading, or that the task isn't in, is still Working: Done comes only with the task.
 #[gpui::test]
 fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppContext) {
@@ -536,20 +540,6 @@ fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppCont
         pages.iter().map(|page| page.word).collect::<Vec<_>>()
     });
     assert_eq!(helpers, ["Working"; 2], "the card's helper lines");
-    let tree = cx.a11y_tree().expect("GPUI built a tree");
-    let rows: Vec<String> = (tree.nodes.iter())
-        .filter_map(|(_, node)| node.label().map(|label| label.to_string()))
-        .filter(|label| {
-            ["Working", "Done", "Paused"]
-                .iter()
-                .any(|word| label.ends_with(&format!(", {word}")))
-        })
-        .collect();
-    assert_eq!(rows.len(), 2, "the sidebar's rows: {rows:?}");
-    assert!(
-        rows.iter().all(|row| row.ends_with(", Working")),
-        "the sidebar's rows: {rows:?}"
-    );
 }
 
 /// A tile whose word turns to Needs you is brought into sight once, where the rail holds more

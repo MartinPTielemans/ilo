@@ -174,6 +174,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // A thread card's button, at the drawing's 8 (spec-thread-card).
+    "shell.task-card.button-radius",
     // Settings' segmented track, concentric round its segments at the control radius.
     "settings.segment-radius",
     // The foot's plates in the owner's drawing (spec-library-foot-theme.md): 28 square at 8.

@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
+use crate::palette::Tone;
 use crate::shell::recorder::Recorder;
 use crate::shell::undo::{Prop, Value};
 use crate::shell::{Shell, SpaceEntry};
@@ -143,4 +144,87 @@ fn a_colour_change_keeps_the_spaces_value(cx: &mut TestAppContext) {
         shell.remove_space_theme(1, cx);
     });
     assert_eq!(themes(&host), ["theme 1 transparency=0.600"]);
+}
+
+/// The tint a window draws at, and where its glass sits.
+fn glass(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (f32, f32, bool) {
+    shell.update(cx, |shell, _| {
+        let palette = shell.palette;
+        (palette.tint.a, palette.glass, palette.tone == Tone::Dark)
+    })
+}
+
+/// Ends a Space switch's slide, and draws the window again.
+fn settle(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// Two windows showing two Spaces each draw their own Space's glass, and a window going to the
+/// other Space takes that one's.
+#[gpui::test]
+fn each_window_draws_its_shown_spaces_glass(cx: &mut TestAppContext) {
+    let spaces = || {
+        vec![
+            entry(1, "transparency=0.300"),
+            entry(2, "transparency=1.000"),
+        ]
+    };
+    let (first, cx, _) = window(spaces(), cx);
+    let (second, cx, _) = window(spaces(), cx);
+    second.update(cx, |shell, cx| shell.set_space(2, cx));
+    settle(&second, cx);
+    settle(&first, cx);
+    let (tint, at, dark) = glass(&first, cx);
+    let expected = crate::space_transparency::tint(0.3, dark);
+    assert_eq!((tint, at), (expected, 0.3), "the first window, on Space 1");
+    let (tint, at, dark) = glass(&second, cx);
+    let expected = crate::space_transparency::tint(1., dark);
+    assert_eq!((tint, at), (expected, 1.), "the second, on Space 2");
+    first.update(cx, |shell, cx| shell.set_space(2, cx));
+    settle(&first, cx);
+    assert_eq!(
+        glass(&first, cx),
+        glass(&second, cx),
+        "the first, gone to 2"
+    );
+}
+
+/// A window works out a palette once for each Space and value it shows, not at each frame or each
+/// switch back, and once more when a Space's value changes.
+#[gpui::test]
+fn a_palette_is_worked_out_once_for_each_spaces_value(cx: &mut TestAppContext) {
+    let spaces = |first: &str| vec![entry(1, first), entry(2, "transparency=1.000")];
+    let (shell, cx, _) = window(spaces("transparency=0.300"), cx);
+    let worked_out = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        settle(shell, cx);
+        shell.update(cx, |shell, _| shell.palettes.borrow().len())
+    };
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    let both = worked_out(&shell, cx);
+    for space in [1, 2, 1, 2, 1] {
+        shell.update(cx, |shell, cx| shell.set_space(space, cx));
+        assert_eq!(worked_out(&shell, cx), both, "Space {space} shown again");
+    }
+    let spaces = spaces("transparency=0.600");
+    shell.update(cx, |shell, cx| shell.set_spaces(spaces, cx));
+    assert_eq!(worked_out(&shell, cx), both + 1, "Space 1 at its new value");
+    assert_eq!(glass(&shell, cx).1, 0.6);
+}
+
+/// A Space keeping no value, as one sync brings from a device that hasn't carried, draws at the
+/// app's level from its own file and not at the start, so nothing changes under the user.
+#[gpui::test]
+fn a_space_keeping_no_value_draws_at_the_apps_level(cx: &mut TestAppContext) {
+    let dir = folder(Transparency::More, cx);
+    let path = dir.to_string_lossy().into_owned();
+    cx.update(|cx| transparency::kept_in(path, cx));
+    let spaces = vec![entry(1, ""), entry(2, "transparency=0.300")];
+    let (shell, cx, _) = window(spaces, cx);
+    let (tint, at, dark) = glass(&shell, cx);
+    assert_eq!(at, crate::space_transparency::of_level(Transparency::More));
+    assert_eq!(tint, Transparency::More.tint(dark));
+    _ = std::fs::remove_dir_all(&dir);
 }

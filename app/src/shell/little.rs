@@ -143,6 +143,7 @@ impl Shell {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);

@@ -23,6 +23,8 @@ pub(crate) enum Pictures {
     Models,
     /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
     SiteNotes { open: bool },
+    /// Threads' first row, your assistant's switch, `on` or off.
+    Threads { on: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -136,6 +138,7 @@ impl gpui::Render for PicturesPage {
             Pictures::CommandLine(_) => Section::OtherApps,
             Pictures::Assistants { .. } | Pictures::Models => Section::Models,
             Pictures::SiteNotes { .. } => Section::Access,
+            Pictures::Threads { .. } => Section::Threads,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -255,6 +258,17 @@ impl gpui::Render for PicturesPage {
                     )],
                 )]);
                 groups
+            }
+            Pictures::Threads { on } => {
+                // As Settings draws it: off says what off does, on is bare.
+                let name = format!("Let your assistant use {}", browser::product::PRODUCT);
+                let line = (!on).then(|| "Off: no thread starts.".into());
+                let row = frame()
+                    .child(row_text(&look, name.clone(), line))
+                    .child(end([gpui::IntoElement::into_any_element(stop_switch(
+                        &look, "agents", name, on, 1., look.on, a11y,
+                    ))]));
+                vec![(None, vec![row])]
             }
             Pictures::General => {
                 use browser::product::PRODUCT;
@@ -390,20 +404,19 @@ impl gpui::Render for PicturesPage {
                         .child(row_text(&look, name, Some(line.to_string().into())))
                         .child(end(controls))
                 };
-                let master = feature(
-                    Section::Threads.glyph(),
-                    "Let agents use the browser",
-                    "On: a connected client reaches the browser through the bridge beside it.",
-                    vec![gpui::IntoElement::into_any_element(stop_switch(
+                // Other apps' own switch, on, as its page has it: S30's draft, bare when on.
+                let agents_on = format!("Let other apps' agents use {}", browser::product::PRODUCT);
+                let master = frame()
+                    .child(row_text(&look, agents_on.clone(), None))
+                    .child(end(vec![gpui::IntoElement::into_any_element(stop_switch(
                         &look,
-                        "agents",
-                        "Let agents use the browser",
+                        "other apps",
+                        agents_on,
                         true,
                         1.,
                         look.on,
                         a11y,
-                    ))],
-                );
+                    ))]));
                 let clients = vec![
                     feature(
                         "icons/terminal.svg",
@@ -686,7 +699,8 @@ impl gpui::Render for PicturesPage {
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let lede = match self.shown {
-            Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
+            Pictures::Models | Pictures::Assistants { .. } => Section::Models.lede(),
+            Pictures::CommandLine(_) => Section::OtherApps.lede(),
             _ => None,
         };
         let lede = lede.map(|lede| {

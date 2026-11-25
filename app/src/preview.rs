@@ -1221,8 +1221,9 @@ impl Browser for Fake {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
-    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
-    // a click doesn't change: nothing here sorts.
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
     fn broom(&self) -> Option<Broom> {
         match states::var("PREVIEW_BROOM").ok()?.as_str() {
             "idle" => Some(Broom::Idle),
@@ -2718,6 +2719,11 @@ fn main() {
                 );
                 return;
             }
+            // PREVIEW_THREADS=on or off shows Settings › Threads' first row, its switch so.
+            if let Ok(state) = states::var("PREVIEW_THREADS") {
+                preview_pictures(Pictures::Threads { on: state == "on" }, cx);
+                return;
+            }
             // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
             if states::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
                 preview_pictures(Pictures::General, cx);
@@ -2840,7 +2846,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
