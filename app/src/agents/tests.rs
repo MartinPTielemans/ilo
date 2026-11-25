@@ -13600,7 +13600,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 #[cfg(unix)]
-mod handed;
+pub(crate) mod handed;
 #[cfg(unix)]
 mod helpers;
 mod holds;

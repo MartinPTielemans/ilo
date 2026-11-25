@@ -135,7 +135,7 @@ mod task_cards;
 mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
-pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
+pub use conversation::{bind_keys as bind_conversation_keys, send_agents, send_past_stand_ins};
 mod picture;
 mod recent_downloads;
 mod recent_tabs;
@@ -1947,6 +1947,9 @@ pub struct Shell {
     archived_tasks: Vec<crate::agents::task::ArchivedTask>,
     /// Library › Agents' past tasks of the window's profile, as read when it shows them.
     agent_history: Vec<crate::agent_history::Past>,
+    /// What stands in for the title of a past thread that has none, by the past's id
+    /// (`set_past_stand_ins`): this run's alone, in memory.
+    past_stand_ins: Vec<(String, SharedString)>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
     /// What the composer's ↩ started: that task's view opens as its card comes in, if its Space
@@ -2424,6 +2427,7 @@ impl Shell {
             closed_task: None,
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
+            past_stand_ins: Vec::new(),
             show_restored: None,
             show_started: None,
             kept_cards: Vec::new(),

@@ -314,3 +314,68 @@ fn a_past_request_opens_to_what_it_sent(cx: &mut TestAppContext) {
         named(cx, Role::ListBoxOption, title).expect("the request is a row of the list");
     assert_eq!(node.is_expanded(), Some(false));
 }
+
+/// A thread that ended with no title of its own reads one title wherever it has a row: on its
+/// card, in its panel, in the Archive and here, the first tab's it was started with, as one
+/// function answers each (`handed::titled`). The file keeps the thread's own title, which is
+/// empty, and nothing of the tab's, so after a quit and a launch each of the four reads
+/// `New Thread`.
+#[cfg(unix)]
+#[gpui::test]
+fn a_thread_with_no_title_reads_the_same_in_every_row(cx: &mut TestAppContext) {
+    use crate::agents::task::handed::NEW_THREAD;
+    use crate::agents::tests::handed::an_unnamed_thread_ended;
+
+    let (threads, agent, tab, relaunch) = an_unnamed_thread_ended(cx);
+    let (card, panel) = threads.read_with(cx, |threads, cx| {
+        let mut cards = threads.shown_cards(cx).into_iter();
+        let card = cards.find(|card| *card.agent == *agent);
+        let panel = threads.conversation(&agent, cx).expect("its conversation");
+        (card.expect("its card").title, panel.title)
+    });
+    // Its record, as the browser keeps it at its end, then its row in the Archive.
+    let mut ended = threads.update(cx, |threads, cx| threads.take_ended(cx));
+    let (_, record) = ended.pop().expect("its record");
+    assert_eq!(record.title, "");
+    threads.update(cx, |threads, cx| threads.dismiss_task(&agent, cx));
+    let (archived, stood) = threads.read_with(cx, |threads, cx| {
+        (threads.archived_tasks(cx), threads.past_stand_ins())
+    });
+
+    let (shell, host, cx) = agents(cx);
+    let kept = write(&[record]);
+    assert!(!kept.contains(tab), "the file has the tab's title");
+    host.agent_history.borrow_mut().insert(0, kept);
+    let shells = [shell.downgrade()];
+    // The window's two rows of the thread, as it is sent them: the Archive's and the one here.
+    let rows = |archived, stood: &[_], cx: &mut VisualTestContext| {
+        cx.update(|_, cx| crate::shell::send_past_stand_ins(stood, &shells, cx));
+        shell.update(cx, |shell, cx| shell.set_archived_tasks(archived, cx));
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.agent_history.len(), 1);
+            let archive = shell.row_name(Item::Task(0), 0);
+            (archive, shell.row_name(Item::Past(0), 0))
+        })
+    };
+    let (archive, history) = rows(archived, &stood, cx);
+    for title in [card, panel, archive, history] {
+        assert_eq!(title, tab);
+    }
+
+    // After a quit, the launch has the file and the kept thread, and nothing that stood in.
+    let threads = relaunch(cx);
+    let (card, panel, archived, stood) = threads.read_with(cx, |threads, cx| {
+        let archived = threads.archived_tasks(cx);
+        let mut cards = threads.kept_cards(cx).into_iter();
+        let card = cards.find(|card| card.agent == archived[0].agent);
+        let panel = threads.conversation(&archived[0].agent, cx);
+        let panel = panel.expect("its conversation").title;
+        let stood = threads.past_stand_ins();
+        (card.expect("its card").title, panel, archived, stood)
+    });
+    assert!(stood.is_empty());
+    let (archive, history) = rows(archived, &stood, cx);
+    for title in [card, panel, archive, history] {
+        assert_eq!(title, NEW_THREAD);
+    }
+}

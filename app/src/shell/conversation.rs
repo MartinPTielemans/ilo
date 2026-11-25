@@ -166,6 +166,20 @@ pub fn send_agents(
     }
 }
 
+/// Sends the windows' `shells` what stands in for the titles of this run's threads that have
+/// none, by their pasts' ids (`Agents::past_stand_ins`), for History's rows of them.
+pub fn send_past_stand_ins(
+    titles: &[(String, gpui::SharedString)],
+    shells: &[WeakEntity<Shell>],
+    cx: &mut gpui::App,
+) {
+    for shell in shells.iter().filter_map(WeakEntity::upgrade) {
+        shell.update(cx, |shell, cx| {
+            shell.set_past_stand_ins(titles.to_vec(), cx)
+        });
+    }
+}
+
 /// The key context of the conversation, whose Return sends the reply ahead of the browser's
 /// keys. Esc, ⌘W and ⌘. are the task area's, wherever the keyboard is.
 const KEY_CONTEXT: &str = "Conversation";

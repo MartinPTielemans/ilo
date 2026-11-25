@@ -156,7 +156,7 @@ fn hint_key(key: &str, off_the_mac: bool) -> String {
 
 /// The row that grows the bar into the composer with what's typed, second once something is
 /// typed, and the kind at its end (the words table's Z2b).
-const NEW_THREAD: &str = "New Thread";
+const NEW_THREAD: &str = crate::agents::task::handed::NEW_THREAD;
 const THREAD_KIND: &str = "Thread";
 /// The composer's foot: what ⇥ does at its left, and what ↩ does at its right (Z8).
 const BACK_TO_SEARCH: &str = "Back to Search";

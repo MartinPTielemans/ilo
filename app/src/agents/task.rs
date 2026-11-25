@@ -534,15 +534,17 @@ pub struct Session {
 }
 
 impl Task {
-    /// The title its card and its panel show: its own, or for a thread started with a tab and no
-    /// words, which has none until its assistant names it, what stands in for one. `title` itself
-    /// stays empty until then, so what is kept, logged or told of a thread's title never has a
-    /// page's words.
+    /// The title its card, its panel and its row in the Archive show: its own, or for a thread
+    /// started with a tab and no words, which has none until its assistant names it, what stands
+    /// in for one. `title` itself stays empty until then, so what is kept, logged or told of a
+    /// thread's title never has a page's words.
     fn shown_title(&self) -> SharedString {
-        match self.title.is_empty() {
-            true => self.sends.stand_in(),
-            false => self.title.clone(),
-        }
+        handed::titled(self.title.clone(), self.sends.first())
+    }
+
+    /// The id of its record among the profile's past threads (`agent_history::Past::id`).
+    fn past_id(&self) -> String {
+        format!("{}-{}", self.agent, seconds(self.started))
     }
 
     /// It ended `at`. Its record keeps the log's entries from before then, and none noted after,
@@ -1027,6 +1029,20 @@ impl Agents {
             .collect()
     }
 
+    /// What stands in for the title of each thread that has none of its own, by the id of its
+    /// record among the past threads, so History's row of it reads what its card does. Held in
+    /// memory alone: the record's own title stays empty in the file, which keeps nothing of a
+    /// user's tab, and no tool of an agent's reaches this.
+    pub fn past_stand_ins(&self) -> Vec<(String, SharedString)> {
+        (self.tasks.tasks.iter())
+            .filter(|task| task.title.is_empty())
+            .filter_map(|task| {
+                let first = task.sends.first()?.clone();
+                Some((task.past_id(), first))
+            })
+            .collect()
+    }
+
     /// The tasks in the Archive, the last to leave the foot first, as `dismissed` keeps them.
     pub fn archived_tasks(&self, cx: &App) -> Vec<ArchivedTask> {
         (self.tasks.dismissed.iter().rev())
@@ -1044,7 +1060,7 @@ impl Agents {
                 };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
-                    title: task.title.clone(),
+                    title: task.shown_title(),
                     asked: task.asked.clone(),
                     dot,
                     about: about.into(),
@@ -3510,7 +3526,7 @@ impl Agents {
                 _ => task.title.to_string(),
             };
             let past = crate::agent_history::Past {
-                id: format!("{}-{}", task.agent, seconds(task.started)),
+                id: task.past_id(),
                 title,
                 agent: task.name.to_string(),
                 started: seconds(task.started),
