@@ -214,6 +214,7 @@ impl Shell {
         if self.task_core == 0 && self.task_space(self.space).is_some() {
             self.show_users_space(cx);
         }
+        self.show_started_task(None, cx);
     }
 
     pub(super) fn task_space(&self, space: u64) -> Option<&Space> {
