@@ -1,4 +1,5 @@
 use super::*;
+use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
 use crate::tokens::palette::{LIGHT_TINT, TINT};
 
@@ -286,7 +287,7 @@ fn failures_over(
     }
     // The Space's swatch, ringed where its edge doesn't reach 3:1 on the window.
     let swatch = match theme {
-        Some(theme) => Window::of(theme, tone).swatch(),
+        Some(theme) => Window::of(theme, tone, palette.glass).swatch(),
         None => vec![rgb(NO_THEME_ACCENT)],
     };
     let edge = match Palette::swatch_ring_on(theme, window) {
@@ -658,7 +659,7 @@ fn a_theme_only_fades_where_the_ink_needs_it() {
     // The picker's palest swatch, too light for Paper at its own alpha over white.
     let pale = Theme::of_color(0xf0eae5);
     let palette = Palette::of(Some(&pale), Tone::Dark);
-    let window = Window::of(&pale, Tone::Dark);
+    let window = Window::of(&pale, Tone::Dark, START);
     assert_eq!(palette.tint, none.tint, "the pale theme shades the window");
     assert!(
         palette.layer_alpha < window.alpha,
@@ -1230,7 +1231,7 @@ fn secondary_text_reads_at_both_ends_of_each_window() {
 #[ignore]
 fn secondary_text_unlifted() {
     for tone in [Tone::Dark, Tone::Light] {
-        for ground in tone.grounds() {
+        for ground in tone.grounds(tone.tint(START)) {
             let ink = tone.ink();
             let ratio = contrast(over(ground, ink, TEXT_SECONDARY), ground);
             println!("{tone:?} over {:06x}: {ratio:.2}", theme::packed(ground));
@@ -1928,4 +1929,115 @@ fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
         }
     }
     set_transparency(Transparency::Standard);
+}
+
+/// A Space's glass on its bar, from solid to clearest, in hundredths.
+fn bar() -> impl Iterator<Item = f32> {
+    (0..=100).map(|step| step as f32 / 100.)
+}
+
+/// The least gray text reads over `palette`'s window, both backdrops and every glow, less what it
+/// has to hold there.
+fn gray_margin(palette: &Palette) -> f32 {
+    let gray = Rgba::from(palette.gray(0.));
+    let window = fine_window(palette);
+    let worst = (window.iter())
+        .map(|&at| contrast(over(at, gray, gray.a), at))
+        .fold(f32::MAX, f32::min);
+    worst - gray_text_at(palette.glass)
+}
+
+/// The least gray text reads on a Space's window at `glass`, over a black and a white backdrop and
+/// every glow.
+fn gray_reads(theme: Option<&Theme>, tone: Tone, glass: f32) -> f32 {
+    gray_margin(&Palette::at(theme, tone, glass)) + gray_text_at(glass)
+}
+
+/// Gray text holds 4.5:1 from solid up to where Less sits, and then what today's levels hold where
+/// they sit, never less than More's.
+#[test]
+fn gray_text_holds_what_todays_level_did_where_it_sits() {
+    for level in Transparency::ALL {
+        assert_eq!(gray_text_at(of_level(level)), gray_text(level), "{level:?}");
+    }
+    assert_eq!(gray_text_at(0.), GRAY_TEXT_LESS);
+    assert!(bar().all(|glass| gray_text_at(glass) >= GRAY_TEXT_MORE));
+    assert!(GRAY_TEXT_LESS >= TEXT, "Less's gray holds 4.5");
+}
+
+/// A Space carried over at today's level is the window it was: its palette at that place on the
+/// bar is the app's at the level.
+#[test]
+fn a_space_at_a_levels_place_is_that_levels_window() {
+    let colored = Theme::at(0.3, -0.5);
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in [None, Some(&colored)] {
+            for tone in [Tone::Dark, Tone::Light] {
+                let app = Palette::of(theme, tone);
+                let space = Palette::at(theme, tone, of_level(level));
+                assert_eq!(app.tint, space.tint, "{level:?} {tone:?}");
+                assert_eq!(app.gray_floor, space.gray_floor, "{level:?} {tone:?}");
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
+}
+
+/// The window shows more of what's behind it the further along the bar its Space's glass is, from
+/// solid at 0.
+#[test]
+fn a_spaces_glass_shows_more_further_along_its_bar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let tints: Vec<f32> = bar()
+            .map(|glass| Palette::at(None, tone, glass).tint.a)
+            .collect();
+        assert_eq!(tints[0], 1., "{tone:?}: solid at 0");
+        assert!(
+            tints.windows(2).all(|step| step[0] > step[1]),
+            "{tone:?}: {tints:?}"
+        );
+    }
+}
+
+/// Menus, the command bar, dialogs and everything else that floats keep Standard's fills whatever
+/// a Space's glass or the app's level: a Space's value changes only the window's glass.
+#[test]
+fn what_floats_keeps_standards_fill_at_any_glass() {
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for surface in Float::ALL {
+            for tone in [Tone::Dark, Tone::Light] {
+                let standard = Some(Transparency::Standard);
+                assert_eq!(
+                    surface.fill_on(tone, true),
+                    surface.fill_at(tone, standard),
+                    "{surface:?} {tone:?} {level:?}"
+                );
+            }
+        }
+        for glass in [0., START, 1.] {
+            for tone in [Tone::Dark, Tone::Light] {
+                let (overlay, dialog) = tone.overlays();
+                let palette = Palette::at(None, tone, glass);
+                assert_eq!((palette.overlay, palette.dialog), (overlay, dialog));
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
+}
+
+/// What gray text reads at the bar's points under 4.5:1 until the contrast floor, for the DEV.
+#[test]
+#[ignore]
+fn gray_text_under_4_5_on_the_bar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        for glass in [0., of_level(Transparency::Less), START, 1.] {
+            let reads = gray_reads(None, tone, glass);
+            println!(
+                "{tone:?} at {glass}: gray reads {reads:.2}, target {}",
+                gray_text_at(glass)
+            );
+        }
+    }
 }

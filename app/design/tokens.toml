@@ -3485,6 +3485,9 @@ hairline = 0.5
 less = 0.3
 # Where today's Standard sits on it: the value a Space comes with and Reset gives.
 start = 0.4
+# The drawing's ground at the solid end, laid over the material at full strength, which a dark
+# window's black goes to from where Less sits (the drawing's screen 15, its Solid band).
+solid = 0x18181a
 
 [zoom-hud]
 # Arc's, measured at 2× (Arc 1.170 rec): 41.5 tall, 8 inside the card's top right corner, the
