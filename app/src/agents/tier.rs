@@ -309,6 +309,17 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
 }
 
+/// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
+/// its level: the menu's names with how many sites, never an address.
+pub fn sites_logged(from: &Sites, to: &Sites) -> String {
+    let name = |sites: &Sites| match sites {
+        Sites::Any => ANY_SITE.to_string(),
+        Sites::Only(only) if only.len() == 1 => format!("{ONLY_ADDED} · 1 site"),
+        Sites::Only(only) => format!("{ONLY_ADDED} · {} sites", only.len()),
+    };
+    format!("{} → {}", name(from), name(to))
+}
+
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
 /// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
 /// count alone, never an address or title.

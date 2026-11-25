@@ -2671,7 +2671,7 @@ impl Shell {
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
         let row = plate(self.tab_icon_in(&palette, tab), label);
-        let row = selected_plate(&palette, row, 1., 0., false);
+        let row = selected_plate(&palette, row, 1., 0.);
         div()
             .w(px(CARD_WIDTH
                 - 2. * PLATE_INSET
