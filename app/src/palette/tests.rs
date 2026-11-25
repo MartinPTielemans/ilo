@@ -1278,9 +1278,9 @@ fn least_on(
 }
 
 /// Each transparency level holds its rule over what the material makes of any page (#4090). Less
-/// holds the floor before levels, text at 0.6 of the ink at 4.5:1 over a white, grey and black
-/// page. Standard and More hold text at full strength at 4.5:1 and at 0.6 at 3:1 over all of them
-/// and a photo.
+/// holds the floor before levels, the look's quiet ink (0.6 of Paper, 0.65 of Ink: #4276) at 4.5:1
+/// over a white, grey and black page. Standard and More hold text at full strength at 4.5:1 and at
+/// 0.6 at 3:1 over all of them and a photo.
 #[test]
 fn each_transparency_level_holds_its_rule_over_any_page() {
     let mut failures = Vec::new();
@@ -1288,9 +1288,13 @@ fn each_transparency_level_holds_its_rule_over_any_page() {
         for tone in [Tone::Dark, Tone::Light] {
             // One drawn dark in both looks lies on the dark material.
             let grounds = material(surface.tone(tone));
+            let quiet = match surface.tone(tone) {
+                Tone::Dark => TEXT_SECONDARY,
+                Tone::Light => LIGHT_TEXT_SECONDARY,
+            };
             for level in Transparency::ALL {
                 let rules: &[(&[u32], f32, f32)] = match level {
-                    Transparency::Less => &[(&grounds[..3], 0.6, TEXT)],
+                    Transparency::Less => &[(&grounds[..3], quiet, TEXT)],
                     _ => &[(&grounds, 1., TEXT), (&grounds, 0.6, 3.)],
                 };
                 for &(on, strength, floor) in rules {
@@ -2377,4 +2381,82 @@ fn the_foots_plates_tell_from_the_window_at_every_level() {
             }
         }
     }
+}
+
+/// A dark window's palette as numbers a float's last bit can't move: each colour as it's drawn in
+/// 8 bits and each floor and shade in thousandths, at `glass`. A colour that is the palette's ink
+/// itself is written "ink", so the pin below holds what Dark solves and not what the ink is.
+fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
+    let palette = Palette::at(theme, Tone::Dark, glass);
+    let colour = |c: Rgba| match hex(c) == INK && c.a == 1. {
+        true => "ink".to_owned(),
+        false => format!("{:06x}{:02x}", hex(c), (c.a * 255.).round() as u8),
+    };
+    let colours = [
+        palette.tint,
+        palette.underlay,
+        palette.glow,
+        palette.far_glow,
+        palette.shown.unwrap_or(BLACK),
+        palette.ink,
+        palette.accent,
+        palette.accent_label,
+        palette.section_glyph,
+        palette.overlay,
+        palette.dialog,
+        palette.page,
+        palette.card,
+        palette.swatch.main(),
+    ]
+    .map(colour)
+    .join(" ");
+    let numbers = [
+        palette.layer_alpha,
+        palette.text_floor,
+        palette.glyph_floor,
+        palette.gray_floor,
+        palette.overlay_floor,
+        palette.overlay_glyph_floor,
+        palette.float_shades[0],
+        palette.float_shades[1],
+        palette.pointed_shade,
+    ]
+    .into_iter()
+    .chain(palette.ground_shades)
+    .map(|n| format!("{}", (n * 1000.).round() as i32))
+    .collect::<Vec<_>>()
+    .join(" ");
+    format!("{colours} | {numbers}")
+}
+
+/// Light's pass (#4276) moves the palette's ink and Light's plates, and a dark window draws as it
+/// did before it: with no theme, each of the picker's swatches and the field's extremes, at the
+/// bar's two ends and its three old levels. Only where Dark draws the ink itself, as a label on a
+/// light accent, does it follow the ink.
+#[test]
+fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
+    let themes: Vec<Option<Theme>> = [
+        0xf0eae5, 0xe59eba, 0x9e749b, 0xe1676f, 0xef8c63, 0xf2d46c, 0x73e49b, 0x7eb6d5, 0x656786,
+        0x000000, 0xffffff, 0x808080, 0x00ff6a, 0xffff00, 0x0000ff,
+    ]
+    .into_iter()
+    .map(|color| Some(Theme::of_color(color)))
+    .chain([None])
+    .collect();
+    let glasses = [0., 1.].into_iter().chain(Transparency::ALL.map(of_level));
+    let mut all = String::new();
+    for glass in glasses {
+        for theme in &themes {
+            all.push_str(&dark_solved(theme.as_ref(), glass));
+            all.push('\n');
+        }
+    }
+    // FNV-1a, so the pin is one number and not eighty lines.
+    let pin = all.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    assert_eq!(
+        pin, 329_911_903_870_600_431,
+        "a dark window's palette moved:\n{all}"
+    );
 }
