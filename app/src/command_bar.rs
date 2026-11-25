@@ -119,6 +119,8 @@ use crate::tokens::command_bar::{
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
+/// What the bar's field says with nothing typed where the bar can start a thread (Z2).
+const THREAD_PLACEHOLDER: &str = "Search, or start a thread";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -1304,7 +1306,7 @@ fn reset(
             let placeholder = match target {
                 Target::Tabs => TABS_PLACEHOLDER,
                 Target::Spaces => SPACES_PLACEHOLDER,
-                _ => PLACEHOLDER_TEXT,
+                _ => bar.search_placeholder(),
             };
             bar.input.update(cx, |input, cx| {
                 input.set_placeholder(placeholder.into(), cx)
@@ -1438,6 +1440,11 @@ pub fn task_agents_changed(cx: &mut App) {
             bar.task_agents = agents;
             if bar.ask.is_some() {
                 bar.log_agents();
+            } else if bar.site.is_none() && bar.commands.is_none() && bar.lists_commands() {
+                let placeholder = bar.search_placeholder();
+                bar.input.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder.into(), cx)
+                });
             }
             cx.notify();
         })
@@ -2049,8 +2056,9 @@ impl CommandBar {
         };
         // check.sh reads this line.
         log!("browser: command bar leaves commands");
+        let placeholder = self.search_placeholder();
         self.input.update(cx, |input, cx| {
-            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx)
+            input.set_placeholder(placeholder.into(), cx)
         });
         let text = format!("{by}{}", self.input.read(cx).text());
         self.input.update(cx, |input, cx| {
@@ -2173,8 +2181,9 @@ impl CommandBar {
     /// Takes the bar out of its site search, if it's in one, and returns it.
     fn site_left(&mut self, cx: &mut Context<Self>) -> Option<Site> {
         let site = self.site.take()?;
+        let placeholder = self.search_placeholder();
         self.input.update(cx, |input, cx| {
-            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx);
+            input.set_placeholder(placeholder.into(), cx);
             input.set_spoken(None, cx);
         });
         Some(site)
@@ -2281,11 +2290,22 @@ impl CommandBar {
     /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
     /// hasn't learned yet. With none ready, ⇥ offers to set one up, and nothing else of tasks shows.
     fn offers_ask(&self, cx: &App) -> bool {
-        let ready = self
-            .task_agents
-            .as_ref()
-            .is_some_and(|agents| !agents.known || !agents.agents.is_empty());
-        ready && self.may_ask(cx)
+        self.agents_ready() && self.may_ask(cx)
+    }
+
+    /// Whether an agent is ready for a thread, or the browser hasn't learned yet.
+    fn agents_ready(&self) -> bool {
+        (self.task_agents.as_ref()).is_some_and(|agents| !agents.known || !agents.agents.is_empty())
+    }
+
+    /// What the field says with nothing typed, outside a site search and the commands-only list:
+    /// Z2 where the bar can start a thread, as New Thread is offered; else E1, as with tasks off or
+    /// no assistant set up.
+    fn search_placeholder(&self) -> &'static str {
+        match self.surface == Surface::Window && self.lists_commands() && self.agents_ready() {
+            true => THREAD_PLACEHOLDER,
+            false => PLACEHOLDER_TEXT,
+        }
     }
 
     /// ⇥: what's typed becomes a thread's, with the page the user is on as a chip before it, and
