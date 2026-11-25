@@ -3788,41 +3788,35 @@ fn ring_round(
 }
 
 /// The page row in each of its cases, and an outside app's panel, which has no composer: what the
-/// ring goes round, and that Return on each of its buttons does what a click on it does. The
-/// thread works on the page shown: its words and Take Over. The user holds it: the page itself,
-/// in the words' place, and Hand Back. The thread ended with the page to move: Open alone. An outside
-/// app's session: its words, Take Over and Stop, the one row with two.
+/// ring goes round, and that Return on the row's button does what a click on it does. The thread
+/// works on the page shown: its words and Take Over. The user holds it, taken over or handed to
+/// them: the page itself, and Hand Back where the row has it. The thread ended with the page to
+/// move: Open alone, with ilo's line in the field's place too. An outside app's session: its
+/// words, Take Over and Stop, or Hand Back and Stop on a page its user holds. Waiting on the user
+/// for a refused step or its question, at work on another page or between steps, the row holds
+/// nothing and the page is the agent's, which the ring never enters.
 #[gpui::test]
 fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut TestAppContext) {
     use crate::shell::page_ends::STOPS_DRAWN;
     let (session, session_talk) = session_panel();
-    let cases = row_cases()
-        .into_iter()
-        .map(|(case, card, talk, status, button)| {
-            let ring = match case {
-                "working" => vec!["Page", "TakeOver"],
-                "yours" => vec!["into the page", "HandBack"],
-                "ended" => vec!["Open"],
-                _ => vec!["Page", "TakeOver", "Stop"],
-            };
-            // Only a held page's status changes the row; the agent at work is left out, as before.
-            let status = status.filter(|status| !status.held.is_empty());
-            (case, card, talk, status, ring, button)
-        });
-    for (case, card, talk, status, ring, button) in cases {
+    for case in row_cases() {
+        let name = case.name;
+        // Only a held page's status changes the row; the agent at work is left out, as before.
+        let status = case.status.clone().filter(|status| !status.held.is_empty());
         let calls = |pressed: bool, cx: &mut TestAppContext| {
-            let (shell, host, view, cx) = standing_with(card.clone(), talk.clone(), cx);
+            let (shell, host, view, cx) = standing_with(case.card.clone(), case.talk.clone(), cx);
             if let Some(status) = status.clone() {
                 shell.update(cx, |shell, cx| shell.set_agent_status(vec![status], cx));
                 redraw(&shell, &view, cx);
             }
             let went = ring_round(&shell, &view, &host, cx);
-            assert_eq!(went, ring, "{case}: the ring's round");
+            assert_eq!(went, case.ring, "{name}: the ring's round");
+            let button = case.button?;
             shell.update(cx, |shell, cx| shell.leave_strip("test", cx));
             STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
             redraw(&shell, &view, cx);
             let at = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&button).copied());
-            let at = at.unwrap_or_else(|| panic!("{case}: {button:?} isn't drawn"));
+            let at = at.unwrap_or_else(|| panic!("{name}: {button:?} isn't drawn"));
             host.take();
             match pressed {
                 true => shell.update(cx, |shell, cx| shell.key_strip_show(button, cx)),
@@ -3832,13 +3826,14 @@ fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut Tes
             let calls: Vec<String> = (host.take().into_iter())
                 .filter(|call| !call.starts_with("focus") && !call.starts_with("picture"))
                 .collect();
-            assert!(!calls.is_empty(), "{case}: {button:?} did nothing");
-            calls
+            assert!(!calls.is_empty(), "{name}: {button:?} did nothing");
+            Some(calls)
         };
         assert_eq!(
             calls(true, cx),
             calls(false, cx),
-            "{case}: Return on {button:?} didn't do what its click does"
+            "{name}: Return on {:?} didn't do what its click does",
+            case.button
         );
     }
 
@@ -3852,15 +3847,26 @@ fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut Tes
     );
 }
 
-/// The page row's cases, each standing on tab 30, and an outside app's panel: the case's name,
-/// task-1's card and conversation, what the agents say of it, and the row's last button.
-fn row_cases() -> Vec<(
-    &'static str,
-    Card,
-    Conversation,
-    Option<Status>,
-    crate::shell::page_ends::StripStop,
-)> {
+/// One of the page row's cases, standing on tab 30.
+#[derive(Clone)]
+struct RowCaseShown {
+    name: &'static str,
+    card: Card,
+    talk: Conversation,
+    /// What the agents say of it.
+    status: Option<Status>,
+    /// The ring's stops once round, the task's header left out.
+    ring: Vec<&'static str>,
+    /// The row's last button, if it has one.
+    button: Option<crate::shell::page_ends::StripStop>,
+    /// What ⌘↩ from the page asks of the core: Take Over or Hand Back, where the case has one.
+    command: Option<&'static str>,
+    /// Whether ⌘. from the page stops the work.
+    stops: bool,
+}
+
+/// The page row's cases, each standing on tab 30, and an outside app's panels.
+fn row_cases() -> Vec<RowCaseShown> {
     use crate::shell::page_ends::StripStop;
     let at_work = |agent: &str, name: &str| Status {
         agent: agent.into(),
@@ -3869,17 +3875,23 @@ fn row_cases() -> Vec<(
         doing: "Searching flights".into(),
         held: Vec::new(),
     };
-    let held = Status {
-        held: vec![(30, "".into())],
+    let held = |agent: &str, name: &str, why: &str| Status {
+        held: vec![(30, why.into())],
         doing: "".into(),
-        ..at_work("task-1", "Claude")
+        ..at_work(agent, name)
     };
-    let yours = Conversation {
-        live: Live::Yours {
-            tab: 30,
-            site: None,
-        },
+    let live = |live: Live| Conversation {
+        live,
         ..conversation(3)
+    };
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    let waits = Card {
+        dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
+        ..card()
     };
     let done = Card {
         dot: Dot::Done,
@@ -3891,24 +3903,124 @@ fn row_cases() -> Vec<(
         stoppable: false,
         ..conversation(3)
     };
+    let between = Conversation {
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            started: None,
+            items: vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))],
+        })],
+        ..conversation(1)
+    };
+    let elsewhere = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        on: Some(31),
+        ..conversation(3)
+    };
     let (session, session_talk) = session_panel();
+    let session_held = Conversation {
+        live: yours.clone(),
+        ..session_talk.clone()
+    };
+    let case = |name, card: &Card, talk: Conversation, status: Option<Status>| RowCaseShown {
+        name,
+        card: card.clone(),
+        talk,
+        status,
+        ring: Vec::new(),
+        button: None,
+        command: None,
+        stops: true,
+    };
+    let task_take_over = Some("take over task-1 30");
     vec![
-        (
-            "working",
-            card(),
-            conversation(3),
-            Some(at_work("task-1", "Claude")),
-            StripStop::TakeOver,
-        ),
-        ("yours", card(), yours, Some(held), StripStop::HandBack),
-        ("ended", done, ended, None, StripStop::Open),
-        (
-            "session",
-            session,
-            session_talk,
-            Some(at_work("session-1", "Claude Code")),
-            StripStop::Stop,
-        ),
+        RowCaseShown {
+            ring: vec!["Page", "TakeOver"],
+            button: Some(StripStop::TakeOver),
+            command: task_take_over,
+            ..case(
+                "working",
+                &card(),
+                conversation(3),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["into the page", "HandBack"],
+            button: Some(StripStop::HandBack),
+            command: Some("hand back 30"),
+            ..case(
+                "yours",
+                &card(),
+                live(yours.clone()),
+                Some(held("task-1", "Claude", "")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "refused",
+                &waits,
+                live(Live::Refused),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "asked",
+                &waits,
+                live(Live::Asked),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "elsewhere",
+                &card(),
+                elsewhere,
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "between steps",
+                &card(),
+                between,
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["Open"],
+            button: Some(StripStop::Open),
+            stops: false,
+            ..case("ended", &done, ended, None)
+        },
+        RowCaseShown {
+            ring: vec!["Page", "TakeOver", "Stop"],
+            button: Some(StripStop::Stop),
+            command: Some("take over session-1 30"),
+            ..case(
+                "session",
+                &session,
+                session_talk,
+                Some(at_work("session-1", "Claude Code")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["into the page", "HandBack", "Stop"],
+            button: Some(StripStop::HandBack),
+            command: Some("hand back 30"),
+            ..case(
+                "session held",
+                &session,
+                session_held,
+                Some(held("session-1", "Claude Code", "")),
+            )
+        },
     ]
 }
 
@@ -3938,10 +4050,10 @@ fn session_panel() -> (Card, Conversation) {
 /// of ours, even with the ring last on the row's button.
 #[gpui::test]
 fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut TestAppContext) {
-    for (case, card, talk, status, button) in row_cases() {
-        let (shell, host, view, cx) = standing_with(card, talk, cx);
-        let agent = status.as_ref().map(|status| status.agent.clone());
-        if let Some(status) = status {
+    for case in row_cases() {
+        let name = case.name;
+        let (shell, host, view, cx) = standing_with(case.card, case.talk, cx);
+        if let Some(status) = case.status {
             shell.update(cx, |shell, cx| {
                 shell.agent_acted(status.agent.clone(), 30, cx);
                 shell.set_agent_status(vec![status], cx)
@@ -3949,7 +4061,9 @@ fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut
             redraw(&shell, &view, cx);
         }
         // The ring was last on the row's button, and the page took the keyboard.
-        shell.update(cx, |shell, cx| shell.key_strip(button, cx));
+        if let Some(button) = case.button {
+            shell.update(cx, |shell, cx| shell.key_strip(button, cx));
+        }
         shell.update(cx, |shell, cx| shell.leave_strip("page", cx));
         host.page_keys.set(Some(true));
         host.take();
@@ -3962,34 +4076,29 @@ fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut
         };
         for key in ["enter", "space"] {
             let (kept, calls) = from_page(key, cx);
-            assert!(!kept, "{case}: {key} from the page was kept from it");
+            assert!(!kept, "{name}: {key} from the page was kept from it");
             assert_eq!(
                 calls,
                 Vec::<String>::new(),
-                "{case}: {key} from the page pressed"
+                "{name}: {key} from the page pressed"
             );
         }
         let (kept, calls) = from_page("cmd-enter", cx);
-        match case {
-            "working" | "session" => {
-                let agent = agent.clone().unwrap();
-                assert!(kept, "{case}: ⌘↩ from the page went to it");
-                assert!(
-                    calls.contains(&format!("take over {agent} 30")),
-                    "{case}: {calls:?}"
-                );
-            }
-            "yours" => assert!(calls.contains(&"hand back 30".to_string()), "{calls:?}"),
-            _ => assert!(!kept && calls.is_empty(), "{case}: ⌘↩ answered: {calls:?}"),
+        match case.command {
+            Some(command) => assert!(
+                kept && calls.iter().any(|call| call == command),
+                "{name}: ⌘↩ from the page didn't ask {command}: {calls:?}"
+            ),
+            None => assert!(!kept && calls.is_empty(), "{name}: ⌘↩ answered: {calls:?}"),
         }
         let (kept, calls) = from_page("cmd-.", cx);
-        match case {
-            "ended" => assert!(!kept && calls.is_empty(), "{case}: ⌘. answered: {calls:?}"),
-            _ => assert!(
+        match case.stops {
+            false => assert!(!kept && calls.is_empty(), "{name}: ⌘. answered: {calls:?}"),
+            true => assert!(
                 kept && calls
                     .iter()
                     .any(|call| call.contains("Stop") || call.starts_with("stop")),
-                "{case}: ⌘. from the page didn't stop: {calls:?}"
+                "{name}: ⌘. from the page didn't stop: {calls:?}"
             ),
         }
     }
