@@ -124,6 +124,20 @@ void WidgetMoveToActiveFullscreenSpace(base::WeakPtr<views::Widget> window) {
     window->MoveToActiveFullscreenSpace();
   }
 }
+
+// Brings |window| back after a Space change left it off the Space the user is on, which the
+// window server does to a shown window only rarely, and the panel answer can't help once the
+// window has shown (Ardia's activeSpaceChanged waits as long for theirs and only notes it). The
+// gate re-reads the two visibilities as the task runs: a window hidden meanwhile (the app, with
+// ⌘H, or the window itself) is left hidden, and one already carried to the Space by the window
+// server in the wait's course needs no move. So reads live in the task, not at the switch.
+void WidgetMoveIfLeftBehind(base::WeakPtr<views::Widget> window) {
+  if (window && window->IsVisible() && !window->IsVisibleOnScreen()) {
+    window->MoveToActiveFullscreenSpace();
+    // check.sh reads this line.
+    fprintf(stderr, "browser: mini player brought back to the active Space\n");
+  }
+}
 #endif
 
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
@@ -145,6 +159,19 @@ class MiniPlayerWatch : public views::WidgetObserver {
   // core sees the widget, inside Init and after its window exists, before any show.
   void OnWidgetCreated(views::Widget* widget) override {
     platform::JoinSpacesBeforeFirstShow(widget);
+  }
+
+  // The Space changed under a shown player, the rare race the window server leaves it on the
+  // Space it left (Ardia's activeSpaceChanged waits the same 0.6 s for theirs; they only note
+  // it, while this brings the player to the Space the user is on). Not at once: a Space's own
+  // animation takes a moment, and a window that comes back in that moment flickers.
+  void OnWidgetVisibilityOnScreenChanged(views::Widget* widget, bool visible) override {
+    if (visible || !widget->IsVisible()) {
+      return;
+    }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&WidgetMoveIfLeftBehind, widget->GetWeakPtr()),
+        base::Milliseconds(600));
   }
 #endif
 
