@@ -13,9 +13,9 @@ class Profile;
 
 namespace browser_core::platform {
 
-// Names the item after the app, as "<name> Safe Storage", so the app keeps a key of its own
-// rather than sharing Chromium's with every other Chromium on the Mac. Call it before anything
-// reads the key.
+// Names the item after the folder the app's profiles are in, as "<name> Safe Storage"
+// (keychain_item.h), so the app keeps a key of its own rather than sharing Chromium's with every
+// other Chromium on the Mac. Call it before anything reads the key.
 void NameKeychainItem();
 
 // The keychain access group the app is signed to keep its passkeys in: the entry of its
