@@ -1446,8 +1446,9 @@ typedef struct bc_host {
   // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
   // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
   // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
-  // A click that went, whose page then went on to one that answers only over http, with no page
-  // behind it, so that the tab closed: a JSON object of its own, {"closed": "not_secure"}.
+  // A click, a typed Enter, a key or a choice in a select that went, whose page then went on to
+  // one that answers only over http, with no page behind it, so that the tab closed: a JSON
+  // object of its own, {"closed": "not_secure"}.
   // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
   void (*agent_page_done)(void* context,
                           bc_id tab,
