@@ -2587,6 +2587,34 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     assert_eq!(looks(), 2, "shown again, it looked again");
 }
 
+/// With agents off, the assistants' step runs nothing of an assistant as it shows: With an
+/// assistant looks for them once, and picked again, or shown again, not until it shows again.
+#[gpui::test]
+fn the_assistant_step_looks_only_after_a_yes(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.reads_shell(shell.downgrade());
+    host.agents.set(Some(false));
+    let (_agents, looks) = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    assert_eq!(looks(), 0, "shown with agents off, nothing looked");
+    press("up", cx);
+    assert_eq!(host.agents.get(), Some(true));
+    assert_eq!(looks(), 1, "With an assistant looked once");
+    press("up", cx);
+    assert_eq!(looks(), 1, "picked again, none more");
+    press("down", cx);
+    press("up", cx);
+    assert_eq!(looks(), 1, "nor once more in the same showing");
+    click_skip(cx);
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "shown again with agents on, it looked again");
+}
+
 /// In the sheet's narrow half no assistant's name is cut by its button: each button is beside the
 /// whole name, or, where the row has no room for both, under it.
 #[gpui::test]

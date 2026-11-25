@@ -407,6 +407,8 @@ pub(super) struct Onboarding {
     keyboard: bool,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
+    /// The assistants' programs have been looked for since the assistant step last showed.
+    looked: bool,
     /// The assistant step's rows follow the Agents, as a sign-in under way changes them.
     _assistants: Option<Subscription>,
     /// The assistants' rows the preview shows, and the one marked, as it has no Agents to read.
@@ -569,6 +571,7 @@ impl Shell {
             keys: None,
             keyboard: false,
             account,
+            looked: false,
             _assistants: (crate::agents::global(cx))
                 .map(|agents| cx.observe(&agents, |_, _, cx| cx.notify())),
             shown_assistants: None,
@@ -782,12 +785,29 @@ impl Shell {
         cx.notify();
     }
 
-    /// As the assistants' step shows, ilo looks for them once, off the UI thread, as Settings ›
-    /// Agents does as it opens, so each row says what it found, not that it's checking.
-    fn onboarding_shown(&self, step: Step, cx: &mut Context<Self>) {
+    /// As the assistants' step shows with agents on, ilo looks for them once, off the UI thread,
+    /// as Settings › Agents does as it opens, so each row says what it found, not that it's
+    /// checking. With agents off nothing of an assistant runs until the user says yes there.
+    fn onboarding_shown(&mut self, step: Step, cx: &mut Context<Self>) {
         if step != Step::Assistant {
             return;
         }
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            onboarding.looked = false;
+        }
+        self.onboarding_look(cx);
+    }
+
+    /// Looks for the assistants' programs, once a showing of their step, only with agents on.
+    fn onboarding_look(&mut self, cx: &mut Context<Self>) {
+        let agents_on = self.browser.agents(cx) == Some(true);
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        if onboarding.step != Step::Assistant || onboarding.looked || !agents_on {
+            return;
+        }
+        onboarding.looked = true;
         if let Some(agents) = crate::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         }
@@ -1088,6 +1108,7 @@ impl Shell {
             browser.set_agents(on, cx);
             shell.update(cx, |shell, cx| {
                 shell.onboarding_plan_opt_ins(cx);
+                shell.onboarding_look(cx);
                 cx.notify();
             });
         });
