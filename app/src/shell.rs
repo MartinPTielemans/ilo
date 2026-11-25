@@ -53,6 +53,7 @@ mod blank_tests;
 #[cfg(test)]
 mod board_title_tests;
 mod boost;
+mod broom;
 mod browser;
 mod by_site;
 #[cfg(test)]
@@ -92,6 +93,7 @@ mod help_tests;
 mod history;
 mod hover_cards;
 mod into_folder;
+mod join;
 mod keys;
 mod launch_room;
 mod library;
@@ -122,6 +124,7 @@ mod permission;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
+mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -172,6 +175,7 @@ mod update_banner;
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
+pub use broom::Broom;
 pub use browser::{
     Browser, Folders, MediaAction, Page, Setting, Split, Trouble, Volume, WindowButton,
     WindowButtonGeometry,
@@ -1744,6 +1748,8 @@ pub struct Shell {
     drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
+    /// The same for the broom after it.
+    broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
     /// The window's content size at the last draw, and the frame and corner radius the page was
@@ -2300,6 +2306,7 @@ impl Shell {
             drawn_copied: "shows link",
             drawn_arrow: None,
             clear_hovered: false,
+            broom_hovered: false,
             swaps: Swaps::default(),
             viewport: Size::default(),
             scale: 1.,
@@ -5097,13 +5104,25 @@ impl Shell {
         // sidebar has no line: the open tab's row runs into the page there.
         let outlined = self.card_left() > 0.;
         let meets_sidebar = self.card_left() == self.width();
-        let outline = |bounds| {
-            card_outline(
+        // A page of a colour of its own is one shape with its tab's line (join.rs). A dark one is
+        // told from a dark window by a hairline of the ink that reads on it, round the line and
+        // the page, so down the sidebar's side too.
+        let own = self.page_fill(self.selected);
+        let lit = own
+            .map(|fill| self.palette.on_fill(fill))
+            .filter(|on| on.tone == Tone::Dark);
+        let outline = |bounds| match lit {
+            Some(on) => card_outline(scaled(bounds), radius, None, on.faint(DIVIDER)),
+            None => card_outline(
                 scaled(bounds),
                 radius,
                 meets_sidebar.then_some(self.right),
-                self.palette.tone,
-            )
+                rgba(match self.palette.tone {
+                    Tone::Dark => PAGE_OUTLINE,
+                    Tone::Light => PAGE_OUTLINE_LIGHT,
+                })
+                .into(),
+            ),
         };
         let panes = self.panes(self.selected);
         let glow = BoxShadow {
@@ -5128,7 +5147,10 @@ impl Shell {
             .filter(|_| outlined)
             .map(|&bounds| outline(bounds));
         let cards = frames.iter().enumerate().map(|(index, &bounds)| {
-            card(bounds, self.palette.page).when(focused == Some(index), |card| {
+            // Under a page of a colour of its own the card is that colour, so the line and the
+            // page stay one shape while the page's view has nothing drawn.
+            let fill = own.filter(|_| index == 0).unwrap_or(self.palette.page);
+            card(bounds, fill).when(focused == Some(index), |card| {
                 card.shadow(vec![glow.clone()])
             })
         });
@@ -5411,7 +5433,11 @@ impl Shell {
             .child(
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
                     let clear = still_clear(&self.palette, space.clears_last(space.shown));
-                    plate.child(today_line(&self.palette, self.hairline(), clear))
+                    let broom = self
+                        .browser
+                        .broom()
+                        .map(|_| broom::still_broom(&self.palette));
+                    plate.child(today_line(&self.palette, self.hairline(), clear, broom))
                 })),
             )
             .children(today.into_iter().map(row))
@@ -5852,7 +5878,7 @@ fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
 /// The line round a card at `bounds` where it faces the window, outside it, on every side but
 /// the one that meets the sidebar: `open` is None with no sidebar beside it, or whether that side
 /// is the right. It has no fill, as the card's own may show the window through.
-fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: Tone) -> gpui::Div {
+fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, color: Hsla) -> gpui::Div {
     let width = px(PAGE_OUTLINE_WIDTH);
     let [left, right] = [Some(false), Some(true)].map(|side| match open == side {
         true => px(0.),
@@ -5865,10 +5891,7 @@ fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: T
         .w(bounds.size.width + left + right)
         .h(bounds.size.height + 2. * width)
         .rounded(px(radius + PAGE_OUTLINE_WIDTH))
-        .border_color(rgba(match tone {
-            Tone::Dark => PAGE_OUTLINE,
-            Tone::Light => PAGE_OUTLINE_LIGHT,
-        }))
+        .border_color(color)
         .border_t(width)
         .border_b(width)
         .border_l(left)
@@ -6079,8 +6102,14 @@ pub(super) fn icon_slot(drawn: impl IntoElement) -> gpui::Div {
 }
 
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
-/// the room the label leaves, then `clear`, which ends where the titles do.
-fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui::Div {
+/// the room the label leaves, then `clear`, which ends where the titles do, or before `broom`,
+/// which then ends there.
+fn today_line(
+    palette: &Palette,
+    line: Pixels,
+    clear: impl IntoElement,
+    broom: Option<impl IntoElement>,
+) -> gpui::Div {
     div()
         .flex_1()
         .min_w_0()
@@ -6091,6 +6120,7 @@ fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui:
         .items_center()
         .child(div().flex_1().h(line).bg(palette.faint(DIVIDER)))
         .child(clear)
+        .children(broom)
 }
 
 /// The divider of a Space's card in the Library: a line, and `clear` at its end while it shows.

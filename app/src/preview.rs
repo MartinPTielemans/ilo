@@ -31,9 +31,9 @@ use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
-    self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry, Page,
-    PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
+    self, Archived, BarTab, Broom, Browser, Command, Download, DownloadAction, DownloadState,
+    Folders, LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry,
+    Page, PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -1061,6 +1061,7 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    sorted: None,
                 }
             };
         let day = 24 * 60 * 60;
@@ -1222,6 +1223,18 @@ impl Browser for Fake {
 
     fn ad_blocking(&self) -> bool {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
+    }
+
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
+    // a click doesn't change: nothing here sorts.
+    fn broom(&self) -> Option<Broom> {
+        match states::var("PREVIEW_BROOM").ok()?.as_str() {
+            "idle" => Some(Broom::Idle),
+            "sorting" => Some(Broom::Sorting),
+            "failed" => Some(Broom::Failed),
+            "nothing" => Some(Broom::NothingToSort),
+            _ => None,
+        }
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -3110,6 +3123,19 @@ fn main() {
                     // A Live Folder's tab is the one selected, as the mock's #2961 is.
                     if states::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("states") {
                         shell.set_selected(LIVE_TABS[0].0, cx);
+                    }
+                    // PREVIEW_PAGE=<rrggbb>[,<tab>] says the page of the tab shown, or of that
+                    // tab, which it shows, is that colour, as the core reports a page's own.
+                    if let Ok(page) = states::var("PREVIEW_PAGE") {
+                        let mut parts = page.split(',');
+                        let color = parts
+                            .next()
+                            .and_then(|hex| u32::from_str_radix(hex, 16).ok());
+                        if let Some(tab) = parts.next().and_then(|tab| tab.parse().ok()) {
+                            shell.set_selected(tab, cx);
+                        }
+                        let shown = shell.selected();
+                        shell.set_tab_background(shown, color, cx);
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.

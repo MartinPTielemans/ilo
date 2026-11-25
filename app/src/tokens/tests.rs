@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "agents/wall/links.rs",
+        "0x2FC1_2FC1",
+        "ZFS's filesystem number, not a colour",
+    ),
+    (
+        "agents/wall/links.rs",
+        "0xCA45_1A4E",
+        "bcachefs's filesystem number, not a colour",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
@@ -122,6 +132,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.recent-downloads.preview-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The two curves that take the open tab's line into its page, which round no corner.
+    "shell.join-radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",

@@ -19,18 +19,20 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
-use super::files::Given;
+use super::files::{self, Given, Names, Never, Picked, never_grantable};
 use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{self, Sites, Stop, Tier};
+use super::tier::{self, Sites, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
 mod pick_up;
+pub(super) mod revoke;
 pub(super) mod rewall;
+pub use revoke::FolderInUse;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -56,6 +58,10 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// How much of the agent's name for its task is kept: the tool asks for 24 characters, which a
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
+
+/// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
+/// line has the width of a title.
+pub const TOLD_KEPT: usize = 120;
 
 /// How long a task's title stays before it may change, so it can't flicker (#3690).
 pub const RENAMING: Duration = Duration::from_secs(60);
@@ -156,6 +162,9 @@ pub struct Conversation {
     pub tier: Tier,
     /// Whether it may go only to the sites of the pages the user added.
     pub only_added: bool,
+    /// The folder a live task holds, by its name as the system's panel showed it, which the chip
+    /// under the reply field shows with its one act, Revoke.
+    pub folder: Option<SharedString>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -448,12 +457,18 @@ pub struct Task {
     /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
     /// until a grant gives it some.
     pub(in crate::agents) files: Given,
+    /// What its files are shown by, in its conversation alone, as long as it has them.
+    pub(in crate::agents) names: super::files::Names,
     /// Its start inside a wall, until the system says the wall is up (rewall.rs).
     pub(super) rising: Option<rewall::Rising>,
     /// What came of each wall of its that wasn't put up, in order, each with where it came among
     /// the task's messages and steps, so its line stands where it happened: what its lines about
     /// them are written from, by the conversation's words table.
     pub(in crate::agents) rewalled: Vec<rewall::Came>,
+    /// While ilo copies its attached files, before its assistant first starts: nothing starts or
+    /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
+    /// `told`, which that one start carries (`attached`).
+    pub(in crate::agents) copying: bool,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -551,6 +566,14 @@ impl Task {
 
     fn thinking(&self) -> bool {
         self.state == State::Working && self.heard_nothing()
+    }
+
+    /// `text` waits in `told` for the task's next start, after what waits there already.
+    pub(in crate::agents) fn hold(&mut self, text: String) {
+        self.told = Some(match self.told.take() {
+            Some(told) => format!("{told}\n\n{text}"),
+            None => text,
+        });
     }
 }
 
@@ -725,6 +748,9 @@ pub enum TaskAction {
     PagesBack,
     /// A step's Not now, by its line's key.
     NotNow(usize),
+    /// Revoke on the folder's chip under the reply field: only the user's press takes a folder
+    /// back, as on Settings › Agents › Folders in use.
+    RevokeFolder,
 }
 
 /// What the composer starts a task with beside what was asked: the user's picks on its line, which
@@ -739,6 +765,8 @@ pub struct Start {
     pub pages: Vec<String>,
     /// Only the sites you add: the task may go only to the sites of the pages added.
     pub only_added: bool,
+    /// The files and the folder picked on the `+` menu (#4101), given at the start alone.
+    pub files: super::files::Picked,
 }
 
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
@@ -870,6 +898,9 @@ pub struct Tasks {
     /// The files the tasks a test starts are given, as a grant will give a task its own.
     #[cfg(test)]
     pub(super) files: Given,
+    /// Whether a test's system can wall a task in with its files.
+    #[cfg(test)]
+    pub(super) files_available: bool,
 }
 
 impl Agents {
@@ -1023,6 +1054,7 @@ impl Agents {
             TaskAction::HandBack(tab) => self.hand_back(tab, cx),
             TaskAction::PagesBack => self.pages_back(agent, cx),
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
+            TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
         }
         (None, None)
     }
@@ -1138,6 +1170,9 @@ impl Agents {
             // The chip under the reply field says the task's own level, the one its refusals read.
             tier: task.tier,
             only_added: matches!(task.sites, Sites::Only(_)),
+            folder: (task.ended.is_none() && task.files.folder.is_some())
+                .then(|| task.names.folder.clone().map(Into::into))
+                .flatten(),
         })
     }
 
@@ -1365,6 +1400,12 @@ impl Agents {
         }
     }
 
+    /// Settings › Models opens: it looks for each assistant, as Other Apps does, so its rows say
+    /// what's on this computer. Nothing else in Settings looks, so a launch never runs one.
+    pub fn models_shown(&mut self, cx: &mut Context<Self>) {
+        self.look_for_task_agents(cx);
+    }
+
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
         self.tasks
@@ -1421,6 +1462,33 @@ impl Agents {
     /// The CLI ⌘T's ask lists first.
     pub fn default_task_agent(&self) -> Option<Cli> {
         self.tasks.default
+    }
+
+    /// What a sort of today's tabs into folders runs (#4252), from what the browser already knows:
+    /// the user's own Claude Code, while tasks are on, it runs them and it's signed in, as last
+    /// learned, with its task model. Codex has no switch that keeps a run to the list, so it sorts
+    /// nothing.
+    pub fn sort_program(&self) -> Option<crate::broom::Program> {
+        let found = self.sorter()?;
+        Some(crate::broom::Program {
+            program: found.program.clone()?,
+            path: found.path.clone(),
+            model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+        })
+    }
+
+    /// Whether a sort has a program to run, as `sort_program` finds it, without copying it: the
+    /// broom is drawn only then.
+    pub fn sorts(&self) -> bool {
+        self.sorter().is_some()
+    }
+
+    fn sorter(&self) -> Option<&Found> {
+        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+            return None;
+        }
+        let found = self.tasks.found.get(&Cli::Claude)?;
+        (found.ready == Ready::SignedIn && found.program.is_some()).then_some(found)
     }
 
     /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
@@ -1520,6 +1588,7 @@ impl Agents {
             model: picked,
             pages,
             only_added,
+            files: given,
         } = start.into();
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
@@ -1609,21 +1678,158 @@ impl Agents {
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
             files: self.files_at_start(),
+            names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            copying: false,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it, and on the same row
-        // that it started without its files, which its wall's answer says (rewall.rs).
-        let wall = self.wall_to_begin(&agent, pages.len());
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch_in(&agent, &first, wall, cx);
-        self.wait_for_answer(&agent, cx);
+        self.start_with(&agent, first, given, cx);
         cx.notify();
         Some(agent)
+    }
+
+    /// Starts `agent`'s task with what the user picked on the `+`: the folder, if ilo may give
+    /// it, and ilo's copies of the files attached, made off the UI thread before its assistant
+    /// starts, as a file may be large. A system that can't wall a task in gives it neither.
+    fn start_with(
+        &mut self,
+        agent: &str,
+        first: String,
+        mut picked: Picked,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.files_available() {
+            picked = Picked::default();
+        }
+        // The folder is checked again by its real path, as it may have moved since the panel
+        // gave it: one that no longer resolves to itself, or that ilo never gives, isn't given,
+        // and its line says so by the name the user saw (X6).
+        let never = Never::here(Some(self.tasks_dir()));
+        let refuses = |folder: &super::wall::Granted| {
+            let root = folder.root();
+            files::resolved(root).as_deref() != Some(root) || never_grantable(root, &never)
+        };
+        let refused = match &picked.folder {
+            Some(folder) if refuses(folder) => picked.folder.take(),
+            _ => None,
+        };
+        let names = Names::of(&Picked {
+            folder: refused.clone().or(picked.folder.clone()),
+            files: picked.files.clone(),
+        });
+        if let Some(task) = self.task_mut(agent)
+            && (picked.folder.is_some() || refused.is_some() || !picked.files.is_empty())
+        {
+            task.files.folder = picked.folder.clone();
+            task.names = names;
+            if let Some(folder) = &refused {
+                let files = Given {
+                    folder: Some(folder.clone()),
+                    attached: None,
+                };
+                task.rewalled(rewall::Rewalled::WithoutFiles { files });
+            }
+        }
+        let with = StartedWith {
+            pages: self.task(agent).map_or(0, |task| task.added.len()),
+            folder: picked.folder.is_some(),
+            files: picked.files.len(),
+            left_out: refused.is_some(),
+        };
+        if picked.files.is_empty() {
+            let wall = self.wall_to_begin(agent, with);
+            self.launch_in(agent, &first, wall, cx);
+            return self.wait_for_answer(agent, cx);
+        }
+        if let Some(task) = self.task_mut(agent) {
+            task.copying = true;
+        }
+        let into = self.attached_dir(agent);
+        let files = picked.files;
+        let copy = (cx.background_executor())
+            .spawn(async move { files::copy_attached(&files, &into).map(|()| into) });
+        let agent = agent.to_string();
+        cx.spawn(async move |agents, cx| {
+            let copied = copy.await.ok();
+            _ = agents.update(cx, |agents, cx| {
+                agents.attached(&agent, &first, with, copied, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Where ilo's copies of `agent`'s attached files are, beside its own folder and not in it,
+    /// as the assistant writes in its own and only reads these.
+    pub(super) fn attached_dir(&self, agent: &str) -> PathBuf {
+        self.tasks_dir().join(format!("{agent} files"))
+    }
+
+    /// ilo's copies of `agent`'s attached files are made, or couldn't be: its assistant starts,
+    /// with them or without. A task stopped meanwhile starts nothing, and its copies go.
+    fn attached(
+        &mut self,
+        agent: &str,
+        first: &str,
+        with: StartedWith,
+        copied: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task_mut(agent) else {
+            _ = std::fs::remove_dir_all(self.attached_dir(agent));
+            return;
+        };
+        task.copying = false;
+        // Its folder is what it has now, which a Revoke meanwhile took.
+        let with = StartedWith {
+            folder: task.files.folder.is_some(),
+            ..with
+        };
+        if task.state != State::Working {
+            self.log_start(agent, with);
+            _ = std::fs::remove_dir_all(self.attached_dir(agent));
+            return;
+        }
+        // What ilo or the user had to say while the copies were made goes with its one start.
+        let first = match task.told.take() {
+            Some(told) => format!("{first}\n\n{told}"),
+            None => first.to_string(),
+        };
+        let first = first.as_str();
+        let copied_none = copied.is_none();
+        match copied {
+            Some(into) => {
+                if let Some(task) = self.task_mut(agent) {
+                    task.files.attached = Some(into);
+                }
+            }
+            // Not silently: its line names what the task started without.
+            None => {
+                let files = Given {
+                    folder: None,
+                    attached: Some(self.attached_dir(agent)),
+                };
+                self.place_in(agent, super::lines::Happened::NotCopied { files });
+            }
+        }
+        // The start's log row counts what it starts with, and that its files were left out
+        // where their copies couldn't be made or its wall wasn't put up (rewall.rs).
+        let left_out = with.left_out || copied_none;
+        let wall = self.wall_to_begin(agent, StartedWith { left_out, ..with });
+        self.launch_in(agent, first, wall, cx);
+        self.wait_for_answer(agent, cx);
+    }
+
+    /// Whether this system can wall a task in with its files, which the `+` offers them by.
+    pub fn files_available(&self) -> bool {
+        #[cfg(test)]
+        return self.tasks.files_available;
+        #[cfg(not(test))]
+        super::wall::available().is_ok()
     }
 
     /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
@@ -1677,6 +1883,18 @@ impl Agents {
         return self.tasks.files.clone();
         #[cfg(not(test))]
         Given::default()
+    }
+
+    /// The names of `files_at_start`, as the system's panel would show them.
+    fn names_at_start(&self) -> Names {
+        #[cfg(test)]
+        return Names {
+            folder: (self.tasks.files.folder.as_ref())
+                .map(|folder| super::files::shown_name(folder.root())),
+            files: Vec::new(),
+        };
+        #[cfg(not(test))]
+        Names::default()
     }
 
     /// Starts the task's CLI with its first message.
@@ -2032,6 +2250,11 @@ impl Agents {
         task.state = State::Working;
         task.writing = None;
         task.helpers.turned(task.trace.len());
+        // Its assistant hasn't started: the reply goes with its one start, once the copies end.
+        if task.copying {
+            task.hold(text.to_string());
+            return cx.notify();
+        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2380,6 +2603,7 @@ impl Agents {
         _ = std::fs::remove_dir_all(dir.join(agent));
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
         _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
+        _ = std::fs::remove_dir_all(dir.join(format!("{agent} files")));
     }
 
     /// A task's call, as a step of its trace from when it came, or an outside agent's, as a step
@@ -2670,6 +2894,9 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
+        if task.copying {
+            return task.hold(text);
+        }
         if !now && task.state != State::Working {
             task.told = Some(text);
             return;
@@ -2917,8 +3144,10 @@ impl Agents {
             told: None,
             helpers: Helpers::default(),
             files: Given::default(),
+            names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
+            copying: false,
         });
         cx.notify();
         Some(key)
@@ -3058,6 +3287,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
             let home = if task.home != 0 {
@@ -3706,6 +3936,23 @@ fn first_words(result: &str) -> SharedString {
 /// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
 /// and what wouldn't show or would move the text around it written out. None with no text.
 pub fn first_line(result: &str) -> Option<SharedString> {
+    let kept = page::clip(&first_text(result)?, TITLE_KEPT);
+    Some(super::request::escaped(&kept, false).0.into())
+}
+
+/// A result's first line as a screen reader is told it: the card's line's text, cleaned the same,
+/// but up to TOLD_KEPT characters and ending with a whole word, as nothing marks a cut in speech.
+pub fn told_line(result: &str) -> Option<SharedString> {
+    let line = first_text(result)?;
+    Some(
+        super::request::escaped(words_within(&line, TOLD_KEPT), false)
+            .0
+            .into(),
+    )
+}
+
+/// A result's first line of text without its marks, a link its label. None with no text.
+fn first_text(result: &str) -> Option<String> {
     let line = (result.lines())
         .map(|line| {
             line.trim()
@@ -3713,8 +3960,26 @@ pub fn first_line(result: &str) -> Option<SharedString> {
                 .trim_end_matches(['*', ' '])
         })
         .find(|line| !line.is_empty())?;
-    let kept = page::clip(&labels(&line.replace("**", "")), TITLE_KEPT);
-    Some(super::request::escaped(&kept, false).0.into())
+    Some(labels(&line.replace("**", "")))
+}
+
+/// `text` whole, or the words of it that end within its first `chars` characters. A first word
+/// longer than that is cut there.
+fn words_within(text: &str, chars: usize) -> &str {
+    let Some((end, next)) = text.char_indices().nth(chars) else {
+        return text;
+    };
+    let head = &text[..end];
+    let whole = match next.is_whitespace() {
+        true => head,
+        false => head
+            .rfind(char::is_whitespace)
+            .map_or("", |space| &head[..space]),
+    };
+    match whole.trim_end() {
+        "" => head,
+        words => words,
+    }
 }
 
 /// `text` with each "[label](address)" its label alone.

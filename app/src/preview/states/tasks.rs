@@ -422,6 +422,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        folder: None,
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);

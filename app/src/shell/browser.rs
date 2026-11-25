@@ -859,6 +859,41 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// What the broom on the New Tab line shows for the Space the window shows, or None where it
+    /// isn't drawn, which the browser alone decides. It tells the shell to draw again as the
+    /// answer changes, and ends `Broom::Failed` itself.
+    fn broom(&self) -> Option<super::Broom> {
+        None
+    }
+    /// The user's click on the broom, its menu item or its bar entry: sorts the Today tabs of the
+    /// Space the window shows into folders. The user's alone: no agent tool, page or typed text
+    /// reaches it.
+    fn start_broom(&self, _cx: &mut App) {}
+    /// Makes Sort Tabs into Folders' folders in `space`'s today's list: each of `new` a folder of
+    /// its name holding its tabs, brought together at the first one's place in their order, and
+    /// each of `joins` its tabs put at the end of that today's folder. Returns the folders made,
+    /// or None if it made none, which a core without today's folders answers.
+    fn make_today_folders(
+        &self,
+        _space: u64,
+        _new: &[(String, Vec<u64>)],
+        _joins: &[(u64, Vec<u64>)],
+        _cx: &mut App,
+    ) -> Option<Vec<u64>> {
+        None
+    }
+    /// Takes back `make_today_folders`: the folders it `made` go, leaving their tabs, the tabs it
+    /// `joined` to a today's folder leave it, and `space`'s today's rows go back to the order
+    /// `rows`; the folders that were there before stay as they were.
+    fn unsort_today(
+        &self,
+        _space: u64,
+        _made: &[u64],
+        _joined: &[u64],
+        _rows: &[u64],
+        _cx: &mut App,
+    ) {
+    }
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -913,6 +948,11 @@ pub trait Browser {
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
     /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
     /// calls it: no agent has a path to it.

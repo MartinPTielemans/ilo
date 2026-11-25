@@ -871,6 +871,20 @@ impl Agents {
         shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
     }
 
+    /// Settings › Models' assistants: every one the app can run, in its state, whether agents
+    /// and tasks are on or not, so the page is never only its title; each with whether its model
+    /// for a new thread is drawn under it, which is once it's signed in.
+    pub fn providers(&self) -> Vec<(Cli, Shown, bool)> {
+        Cli::ALL
+            .into_iter()
+            .map(|cli| {
+                let row = self.assistant_row(cli);
+                let signed_in = row.offer == Offer::SignedIn;
+                (cli, row, signed_in)
+            })
+            .collect()
+    }
+
     /// What the card of a task that failed for want of `cli`'s sign-in or install offers: its
     /// row's own button, so the two never differ. Try Again reads as Sign in there, as on a card it
     /// would read as trying the task again.

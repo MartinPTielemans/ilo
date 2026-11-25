@@ -3879,6 +3879,7 @@ fn the_spaces_menu_lists_its_spaces_and_filters_them(cx: &mut TestAppContext) {
 fn settings_rows() -> Vec<settings_search::Entry> {
     let row = |section, name: &str| settings_search::Entry {
         section,
+        group: None,
         under: None,
         name: name.to_string().into(),
         line: Some("Links open in a preview.".into()),

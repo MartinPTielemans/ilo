@@ -1918,6 +1918,10 @@ impl Browser for Engine {
         command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
+    }
+
     fn start_task(
         &self,
         agent: &str,
@@ -2084,6 +2088,14 @@ impl Browser for Engine {
 
     fn fetch_recent(&self, tab: u64, _: &mut App) {
         recent_host::fetch(self.window, tab);
+    }
+
+    fn broom(&self) -> Option<shell::Broom> {
+        broom_host::shown(self.window)
+    }
+
+    fn start_broom(&self, cx: &mut App) {
+        broom_host::start(self.window, cx);
     }
 
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
