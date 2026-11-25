@@ -2201,10 +2201,10 @@ impl TalkView {
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
-    /// With Settings › Agents' Tasks from the command bar off, the line says so in the field's
-    /// place, as the task takes no more.
+    /// With the inside switch off, the line says so in the field's place, as the task takes no
+    /// more.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).tasks_on());
+        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).threads());
         let quiet = match (self.replies, tasks_off) {
             (false, _) => {
                 let name = self

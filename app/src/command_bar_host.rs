@@ -187,7 +187,7 @@ impl command_bar::Host for Bar {
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
-        if !agents.tasks_on() {
+        if !agents.threads() {
             return None;
         }
         let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {

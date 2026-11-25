@@ -46,6 +46,7 @@ pub use server::address;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use std::time::{Instant, SystemTime};
@@ -809,10 +810,10 @@ pub struct Agents {
     /// in a Flatpak the command that runs it there (bridge::launch).
     socket: PathBuf,
     bridge: Vec<String>,
-    on: bool,
-    /// Whether other apps' agents may connect while agents are on (#4260), which the server's
-    /// threads read: off for a new profile.
-    others: server::Others,
+    /// The user's two switches (#4260), which the server's threads read: the inside one, whether
+    /// the product's own threads run, and the outside one, whether other apps' agents may
+    /// connect. Neither touches the other, and both are off for a new profile.
+    switches: server::Switches,
     agents: Vec<Agent>,
     /// The agents' tokens, which the server's threads read.
     tokens: server::Tokens,
@@ -895,9 +896,6 @@ pub struct Agents {
     /// Whether scripts may control the browser (scripts.rs), and the Apple Event logged last.
     scripts: bool,
     script_event: u64,
-    /// Settings › Agents' Tasks from the command bar is off: asking an agent from ⌘T and letting
-    /// an app connect are two trust decisions, so tasks have a switch of their own under agents'.
-    tasks_off: bool,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -1056,8 +1054,7 @@ impl Agents {
             path,
             socket,
             bridge,
-            on: false,
-            others: Arc::default(),
+            switches: server::Switches::default(),
             agents: Vec::new(),
             tokens: Arc::default(),
             server: None,
@@ -1104,7 +1101,6 @@ impl Agents {
             },
             scripts: false,
             script_event: 0,
-            tasks_off: false,
         }
     }
 
@@ -1191,7 +1187,7 @@ impl Agents {
             Some((profile.clone(), last))
         }))
         .collect();
-        self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
+        let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
@@ -1200,48 +1196,92 @@ impl Agents {
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
-        self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
-        // Settings saved before other apps' agents had a switch of their own let them in while
-        // agents were on, which they keep, once: saved, the switch is the user's from then on.
+        // Settings saved before the two switches had one for every agent, and under it one for
+        // the command bar's tasks. Once, the inside switch is on only where both were, and other
+        // apps' agents only where agents were and they weren't turned off, so nothing comes on
+        // and nothing listens that didn't before. Saved, each is the user's alone.
+        let agents_on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        let threads = saved.get("threads").and_then(Value::as_bool);
         let others = saved.get("other_apps").and_then(Value::as_bool);
-        self.others.store(
-            others.unwrap_or(self.on),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        let (threads_on, others_on) = match threads {
+            Some(threads) => (threads, others.unwrap_or(false)),
+            None => (agents_on && !tasks_off, agents_on && others.unwrap_or(true)),
+        };
+        self.switches.threads.store(threads_on, SeqCst);
+        self.switches.others.store(others_on, SeqCst);
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if others.is_none() && self.on {
+        // The kept tasks taken above had no token while the inside switch was still unread.
+        self.tokens_changed();
+        if threads.is_none() && agents_on {
             self.save();
         }
-        if self.on {
+        if self.listening() {
             self.start(cx);
         }
         cx.notify();
     }
 
-    pub fn is_on(&self) -> bool {
-        self.on
+    /// Whether the product's own threads run: the inside switch, Threads' first row, which the user
+    /// alone sets. Off, no thread starts from the bar, a card, a reply or the broom.
+    pub fn threads(&self) -> bool {
+        self.switches.threads.load(SeqCst)
     }
 
-    /// Whether the user may ask an agent from ⌘T: agents are on, and so is Settings › Agents' Tasks
-    /// from the command bar, which is on unless they turned it off. Outside agents, through the
-    /// server, don't hang on it.
-    pub fn tasks_on(&self) -> bool {
-        self.on && !self.tasks_off
+    /// Whether the server listens: while either switch is on. With both off nothing listens.
+    pub fn listening(&self) -> bool {
+        self.threads() || self.other_apps()
     }
 
-    /// Settings › Agents' Tasks from the command bar. Off, ⇥ makes no task and shows no hint, no
-    /// task starts, and a task's card offers no Retry or reply; the tasks running finish, and
-    /// their cards stay until seen.
-    pub fn set_tasks_on(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on != self.tasks_off {
+    /// Sets the inside switch, the user's click alone. Off, every thread of the product's own ends
+    /// as Stop ends it, its assistant's program with it, its token goes so no call of it is
+    /// handled after, a sort under way ends, and with other apps' agents off too the server
+    /// stops. Other apps' agents connected work on.
+    pub fn set_threads(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.threads() {
             return;
         }
-        self.tasks_off = !on;
+        self.switches.threads.store(on, SeqCst);
+        match on {
+            true => self.start(cx),
+            false => {
+                self.end_threads(cx);
+                if !self.other_apps() {
+                    self.stop(cx);
+                }
+            }
+        }
+        self.tokens_changed();
         self.save();
+        // The brooms follow as Agents' observer tells them (broom_host::agents_changed), which
+        // ends a sort under way.
         cx.notify();
+    }
+
+    /// Ends every thread of the product's own as Stop ends it, then its assistant's program, so
+    /// nothing of it runs while the inside switch is off. A session's task is its app's, which
+    /// the outside switch has.
+    fn end_threads(&mut self, cx: &mut Context<Self>) {
+        let own: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| task.session.is_none())
+            .map(|task| task.agent.clone())
+            .collect();
+        for agent in own {
+            self.stop_task(&agent, cx);
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(&agent, None, cx);
+            if let Some(task) = self.task_mut(&agent) {
+                task.end_run();
+            }
+            if let Some((server, _)) = &self.server {
+                server.disconnect(&agent);
+            }
+            if self.live.remove(&agent) {
+                self.browser.disconnected(&agent, cx);
+            }
+        }
     }
 
     /// Whether Settings › Agents' Site notes is on, as it is unless the user turned it off.
@@ -1274,19 +1314,26 @@ impl Agents {
     /// Whether other apps' agents may connect while agents are on: Settings › Other apps' switch,
     /// and first run's, which the user alone sets. A task from the command bar doesn't hang on it.
     pub fn other_apps(&self) -> bool {
-        self.others.load(std::sync::atomic::Ordering::SeqCst)
+        self.switches.others.load(SeqCst)
     }
 
-    /// Sets Settings › Other apps' switch. Off, an app's agent that connects is answered as it is
-    /// with agents off, and each one's sessions end as they do when agents go off, their pages by
-    /// the same rule; the apps stay connected, listed as they are.
+    /// Sets Settings › Other apps' switch, the user's click alone. Off, an app's agent that
+    /// connects is answered as it is with nothing listening, and each one's sessions end as they
+    /// do when the server stops, their pages by the same rule; the apps stay connected, listed as
+    /// they are. With the inside switch off too the server stops; the user's threads run on.
     pub fn set_other_apps(&mut self, on: bool, cx: &mut Context<Self>) {
         if on == self.other_apps() {
             return;
         }
-        self.others.store(on, std::sync::atomic::Ordering::SeqCst);
-        if !on {
-            self.end_other_apps(cx);
+        self.switches.others.store(on, SeqCst);
+        match on {
+            true => self.start(cx),
+            false => {
+                self.end_other_apps(cx);
+                if !self.threads() {
+                    self.stop(cx);
+                }
+            }
         }
         self.save();
         cx.notify();
@@ -1308,20 +1355,6 @@ impl Agents {
                 self.note(agent, 0, "disconnected", "", "");
             }
         }
-    }
-
-    /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
-    pub fn set_on(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on == self.on {
-            return;
-        }
-        self.on = on;
-        match on {
-            true => self.start(cx),
-            false => self.stop(cx),
-        }
-        self.save();
-        cx.notify();
     }
 
     /// The server as a client's config names it, with the agent's token.
@@ -2441,18 +2474,25 @@ impl Agents {
         }
     }
 
-    /// Whether the agent's connections are taken: any but another app's while the user has other
-    /// apps' agents off.
+    /// Whether the agent's connections are taken: a thread's while the inside switch is on, an
+    /// app's while the outside one is, each whatever the other says.
     fn may_connect(&self, agent: &str) -> bool {
-        Client::from_id(agent).is_none() || self.other_apps()
+        match server::side(agent) {
+            Some(server::Side::Inside) => self.threads(),
+            Some(server::Side::Outside) => self.other_apps(),
+            None => false,
+        }
     }
 
     /// Whether the agent may call tools: a client the user connected, while other apps' agents are
-    /// on, or a task not dropped.
+    /// on, or a thread not dropped, while threads are.
     fn may_call(&self, agent: &str) -> bool {
-        match Client::from_id(agent) {
-            Some(client) => self.is_connected(client) && self.other_apps(),
-            None => is_task(agent) && self.task(agent).is_some(),
+        match (server::side(agent), Client::from_id(agent)) {
+            (Some(server::Side::Outside), Some(client)) => {
+                self.is_connected(client) && self.other_apps()
+            }
+            (Some(server::Side::Inside), _) => self.threads() && self.task(agent).is_some(),
+            _ => false,
         }
     }
 
@@ -5327,8 +5367,8 @@ impl Agents {
             return;
         }
         let (events, mut handed) = futures::channel::mpsc::unbounded();
-        let (tokens, others) = (self.tokens.clone(), self.others.clone());
-        match server::Server::start(&self.socket, tokens, others, events) {
+        let (tokens, switches) = (self.tokens.clone(), self.switches.clone());
+        match server::Server::start(&self.socket, tokens, switches, events) {
             Ok(server) => {
                 // check.sh reads this line.
                 log!("browser: agents server on {}", server.path().display());
@@ -5376,9 +5416,11 @@ impl Agents {
             .agents
             .iter()
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
-        // A session's calls come with its client's token: it has none of its own.
+        // A session's calls come with its client's token: it has none of its own. A thread of the
+        // product's own has one only while the inside switch is on.
+        let threads = self.threads();
         let tasks = (self.tasks.tasks.iter())
-            .filter(|task| task.session.is_none())
+            .filter(|task| threads && task.session.is_none())
             .map(|task| (task.token().to_string(), task.agent.clone()));
         *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
@@ -5412,7 +5454,6 @@ impl Agents {
             })
             .collect();
         let tasks = json!({
-            "on": !self.tasks_off,
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,
@@ -5421,7 +5462,7 @@ impl Agents {
             "notify": self.notify.id(),
         });
         let saved = json!({
-            "on": self.on,
+            "threads": self.threads(),
             "other_apps": self.other_apps(),
             "agents": agents,
             "grants": grants,

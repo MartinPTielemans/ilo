@@ -120,7 +120,7 @@ pub(crate) struct Recorder {
     pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
-    pub(super) agents: Cell<Option<bool>>,
+    pub(super) threads: Cell<Option<bool>>,
     pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
@@ -320,7 +320,7 @@ pub(crate) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
-    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// The Shell that set_threads and show_share_sheet read, as the core's do: turning agents off
     /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
     reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
@@ -2177,14 +2177,18 @@ impl Browser for Recorder {
         self.record(format!("crash reports {on}"))
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
-        self.agents.get()
+    fn threads(&self, _: &App) -> Option<bool> {
+        self.threads.get()
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         self.read_shell(cx);
-        self.agents.set(Some(on));
-        self.record(format!("agents {on}"))
+        self.threads.set(Some(on));
+        self.record(format!("threads {on}"));
+        // As the engine's host passes it on, so a stand-in's Agents runs what the switch lets.
+        if let Some(agents) = crate::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+        }
     }
 
     fn other_apps(&self, _: &App) -> Option<bool> {
