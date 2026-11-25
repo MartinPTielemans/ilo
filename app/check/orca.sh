@@ -160,9 +160,10 @@ orca_press tab
 orca_press tab
 orca_press tab shift
 orca_press down
-# On through the steps as Esc goes, each one's speech recorded as it comes. At the opt-ins, whose
-# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥
-# back to the last switch, before the Esc.
+# On through the steps as Skip goes, a click on it where each step says it's drawn, as Esc is Back,
+# each one's speech recorded as it comes. At the opt-ins, whose keyboard rests on Continue (#3498),
+# ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥ back to the last switch, before the
+# Skip.
 orca_switches=
 for _ in $(seq 10); do
   grep -q '^browser: onboarding done$' "$log" && break
@@ -176,7 +177,11 @@ for _ in $(seq 10); do
     orca_press tab
     orca_press tab shift
   fi
-  orca_press escape
+  at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
+  orca_mark "skip $at"
+  skip_step "$at"
+  expect '^browser: onboarding \(step [a-z-]* settled\|done\)$' "Skip didn't leave the $at step"
+  orca_settled
 done
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
 orca_mark "command bar after the onboarding"

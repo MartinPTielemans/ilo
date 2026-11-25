@@ -36,7 +36,7 @@ use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
-    TraceStep, first_line,
+    TraceStep, told_line,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -782,7 +782,7 @@ impl TalkView {
                     Line::Said(text) => Some(text),
                     _ => None,
                 })?;
-                Some(words::says(&shown.name, &first_line(said)?))
+                Some(words::says(&shown.name, &told_line(said)?))
             });
             if let Some(first) = answer {
                 self.tell(first.into());

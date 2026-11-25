@@ -114,8 +114,8 @@ to_opt_ins() {
       expect "^browser: onboarding step $each settled\$" "the onboarding's $each step didn't come"
     fi
     [ "$each" = opt-ins ] && break
-    send key escape
-    expect "^browser: onboarding left $each via escape\$" "Esc didn't leave the $each step"
+    skip_step "$each"
+    expect "^browser: onboarding left $each via skip\$" "Skip didn't leave the $each step"
   done
   expect '^browser: onboarding daily-count at ' \
     "the opt-ins step didn't draw the count's switch, though the build names an endpoint"
@@ -125,9 +125,12 @@ turn_count() {
   send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f5-6)
   expect "^browser: onboarding daily-count $1\$" "a click on the count's switch didn't turn it $1"
 }
-# Leaves the onboarding's last step with key $1, escape or return, which ends it.
+# Leaves the onboarding's last step with $1, skip or the return key, which ends it.
 leave_onboarding() {
-  send key "$1"
+  case $1 in
+    skip) skip_step opt-ins ;;
+    *) send key "$1" ;;
+  esac
   expect '^browser: onboarding done$' "$1 at the opt-ins step didn't end the onboarding"
   # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
   # open behind the browser's window with a click meant for it landing in the sidebar.
@@ -211,7 +214,7 @@ use_profile skipped
 launch_count skipped "$endpoint/v1/daily" onboarding
 to_opt_ins
 ../tools/window-screenshot.sh "$pid" "$out/count-onboarding-off.png" || fail "no window to capture"
-leave_onboarding escape
+leave_onboarding skip
 held_off "onboarding skipped"
 grep -q '^browser: onboarding daily-count set ' "$log" && fail "skipping the step set the count"
 exec 3>&-

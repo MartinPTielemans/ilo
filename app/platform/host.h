@@ -758,6 +758,19 @@ void host_show_settings(void);
 // Hides the Settings window, which keeps its place for the next host_show_settings.
 void host_hide_settings(void);
 
+// Makes the window of |first_run_view| first run's window: a window of its own that can't be
+// resized or zoomed, with the system's window buttons, whose close the view answers (Skip Setup).
+// It starts hidden.
+void host_add_first_run(void* first_run_view);
+
+// Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
+// screen the browser window opens on, and takes the launch window down: until first run ends it's
+// the only window on screen.
+void host_show_first_run(void);
+
+// Takes first run's window off screen for good, before the UI closes it.
+void host_close_first_run(void);
+
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
 // Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
 // isn't one: ⌘W on it closes its tab.

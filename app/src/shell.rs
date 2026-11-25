@@ -1572,8 +1572,10 @@ pub struct Shell {
     /// The command bar an empty Space's card rests on, made as the card comes to show no page and
     /// dropped as a page shows (#4140).
     resting: Option<empty::composer::Resting>,
-    /// A new profile's first launch, or Help › Welcome to ilo, over the window while it shows.
+    /// A new profile's first launch, or Help › Welcome, in its own window while it shows.
     onboarding: Option<onboarding::Onboarding>,
+    /// First run's window, once it has opened: the host closes it as the flow ends.
+    first_run: Option<gpui::WindowHandle<onboarding::FirstRun>>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
     /// import under way goes on while the steps after it show and once the flow has ended.
     importing: Option<onboarding::Importing>,
@@ -2224,6 +2226,7 @@ impl Shell {
             welcome: false,
             resting: None,
             onboarding: None,
+            first_run: None,
             importing: None,
             in_hint: false,
             press_closed_bar: false,
@@ -4977,15 +4980,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        // Onboarding's transparency step shows the window's glass alone (onboarding.rs).
-        let bare = self.onboarding_bare();
-        let normal = normal && !bare;
-        let task_area = task_area.filter(|_| !bare);
         let empty_card = self.empty_card(window, cx);
-        let (under, sidebar, over, edge) = match bare {
-            true => (None, None, None, None),
-            false => (under, sidebar, over, edge),
-        };
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5083,7 +5078,6 @@ impl Render for Shell {
             .children(own_buttons)
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
-            .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
             .children(self.task_announcer())
     }

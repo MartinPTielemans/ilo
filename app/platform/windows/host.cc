@@ -5428,6 +5428,46 @@ void host_hide_settings(void) {
   ShowWindow(g_settings.hwnd, SW_HIDE);
 }
 
+namespace {
+// First run's window, while it's open.
+HWND g_first_run = nullptr;
+}  // namespace
+
+void host_add_first_run(void* first_run_view) {
+  g_first_run = Hwnd(first_run_view);
+  ShowWindow(g_first_run, SW_HIDE);
+  // The system's buttons, but its size is fixed.
+  LONG_PTR style = GetWindowLongPtrW(g_first_run, GWL_STYLE);
+  SetWindowLongPtrW(g_first_run, GWL_STYLE, style & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
+}
+
+void host_show_first_run(void) {
+  if (!g_first_run) {
+    return;
+  }
+  // Centred on the primary display's work area, where the browser window opens.
+  MONITORINFO monitor{sizeof(monitor)};
+  GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor);
+  RECT own{};
+  GetWindowRect(g_first_run, &own);
+  const RECT work = monitor.rcWork;
+  const int width = own.right - own.left, height = own.bottom - own.top;
+  SetWindowPos(g_first_run, nullptr, (work.left + work.right - width) / 2,
+               (work.top + work.bottom - height) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+  ShowWindow(g_first_run, SW_SHOW);
+  SetForegroundWindow(g_first_run);
+  host_close_launch_window();
+  // check.sh waits for this line.
+  fprintf(stderr, "browser: first run shown\n");
+}
+
+void host_close_first_run(void) {
+  if (g_first_run) {
+    ShowWindow(g_first_run, SW_HIDE);
+  }
+  g_first_run = nullptr;
+}
+
 bool host_close_other_window(void) {
   HWND window = GetForegroundWindow();
   if (!window) {

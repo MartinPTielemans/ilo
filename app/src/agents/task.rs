@@ -57,6 +57,10 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
+/// line has the width of a title.
+pub const TOLD_KEPT: usize = 120;
+
 /// How long a task's title stays before it may change, so it can't flicker (#3690).
 pub const RENAMING: Duration = Duration::from_secs(60);
 
@@ -1067,7 +1071,8 @@ impl Agents {
             &task.trace,
             ended,
             at_work,
-            task.writing.as_ref(),
+            // The assistant's words show as they come while the task works, whatever the head says.
+            task.writing.as_ref().filter(|_| working),
             &task.helpers,
             &task.stopped_turns,
             // ilo's lines of its refusals, its steps handed to the user and its changes of access.
@@ -3705,6 +3710,23 @@ fn first_words(result: &str) -> SharedString {
 /// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
 /// and what wouldn't show or would move the text around it written out. None with no text.
 pub fn first_line(result: &str) -> Option<SharedString> {
+    let kept = page::clip(&first_text(result)?, TITLE_KEPT);
+    Some(super::request::escaped(&kept, false).0.into())
+}
+
+/// A result's first line as a screen reader is told it: the card's line's text, cleaned the same,
+/// but up to TOLD_KEPT characters and ending with a whole word, as nothing marks a cut in speech.
+pub fn told_line(result: &str) -> Option<SharedString> {
+    let line = first_text(result)?;
+    Some(
+        super::request::escaped(words_within(&line, TOLD_KEPT), false)
+            .0
+            .into(),
+    )
+}
+
+/// A result's first line of text without its marks, a link its label. None with no text.
+fn first_text(result: &str) -> Option<String> {
     let line = (result.lines())
         .map(|line| {
             line.trim()
@@ -3712,8 +3734,26 @@ pub fn first_line(result: &str) -> Option<SharedString> {
                 .trim_end_matches(['*', ' '])
         })
         .find(|line| !line.is_empty())?;
-    let kept = page::clip(&labels(&line.replace("**", "")), TITLE_KEPT);
-    Some(super::request::escaped(&kept, false).0.into())
+    Some(labels(&line.replace("**", "")))
+}
+
+/// `text` whole, or the words of it that end within its first `chars` characters. A first word
+/// longer than that is cut there.
+fn words_within(text: &str, chars: usize) -> &str {
+    let Some((end, next)) = text.char_indices().nth(chars) else {
+        return text;
+    };
+    let head = &text[..end];
+    let whole = match next.is_whitespace() {
+        true => head,
+        false => head
+            .rfind(char::is_whitespace)
+            .map_or("", |space| &head[..space]),
+    };
+    match whole.trim_end() {
+        "" => head,
+        words => words,
+    }
 }
 
 /// `text` with each "[label](address)" its label alone.
@@ -4003,8 +4043,9 @@ pub struct Mark {
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
-/// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
-/// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+/// it. The last stretch is under way while `working`, and what the agent is `writing` shows under
+/// it, as it comes and once it's whole, until the turn ends or a call takes it in: `working` heads
+/// the stretch and never withholds the words, which the caller gives only while its task works.
 /// ilo's lines, `marks`, each go where it came among the messages and the steps, ending the
 /// stretch of steps before it.
 pub fn fold(
@@ -4019,7 +4060,7 @@ pub fn fold(
 ) -> Vec<Line> {
     #[cfg(test)]
     FOLDS.with(|folds| folds.set(folds.get() + 1));
-    let writing = writing.filter(|_| working && !ended);
+    let writing = writing.filter(|_| !ended);
     // Once whole, it's the last message, which shows where it was written rather than in the trace.
     let held = (writing.is_some_and(|writing| writing.said))
         .then(|| messages.len().checked_sub(1))
@@ -4071,8 +4112,19 @@ pub fn fold(
     }
     stretch.gather(&mut steps, &mut began, None, &mut lines, &mut marks);
     stretch.flush(&mut lines, working, None);
-    lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
     lines.extend(marks.map(|mark| Line::Ilo(mark.line)));
+    if let Some(writing) = writing {
+        // Never under a button: above the trailing line of ilo's that waits on the user, which
+        // stays the last over the field.
+        let trailing = lines.len()
+            - (lines.iter().rev())
+                .take_while(|line| matches!(line, Line::Ilo(_)))
+                .count();
+        let at = (trailing..lines.len())
+            .find(|&at| matches!(&lines[at], Line::Ilo(line) if !ilo::buttons(line).is_empty()))
+            .unwrap_or(lines.len());
+        lines.insert(at, Line::Said(writing.text.clone()));
+    }
     lines
 }
 

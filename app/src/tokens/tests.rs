@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "agents/wall/links.rs",
+        "0x2FC1_2FC1",
+        "ZFS's filesystem number, not a colour",
+    ),
+    (
+        "agents/wall/links.rs",
+        "0xCA45_1A4E",
+        "bcachefs's filesystem number, not a colour",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
@@ -104,6 +114,12 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
+    // foot's buttons and their key, and the picture's panel.
+    "shell.onboarding.window.track-radius",
+    "shell.onboarding.window.button-radius",
+    "shell.onboarding.window.key-radius",
+    "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
