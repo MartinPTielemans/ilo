@@ -1532,6 +1532,16 @@ void bc_window_set_page_color(bc_id window_id, uint32_t color) {
   }
 }
 
+bool bc_tab_background_color(bc_id id, uint32_t* color) {
+  browser_core::Tab* tab = browser_core::Tab::Get(id);
+  const std::optional<uint32_t> kept = tab ? tab->BackgroundColor() : std::nullopt;
+  if (!kept) {
+    return false;
+  }
+  *color = *kept;
+  return true;
+}
+
 void bc_window_page_moving(bc_id window_id, bool moving) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->SetPageMoving(moving);

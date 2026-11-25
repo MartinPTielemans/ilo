@@ -1093,6 +1093,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_state_changed: Some(tab_state_changed),
         tab_title_changed: Some(tab_title_changed),
         tab_favicon_changed: Some(tab_favicon_changed),
+        tab_background_color_changed: Some(tab_background_color_changed),
         tab_history: Some(tab_history),
         archive_changed: Some(archive_changed),
         page_favicon: Some(page_favicon),

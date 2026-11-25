@@ -411,6 +411,13 @@ Tab::~Tab() = default;
 
 void Tab::Attach(content::WebContents* contents) {
   Observe(contents);
+  // A page that painted before the tab had it tells of its colour only once it changes. One that
+  // hasn't painted tells of it when it does, as Chromium has it, and until then the tab has the
+  // colour it kept without a page: the empty document a tab starts with never gives it one.
+  if (contents->CompletedFirstVisuallyNonEmptyPaint()) {
+    reported_background_ = contents->GetBackgroundColor();
+    background_.Changed(reported_background_, /*shown=*/false, base::TimeTicks::Now());
+  }
   TabLink::CreateForWebContents(contents, id_);
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
   // as a page's popup can still come after StopHearingCaptures.
@@ -1112,6 +1119,39 @@ void Tab::EngineChanged() {
   StateChanged();
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Tab::ReportTitle, weak_factory_.GetWeakPtr()));
+  // The system's engine reports no background colour, and Chromium's page has the one it had.
+  // Posted, as the title is: the app may be in the call that changed the engine.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Tab::BackgroundChanged, weak_factory_.GetWeakPtr()));
+}
+
+void Tab::OnBackgroundColorChanged() {
+  // Chromium tells of the primary page's colour once the page has painted, and only when it
+  // differs from the one it last told: a new page keeps the one before until then.
+  reported_background_ = web_contents()->GetBackgroundColor();
+  BackgroundChanged();
+}
+
+void Tab::BackgroundChanged() {
+  TellBackground(background_.Changed(system_page_ ? std::nullopt : reported_background_,
+                                     Window::Showing(id_) != nullptr, base::TimeTicks::Now()));
+}
+
+void Tab::BackgroundSettled() {
+  TellBackground(background_.Settled(Window::Showing(id_) != nullptr, base::TimeTicks::Now()));
+}
+
+void Tab::TellBackground(TabBackground::Step step) {
+  if (step.wait) {
+    // The one timer, started only while none runs: a page animating its background posts nothing
+    // per change.
+    background_wait_.Start(FROM_HERE, *step.wait, this, &Tab::BackgroundSettled);
+  }
+  if (step.tell && Host().tab_background_color_changed) {
+    const std::optional<uint32_t> color = background_.color();
+    Host().tab_background_color_changed(Host().context, id_, color.has_value(),
+                                        color.value_or(0));
+  }
 }
 
 void Tab::FetchSystemPageFavicon() {
@@ -1433,6 +1473,9 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
     }
     ShowOnPageColor();
     ClearHang();
+    // The page that was changing its background is gone, and its wait with it.
+    background_wait_.Stop();
+    TellBackground(background_.LeftPage(Window::Showing(id_) != nullptr));
     if (std::exchange(crashed_, false)) {
       LayOutSoon();
     }
@@ -2168,6 +2211,8 @@ void Tab::BeforeUnloadFired(bool proceed) {
 
 void Tab::WebContentsDestroyed() {
   user_load_.Closed();
+  background_wait_.Stop();
+  background_.LeftPage(/*shown=*/false);
   tiles::End(id_);
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
