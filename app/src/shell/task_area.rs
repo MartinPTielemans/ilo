@@ -1661,27 +1661,31 @@ impl Shell {
                 .border(px(RING))
                 .border_color(rgb(COLOR))
         });
-        let press = div()
-            .id("task-page-tile")
-            .absolute()
-            .left(at.left())
-            .top(at.top())
-            .w(at.size.width)
-            .h(at.size.height)
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.press_watch_tile(cx);
-                }),
-            );
+        // Going back, the tile takes no press: the conversation's pictures under it do, as they do
+        // under a page going back into its picture (#3496, #4267).
+        let press = (!self.task_page_going_back()).then(|| {
+            div()
+                .id("task-page-tile")
+                .absolute()
+                .left(at.left())
+                .top(at.top())
+                .w(at.size.width)
+                .h(at.size.height)
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.press_watch_tile(cx);
+                    }),
+                )
+        });
         div()
             .absolute()
             .size_full()
             .child(card(place, radius, self.palette.page).opacity(zoom))
             .children(ring)
-            .child(press)
+            .children(press)
             .into_any_element()
     }
 

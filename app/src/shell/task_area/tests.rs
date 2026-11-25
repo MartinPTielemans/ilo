@@ -2719,6 +2719,46 @@ fn a_press_on_the_tile_takes_over_and_reaches_nothing(cx: &mut TestAppContext) {
     );
 }
 
+/// A click where the watched tile is while it goes back into its picture reaches the conversation
+/// under it, as one does under a page going back (#3496), and takes nothing over (#4267).
+#[gpui::test]
+fn a_click_on_the_conversation_while_the_tile_goes_back_reaches_it(cx: &mut TestAppContext) {
+    // With motion, as reduced motion takes the page back at once.
+    let (shell, host, cx) = shell_with_task(cx);
+    host.shows_tiles.set(Some(true));
+    let tiles = LiveTiles::new(host.clone());
+    let clicks = Rc::new(std::cell::Cell::new(0));
+    let pictures = clicks.clone();
+    let view: AnyView = cx.update(|_, cx| cx.new(|_| Pictures(pictures)).into());
+    shell.update(cx, |shell, cx| {
+        shell.open_task(3, view, cx);
+        shell.set_agent_status(at_work(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page_from(30, thumb, None, false, Some(tiles), cx)
+    }));
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::Out(Instant::now() - Duration::from_secs(1)),
+    );
+    draw(&shell, cx);
+    let place = tile_place(&shell, cx);
+    // Held where its zoom back starts, the tile still fills the watched page's place.
+    shell.update(cx, |shell, _| shell.hold_task_page_going_back());
+    draw(&shell, cx);
+    host.take();
+    cx.simulate_click(place.center(), gpui::Modifiers::none());
+    assert_eq!(clicks.get(), 1, "the click on the conversation was lost");
+    let asked = host.take();
+    assert!(
+        !asked.iter().any(|line| line.starts_with("take over")),
+        "{asked:?}"
+    );
+}
+
 /// A handoff or an ask while the user watches the tile is the agent's doing, not the user's, by
 /// the hold's kind and whatever words the agent gave it, none too: the page stays a tile for ARM,
 /// so a click meant for the tile reaches nothing, then it's the window's page with the keyboard
