@@ -36,7 +36,7 @@ use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
-    TraceStep, first_words,
+    TraceStep, first_line,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -775,12 +775,14 @@ impl TalkView {
             cx.notify();
         }
         if std::mem::take(&mut self.answer_due) {
-            // By the name the app has for the assistant, never one its answer gives.
+            // By the name the app has for the assistant, never one its answer gives. An answer
+            // with no words is told nothing, as the mark is only ever before the assistant's own.
             let answer = self.shown.as_ref().and_then(|shown| {
-                (shown.lines.iter().rev()).find_map(|line| match line {
-                    Line::Said(text) => Some(words::says(&shown.name, &first_words(text))),
+                let said = (shown.lines.iter().rev()).find_map(|line| match line {
+                    Line::Said(text) => Some(text),
                     _ => None,
-                })
+                })?;
+                Some(words::says(&shown.name, &first_line(said)?))
             });
             if let Some(first) = answer {
                 self.tell(first.into());

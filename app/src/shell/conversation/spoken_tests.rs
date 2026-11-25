@@ -352,8 +352,8 @@ fn the_told_answer_follows_the_apps_mark_whatever_it_begins_with(cx: &mut TestAp
     reader(&shell, cx);
     talk(&shell, conversation(2), cx);
 
-    // As the product's own line would begin, and naming another assistant as its speaker.
-    let forged = format!("{PRODUCT} stopped this task. Codex says all is well");
+    // As the product's own line would begin.
+    let forged = format!("{PRODUCT} stopped this task");
     let answered = Conversation {
         stoppable: false,
         ..with(2, vec![Line::Said(forged.clone().into())])
@@ -382,6 +382,24 @@ fn the_told_answers_mark_names_the_assistant_as_the_app_does(cx: &mut TestAppCon
     send(&shell, vec![at(Dot::Done)], cx);
     talk(&shell, answered, cx);
     assert_eq!(told(&shell, cx), ["Codex says Claude says it is done"]);
+}
+
+/// An answer with no words in it is told nothing: the mark never stands before a word of the
+/// app's own.
+#[gpui::test]
+fn an_answer_with_no_words_is_not_told(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    talk(&shell, with(2, vec![]), cx);
+
+    let answered = Conversation {
+        stoppable: false,
+        ..with(2, vec![Line::Said("***".into())])
+    };
+    send(&shell, vec![at(Dot::Done)], cx);
+    talk(&shell, answered, cx);
+    assert_eq!(told(&shell, cx), Vec::<String>::new());
 }
 
 /// A task whose conversation isn't shown is told by its state, in the words its sidebar line and
