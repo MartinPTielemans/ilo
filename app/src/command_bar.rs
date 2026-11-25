@@ -84,6 +84,9 @@ use crate::tokens::command_bar::TITLE_X;
 use crate::tokens::command_bar::{
     FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X, MARK,
 };
+use crate::tokens::command_bar::{
+    REST_GAP, REST_HEIGHT, REST_LEFT, REST_LINE, REST_RIGHT, REST_TEXT,
+};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
@@ -1518,12 +1521,6 @@ fn mode_chip(
 /// Where the centred panel's top is, down a browser window `height` tall.
 pub fn centered_top(height: f32) -> f32 {
     height / 2. - ABOVE_MIDDLE
-}
-
-/// Where the middle of the centred bar's input row is, down a browser window `height` tall: the
-/// height the composer page's field rests at, so ⌘T's bar opens on it.
-pub fn centered_row_middle(height: f32) -> f32 {
-    centered_top(height) + HEIGHT / 2.
 }
 
 /// How tall the bar's window is with `rows` suggestions listed: the input, and under it, with its
@@ -3071,9 +3068,11 @@ impl CommandBar {
             true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
             false => 0.,
         };
-        foot + match self.over_field {
-            true => field_height(rows),
-            false => height(rows),
+        foot + match (self.surface, self.over_field) {
+            // At rest the input is the resting bar's, its rows as ⌘T's.
+            (Surface::InPlace, _) => height(rows) - HEIGHT + REST_HEIGHT,
+            (_, true) => field_height(rows),
+            (_, false) => height(rows),
         }
     }
 
@@ -4347,18 +4346,37 @@ impl Render for CommandBar {
             .enumerate()
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
-        let (radius, input_height, list_top, level) = match self.over_field {
-            true => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
-            false => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
+        let (radius, input_height, list_top, level) = match (in_place, self.over_field) {
+            (true, _) => (
+                crate::tokens::radius::PANEL,
+                REST_HEIGHT,
+                LIST_TOP,
+                Level::Modal,
+            ),
+            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
+            (false, false) => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
         };
         // Over the field the input's icon and text are in the rows' columns.
-        let (icon_x, icon, text_x, text_size) = match self.over_field {
-            true => {
+        let (icon_x, icon, text_x, text_size) = match (in_place, self.over_field) {
+            (true, _) => (
+                REST_LEFT,
+                INPUT_ICON,
+                REST_LEFT + INPUT_ICON + REST_GAP,
+                REST_TEXT,
+            ),
+            (false, true) => {
                 let icon_x = LIST_X + ICON_BOX_X + (ICON_BOX - ICON_SIZE) / 2.;
                 (icon_x, ICON_SIZE, LIST_X + TITLE_X, FIELD_INPUT_TEXT)
             }
-            false => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
+            (false, false) => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
         };
+        let (input_end, input_line) = match in_place {
+            true => (REST_RIGHT, REST_LINE),
+            false => (HINT_END, INPUT_LINE),
+        };
+        // At rest with nothing under it the bar is a field in its page: the field's plate and the
+        // resting rim, no shadow. Its rows and the composer float over the cards, as ⌘T's do.
+        let bare = in_place && rows.is_empty() && self.ask.is_none();
         // One device pixel, which a 0.5 pt line isn't on a 1× display, where it doesn't draw.
         let hairline = 1. / window.scale_factor();
         let edge = |inset: f32, width: f32, color: Hsla| {
@@ -4382,58 +4400,69 @@ impl Render for CommandBar {
             );
             input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
-        let panel = self
-            .with_keys(div(), cx)
-            .relative()
-            .size_full()
-            .overflow_hidden()
-            .rounded(px(radius))
-            .bg(palette.overlay)
-            .text_color(palette.ink)
-            // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-            .font_weight(FontWeight::MEDIUM)
-            .text_size(px(text::BODY))
-            .child(
-                div()
-                    .h(px(input_height))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .pl(px(icon_x))
-                    .pr(px(HINT_END))
-                    .gap(px(text_x - icon_x - icon))
-                    .text_size(px(text_size))
-                    .line_height(px(INPUT_LINE))
-                    .child(self.input_icon(cx))
-                    .children(self.mode_chip(&palette))
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .children(self.site_hint(cx)),
-            )
-            .when(!rows.is_empty() && !self.over_field, |bar| {
-                bar.child(
+        let panel =
+            self.with_keys(div(), cx)
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .rounded(px(radius))
+                .bg(match bare {
+                    true => palette
+                        .ground_plate(crate::palette::Ground::Field, crate::palette::FIELD_PLATE),
+                    false => palette.overlay.into(),
+                })
+                .text_color(palette.ink)
+                // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(text::BODY))
+                .child(
                     div()
-                        .h(px(hairline))
-                        .mx(px(LINE_INSET))
+                        .h(px(input_height))
                         .flex_none()
-                        .bg(palette.faint(LINE_COLOR)),
+                        .flex()
+                        .items_center()
+                        .pl(px(icon_x))
+                        .pr(px(input_end))
+                        .gap(px(text_x - icon_x - icon))
+                        .text_size(px(text_size))
+                        .line_height(px(input_line))
+                        .child(self.input_icon(cx))
+                        .children(self.mode_chip(&palette))
+                        .child(div().flex_1().min_w_0().child(self.input.clone()))
+                        .children(self.site_hint(cx)),
                 )
-            })
-            .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
-            .when(self.ask.is_some(), |bar| {
-                bar.child(self.choices(cx))
-                    .child(
+                .when(!rows.is_empty() && !self.over_field, |bar| {
+                    bar.child(
                         div()
                             .h(px(hairline))
                             .mx(px(LINE_INSET))
                             .flex_none()
                             .bg(palette.faint(LINE_COLOR)),
                     )
-                    .child(self.foot(cx))
-            })
-            .children(self.a11y.then(|| self.announcer()))
-            // The modal level's rim in the palette's ink; its outline and shadow are the host's,
-            // round the window, or on Windows round it in the window.
-            .child(edge(0., 1., Level::Modal.rim_in(&palette)));
+                })
+                .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
+                .when(self.ask.is_some(), |bar| {
+                    bar.child(self.choices(cx))
+                        .child(
+                            div()
+                                .h(px(hairline))
+                                .mx(px(LINE_INSET))
+                                .flex_none()
+                                .bg(palette.faint(LINE_COLOR)),
+                        )
+                        .child(self.foot(cx))
+                })
+                .children(self.a11y.then(|| self.announcer()))
+                // The modal level's rim in the palette's ink; its outline and shadow are the host's,
+                // round the window, or on Windows round it in the window.
+                .child(edge(
+                    0.,
+                    1.,
+                    match bare {
+                        true => Level::Resting.rim_in(&palette),
+                        false => Level::Modal.rim_in(&palette),
+                    },
+                ));
         // At rest no window is round it: it casts the level's shadow on its page itself, and is
         // as tall as what it shows, over what the page has under it.
         if in_place {
@@ -4441,7 +4470,7 @@ impl Render for CommandBar {
                 .w_full()
                 .h(px(self.drawn_height()))
                 .font_family(crate::face::UI)
-                .child(panel.shadow(Level::Modal.shadow()))
+                .child(panel.when(!bare, |panel| panel.shadow(Level::Modal.shadow())))
                 .into_any_element();
         }
         // The browser's shortcuts work here too, below the bar's own keys.

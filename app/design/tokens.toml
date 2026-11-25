@@ -289,6 +289,17 @@ field-radius = 20.0
 field-input-text = 13.0
 # Over a new pane of a split view, the bar's right edge stays this far inside the card's (Arc).
 beside-end = 70.0
+# At rest in the empty window (49): the bar 560 wide in its column, its input 56 tall, the glyph 20
+# in and the end 16 in, 12 between, its words 16 on a 21 line, at the panel's corners. Bare, it is
+# a field (the field's plate and the resting rim, no shadow); with rows or the composer under it,
+# it floats over the cards as ⌘T's does.
+rest-width = 560.0
+rest-height = 56.0
+rest-left = 20.0
+rest-right = 16.0
+rest-gap = 12.0
+rest-text = 16.0
+rest-line = 21.0
 # In a Little ilo window, ⌘L and ⌘T open the bar inside the window, this wide, centred across it,
 # its top this far down the window (Arc 1.168, measured by an outside reverse-engineering,
 # *interim*, #1407).
@@ -2121,12 +2132,13 @@ hint-bottom = 40.0
 
 [shell.composer]
 # The page an empty Space rests on (#4140), as its drawing measures it on the window's ink: ⌘T's
-# bar, with its own tokens, and under it the user's recent tasks. The mark (`shell.empty`'s) stands
-# `mark-gap` over the bar where the card has that room over it. The group moves up only as far as
-# it needs to fit the cards, never nearer its top than `top`, and the bar and the label keep 24
-# from the window's sides. A card's rim is white on a dark window and ink 0.09 on a light one, where
-# white doesn't show.
+# bar at rest, with its own tokens, and under it the user's recent tasks. Its column starts 150
+# down; the mark (`shell.empty`'s) and `mark-gap` under it come before the bar. The group moves up
+# only as far as it needs to fit the cards, never nearer its top than `top`, and the bar and the
+# label keep 24 from the window's sides. A card's rim is white on a dark window and ink 0.09 on a
+# light one, where white doesn't show.
 top = 40.0
+column-top = 150.0
 mark-gap = 28.0
 field-gutter = 24.0
 light-rim = 0.09
