@@ -334,6 +334,7 @@ unsafe extern "C" {
     pub fn host_add_settings(settings_view: *mut c_void);
     pub fn host_show_settings();
     pub fn host_hide_settings();
+    pub fn host_hold_window(ui_view: *mut c_void);
     pub fn host_add_first_run(first_run_view: *mut c_void);
     pub fn host_show_first_run();
     pub fn host_close_first_run();

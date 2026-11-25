@@ -3710,6 +3710,9 @@ void WriteJumpList();
 constexpr double kJumpListAfter = 2;
 }  // namespace
 
+// First run holding the window off screen is the Mac's alone so far.
+void host_hold_window(void* ui_view) {}
+
 void host_show_window(void* ui_view) {
   HWND root = Root(ui_view);
   TakeTitleBar(ui_view);

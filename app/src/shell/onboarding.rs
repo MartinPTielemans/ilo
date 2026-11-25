@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    AnyElement, App, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
     KeystrokeEvent, MouseButton, Pixels, Rgba, SharedString, Subscription, Window,
     accesskit::{Role, Toggled},
     canvas, div,
@@ -580,6 +580,12 @@ impl Shell {
             });
         });
         cx.notify();
+    }
+
+    /// First run's window has the keyboard, with the flow in it.
+    pub(super) fn first_run_key(&self, cx: &App) -> bool {
+        self.onboarding.is_some()
+            && (self.first_run).is_some_and(|handle| cx.active_window() == Some(handle.into()))
     }
 
     /// First run is showing, so the browser window it opened at launch waits for it to end.

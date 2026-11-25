@@ -115,6 +115,11 @@ void host_grow_little_window(void* ui_view);
 // app the active one.
 void host_show_window(void* ui_view);
 
+// Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
+// host_show_window, whatever else asks to show it: first run's window is the only one on screen
+// until it ends. Off the Mac, nothing.
+void host_hold_window(void* ui_view);
+
 // Shows the window holding |ui_view| as host_show_window does, but right behind the browser window
 // of |above_ui_view|, neither key nor activating the app, as the windows a relaunch brings back
 // after the first.
@@ -1041,6 +1046,9 @@ bool host_choose(const char* title);
 // For the test driver: the NSWindow of the browser window whose view host_ui_view made |index|th,
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
+
+// For the test driver: first run's window while it's on screen, else null. The Mac's alone.
+void* host_first_run_window(void);
 
 // AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
 // Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,

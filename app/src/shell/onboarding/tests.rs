@@ -211,6 +211,33 @@ fn the_welcome_waits_then_goes_on_or_skips_the_setup(cx: &mut TestAppContext) {
     }
 }
 
+/// ⌘W in first run's window is its close and nothing else: File's Close Tab, which the same key
+/// reaches, leaves first run by that road and closes no tab or window, and ⇧⌘W's Close Window too.
+#[gpui::test]
+fn command_w_in_first_run_closes_only_first_run(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    host.take();
+    for command in [Command::CloseTab, Command::CloseWindow] {
+        cx.simulate_keystrokes("secondary-w");
+        shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+        cx.run_until_parked();
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{command:?} leaves first run");
+        assert!(
+            !host.take().iter().any(|asked| asked.starts_with("close")),
+            "{command:?} closes nothing else"
+        );
+        later(&shell, cx, END_FADE);
+        started(&shell, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        host.take();
+    }
+}
+
 /// With the system's Reduce Motion, the welcome is all there once it has faded in, asking for no
 /// more frames.
 #[gpui::test]

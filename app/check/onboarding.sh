@@ -104,6 +104,39 @@ launch_new() {
 launch_new light
 grep -q '^browser: onboarding started$' "$log" || fail "a new profile didn't start the onboarding"
 capture_step light-intro
+if [ "$(uname)" = Darwin ]; then
+  # A reopen, which a click on the Dock's icon sends, brings first run's window to the front and
+  # makes no window: the browser's stays held and Chromium makes none of its own.
+  send reopen
+  expect '^browser: reopen brought first run to the front$' "light: a reopen didn't come to first run"
+  send front
+  grep '^browser: front ' "$log" | tail -1 | grep -q '^browser: front GPUIWindow .*, key GPUIWindow ' ||
+    fail "light: a reopen put a window in front of first run's: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a reopen showed the browser's window while first run showed"
+  # A link from another app opens in a Little window over first run's, as an assistant's sign-in
+  # page comes. Closing it gives first run's window the keyboard back at the welcome, which Return
+  # goes on from below, and the browser's window stays held.
+  open -a "$app" "${site}index.html"
+  little_link="^browser: link from another app ${site}index.html: tab [1-9][0-9]* in little window [0-9]* of space [0-9]*\$"
+  expect "$little_link" "light: a link while first run showed didn't open in a Little window"
+  tab=$(grep "$little_link" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  little=$(grep "$little_link" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
+  expect "^browser: loaded $tab ${site}index.html\$" "light: the link didn't load in its Little window"
+  send key w cmd
+  expect "^browser: window closed $little\$" "light: ⌘W didn't close the link's Little window"
+  # As AppKit may hand the keyboard on a moment after.
+  for _ in $(seq 20); do
+    send front
+    case "$(grep '^browser: front ' "$log" | tail -1)" in *", key GPUIWindow "*) break ;; esac
+  done
+  grep '^browser: front ' "$log" | tail -1 | grep -q ', key GPUIWindow ' ||
+    fail "light: first run's window didn't get the keyboard back: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: onboarding left ' "$log" ||
+    fail "light: the link's Little window took first run off its welcome"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a link showed the browser's window while first run showed"
+fi
 send key return
 expect '^browser: onboarding left intro via return$' "light: Return didn't go on from the welcome"
 for each in $steps; do
@@ -126,6 +159,9 @@ expect '^browser: onboarding done$' "light: the flow didn't end after its last s
 # First run is the only window until it ends, when the browser's, held off screen, comes on.
 grep -q '^browser: window held for first run$' "$log" ||
   fail "light: the browser's window came on screen while first run showed"
+# The Mac's Chromium puts the window on screen as it makes it, so the host takes it off again.
+[ "$(uname)" != Darwin ] || grep -q '^browser: window held off screen$' "$log" ||
+  fail "light: the Mac left the browser's window on screen while first run showed"
 expect '^browser: window on screen after first run$' \
   "light: the browser's window didn't come on screen as first run ended"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Skip at the colour step gave the Space one"

@@ -1450,6 +1450,11 @@ impl Shell {
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
+        // ⌘W and ⇧⌘W in first run's window are its close, which leaves first run once; File's
+        // Close Tab and Close Window, which the same keys reach, close nothing else there.
+        if matches!(command, Command::CloseTab | Command::CloseWindow) && self.first_run_key(cx) {
+            return self.onboarding_skip_setup("close", cx);
+        }
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
         // And a command of the user's after a close a page hasn't answered is no answer to it,
