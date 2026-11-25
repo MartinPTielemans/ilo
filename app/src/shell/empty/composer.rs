@@ -213,6 +213,11 @@ impl Shell {
         let Some(resting) = &mut self.resting else {
             return false;
         };
+        // The core shows a page the shell hasn't heard of yet, as at launch with a page to open:
+        // the keys are that page's, and open the bar over it (#4268).
+        if self.browser.shown_now() != 0 {
+            return false;
+        }
         resting.wants_keys = Owed::Asked;
         cx.notify();
         true

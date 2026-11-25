@@ -2110,6 +2110,10 @@ impl Browser for Engine {
         self.window
     }
 
+    fn shown_now(&self) -> u64 {
+        unsafe { bc::bc_window_selected(self.window) }
+    }
+
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App) {
         let window = self.window;
         with_overlays(move |cx| find_bar::find_next(window, tab, forward, cx), cx);
