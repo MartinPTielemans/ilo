@@ -792,3 +792,247 @@ fn a_tab_alone_limits_its_thread_to_its_site(cx: &mut TestAppContext) {
     assert_eq!(space_of(&run, TRAINS.0), USERS);
     assert_eq!(sites(&run, &agent, cx), Sites::Only(Vec::new()));
 }
+
+/// The user's reply to `agent`'s thread: `text` with the chips of `tabs`, picked in their Space.
+fn reply(run: &Run, agent: &str, text: &str, tabs: &[u64], cx: &mut TestAppContext) {
+    let reply = handed::Reply {
+        text: text.to_string().into(),
+        tabs: Picked::of_chips(USERS, tabs.to_vec()),
+    };
+    run.agents.update(cx, |agents, cx| {
+        agents.task_action(agent, TaskAction::Reply(reply), cx);
+    });
+    cx.run_until_parked();
+}
+
+/// The message the stand-in's run `ran` was given as its `line`th, the one it started with being
+/// the first.
+fn heard(run: &Run, ran: usize, line: usize) -> String {
+    let input = super::kept::beside(&run.program, &format!("in.{ran}"));
+    for _ in 0..500 {
+        let sent = std::fs::read_to_string(&input).unwrap_or_default();
+        // Whole once its line has ended.
+        if sent.lines().count() > line || (sent.lines().count() == line && sent.ends_with('\n')) {
+            let said: Value = serde_json::from_str(sent.lines().nth(line - 1).unwrap()).unwrap();
+            return said["message"]["content"].as_str().unwrap().to_string();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("run {ran} of the stand-in was given no message {line}");
+}
+
+/// The user's messages `agent`'s thread has after the one that started it.
+fn replies(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+    run.agents.read_with(cx, |agents, _| {
+        let messages = agents.task(agent).unwrap().messages.iter();
+        (messages.filter(|message| message.who == crate::agents::task::Who::User))
+            .map(|message| message.text.to_string())
+            .collect()
+    })
+}
+
+/// The chips of `agent`'s thread's messages: which message, then each tab with its title and
+/// whether it went.
+fn chips(
+    run: &Run,
+    agent: &str,
+    cx: &mut TestAppContext,
+) -> Vec<(usize, Vec<(u64, String, bool)>)> {
+    run.agents.read_with(cx, |agents, _| {
+        (agents.message_chips(agent).into_iter())
+            .map(|(said, chips)| {
+                let chips = chips.into_iter();
+                let each = chips.map(|chip| (chip.tab, chip.title.to_string(), chip.handed));
+                (said, each.collect())
+            })
+            .collect()
+    })
+}
+
+fn line_of(tab: (u64, &str, &str)) -> String {
+    format!("  {}  {}  {}", tab.0, tab.1, tab.2)
+}
+
+/// A reply hands the tabs picked for it as its assistant is given it: the thread is taken up,
+/// the core gives each, the log has each, and the message says how many after the user's words,
+/// each as list_tabs lists it. The message shows its chips, by the titles the tabs had.
+#[gpui::test]
+fn a_reply_hands_the_tabs_picked_for_it(cx: &mut TestAppContext) {
+    let run = run("handed-reply", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    run.finish(&agent, cx);
+    reply(&run, &agent, " And these two ", &[TRAINS.0, SEATS.0], cx);
+    assert_eq!(given(&run), [TRAINS.0, SEATS.0]);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(
+        entries(&run, &agent, handed::HANDED, cx),
+        ["example.com", "tickets.example"]
+    );
+    assert_eq!(
+        heard(&run, 1, 2),
+        format!(
+            "And these two\n\nThe user added 2 of their tabs to your pages.\n{}\n{}",
+            line_of(TRAINS),
+            line_of(SEATS)
+        )
+    );
+    // The conversation has their words alone, and the chips beside them.
+    assert_eq!(replies(&run, &agent, cx), ["And these two"]);
+    let shown = vec![
+        (TRAINS.0, TRAINS.1.to_string(), true),
+        (SEATS.0, SEATS.1.to_string(), true),
+    ];
+    assert_eq!(chips(&run, &agent, cx), [(1, shown)]);
+}
+
+/// A tab picked and no words is a reply, which is what its assistant is told of the tab and
+/// nothing else. No words and no tab that goes is none: the thread is as it was.
+#[gpui::test]
+fn a_tab_and_no_words_is_a_reply(cx: &mut TestAppContext) {
+    let run = run("handed-reply-alone", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    run.finish(&agent, cx);
+    let done = run.state(&agent, cx);
+    // One the core won't give, which the app can't know before it asks; and one not open.
+    run.browser.not_given.borrow_mut().insert(SEATS.0);
+    reply(&run, &agent, "  ", &[], cx);
+    reply(&run, &agent, "", &[SEATS.0, 77], cx);
+    assert_eq!(run.state(&agent, cx), done);
+    assert!(replies(&run, &agent, cx).is_empty());
+    assert!(chips(&run, &agent, cx).is_empty());
+    assert!(given(&run).is_empty());
+    let resumed = run.agents.read_with(cx, |agents, _| {
+        (agents.activity(&agent)).any(|entry| entry.action.as_ref() == "resumed")
+    });
+    assert!(!resumed, "a reply with nothing in it took the thread up");
+    // One that goes, beside one that doesn't, of which nothing is said.
+    reply(&run, &agent, "", &[SEATS.0, TRAINS.0], cx);
+    assert_eq!(given(&run), [TRAINS.0]);
+    assert_eq!(
+        heard(&run, 1, 2),
+        format!(
+            "The user added one of their tabs to your pages.\n{}",
+            line_of(TRAINS)
+        )
+    );
+    assert_eq!(replies(&run, &agent, cx), [""]);
+    let shown = vec![
+        (SEATS.0, SEATS.1.to_string(), false),
+        (TRAINS.0, TRAINS.1.to_string(), true),
+    ];
+    assert_eq!(chips(&run, &agent, cx), [(1, shown)]);
+}
+
+/// A reply without a chip hands nothing, whatever its words name, and no reply reaches a give
+/// while tasks are off.
+#[gpui::test]
+fn a_reply_without_a_chip_hands_nothing(cx: &mut TestAppContext) {
+    let run = run("handed-reply-words", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    run.finish(&agent, cx);
+    let words = format!("Use tab {} at {} too", TRAINS.0, TRAINS.2);
+    reply(&run, &agent, &words, &[], cx);
+    assert_eq!(heard(&run, 1, 2), words);
+    assert!(given(&run).is_empty());
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert!(chips(&run, &agent, cx).is_empty());
+    assert!(!listed(&run, &agent, cx).contains(TRAINS.2));
+    // Tasks off: nothing more is asked of a thread, with a chip or without.
+    run.finish(&agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+    reply(&run, &agent, "And this", &[TRAINS.0], cx);
+    assert!(given(&run).is_empty());
+    assert_eq!(replies(&run, &agent, cx), [words]);
+}
+
+/// A reply that answers the thread's question hands its tabs as it does: the answer says so after
+/// the user's words, and a tab alone answers it. With tasks off the words still answer, and no
+/// tab goes.
+#[gpui::test]
+fn a_reply_that_answers_a_question_hands_its_tabs(cx: &mut TestAppContext) {
+    let run = run("handed-answer", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    let ask = || json!({ "question": "Which train?", "answers": ["The 9:05", "The 10:05"] });
+    let asked = call(&run.agents, &agent, "ask", ask(), cx);
+    // No words and no tab that goes: it still waits.
+    reply(&run, &agent, "", &[77], cx);
+    assert!(asked.try_recv().is_err(), "nothing answered the question");
+    reply(&run, &agent, "The 9:05", &[TRAINS.0], cx);
+    assert_eq!(
+        asked.try_recv().expect("answered").text,
+        format!(
+            "The user answered: The 9:05\n\nThe user added one of their tabs to your pages.\n{}",
+            line_of(TRAINS)
+        )
+    );
+    assert!(is_handed(&run, &agent, TRAINS.0, cx));
+    let asked = call(&run.agents, &agent, "ask", ask(), cx);
+    reply(&run, &agent, "", &[SEATS.0], cx);
+    assert_eq!(
+        asked.try_recv().expect("answered").text,
+        format!(
+            "The user added one of their tabs to your pages.\n{}",
+            line_of(SEATS)
+        )
+    );
+    assert_eq!(replies(&run, &agent, cx), ["The 9:05", ""]);
+    // Tasks off: the answer lets it finish, and hands nothing.
+    press_return(&run, &agent, SEATS.0, cx);
+    let asked = call(&run.agents, &agent, "ask", ask(), cx);
+    (run.agents).update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+    reply(&run, &agent, "The 10:05", &[SEATS.0], cx);
+    assert_eq!(
+        asked.try_recv().expect("answered").text,
+        "The user answered: The 10:05"
+    );
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(given(&run), [TRAINS.0, SEATS.0]);
+}
+
+/// A new run of a thread from its own words says, at each message of the user's that handed it
+/// tabs, how many and nothing of which, as they went back since; the reply it starts on says its
+/// own in full.
+#[gpui::test]
+fn a_new_run_from_its_words_says_how_many_tabs_and_not_which(cx: &mut TestAppContext) {
+    let run = run("handed-again", cx);
+    // Nothing kept: a run that went starts again from the thread's words.
+    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(false, cx));
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    run.ran(1);
+    run.finish(&agent, cx);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    run.said(&agent, Out::Gone(String::new()), cx);
+    reply(&run, &agent, "And then?", &[SEATS.0], cx);
+    let (_, first) = run.ran(2);
+    assert_eq!(
+        first,
+        format!(
+            "{ASKED}\n\nThe user added one of their tabs to your pages.\n\n\
+             You: Two seats at 9:05, car 4.\n\n\
+             Me: And then?\n\nThe user added one of their tabs to your pages.\n{}\n\n\
+             Go on from here.",
+            line_of(SEATS)
+        )
+    );
+    assert!(
+        !first.contains(TRAINS.2) && !first.contains(TRAINS.1),
+        "{first}"
+    );
+}
+
+/// A reply is recorded as its words, as it always was, and one with tabs says how many and
+/// nothing of which.
+#[test]
+fn a_reply_is_recorded_as_its_words_and_how_many_tabs() {
+    let plain = TaskAction::Reply("And for Sunday?".into());
+    assert_eq!(format!("{plain:?}"), r#"Reply("And for Sunday?")"#);
+    let with = TaskAction::Reply(handed::Reply {
+        text: "And these".into(),
+        tabs: Picked::of_chips(USERS, vec![TRAINS.0, SEATS.0]),
+    });
+    assert_eq!(format!("{with:?}"), r#"Reply("And these" with Picked(2))"#);
+}

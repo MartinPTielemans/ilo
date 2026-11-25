@@ -7,7 +7,7 @@
 
 use std::sync::mpsc;
 
-use gpui::{App, Context};
+use gpui::{App, Context, SharedString};
 
 use crate::agents::tier::Sites;
 use crate::agents::{Agents, Gone, TabInfo, ToolResult, held, site, tools};
@@ -61,12 +61,101 @@ impl Picked {
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }
+
+    /// The tabs picked, in the chips' order: for the composer to show them again.
+    pub fn tabs(&self) -> &[u64] {
+        &self.tabs
+    }
 }
 
 /// How many, and nothing of which: no log line or failed test names a tab of the user's.
 impl std::fmt::Debug for Picked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Picked({})", self.tabs.len())
+    }
+}
+
+/// The user's reply to a thread: their words and the tabs of theirs picked for it, either of which
+/// may be none. The composer's send alone makes one with tabs.
+#[derive(Clone, Default, PartialEq)]
+pub struct Reply {
+    pub text: SharedString,
+    pub tabs: Picked,
+}
+
+/// Its words, as a reply always read where one is recorded, then how many tabs if any.
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.text, f)?;
+        match self.tabs.is_empty() {
+            true => Ok(()),
+            false => write!(f, " with {:?}", self.tabs),
+        }
+    }
+}
+
+impl From<SharedString> for Reply {
+    fn from(text: SharedString) -> Self {
+        Self {
+            text,
+            tabs: Picked::default(),
+        }
+    }
+}
+
+impl From<String> for Reply {
+    fn from(text: String) -> Self {
+        SharedString::from(text).into()
+    }
+}
+
+impl From<&str> for Reply {
+    fn from(text: &str) -> Self {
+        SharedString::from(text.to_string()).into()
+    }
+}
+
+/// A tab of the user's picked for a message, as the message shows it: its title as it was at
+/// their send, and whether it was handed to the thread. One that wasn't shows so. In memory alone,
+/// with its thread: never in the kept list, a tool's answer or a log line.
+#[derive(Clone, PartialEq)]
+pub struct Chip {
+    pub tab: u64,
+    pub title: SharedString,
+    pub handed: bool,
+}
+
+/// Which tab and whether it went, never its title: no failed test names a tab of the user's.
+impl std::fmt::Debug for Chip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Chip({}, {})", self.tab, self.handed)
+    }
+}
+
+/// What a thread's messages of the user's carried of their tabs. In memory alone, and gone with
+/// the thread.
+#[derive(Default)]
+pub(in crate::agents) struct Sends {
+    /// The chips of each message that had any, by which of the user's messages it is: 0 the one
+    /// that started the thread, then each reply in turn.
+    chips: Vec<(usize, Vec<Chip>)>,
+}
+
+impl Sends {
+    /// The user's message `said` showed `chips`.
+    pub(super) fn showed(&mut self, said: usize, chips: Vec<Chip>) {
+        if !chips.is_empty() {
+            self.chips.push((said, chips));
+        }
+    }
+
+    /// What a new run of the thread from its own words is told of the tabs the user's message
+    /// `said` handed it: how many, and nothing of which, as they went back since.
+    pub(super) fn told_again(&self, said: usize) -> Option<String> {
+        let chips = self.chips.iter().find(|(which, _)| *which == said);
+        added(chips.map_or(0, |(_, chips)| {
+            chips.iter().filter(|chip| chip.handed).count()
+        }))
     }
 }
 
@@ -111,12 +200,17 @@ pub fn entry(action: &str, site: &str) -> Option<String> {
 /// by now: how many, then each as list_tabs lists it. With no words of the user's it's the whole
 /// message. None for no tab.
 fn told(tabs: &[TabInfo]) -> Option<String> {
-    let added = match tabs.len() {
-        0 => return None,
-        1 => "The user added one of their tabs to your pages.".to_string(),
-        n => format!("The user added {n} of their tabs to your pages."),
-    };
+    let added = added(tabs.len())?;
     Some(format!("{added}\n{}", tools::tab_list(tabs, None, &[])))
+}
+
+/// That the user added `count` of their tabs to the thread's pages. None for none.
+fn added(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("The user added one of their tabs to your pages.".to_string()),
+        n => Some(format!("The user added {n} of their tabs to your pages.")),
+    }
 }
 
 /// `words`, the user's message as its assistant gets it, with `told` after it.
@@ -207,6 +301,33 @@ impl Agents {
                 && self.browser.off_limits(*tab, cx).is_none()
         };
         self.tasks_on() && picked.tabs.iter().any(fits)
+    }
+
+    /// The user's message hands `picked` to `agent`'s thread, as `hand_tabs` does. Returns the
+    /// message's chips, each with whether its tab went, and what the thread's assistant is told of
+    /// those that did.
+    pub(super) fn hand_with_message(
+        &mut self,
+        agent: &str,
+        picked: Picked,
+        cx: &mut Context<Self>,
+    ) -> (Vec<Chip>, Option<String>) {
+        // Each as the user picked it: a tab's title as it is at their send.
+        let title = |tab: &u64| self.browser.tab(*tab, cx).title;
+        let titles: Vec<SharedString> = picked.tabs.iter().map(title).collect();
+        let handed = self.hand_tabs(agent, picked, cx);
+        let told = self.told_of_handed(agent, &handed, cx);
+        let chips = (handed.into_iter().zip(titles))
+            .map(|((tab, handed), title)| Chip { tab, title, handed })
+            .collect();
+        (chips, told)
+    }
+
+    /// The chips of `agent`'s thread's messages of the user's that had any, each with which of
+    /// their messages it is: 0 the one that started the thread, then each reply in turn. For the
+    /// conversation to show, and nothing else: no tool's answer or log line carries it.
+    pub fn message_chips(&self, agent: &str) -> Vec<(usize, Vec<Chip>)> {
+        (self.task(agent)).map_or_else(Vec::new, |task| task.sends.chips.clone())
     }
 
     /// What `agent`'s assistant is told of the tabs just handed it, those of `handed` that went.

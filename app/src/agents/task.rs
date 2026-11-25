@@ -473,6 +473,8 @@ pub struct Task {
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
     pub(in crate::agents) copying: bool,
+    /// What its messages of the user's carried of their tabs (handed.rs). In memory alone.
+    pub(in crate::agents) sends: handed::Sends,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -731,7 +733,8 @@ pub enum TaskAction {
     Dismiss,
     /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
     Restore,
-    Reply(SharedString),
+    /// Their reply, with the tabs of theirs picked for it, if any.
+    Reply(handed::Reply),
     Retry,
     Stop,
     /// Done's Open <site> or Open 3 pages: every tab it left the user.
@@ -1083,7 +1086,7 @@ impl Agents {
                 let named = Some(agent).filter(|agent| !agent.is_empty());
                 return (None, self.restore_task(named, cx));
             }
-            TaskAction::Reply(text) => self.reply(agent, &text, cx),
+            TaskAction::Reply(reply) => self.reply_with(agent, reply, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
             TaskAction::Open => return (self.open_result(agent, None, cx), None),
@@ -1773,16 +1776,19 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             copying: false,
+            sends: Default::default(),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
         // The user's tabs picked for it are its pages from here, and its assistant is told so.
-        let handed = self.hand_tabs(&agent, tabs, cx);
-        let told = self.told_of_handed(&agent, &handed, cx);
+        let (chips, told) = self.hand_with_message(&agent, tabs, cx);
         // No words, and no tab that went after all: nothing was asked, so no thread started.
         if asked.is_empty() && told.is_none() {
             self.end_task(&agent, true, cx);
             return None;
+        }
+        if let Some(task) = self.task_mut(&agent) {
+            task.sends.showed(0, chips);
         }
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
@@ -2332,56 +2338,97 @@ impl Agents {
 
     /// The user's reply, which the agent reads once its turn under way ends.
     pub fn reply(&mut self, agent: &str, text: &str, cx: &mut Context<Self>) {
+        self.reply_with(agent, text.into(), cx);
+    }
+
+    /// The user's reply with the tabs of theirs picked for it, which are handed to the thread as
+    /// its assistant is given the message, and told of in it after their words. A tab alone is a
+    /// reply; no words and no tab that goes is none.
+    fn reply_with(&mut self, agent: &str, reply: handed::Reply, cx: &mut Context<Self>) {
+        let handed::Reply { text, tabs } = reply;
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && tabs.is_empty() {
             return;
         }
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
-            return self.answer_ask(agent, text, cx);
+            return self.answer_ask(agent, text, tabs, cx);
         }
         // One a run before left comes back in its own profile, or not at all (#4105).
         if !self.goes_on(agent) {
             return cx.notify();
         }
+        self.give_reply(agent, text, tabs, cx);
+    }
+
+    /// Gives `agent`'s assistant the user's reply, `text` with `tabs`. Whether there was anything
+    /// to give: with no words and no tab that went, nothing is, and the thread is as it was.
+    fn give_reply(
+        &mut self,
+        agent: &str,
+        text: &str,
+        tabs: handed::Picked,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (chips, told) = self.hand_with_message(agent, tabs, cx);
+        if text.is_empty() && told.is_none() {
+            return false;
+        }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
         self.pick_up(agent, cx);
         let resumes = self.resumes(agent);
         let Some(task) = self.task_mut(agent) else {
-            return;
+            return false;
         };
         task.messages
             .push(Message::new(Who::User, text.to_string()));
+        let which = pick_up::replies(task);
+        task.sends.showed(which, chips);
         task.state = State::Working;
         task.writing = None;
         task.helpers.turned(task.trace.len());
+        let reply = handed::with_told(text.to_string(), told);
         // Its assistant hasn't started: the reply goes with its one start, once the copies end.
         if task.copying {
-            task.hold(text.to_string());
-            return cx.notify();
+            task.hold(reply);
+            cx.notify();
+            return true;
         }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
-            Some(told) => format!("{told}\n\n{text}"),
-            None => text.to_string(),
+            Some(told) => format!("{told}\n\n{reply}"),
+            None => reply.clone(),
         };
         let text = text.as_str();
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
             // Gone, or never started: a new run, which goes on with the conversation its assistant
-            // kept, or is given the conversation so far.
+            // kept, or is given the conversation so far, this reply last and as it's given here.
             let first = match resumes {
                 true => text.to_string(),
-                false => conversation(task),
+                false => conversation_to(task, Some(&reply)),
             };
             self.launch(agent, &first, cx);
         }
         self.wait_for_answer(agent, cx);
         cx.notify();
+        true
     }
 
-    /// The user's reply to the task's ask, which answers it.
-    fn answer_ask(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
+    /// The user's reply to the task's ask, which answers it. The tabs of theirs picked for it are
+    /// handed as it does, and the answer says so after their words.
+    fn answer_ask(
+        &mut self,
+        agent: &str,
+        answer: &str,
+        tabs: handed::Picked,
+        cx: &mut Context<Self>,
+    ) {
+        let (chips, told) = self.hand_with_message(agent, tabs, cx);
+        // No words and no tab that went: nothing answered it, and it still waits.
+        if answer.is_empty() && told.is_none() {
+            return;
+        }
         let Some(task) = self.task_mut(agent) else {
             return;
         };
@@ -2390,9 +2437,15 @@ impl Agents {
         };
         task.messages
             .push(Message::new(Who::User, answer.to_string()));
+        let which = pick_up::replies(task);
+        task.sends.showed(which, chips);
         task.state = State::Working;
         task.writing = None;
-        _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
+        let answered = match answer.is_empty() {
+            true => String::new(),
+            false => format!("The user answered: {answer}"),
+        };
+        _ = reply.send(ToolResult::text(handed::with_told(answered, told)));
         self.note(agent, 0, "answered", "", "");
         self.wait_for_answer(agent, cx);
         cx.notify();
@@ -3261,6 +3314,7 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             copying: false,
+            sends: Default::default(),
         });
         cx.notify();
         Some(key)
@@ -4019,14 +4073,37 @@ pub(super) fn with_added(first: String, pages: &[String]) -> String {
 
 /// The conversation so far, for a new run of a task whose CLI went.
 pub(super) fn conversation(task: &Task) -> String {
-    let mut text = with_added(first_message(&task.asked, task.page.as_ref()), &task.added);
+    conversation_to(task, None)
+}
+
+/// The conversation so far, with `last`, if any, as the user's last message in it: the reply as
+/// its assistant is given it now. A message of theirs before it that handed the thread tabs says
+/// how many and nothing of which: they went back when the thread was last no longer under way.
+fn conversation_to(task: &Task, last: Option<&str>) -> String {
+    let first = with_added(first_message(&task.asked, task.page.as_ref()), &task.added);
+    let mut text = handed::with_told(first, task.sends.told_again(0));
+    let replies = pick_up::replies(task);
+    let mut reply = 0;
     for message in &task.messages {
+        let said = match message.who {
+            Who::User => {
+                reply += 1;
+                match last.filter(|_| reply == replies) {
+                    Some(last) => last.to_string(),
+                    None => {
+                        let told = task.sends.told_again(reply);
+                        handed::with_told(message.text.to_string(), told)
+                    }
+                }
+            }
+            _ => message.text.to_string(),
+        };
         let who = if message.who == Who::User {
             "Me"
         } else {
             "You"
         };
-        text.push_str(&format!("\n\n{who}: {}", message.text));
+        text.push_str(&format!("\n\n{who}: {said}"));
     }
     text.push_str("\n\nGo on from here.");
     text
