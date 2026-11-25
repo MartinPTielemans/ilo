@@ -4213,7 +4213,8 @@ STOP
   kill -0 "$bridge_pid" 2>/dev/null && fail "the bridge stayed connected once the user stopped its client"
   exec 4>&- 5<&-
 
-  # Off in Settings › Threads takes the socket away and drops a client connected.
+  # Off in Settings › Threads leaves an app's client connected and answered; off in Settings ›
+  # Other apps too takes the socket away and drops it (#4260).
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
@@ -4229,14 +4230,22 @@ STOP
   settings_drew Threads
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   click_in_sight "switch agents"
-  expect '^browser: agents off$' "a click on the switch didn't turn agents off"
+  expect '^browser: agents off$' "a click on the switch didn't turn threads off"
+  [ -e "$socket" ] || fail "the socket went with threads off and other apps' agents on"
+  mcp '{"jsonrpc":"2.0","id":90,"method":"tools/list"}' > /dev/null
+  kill -0 "$bridge_pid" 2>/dev/null || fail "the client was dropped with threads off"
+  send clickkey $(drawn "toolbar Other apps")
+  expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
+  settings_drew 'Other apps'
+  click_in_sight "switch other apps"
+  expect '^browser: other apps off$' "a click on the switch didn't turn other apps' agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
-  [ -e "$socket" ] && fail "the socket stayed once agents were off"
+  [ -e "$socket" ] && fail "the socket stayed once both switches were off"
   for _ in $(seq 100); do kill -0 "$bridge_pid" 2>/dev/null || break; sleep 0.1; done
-  kill -0 "$bridge_pid" 2>/dev/null && fail "the client stayed connected once agents were off"
+  kill -0 "$bridge_pid" 2>/dev/null && fail "the client stayed connected once both were off"
   exec 4>&- 5<&-
   if BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < /dev/null > /dev/null 2>&1; then
-    fail "the bridge got in once agents were off"
+    fail "the bridge got in once both switches were off"
   fi
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
