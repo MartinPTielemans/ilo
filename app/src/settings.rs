@@ -1652,7 +1652,10 @@ impl Settings {
         let look = &self.look;
         let default = self.default_browser.read(cx);
         let (line, make) = match (default.is_default(), default.offers()) {
-            (true, _) => (None, None),
+            (true, _) => (
+                Some(format!("{PRODUCT} is your default browser").into()),
+                None,
+            ),
             (false, offers) => {
                 let line = format!(
                     "{PRODUCT} isn't your default, so links from other apps open somewhere else."
