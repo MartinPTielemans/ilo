@@ -276,7 +276,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             ("All".into(), true),
             ("".into(), false),
             ("Closed Tabs".into(), true),
-            ("Tasks".into(), true),
+            ("Threads".into(), true),
             ("".into(), false),
             ("Visited".into(), true)
         ]
@@ -289,7 +289,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             .collect::<Vec<_>>(),
         [true, false, false, false, false, false]
     );
-    cx.update(|_, cx| host.choose("Tasks", cx));
+    cx.update(|_, cx| host.choose("Threads", cx));
     cx.run_until_parked();
     assert_eq!(items(&shell, cx), ["Today", "task-1"]);
     filter(cx);
@@ -311,10 +311,14 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
     assert!(items(&shell, cx).is_empty());
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.empty_line(Section::Archive, true)),
-        "Finished tasks stay here until ilo quits."
+        concat!(
+            "Finished threads stay here until ",
+            env!("PRODUCT_NAME"),
+            " quits."
+        )
     );
     filter(cx);
-    cx.update(|_, cx| host.choose("Little ilo", cx));
+    cx.update(|_, cx| host.choose("Little Window", cx));
     cx.run_until_parked();
     assert_eq!(items(&shell, cx), ["Today", "tab 9"]);
     assert_eq!(
@@ -361,7 +365,7 @@ fn clear_archive_takes_the_tasks_with_the_tabs(cx: &mut TestAppContext) {
     let (message, detail, confirmed) = host.confirming.borrow_mut().take().expect("it didn't ask");
     assert_eq!(message, "Clear the archive?");
     assert!(
-        detail.starts_with("Its 2 tabs and 2 tasks leave the archive. "),
+        detail.starts_with("Its 2 tabs and 2 threads leave the archive. "),
         "{detail}"
     );
     cx.update(|_, cx| confirmed(cx));

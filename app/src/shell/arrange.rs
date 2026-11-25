@@ -547,7 +547,9 @@ impl Shell {
 fn off_because(arrangement: &boosts::Arrangement) -> Option<&'static str> {
     match (&arrangement.changes, arrangement.state) {
         (None, _) | (_, Some(Arranged::Refused)) => Some("Can't be read, off"),
-        (_, Some(Arranged::Changed)) => Some("Changed outside ilo, off"),
+        (_, Some(Arranged::Changed)) => {
+            Some(concat!("Changed outside ", env!("PRODUCT_NAME"), ", off"))
+        }
         (_, Some(Arranged::New)) => Some("New on this computer, off"),
         _ => None,
     }

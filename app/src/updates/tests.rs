@@ -114,7 +114,7 @@ fn up_to_date_says_so_and_checks_again(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Own, cx);
     about.says(Stage::Checking);
     about.says(Stage::Current);
-    let up_to_date = concat!(env!("APP_NAME"), " is up to date");
+    let up_to_date = concat!(env!("PRODUCT_NAME"), " is up to date");
     assert_eq!(
         about.reads(),
         (Some(up_to_date.into()), Some("Check for Updates"))
@@ -147,7 +147,7 @@ fn an_update_the_updater_waits_on_offers_its_window(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Own, cx);
     about.says(Stage::Found(Some("0.1.5".into())));
     about.says(Stage::Available(Some("0.1.5".into())));
-    let available = concat!(env!("APP_NAME"), " 0.1.5 is available");
+    let available = concat!(env!("PRODUCT_NAME"), " 0.1.5 is available");
     assert_eq!(about.reads(), (Some(available.into()), Some("Show Update")));
     about.click();
     assert_eq!(about.asked(), ["show"]);
@@ -166,7 +166,7 @@ fn ready_restarts_into_the_update(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Own, cx);
     about.says(Stage::Downloading(Some("0.1.1".into())));
     about.says(Stage::Ready(Some("0.1.1".into())));
-    let ready = concat!(env!("APP_NAME"), " 0.1.1 is ready");
+    let ready = concat!(env!("PRODUCT_NAME"), " 0.1.1 is ready");
     assert_eq!(
         about.reads(),
         (Some(ready.into()), Some("Restart to Update"))
@@ -189,7 +189,7 @@ fn ready_restarts_into_the_update(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_store_copy_says_the_store_updates_it(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Store, cx);
-    let store = concat!("The Microsoft Store updates ", env!("APP_NAME"));
+    let store = concat!("The Microsoft Store updates ", env!("PRODUCT_NAME"));
     assert_eq!(about.reads(), (Some(store.into()), None));
     about.cx.update(|_, cx| act(Action::Check, cx));
     assert!(about.asked().is_empty());
@@ -364,11 +364,11 @@ impl Nightly<'_> {
 
 const NIGHTLY_LINE: &str = concat!(
     "Each night’s build of ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     ", ahead of the next release."
 );
 const KEEPS_LINE: &str = concat!(
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " keeps this build until a release is newer."
 );
 
@@ -401,7 +401,7 @@ fn a_nightly_turned_off_keeps_its_build(cx: &mut TestAppContext) {
     // The release feed's newest is older than this nightly, so the updater has nothing to offer.
     about.says(Stage::Checking);
     about.says(Stage::Current);
-    let up_to_date = concat!(env!("APP_NAME"), " is up to date");
+    let up_to_date = concat!(env!("PRODUCT_NAME"), " is up to date");
     assert_eq!(
         about.version_reads(),
         (Some(up_to_date.into()), Some("Check for Updates"))

@@ -74,7 +74,7 @@ pub(crate) fn preview_site() -> Site {
         arrangement_misfits: (states::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
             .then(|| "1 change no longer fits".into()),
         arrangement_off: (states::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
-            .then(|| "Changed outside ilo, off".into()),
+            .then(|| concat!("Changed outside ", env!("PRODUCT_NAME"), ", off").into()),
         // PREVIEW_RECENT=on or off: the switch for what's recent in the site's cards (#3074).
         recent: match states::var("PREVIEW_RECENT").as_deref() {
             Ok("on") => Some(true),

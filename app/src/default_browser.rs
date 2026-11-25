@@ -73,8 +73,8 @@ impl DefaultBrowser {
     /// What the row says: what it offers, or that the browser is the default.
     pub fn title(&self) -> SharedString {
         match self.default {
-            false => concat!("Make ", env!("APP_NAME"), " your default browser").into(),
-            true => concat!(env!("APP_NAME"), " is your default browser").into(),
+            false => concat!("Make ", env!("PRODUCT_NAME"), " your default browser").into(),
+            true => concat!(env!("PRODUCT_NAME"), " is your default browser").into(),
         }
     }
 
@@ -108,7 +108,7 @@ pub fn detail(os: Os, default: bool) -> &'static str {
         // Windows shows its chooser rather than asking.
         (Os::Windows, false) => concat!(
             "Windows opens Settings › Default apps, where you choose ",
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             "."
         ),
         (Os::Windows, true) => "You can change it in Settings › Default apps.",

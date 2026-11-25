@@ -64,14 +64,14 @@ const FRAME: &str = concat!(env!("APP_NAME"), "'s notes for ");
 /// Settings › Agents' heading over the list, its switch and the sentence under it.
 pub const HEADING: &str = "Site notes";
 pub const SWITCH_LINE: &str = concat!(
-    "A task gets what ",
-    env!("APP_NAME"),
+    "A thread gets what ",
+    env!("PRODUCT_NAME"),
     " knows about a site when its tab lands there."
 );
-pub const SWITCH_OFF_LINE: &str = "Off: tasks find their way on every site by reading it.";
+pub const SWITCH_OFF_LINE: &str = "Off: threads find their way on every site by reading it.";
 pub const FOOT: &str = concat!(
     "Notes are part of ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     ": written by us, shipped in the app, never fetched. Each is plain text you can read here."
 );
 /// A row's button, closed and open.

@@ -25,7 +25,7 @@ use crate::tokens::shell::composer::CARDS;
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
 /// its title, and isn't kept.
-const UNTITLED: &str = "Untitled task";
+const UNTITLED: &str = "Untitled thread";
 
 /// The keys of the lines made here, from the top of the range, apart from the lines that count
 /// up from a task's events.

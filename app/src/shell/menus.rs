@@ -78,8 +78,14 @@ pub struct MenuEntry {
     /// Whether it's the menu's search field, its first row, titled with its placeholder: what's
     /// typed there narrows the rows after it (`menu::narrowed`).
     pub field: bool,
-    /// Whether a search leaves it whatever is typed, as the model menu's Sign In and Settings.
+    /// Whether a search leaves it whatever is typed, as the model menu's Settings.
     pub kept: bool,
+    /// Whether it's an offer beside the menu's choices, as a not-signed-in assistant's Sign In:
+    /// in the secondary ink, and gone, its heading with it, once anything is typed, as it names
+    /// nothing a search looks for.
+    pub offer: bool,
+    /// Whether it leaves the menu for a page of its own, with the out arrow after its title.
+    pub out: bool,
 }
 
 impl MenuEntry {
@@ -115,6 +121,8 @@ impl MenuEntry {
             detail: None,
             field: false,
             kept: false,
+            offer: false,
+            out: false,
         }
     }
 
@@ -129,6 +137,19 @@ impl MenuEntry {
     /// Left by any search (`kept`).
     pub fn kept(self) -> Self {
         MenuEntry { kept: true, ..self }
+    }
+
+    /// An offer beside the menu's choices (`offer`).
+    pub fn offer(self) -> Self {
+        MenuEntry {
+            offer: true,
+            ..self
+        }
+    }
+
+    /// With the out arrow (`out`).
+    pub fn out(self) -> Self {
+        MenuEntry { out: true, ..self }
     }
 
     /// A heading over the items after it, in the platform's case.
@@ -241,7 +262,7 @@ pub fn profile_kept(first: bool, profiles: usize, spaces: usize, task: bool) -> 
         _ if first && profiles < 2 => return None,
         _ if first => "The first profile can't be deleted.".into(),
         Some(its) => format!("Delete {its} to delete it."),
-        None if task => "An agent's task is working in it.".into(),
+        None if task => "An agent's thread is working in it.".into(),
         None => return None,
     };
     Some(why)
@@ -2083,7 +2104,10 @@ mod tests {
         );
         assert_eq!(says(false, 2, 1, false), "Delete its Space to delete it.");
         assert_eq!(says(false, 3, 2, true), "Delete its Spaces to delete it.");
-        assert_eq!(says(false, 2, 0, true), "An agent's task is working in it.");
+        assert_eq!(
+            says(false, 2, 0, true),
+            "An agent's thread is working in it."
+        );
         assert_eq!(
             says(false, 2, 0, false),
             "",

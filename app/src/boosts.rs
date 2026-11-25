@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::product::PRODUCT;
 use gpui::SharedString;
 
 pub mod arrange;
@@ -299,7 +300,9 @@ fn first_line(site: &str) -> String {
 }
 
 fn first_script_line(site: &str) -> String {
-    format!("// {site}: your script for its pages, which runs once you turn it on in ilo.\n\n")
+    format!(
+        "// {site}: your script for its pages, which runs once you turn it on in {PRODUCT}.\n\n"
+    )
 }
 
 /// A line of OFF_FILE, if it names a site.

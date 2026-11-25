@@ -611,7 +611,7 @@ impl Account {
     /// The server as the account names it: the build's own by the app's name, else its host.
     fn server_name(&self) -> SharedString {
         match self.state.default_server {
-            true => env!("APP_NAME").into(),
+            true => env!("PRODUCT_NAME").into(),
             false => host_of(&self.state.server).to_owned().into(),
         }
     }
@@ -901,7 +901,15 @@ impl Account {
             (false, None) => None,
         };
         let server = match &self.server {
-            Some(field) => self.field(field, "That isn't a server address ilo can use.", cx),
+            Some(field) => self.field(
+                field,
+                concat!(
+                    "That isn't a server address ",
+                    env!("PRODUCT_NAME"),
+                    " can use."
+                ),
+                cx,
+            ),
             None => {
                 let name = self.server_name();
                 div()
@@ -1128,7 +1136,7 @@ impl Account {
                         "On a device signed in to {}, {} asks to add this one. Add it there if it \
                          shows this code.",
                         self.state.email,
-                        env!("APP_NAME"),
+                        env!("PRODUCT_NAME"),
                     ),
                     None,
                     Some(
@@ -1274,7 +1282,7 @@ impl Account {
             detailed_row(
                 &self.look,
                 "Settings",
-                "Ad blocking, Peek, Little ilo and more. What's this computer's own stays here.",
+                "Ad blocking, Peek, Little Windows and more. What's this computer's own stays here.",
                 Some(self.choice(Choice::Settings, cx)),
             ),
             detailed_row(
@@ -1359,7 +1367,7 @@ impl Account {
     /// The server as a sentence names it: "ilo's server", or its host.
     fn server_phrase(&self) -> String {
         match self.state.default_server {
-            true => format!("{}'s server", env!("APP_NAME")),
+            true => format!("{}'s server", env!("PRODUCT_NAME")),
             false => host_of(&self.state.server).to_owned(),
         }
     }
@@ -1367,7 +1375,7 @@ impl Account {
     /// What the line under the account's email says: what stops sync, if anything, which shows in
     /// red, then when it last synced or what happens next.
     fn status_words(&self) -> (Option<String>, String) {
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let synced = &self.activity.synced;
         let since = &self.activity.since;
         let last = match synced.is_empty() {

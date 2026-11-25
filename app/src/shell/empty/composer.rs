@@ -24,7 +24,7 @@ use super::super::{
 };
 
 /// Over the cards.
-const LATEST: &str = "Latest tasks";
+const LATEST: &str = "Pick up a thread";
 
 /// The bar the page rests on, while the Space shows no page.
 pub(in crate::shell) struct Resting {
@@ -67,7 +67,16 @@ impl Shell {
     /// shows, or the welcome takes the card.
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected != 0 || self.welcome {
-            if self.resting.take().is_some() {
+            if let Some(resting) = self.resting.take() {
+                // GPUI's focus would go with the field, and the shortcuts with it, as the shell's
+                // context holds them, until a click lands on the shell, which a header button's
+                // never does. The shell holds it again; a page that took the keyboard keeps it.
+                if resting.bar.read(cx).field_focus(cx).is_focused(window) {
+                    if self.page_keyboard.is_some() && self.page_has_keyboard(window, cx) {
+                        self.page_keyboard = Some(Some(self.focus_handle.downgrade()));
+                    }
+                    window.focus(&self.focus_handle, cx);
+                }
                 log!("browser: resting field dropped");
             }
             return;

@@ -87,7 +87,7 @@ pub fn question(login: &Login) -> (String, String) {
     };
     (
         message,
-        format!("{} won't fill it in again.", env!("APP_NAME")),
+        format!("{} won't fill it in again.", env!("PRODUCT_NAME")),
     )
 }
 
