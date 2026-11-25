@@ -240,7 +240,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
-        self.keep_ended(key);
+        self.keep_ended(key, cx);
         self.forget_waiting(key, None, cx);
         cx.notify();
     }
