@@ -1067,7 +1067,8 @@ impl Agents {
             &task.trace,
             ended,
             at_work,
-            task.writing.as_ref(),
+            // The assistant's words show as they come while the task works, whatever the head says.
+            task.writing.as_ref().filter(|_| working),
             &task.helpers,
             &task.stopped_turns,
             // ilo's lines of its refusals, its steps handed to the user and its changes of access.
@@ -4003,8 +4004,9 @@ pub struct Mark {
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
-/// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
-/// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+/// it. The last stretch is under way while `working`, and what the agent is `writing` shows under
+/// it, as it comes and once it's whole, until the turn ends or a call takes it in: `working` heads
+/// the stretch and never withholds the words, which the caller gives only while its task works.
 /// ilo's lines, `marks`, each go where it came among the messages and the steps, ending the
 /// stretch of steps before it.
 pub fn fold(
@@ -4019,7 +4021,7 @@ pub fn fold(
 ) -> Vec<Line> {
     #[cfg(test)]
     FOLDS.with(|folds| folds.set(folds.get() + 1));
-    let writing = writing.filter(|_| working && !ended);
+    let writing = writing.filter(|_| !ended);
     // Once whole, it's the last message, which shows where it was written rather than in the trace.
     let held = (writing.is_some_and(|writing| writing.said))
         .then(|| messages.len().checked_sub(1))
@@ -4071,8 +4073,19 @@ pub fn fold(
     }
     stretch.gather(&mut steps, &mut began, None, &mut lines, &mut marks);
     stretch.flush(&mut lines, working, None);
-    lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
     lines.extend(marks.map(|mark| Line::Ilo(mark.line)));
+    if let Some(writing) = writing {
+        // Never under a button: above the trailing line of ilo's that waits on the user, which
+        // stays the last over the field.
+        let trailing = lines.len()
+            - (lines.iter().rev())
+                .take_while(|line| matches!(line, Line::Ilo(_)))
+                .count();
+        let at = (trailing..lines.len())
+            .find(|&at| matches!(&lines[at], Line::Ilo(line) if !ilo::buttons(line).is_empty()))
+            .unwrap_or(lines.len());
+        lines.insert(at, Line::Said(writing.text.clone()));
+    }
     lines
 }
 
