@@ -22,7 +22,7 @@ use super::{
 };
 use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
-use crate::tokens::shell::agent_pointer::{COLOR, RING};
+use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
 
@@ -1258,7 +1258,7 @@ impl Shell {
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
-        // While the agent drives the page, the Signal ring of its pointer goes round it.
+        // While the agent drives the page, its pointer's ring goes round it, in `primary`.
         let driving = in_place && self.task_drives(page.tab);
         if driving {
             let ring = place.dilate(px(RING));
@@ -1271,7 +1271,7 @@ impl Shell {
                     .h(ring.size.height)
                     .rounded(px(self.card_radius() + RING))
                     .border(px(RING))
-                    .border_color(rgb(COLOR)),
+                    .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0)),
             );
         }
         if in_place {

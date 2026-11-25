@@ -2022,11 +2022,15 @@ little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
-# the window shows, its pointer, Lucide's mouse-pointer-2, in the mark's Signal green with the
-# name of its Space beside it, and a Signal ring round the element, outset from its box, with the
-# ref the agent named it by in a chip on the ring's top left.
-color = 0x0e9f55
-text = 0xffffff
+# the window shows, its pointer, Lucide's mouse-pointer-2, in `primary` with the name of its Space
+# beside it, and a `primary` ring round the element, outset from its box, with the ref the agent
+# named it by in a chip on the ring's top left; the ring round a page a thread drives is the same.
+# `primary` is the text colour, never green; the chips' words and the pointer's outline, which
+# reads it on any page, are `on-primary`, the other look's ink.
+primary = 0xf3f0e8
+light-primary = 0x161618
+on-primary = 0x161618
+light-on-primary = 0xf3f0e8
 pointer = 20.0
 label-size = 11.0
 label-height = 18.0

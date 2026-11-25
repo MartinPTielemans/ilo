@@ -475,6 +475,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/moon.svg"),
     ),
     (
+        "icons/mouse-pointer-2-outline.svg",
+        include_bytes!("../../assets/icons/mouse-pointer-2-outline.svg"),
+    ),
+    (
         "icons/mouse-pointer-2.svg",
         include_bytes!("../../assets/icons/mouse-pointer-2.svg"),
     ),
@@ -965,12 +969,19 @@ mod tests {
     }
 
     /// The glyphs that keep their own stroke: Arc's measured nav glyphs, the window buttons' and
-    /// the loading ring, the Library's cards, which has one solid, and a folder's on its line.
+    /// the loading ring, the Library's cards, which has one solid, a folder's on its line, and the
+    /// agent's pointer's outline, a wider stroke drawn under the pointer.
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
             || name.starts_with(ROW_FOLDER)
-            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
+            || [
+                "loading.svg",
+                "spaces.svg",
+                "working.svg",
+                "mouse-pointer-2-outline.svg",
+            ]
+            .contains(&name)
     }
 
     /// What the names of a folder's drawings on its line start with.
