@@ -452,14 +452,15 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
-    command.envs(sets(launch));
     // Inside a wall the listener is the only proxy anything reads: nothing exempt from it, and
-    // no lower-case name of the browser's own naming another, which curl reads first.
+    // no lower-case name of the browser's own naming another, which curl reads first. Cleared
+    // before the start's own are set, since on Windows a name in any case is the same variable.
     if launch.wall.is_some() {
         for name in PROXY_CLEARED {
             command.env_remove(name);
         }
     }
+    command.envs(sets(launch));
 }
 
 /// Every variable a start of `launch` sets, with its value: the one account of them, which
