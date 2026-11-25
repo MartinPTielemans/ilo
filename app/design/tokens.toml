@@ -2086,10 +2086,9 @@ keys-radius = 6.0
 keys-fill = 0xffff_ff14
 # From the words to their keys, as the toast sets its chip.
 keys-gap = 8.0
-# The icon's green dot, #0E9F55, the one colour on the card, and the stem at a tile's white 0.10
-# plus a little, so it reads as pressed into the card rather than printed on it.
-mark-dot-fill = 0x0e9f_55ff
-mark-stem-fill = 0xffff_ff24
+# The product's mark (app/src/product.rs) over the line, this far across: the smallest size that
+# takes the large drawing, a point more than the mark it replaces stood tall.
+mark-size = 40.0
 # From the mark's foot to the line, so they read as a sign and its caption, not one block.
 mark-gap = 24.0
 # The Space's name between the mark and the line, in the display face: its caps start the mark's
