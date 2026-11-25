@@ -300,7 +300,10 @@ fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
             model_id: if id == "claude" { "haiku" } else { "" }.into(),
             default_row: format!("{id}'s default").into(),
             models: match id {
-                "claude" => vec![("haiku".into(), "Haiku".into()), ("sonnet".into(), "Sonnet".into())],
+                "claude" => vec![
+                    ("haiku".into(), "Haiku".into()),
+                    ("sonnet".into(), "Sonnet".into()),
+                ],
                 _ => Vec::new(),
             },
             resets: resets.map(|at| at.to_string().into()),
@@ -3581,7 +3584,8 @@ impl Bar {
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
     fn pick(&mut self, chosen: Chosen, at: usize) {
-        self.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
         self.cx.run_until_parked();
     }
 
@@ -3670,7 +3674,44 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
     );
     bar.calls();
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["task codex compare the two at full with \"\""]);
+    assert_eq!(
+        bar.calls(),
+        ["task codex compare the two at full with \"\""]
+    );
+}
+
+/// A trigger wears its plate while its menu is open, and only then: a menu closed with no pick
+/// takes it off and changes nothing.
+#[gpui::test]
+fn a_trigger_wears_its_plate_while_its_menu_is_open(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    let open = |bar: &mut Bar| {
+        (bar.window)
+            .read_with(&bar.cx.cx, |bar, _| bar.menu_open)
+            .unwrap()
+    };
+    assert_eq!(open(&mut bar), None, "a trigger has a plate at rest");
+    let (_, chosen) = bar.choice_menu(true);
+    assert_eq!(open(&mut bar), Some("composer-model"));
+    bar.cx
+        .update(|window, cx| chosen(crate::menu::Closed::Otherwise, window, cx));
+    bar.cx.run_until_parked();
+    assert_eq!(
+        open(&mut bar),
+        None,
+        "the plate stayed after the menu closed"
+    );
+    assert_eq!(
+        bar.choices(),
+        ("Work on pages".into(), "claude · Haiku".into())
+    );
+    let (_, chosen) = bar.choice_menu(false);
+    assert_eq!(open(&mut bar), Some("composer-level"));
+    bar.pick(chosen, 0);
+    assert_eq!(open(&mut bar), None);
+    assert_eq!(bar.choices().0, "Look only");
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.
@@ -3684,10 +3725,16 @@ fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     let mut bar = Bar::open(cx, Vec::new(), host);
     bar.type_text("read the menu");
     bar.keys("tab");
-    assert_eq!(bar.choices(), ("Look only".into(), "claude · Sonnet".into()));
+    assert_eq!(
+        bar.choices(),
+        ("Look only".into(), "claude · Sonnet".into())
+    );
     bar.calls();
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["task claude read the menu at look with \"sonnet\""]);
+    assert_eq!(
+        bar.calls(),
+        ["task claude read the menu at look with \"sonnet\""]
+    );
 }
 
 /// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and ⌫ at the start takes the

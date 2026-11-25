@@ -14,11 +14,11 @@ use std::time::Instant;
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, FocusHandle, Global, Hsla, KeyDownEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Rgba, Role,
-    SharedString, Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    AnyWindowHandle, App, Bounds, Context, FocusHandle, Global, Hsla, KeyDownEvent,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Radians, Rgba, Role, SharedString, Task, TitlebarOptions, Transformation, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img,
+    point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{

@@ -259,7 +259,7 @@ foot-line = 16.0
 # the left and 12 at the right, 2 between (P3, screen 48). A trigger is 26 high, its words 13 on a
 # 16 line and a chevron 10 after them, 8 in at each side and 5 between, with a plate only while
 # its menu shows; the model's starts 7 in, its assistant's mark 14 and 6 between. Start is a
-# circle 30 with an arrow 14, 6 after the triggers.
+# circle 30 with an arrow 14, 6 after the triggers. A trigger's menu hangs 6 under it.
 choices-height = 48.0
 choices-under = 6.0
 choices-left = 14.0
@@ -277,6 +277,7 @@ model-gap = 6.0
 start-size = 30.0
 start-arrow = 14.0
 start-space = 6.0
+choices-menu-drop = 6.0
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at
 # 305.5 of 949, which no fraction of the height fits.
 above-middle = 169.0

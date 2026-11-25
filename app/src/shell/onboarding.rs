@@ -1811,7 +1811,16 @@ impl Shell {
             let (shown, marked) = self.onboarding.as_ref()?.shown_assistants.clone()?;
             let rows = shown.iter().map(|(cli, shown)| {
                 let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
-                assistant_row(&look, *cli, shown, marked == Some(*cli), a11y, div(), div(), act)
+                assistant_row(
+                    &look,
+                    *cli,
+                    shown,
+                    marked == Some(*cli),
+                    a11y,
+                    div(),
+                    div(),
+                    act,
+                )
             });
             let another = another_agent_name_row(&look, a11y, |_, _| {});
             Some(group(&look, rows.chain([another])))

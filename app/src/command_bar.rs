@@ -111,9 +111,9 @@ use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
-    CHOICES_GAP, CHOICES_HEIGHT, CHOICES_LEFT, CHOICES_RIGHT, CHOICES_UNDER, FOOT_GAP,
-    FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT, FOOT_TEXT, MODEL_GAP, MODEL_LEFT, MODEL_MARK,
-    START_ARROW, START_SIZE, START_SPACE, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_HEIGHT,
+    CHOICES_GAP, CHOICES_HEIGHT, CHOICES_LEFT, CHOICES_MENU_DROP, CHOICES_RIGHT, CHOICES_UNDER,
+    FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT, FOOT_TEXT, MODEL_GAP, MODEL_LEFT,
+    MODEL_MARK, START_ARROW, START_SIZE, START_SPACE, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_HEIGHT,
     TRIGGER_LINE, TRIGGER_TEXT, TRIGGER_X,
 };
 use crate::tokens::text;
@@ -284,7 +284,8 @@ pub fn model_words(agent: &TaskAgent, id: &str) -> String {
 
 /// Whether the composer's model pick is for the assistant `id`.
 fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
-    ask.and_then(|ask| ask.model.as_ref()).is_some_and(|(on, _)| on == id)
+    ask.and_then(|ask| ask.model.as_ref())
+        .is_some_and(|(on, _)| on == id)
 }
 
 /// A heading in a menu named as written, such as an assistant's name over its models.
@@ -319,8 +320,9 @@ enum ModelPick {
 const SIGN_IN: &str = "Sign In";
 const SETTINGS: &str = "Settings";
 const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
-/// How far under its trigger a choice's menu hangs.
-const MENU_DROP: f32 = 6.;
+/// The composer's triggers, by their elements' ids.
+const LEVEL: &str = "composer-level";
+const MODEL: &str = "composer-model";
 
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
@@ -808,6 +810,8 @@ pub struct CommandBar {
     /// Where the composer's level and model triggers were last drawn, which their menus hang from.
     level_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The trigger whose menu is open, by its id, which wears a plate until the menu closes.
+    menu_open: Option<&'static str>,
     /// The rows' favicons by page, asked for as they first show. None until one comes.
     favicons: HashMap<String, Option<Arc<Image>>>,
     /// At rest in Ask, the pages the page added for the task, each address with its title, which
@@ -1048,6 +1052,7 @@ fn new_bar(
             ask: None,
             level_at: Rc::default(),
             model_at: Rc::default(),
+            menu_open: None,
             favicons: HashMap::new(),
             added: Vec::new(),
             tabs: Vec::new(),
@@ -2278,7 +2283,11 @@ impl CommandBar {
     /// Says which assistants the composer may start a thread on, ready or not.
     fn log_agents(&self) {
         let agents = self.task_agents.clone().unwrap_or_default();
-        let names: Vec<&str> = agents.agents.iter().map(|agent| agent.name.as_ref()).collect();
+        let names: Vec<&str> = agents
+            .agents
+            .iter()
+            .map(|agent| agent.name.as_ref())
+            .collect();
         // check.sh reads this line.
         log!("browser: command bar agents: {}", names.join(", "));
     }
@@ -2363,13 +2372,19 @@ impl CommandBar {
         items.push(MenuEntry::named(NEVER_GETS, false));
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
-        let chosen = Box::new(move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-            let Some(tier) = closed.chosen().and_then(|item| Tier::ALL.get(item).copied()) else {
-                return;
-            };
-            bar.update(cx, |bar, cx| bar.pick_tier(tier, cx)).ok();
-        });
-        self.show_choices(self.level_at.get(), items, chosen, window, cx);
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let tier = closed
+                    .chosen()
+                    .and_then(|item| Tier::ALL.get(item).copied());
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    tier.map(|tier| bar.pick_tier(tier, cx));
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(LEVEL, items, chosen, window, cx);
     }
 
     /// The user's pick on the composer's level menu.
@@ -2395,7 +2410,10 @@ impl CommandBar {
         for agent in &agents.agents {
             items.push(heading(agent.name.clone()));
             picks.push(ModelPick::Nothing);
-            let at_limit = agent.resets.clone().map(|resets| format!("Limit resets {resets}"));
+            let at_limit = agent
+                .resets
+                .clone()
+                .map(|resets| format!("Limit resets {resets}"));
             let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
             let default = agent.default_model.as_deref();
             let (ids, entries) = crate::agents::task::model_menu(
@@ -2426,13 +2444,17 @@ impl CommandBar {
         items.push(MenuEntry::named(SETTINGS, true));
         picks.push(ModelPick::Settings);
         let bar = cx.entity().downgrade();
-        let chosen = Box::new(move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-            let Some(pick) = closed.chosen().and_then(|item| picks.get(item).cloned()) else {
-                return;
-            };
-            bar.update(cx, |bar, cx| bar.pick_model(pick, cx)).ok();
-        });
-        self.show_choices(self.model_at.get(), items, chosen, window, cx);
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let pick = closed.chosen().and_then(|item| picks.get(item).cloned());
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    pick.map(|pick| bar.pick_model(pick, cx));
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(MODEL, items, chosen, window, cx);
     }
 
     /// The user's pick on the composer's model menu.
@@ -2454,22 +2476,35 @@ impl CommandBar {
         }
     }
 
-    /// Shows a menu of the composer's choices hanging from its trigger at `trigger`, 6 under it,
-    /// its left edge at the trigger's.
+    /// Shows a menu of the composer's choices hanging from the trigger `id`, 6 under it, its
+    /// left edge at the trigger's; the trigger wears its plate while it's open.
     fn show_choices(
-        &self,
-        trigger: Option<Bounds<Pixels>>,
+        &mut self,
+        id: &'static str,
         items: Vec<MenuEntry>,
         chosen: text_input::Chosen,
         window: &mut Window,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) {
-        let (Some(trigger), Some(menu)) = (trigger, cx.try_global::<crate::menu::EntriesMenu>()) else {
+        let trigger = match id {
+            LEVEL => self.level_at.get(),
+            _ => self.model_at.get(),
+        };
+        let (Some(trigger), Some(menu)) = (trigger, cx.try_global::<crate::menu::EntriesMenu>())
+        else {
             return;
         };
         let menu = menu.0.clone();
-        let at = point(trigger.left(), trigger.bottom() + px(MENU_DROP));
+        self.menu_open = Some(id);
+        cx.notify();
+        let at = point(trigger.left(), trigger.bottom() + px(CHOICES_MENU_DROP));
         menu(items, at, false, window, chosen, cx);
+    }
+
+    /// A composer's menu closing, however it closed: its trigger's plate goes.
+    fn menu_closed(&mut self, cx: &mut Context<Self>) {
+        self.menu_open = None;
+        cx.notify();
     }
 
     /// Where ↩ goes for `text` before its suggestions come: the page it names, else a search for
@@ -3615,6 +3650,7 @@ impl CommandBar {
                 .text_color(color)
                 .child(said)
         };
+        let open = self.menu_open;
         let trigger = |id: &'static str, at: &Rc<Cell<Option<Bounds<Pixels>>>>| {
             div()
                 .id(id)
@@ -3624,10 +3660,14 @@ impl CommandBar {
                 .flex()
                 .items_center()
                 .rounded(px(CHIP_RADIUS))
+                // A trigger has no fill at rest, only while its menu is open.
+                .when(open == Some(id), |shown| shown.bg(palette.plate(CHIP)))
                 .child(drawn_at(at))
         };
-        let level = trigger("composer-level", &self.level_at)
-            .when(self.a11y, |level| level.role(Role::Button).aria_label(tier.label()))
+        let level = trigger(LEVEL, &self.level_at)
+            .when(self.a11y, |level| {
+                level.role(Role::Button).aria_label(tier.label())
+            })
             .px(px(TRIGGER_X))
             .gap(px(TRIGGER_GAP))
             .on_click(cx.listener(|bar, _, window, cx| bar.level_menu(window, cx)))
@@ -3640,8 +3680,10 @@ impl CommandBar {
             }
             None => (None, SIGN_IN.to_string()),
         };
-        let model = trigger("composer-model", &self.model_at)
-            .when(self.a11y, |model| model.role(Role::Button).aria_label(said.clone()))
+        let model = trigger(MODEL, &self.model_at)
+            .when(self.a11y, |model| {
+                model.role(Role::Button).aria_label(said.clone())
+            })
             .pl(px(MODEL_LEFT))
             .pr(px(TRIGGER_X))
             .gap(px(MODEL_GAP))
@@ -3656,7 +3698,9 @@ impl CommandBar {
         };
         let start = div()
             .id("composer-start")
-            .when(self.a11y, |start| start.role(Role::Button).aria_label(NEW_THREAD))
+            .when(self.a11y, |start| {
+                start.role(Role::Button).aria_label(NEW_THREAD)
+            })
             .size(px(START_SIZE))
             .ml(px(START_SPACE))
             .flex_none()
@@ -4360,14 +4404,14 @@ impl Render for CommandBar {
                         .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
                         .when(self.ask.is_some(), |bar| {
                             bar.child(self.choices(cx))
-                            .child(
-                                div()
-                                    .h(px(hairline))
-                                    .mx(px(LINE_INSET))
-                                    .flex_none()
-                                    .bg(palette.faint(LINE_COLOR)),
-                            )
-                            .child(self.foot(cx))
+                                .child(
+                                    div()
+                                        .h(px(hairline))
+                                        .mx(px(LINE_INSET))
+                                        .flex_none()
+                                        .bg(palette.faint(LINE_COLOR)),
+                                )
+                                .child(self.foot(cx))
                         })
                         .children(self.a11y.then(|| self.announcer()))
                         // The modal level's rim in the palette's ink; its outline and shadow are the

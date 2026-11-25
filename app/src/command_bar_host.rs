@@ -361,12 +361,10 @@ impl command_bar::Host for Bar {
     fn composer_last(
         &self,
         cx: &App,
-    ) -> (
-        browser::agents::tier::Tier,
-        Option<(SharedString, String)>,
-    ) {
+    ) -> (browser::agents::tier::Tier, Option<(SharedString, String)>) {
         let space = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-        let space = (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space());
+        let space =
+            (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space());
         let Some(agents) = browser::agents::global(cx) else {
             return Default::default();
         };
