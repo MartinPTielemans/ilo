@@ -390,20 +390,19 @@ impl gpui::Render for PicturesPage {
                         .child(row_text(&look, name, Some(line.to_string().into())))
                         .child(end(controls))
                 };
-                let master = feature(
-                    Section::Threads.glyph(),
-                    "Let agents use the browser",
-                    "On: a connected client reaches the browser through the bridge beside it.",
-                    vec![gpui::IntoElement::into_any_element(stop_switch(
+                // Other apps' own switch, on, as its page has it: S30's draft, bare when on.
+                let agents_on = format!("Let other apps' agents use {}", browser::product::PRODUCT);
+                let master = frame()
+                    .child(row_text(&look, agents_on.clone(), None))
+                    .child(end(vec![gpui::IntoElement::into_any_element(stop_switch(
                         &look,
-                        "agents",
-                        "Let agents use the browser",
+                        "other apps",
+                        agents_on,
                         true,
                         1.,
                         look.on,
                         a11y,
-                    ))],
-                );
+                    ))]));
                 let clients = vec![
                     feature(
                         "icons/terminal.svg",
@@ -686,7 +685,8 @@ impl gpui::Render for PicturesPage {
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let lede = match self.shown {
-            Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
+            Pictures::Models | Pictures::Assistants { .. } => Section::Models.lede(),
+            Pictures::CommandLine(_) => Section::OtherApps.lede(),
             _ => None,
         };
         let lede = lede.map(|lede| {

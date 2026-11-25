@@ -4030,9 +4030,17 @@ impl Settings {
         }
         [
             Page::new(Section::Threads, "", threads),
-            Page::new(Section::Models, "", models),
+            Page::new(
+                Section::Models,
+                Section::Models.lede().unwrap_or_default(),
+                models,
+            ),
             Page::new(Section::Access, agents::tier::NEVER_GETS, access),
-            Page::new(Section::OtherApps, "", blocks),
+            Page::new(
+                Section::OtherApps,
+                Section::OtherApps.lede().unwrap_or_default(),
+                blocks,
+            ),
         ]
     }
 
@@ -4048,8 +4056,9 @@ impl Settings {
             };
             self.toggle("other apps", name.clone(), on, set, accent, cx)
         };
-        let line = "Each works in a Space of its own, never in your tabs.";
-        setting(&self.look, name, Some(line.into()), vec![switch])
+        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
