@@ -2671,7 +2671,7 @@ impl Shell {
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
         let row = plate(self.tab_icon_in(&palette, tab), label);
-        let row = selected_plate(&palette, row, 1., 0., false);
+        let row = selected_plate(&palette, row, 1., 0.);
         div()
             .w(px(CARD_WIDTH
                 - 2. * PLATE_INSET
@@ -4328,7 +4328,13 @@ impl Shell {
             .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
-                shell.hover_button(command, TipSide::Beside, *hovered, cx);
+                shell.hover_button(
+                    command,
+                    TipSide::Beside,
+                    *hovered,
+                    window.mouse_position(),
+                    cx,
+                );
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))

@@ -10,7 +10,7 @@ use browser::{
     find_status, log,
     palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED, Tone},
     shell::{self, keystroke_keys},
-    text_input::TextInput,
+    text_input::{Colors, TextInput},
     tooltip::{self, Anchor, Tip},
 };
 use gpui::{
@@ -151,8 +151,10 @@ pub fn open(
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {
-        let input =
-            cx.new(|cx| TextInput::new("Find in page", cx).placeholder_color(rgba(PLACEHOLDER)));
+        // The bar is dark in every look, so its placeholder is one colour.
+        let input = cx.new(|cx| {
+            TextInput::new("Find in page", cx).follows(|_| Colors::placeholder(rgba(PLACEHOLDER)))
+        });
         window.focus(&input.focus_handle(cx), cx);
         cx.new(|cx| {
             cx.observe(&input, |bar: &mut FindBar, _, cx| bar.edited(cx))

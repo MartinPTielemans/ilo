@@ -306,13 +306,7 @@ impl Shell {
             .relative()
             .children(ring)
             .when(selected, |plate| {
-                selected_plate(
-                    &self.palette,
-                    plate,
-                    plate_in,
-                    hover.unwrap_or(0.),
-                    developer,
-                )
+                selected_plate(&self.palette, plate, plate_in, hover.unwrap_or(0.))
             })
             .when(developer && !ghost, |plate| {
                 plate.child(self.logged_developer_outline(self.selected, PLATE_RADIUS))

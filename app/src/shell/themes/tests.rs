@@ -478,3 +478,63 @@ fn the_window_draws_again_at_each_transparency_level(cx: &mut TestAppContext) {
     assert_eq!(tint(Transparency::Standard, cx), standard, "and back");
     _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The shown tab's plate is the palette's with Developer Mode on as with it off, at every
+/// transparency level, and the outline that marks the mode lays no fill of its own. A plate firmer
+/// than the palette reckoned took its title under text's minimum over a bright window.
+#[gpui::test]
+fn developer_mode_leaves_the_shown_tabs_plate_as_it_is(cx: &mut TestAppContext) {
+    use crate::shell::commands::Command;
+    use crate::shell::{Folders, PLATE_RADIUS, Page, SHOWN_FILL, developer_outline};
+    use crate::theme::Appearance;
+    use crate::transparency::{self, Transparency};
+    let dir = std::env::temp_dir().join(format!("ilo-themes-developer-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cx.update(|cx| transparency::kept_in(dir.to_string_lossy().into_owned(), cx));
+    let (shell, cx) = shell(None, None, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        shell.set_selected(1, cx);
+    });
+    // The fill the shown row's plate is laid in, drawn again with the page in the mode or out.
+    let laid = |developer_mode, cx: &mut VisualTestContext| {
+        SHOWN_FILL.set(None);
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                url: "http://localhost:3000/".into(),
+                developer_mode,
+                ..Page::default()
+            };
+            shell.set_page(1, page, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        SHOWN_FILL.take()
+    };
+    for (appearance, tone) in [
+        (Appearance::Dark, Tone::Dark),
+        (Appearance::Light, Tone::Light),
+    ] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        for level in Transparency::ALL {
+            cx.update(|_, cx| transparency::set(level, cx));
+            cx.run_until_parked();
+            let (on, off) = (laid(true, cx), laid(false, cx));
+            let palette = shell.update(cx, |shell, _| shell.palette);
+            assert_eq!(palette.tone, tone);
+            assert_eq!(
+                on,
+                Some(palette.shown(0.)),
+                "{tone:?} {level:?}, in the mode"
+            );
+            assert_eq!(off, on, "{tone:?} {level:?}, out of it");
+            let mut outline = developer_outline(&palette, PLATE_RADIUS);
+            assert!(outline.style().background.is_none(), "{tone:?} {level:?}");
+        }
+    }
+    cx.update(|_, cx| transparency::set(Transparency::Standard, cx));
+    _ = std::fs::remove_dir_all(&dir);
+}
