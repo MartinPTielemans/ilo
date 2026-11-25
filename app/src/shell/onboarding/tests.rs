@@ -2099,15 +2099,29 @@ fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
     );
 }
 
-/// The assistants' step looks for them once as it comes, off the UI thread, and each row then
-/// says what was found, as Settings › Agents' does. Nothing asks again while the step stands;
-/// shown again, it looks again.
+/// The lines of the assistants' rows as the card draws them.
+fn card_lines(
+    shell: &Entity<Shell>,
+    agents: &Entity<crate::agents::Agents>,
+    cx: &mut VisualTestContext,
+) -> [String; 2] {
+    use crate::agents::runner::Cli;
+    let pressed = shell.read_with(cx, |shell, _| {
+        (shell.onboarding.as_ref()).map_or(Vec::new(), |o| o.pressed.clone())
+    });
+    agents.read_with(cx, |agents, _| {
+        Cli::ALL.map(|cli| super::card_row(agents, cli, pressed.contains(&cli)).line)
+    })
+}
+
+/// The assistants' step runs nothing of an assistant's program as it shows, stands or shows
+/// again, with the inside switch on: each row is its maker's plan and Sign In. Only a press looks,
+/// for that assistant alone, and its row then says what the press learned.
 #[gpui::test]
-fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppContext) {
+fn the_assistant_step_runs_nothing_as_it_shows(cx: &mut TestAppContext) {
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::Cli;
     let (shell, cx, host) = first_window(cx);
-    // With an assistant, as its rows show only on that path.
     host.threads.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
@@ -2116,27 +2130,56 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     let (agents, looks) =
         cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
     agents.update(cx, |agents, cx| agents.set_threads(true, cx));
-    let lines = |cx: &mut VisualTestContext| {
-        agents.read_with(cx, |agents, _| {
-            Cli::ALL.map(|cli| agents.assistant_row(cli).line)
-        })
-    };
-    assert_eq!(looks(), 0, "nothing looked before the card");
-    assert_eq!(lines(cx), ["Checking…", "Checking…"]);
+    let found =
+        |cx: &mut VisualTestContext| agents.read_with(cx, |agents, _| agents.found(Cli::Claude));
 
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
-    cx.run_until_parked();
-    assert_eq!(looks(), 1, "the step's showing looked once");
-    assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
     later(&shell, cx, 5.);
-    assert_eq!(looks(), 1, "nothing looked again while it stood");
-
+    assert_eq!(looks(), 0, "nothing looked as the step showed or stood");
+    assert_eq!(found(cx), Ready::Unknown);
+    assert_eq!(
+        card_lines(&shell, &agents, cx),
+        ["Your Claude plan", "Your ChatGPT plan"]
+    );
     shell.update(cx, |shell, _| shell.onboarding = None);
     started(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    later(&shell, cx, 5.);
+    assert_eq!(looks(), 0, "nor as it showed again");
+    assert_eq!(found(cx), Ready::Unknown);
+
+    shell.update(cx, |shell, cx| shell.onboarding_sign_in(Cli::Claude, cx));
     cx.run_until_parked();
-    assert_eq!(looks(), 2, "shown again, it looked again");
+    assert_eq!(found(cx), Ready::SignedOut, "the press looked for Claude");
+    let lines = card_lines(&shell, &agents, cx);
+    assert_ne!(
+        lines[0], "Your Claude plan",
+        "Claude's row says what the press learned"
+    );
+    assert_eq!(lines[1], "Your ChatGPT plan", "ChatGPT's row is as it was");
+}
+
+/// A new profile's assistants, with the inside switch off, are each its maker's plan and a
+/// Sign In, never Checking… with no button, and nothing is looked for.
+#[gpui::test]
+fn a_new_profiles_assistants_are_not_checking(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(false));
+    let (agents, looks) = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    settle(&shell, cx);
+    assert_eq!(
+        card_lines(&shell, &agents, cx),
+        ["Your Claude plan", "Your ChatGPT plan"]
+    );
+    let said = read(cx);
+    let sign_ins =
+        (said.iter()).filter(|(role, name, _)| *role == Role::Button && name == "Sign In");
+    assert_eq!(sign_ins.count(), 2, "a Sign In on each row in {said:?}");
+    assert!(!said.iter().any(|(_, name, _)| name == "Checking…"));
+    assert_eq!(looks(), 0, "nothing looked");
 }
 
 /// In the card's narrow half no assistant's name is cut by its button: each button is beside the
@@ -2161,13 +2204,12 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
     cx.simulate_a11y_activation();
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
-    // The rows say what the step's own look found.
-    cx.run_until_parked();
+    // The rows draw from what the browser holds, looking for nothing.
     settle(&shell, cx);
-    let lines = agents.read_with(cx, |agents, _| {
-        Cli::ALL.map(|cli| agents.assistant_row(cli).line)
-    });
-    assert_eq!(lines, ["Not signed in", "Not installed"]);
+    assert_eq!(
+        card_lines(&shell, &agents, cx),
+        ["Your Claude plan", "Your ChatGPT plan"]
+    );
 
     let scale = cx.update(|window, _| window.scale_factor());
     let tree = cx.a11y_tree().expect("GPUI built a tree");

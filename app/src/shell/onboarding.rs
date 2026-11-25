@@ -279,8 +279,10 @@ pub(super) struct Onboarding {
     /// The card's size and corners the host last shaped the window to, so it's told only of a
     /// change: on the entry's frames, and once as it ends.
     shaped: Option<(f32, f32, f32)>,
-    /// The assistants' step has looked for their programs since it last came.
-    looked: bool,
+    /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
+    pressed: Vec<crate::agents::runner::Cli>,
+    /// The assistants whose Sign In waits for the look its press started, to sign in once it ends.
+    signing: Vec<crate::agents::runner::Cli>,
     /// The progress knot's fraction as it last left, the one it's going to, and when it set off.
     progress: (f32, f32, Instant),
     /// When the last step was left, for the card's fade.
@@ -404,7 +406,6 @@ impl Onboarding {
         self.step = step;
         self.since = now;
         self.settled = false;
-        self.looked = false;
     }
 
     /// How long a step's content takes to come.
@@ -522,7 +523,8 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
-            looked: false,
+            pressed: Vec::new(),
+            signing: Vec::new(),
             progress: (0., 0., now),
             ending: None,
             light: appearance.and_then(|name| match name {
@@ -535,8 +537,12 @@ impl Shell {
             keyboard: false,
             account,
             returning: false,
-            _assistants: (crate::agents::global(cx))
-                .map(|agents| cx.observe(&agents, |_, _, cx| cx.notify())),
+            _assistants: (crate::agents::global(cx)).map(|agents| {
+                cx.observe(&agents, |shell, _, cx| {
+                    shell.onboarding_sign_in_looked(cx);
+                    cx.notify();
+                })
+            }),
             shown_assistants: None,
             shown_marked: None,
             help: None,
@@ -863,6 +869,55 @@ impl Shell {
         self.onboarding_next(how, cx);
     }
 
+    /// A row's Sign In: nothing of the assistant's program runs before it. A program the browser
+    /// already knows signs in at once; else the press looks for that one alone, and it signs in
+    /// as the look ends (`onboarding_sign_in_looked`).
+    fn onboarding_sign_in(&mut self, cli: crate::agents::runner::Cli, cx: &mut Context<Self>) {
+        use crate::agents::ready::Ready;
+        let (Some(agents), Some(onboarding)) =
+            (crate::agents::global(cx), self.onboarding.as_mut())
+        else {
+            return;
+        };
+        if !onboarding.pressed.contains(&cli) {
+            onboarding.pressed.push(cli);
+        }
+        let known = agents.read(cx).found(cli) == Ready::SignedOut;
+        if !known && !onboarding.signing.contains(&cli) {
+            onboarding.signing.push(cli);
+        }
+        agents.update(cx, |agents, cx| match known {
+            true => agents.sign_in(cli, cx),
+            false => agents.look_up_assistant(cli, cx),
+        });
+        cx.notify();
+    }
+
+    /// Signs in each assistant whose press waited on its look, now that the look has found it
+    /// signed out; one found missing or signed in already is left as the look found it.
+    fn onboarding_sign_in_looked(&mut self, cx: &mut Context<Self>) {
+        use crate::agents::ready::Ready;
+        let (Some(agents), Some(onboarding)) =
+            (crate::agents::global(cx), self.onboarding.as_mut())
+        else {
+            return;
+        };
+        let found = |cli| agents.read(cx).found(cli);
+        let (ended, waiting): (Vec<_>, Vec<_>) =
+            (onboarding.signing.iter()).partition(|&&cli| found(cli) != Ready::Unknown);
+        onboarding.signing = waiting;
+        let sign_in: Vec<_> = (ended.into_iter())
+            .filter(|&cli| found(cli) == Ready::SignedOut)
+            .collect();
+        if !sign_in.is_empty() {
+            cx.defer(move |cx| {
+                agents.update(cx, |agents, cx| {
+                    sign_in.into_iter().for_each(|cli| agents.sign_in(cli, cx))
+                })
+            });
+        }
+    }
+
     /// Someone is signed in on a row of the assistant step.
     fn assistants_signed_in(&self, cx: &gpui::App) -> bool {
         use crate::agents::runner::Cli;
@@ -1149,20 +1204,6 @@ impl Shell {
         })
     }
 
-    /// Looks for the assistants' programs once each time their step comes, so its rows say what's
-    /// on this computer; Agents runs nothing while threads are off.
-    fn onboarding_look(&mut self, cx: &mut Context<Self>) {
-        let Some(onboarding) = self.onboarding.as_mut() else {
-            return;
-        };
-        if onboarding.step != Step::Assistant || std::mem::replace(&mut onboarding.looked, true) {
-            return;
-        }
-        if let Some(agents) = crate::agents::global(cx) {
-            cx.defer(move |cx| agents.update(cx, |agents, cx| agents.look_for_task_agents(cx)));
-        }
-    }
-
     /// The card in first run's `window` while it shows, stepping its motion; none once it has
     /// ended, as the window goes.
     pub(super) fn onboarding_layer(
@@ -1171,7 +1212,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let rest = self.onboarding_rest(cx);
-        self.onboarding_look(cx);
         let glass = self.blurred;
         let still = crate::motion::still(cx);
         let onboarding = self.onboarding.as_mut()?;
@@ -1897,7 +1937,8 @@ impl Shell {
         let rows = crate::agents::global(cx).map(|agents| {
             let model = agents.read(cx);
             let marked = model.default_task_agent();
-            let shown = Cli::ALL.map(|cli| (cli, model.assistant_row(cli)));
+            let pressed = (self.onboarding.as_ref()).map_or(&[][..], |o| &o.pressed[..]);
+            let shown = Cli::ALL.map(|cli| (cli, card_row(model, cli, pressed.contains(&cli))));
             let rows = shown.map(|(cli, shown)| {
                 let (agents, shell) = (agents.clone(), shell.clone());
                 // As Settings' rows do, but for its ⋯ menu, which is Settings' own, so it opens
@@ -1910,7 +1951,11 @@ impl Shell {
                         };
                         shell.update(cx, open).ok();
                     }
-                    Act::SignIn => agents.update(cx, |agents, cx| agents.sign_in(cli, cx)),
+                    Act::SignIn => {
+                        shell
+                            .update(cx, |shell, cx| shell.onboarding_sign_in(cli, cx))
+                            .ok();
+                    }
                     Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
                     Act::Mark => {
                         agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx))
@@ -2206,3 +2251,26 @@ fn with_alpha(color: u32, alpha: f32) -> Rgba {
 
 #[cfg(test)]
 mod tests;
+
+/// An assistant's row on the card. Until its Sign In is pressed it draws from what the browser
+/// already holds, running nothing: its maker's plan and Sign In, or the sign-in the browser knows
+/// of. Once pressed, it says what the press learned, as Settings › Models' row does.
+fn card_row(
+    agents: &crate::agents::Agents,
+    cli: crate::agents::runner::Cli,
+    pressed: bool,
+) -> crate::agents::sign_in::Shown {
+    use crate::agents::{ready::Ready, sign_in::Offer};
+    let shown = agents.assistant_row(cli);
+    let known = matches!(
+        shown.offer,
+        Offer::Cancel | Offer::SignedIn | Offer::TryAgain
+    ) || agents.found(cli) == Ready::SignedIn;
+    if pressed || known {
+        return shown;
+    }
+    crate::agents::sign_in::Shown {
+        line: format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
+        offer: Offer::SignIn,
+    }
+}
