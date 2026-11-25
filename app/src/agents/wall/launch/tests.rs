@@ -695,6 +695,7 @@ mod walled {
                 token: "token".into(),
             },
             model: None,
+            effort: None,
             instructions: String::new(),
             tools: Vec::new(),
             helpers: false,

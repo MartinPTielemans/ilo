@@ -250,6 +250,7 @@ impl Host for Recorder {
         page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
@@ -258,7 +259,8 @@ impl Host for Recorder {
             tier => format!(" at {}", tier.id()),
         };
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
-        self.record(format!("task {agent} {asked}{page}{tier}{model}"));
+        let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
+        self.record(format!("task {agent} {asked}{page}{tier}{model}{effort}"));
     }
 
     fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
@@ -3551,6 +3553,32 @@ impl Bar {
     /// `#` where it's a heading and `?` where it's the search's field, and its answer, which `pick`
     /// then gives the menu's pick.
     fn choice_menu(&mut self, model: bool) -> (Vec<String>, Chosen) {
+        self.shown_menu(match model {
+            true => CommandBar::model_menu,
+            false => CommandBar::level_menu,
+        })
+        .expect("no menu showed")
+    }
+
+    /// Opens the composer's effort menu as a click on its trigger does, as `choice_menu` does
+    /// the others; None where no menu shows.
+    fn effort_menu(&mut self) -> Option<(Vec<String>, Chosen)> {
+        self.shown_menu(CommandBar::effort_menu)
+    }
+
+    /// Where the effort trigger would be drawn: it isn't yet, so a test puts it there.
+    fn draw_effort_trigger(&mut self) {
+        (self.window)
+            .update(&mut self.cx.cx, |bar, _, _| {
+                bar.effort_at.set(Some(Bounds::default()))
+            })
+            .unwrap();
+    }
+
+    fn shown_menu(
+        &mut self,
+        open: fn(&mut CommandBar, &mut Window, &mut Context<CommandBar>),
+    ) -> Option<(Vec<String>, Chosen)> {
         let shown: Rc<RefCell<Option<(Vec<MenuEntry>, Chosen)>>> = Rc::default();
         let into = shown.clone();
         self.cx.update(|_, cx| {
@@ -3560,12 +3588,9 @@ impl Bar {
         });
         self.cx.run_until_parked();
         (self.window)
-            .update(&mut self.cx.cx, |bar, window, cx| match model {
-                true => bar.model_menu(window, cx),
-                false => bar.level_menu(window, cx),
-            })
+            .update(&mut self.cx.cx, |bar, window, cx| open(bar, window, cx))
             .unwrap();
-        let (items, chosen) = shown.borrow_mut().take().expect("no menu showed");
+        let (items, chosen) = shown.borrow_mut().take()?;
         let rows = (items.iter())
             .map(|item| {
                 let mark = match (item.header, item.checked, item.enabled) {
@@ -3581,7 +3606,7 @@ impl Bar {
                 }
             })
             .collect();
-        (rows, chosen)
+        Some((rows, chosen))
     }
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
@@ -3773,6 +3798,48 @@ fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
     assert!(focused, "the composer lost the keyboard to the menu");
     assert_eq!(bar.choices().1, "claude · Sonnet");
     assert!(!bar.calls().iter().any(|call| call.contains("opus")));
+}
+
+/// The effort menu lists Claude's own levels as its help names them, none checked before a
+/// pick, and the thread starts with the one picked; with none picked, ilo passes none.
+#[gpui::test]
+fn the_effort_menu_lists_claudes_levels_and_the_pick_goes_with_the_start(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    bar.draw_effort_trigger();
+    let (rows, chosen) = bar.effort_menu().expect("no effort menu for Claude");
+    assert_eq!(rows, ["low", "medium", "high", "xhigh", "max"]);
+    bar.pick(chosen, 2);
+    let (rows, chosen) = bar.effort_menu().unwrap();
+    assert_eq!(rows, ["low", "medium", "✓ high", "xhigh", "max"]);
+    bar.pick(chosen, 2);
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week effort high"]);
+
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week"]);
+}
+
+/// Codex's program takes no effort setting, so its composer has no effort menu, and the menu
+/// doesn't show while its trigger isn't drawn.
+#[gpui::test]
+fn no_effort_menu_for_codex_or_without_its_trigger(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("codex", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    bar.draw_effort_trigger();
+    assert!(bar.effort_menu().is_none(), "Codex takes no effort");
+
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert!(bar.effort_menu().is_none(), "a menu under no trigger");
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.

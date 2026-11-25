@@ -327,6 +327,7 @@ const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other t
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
+const EFFORT: &str = "composer-effort";
 
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
@@ -357,6 +358,15 @@ struct Ask {
     /// The assistant and model picked on the model menu, by the assistant's id and the model's,
     /// empty for its own default; None for the first ready assistant on Settings' model.
     model: Option<(SharedString, String)>,
+    /// The effort level picked on the effort menu, one of its assistant's `Cli::efforts`; None
+    /// for the program's own, which ilo then passes nothing for. It holds for this thread only.
+    effort: Option<&'static str>,
+}
+
+/// The effort levels the program of the assistant `id` takes, from the one list
+/// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
+fn efforts_of(id: &str) -> &'static [&'static str] {
+    crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
 }
 
 /// What a row's icon stands for.
@@ -643,6 +653,7 @@ pub trait Host {
         page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     );
     /// The level and model the composer last started a thread with in the profile of the Space
@@ -837,6 +848,9 @@ pub struct CommandBar {
     /// Where the composer's level and model triggers were last drawn, which their menus hang from.
     level_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the effort trigger was last drawn. It isn't drawn until its word is in the table,
+    /// so its menu doesn't show yet.
+    effort_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The trigger whose menu is open, by its id, which wears a plate until the menu closes.
     menu_open: Option<&'static str>,
     /// The rows' favicons by page, asked for as they first show. None until one comes.
@@ -1090,6 +1104,7 @@ fn new_bar(
             ask: None,
             level_at: Rc::default(),
             model_at: Rc::default(),
+            effort_at: Rc::default(),
             menu_open: None,
             favicons: HashMap::new(),
             added: Vec::new(),
@@ -2325,7 +2340,12 @@ impl CommandBar {
             self.host.page_favicon(url);
         }
         let (tier, model) = self.host.composer_last(cx);
-        self.ask = Some(Ask { page, tier, model });
+        self.ask = Some(Ask {
+            page,
+            tier,
+            model,
+            effort: None,
+        });
         self.completion.clear();
         self.asked = typed.clone();
         let caret = typed.len();
@@ -2393,7 +2413,7 @@ impl CommandBar {
     /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
     fn run_ask(&mut self, by: By, cx: &mut App) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier) = (ask.page.clone(), ask.tier);
+        let (page, tier, effort) = (ask.page.clone(), ask.tier, ask.effort);
         let asked = self.input.read(cx).text().trim().to_string();
         let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
             return;
@@ -2405,13 +2425,56 @@ impl CommandBar {
         // Settings' model unless the user picked one for this assistant, here or last time.
         let picked = ask_model_on(self.ask.as_ref(), &id);
         let model = picked.then_some(model);
+        // A level picked for another assistant isn't this one's.
+        let effort = effort.filter(|level| efforts_of(&id).contains(level));
         // check.sh reads this line.
         log!("browser: command bar runs a task on {id}");
         // The host folds the bar into the slot its card fills, so the slot doesn't close first,
         // and the bar doesn't hide on its own.
         self.ask = None;
         self.closed(Close::new(Why::Chosen, by));
-        self.host.run_task(&id, &asked, page, tier, model, cx);
+        self.host
+            .run_task(&id, &asked, page, tier, model, effort, cx);
+    }
+
+    /// The effort trigger's menu, under it: the levels the composer's assistant's own program
+    /// takes, under the names its help gives them, the one picked checked, none before a pick.
+    /// No menu for an assistant whose program takes none. A pick holds for this thread only.
+    fn effort_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ask) = &self.ask else { return };
+        let Some(agent) = self.composer_assistant() else {
+            return;
+        };
+        let levels = efforts_of(&agent.id);
+        if levels.is_empty() {
+            return;
+        }
+        let items = (levels.iter())
+            .map(|level| MenuEntry {
+                checked: ask.effort == Some(*level),
+                ..MenuEntry::named(*level, true)
+            })
+            .collect();
+        let bar = cx.entity().downgrade();
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let level = closed.chosen().and_then(|item| levels.get(item).copied());
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    level.map(|level| bar.pick_effort(level, cx));
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(EFFORT, items, chosen, window, cx);
+    }
+
+    /// The user's pick on the composer's effort menu.
+    fn pick_effort(&mut self, level: &'static str, cx: &mut Context<Self>) {
+        let Some(ask) = &mut self.ask else { return };
+        ask.effort = Some(level);
+        log!("browser: composer effort {level}");
+        cx.notify();
     }
 
     /// The level trigger's menu, under it: the three levels, the one the thread starts at
@@ -2547,6 +2610,7 @@ impl CommandBar {
     ) {
         let trigger = match id {
             LEVEL => self.level_at.get(),
+            EFFORT => self.effort_at.get(),
             _ => self.model_at.get(),
         };
         let (Some(trigger), Some(menu)) = (trigger, cx.try_global::<crate::menu::EntriesMenu>())

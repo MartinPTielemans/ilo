@@ -64,6 +64,7 @@ fn launch() -> Launch {
             token: "secret".into(),
         },
         model: None,
+        effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,

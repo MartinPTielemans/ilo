@@ -10163,6 +10163,38 @@ mod tasks {
         });
     }
 
+    /// The composer's effort pick is the task's for each of its runs, only as a level its own
+    /// program lists: none for one it doesn't, nor for Codex, whose program takes none.
+    #[gpui::test]
+    fn a_task_keeps_only_an_effort_its_program_lists(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let start = |effort: Option<&str>| Start {
+            effort: effort.map(str::to_string),
+            ..Start::default()
+        };
+        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        let started = [
+            (Cli::Claude, Some("max")),
+            (Cli::Claude, None),
+            (Cli::Claude, Some("turbo")),
+            (Cli::Codex, Some("high")),
+        ]
+        .map(|(cli, effort)| {
+            let agent = agents.update(cx, |agents, cx| {
+                agents.start_task(cli, "Effort", None, 1, start(effort), cx)
+            });
+            agent.expect("a task started")
+        });
+        agents.read_with(cx, |agents, _| {
+            let kept = started
+                .clone()
+                .map(|agent| agents.task(&agent).unwrap().effort.clone());
+            assert_eq!(kept, [Some("max".to_string()), None, None, None]);
+        });
+    }
+
     /// The composer's pick on the assistant's chip is the model its task's run passes, and the
     /// task's own name for it; Settings' Model is untouched, and the next task starts on it. A
     /// pick the CLI no longer offers runs on its default, saying nothing.

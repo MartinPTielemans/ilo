@@ -372,6 +372,7 @@ impl Shell {
         let start = Start {
             tier: resting.tier,
             model,
+            effort: None,
             pages: resting.pages.iter().map(|page| page.url.clone()).collect(),
             only_added: resting.only_added,
             files: Picked {

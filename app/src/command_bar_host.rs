@@ -285,6 +285,7 @@ impl command_bar::Host for Bar {
         page: Option<(SharedString, SharedString)>,
         tier: browser::agents::tier::Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -336,6 +337,7 @@ impl command_bar::Host for Bar {
             let start = browser::agents::task::Start {
                 tier,
                 model: model.clone(),
+                effort: effort.map(String::from),
                 pages: Vec::new(),
                 only_added: false,
                 // The bar's composer has no `+` yet: a path reaches a task only from the panel.

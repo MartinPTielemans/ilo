@@ -144,6 +144,7 @@ impl command_bar::Host for RestingBar {
         _: Option<(SharedString, SharedString)>,
         _: crate::agents::tier::Tier,
         _: Option<String>,
+        _: Option<&'static str>,
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));
