@@ -297,6 +297,7 @@ void host_watch_fd(int fd, void (*ready)(void)) {
 // The core shows the browser window as it opens it, in front or for a saved window behind,
 // since the window is Chromium's. host_show_window_behind is frames.rs's, which stacks it.
 void host_show_window(void* ui_view) {}
+void host_hold_window(void* ui_view) {}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;

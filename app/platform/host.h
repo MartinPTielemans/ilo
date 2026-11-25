@@ -115,6 +115,11 @@ void host_grow_little_window(void* ui_view);
 // app the active one.
 void host_show_window(void* ui_view);
 
+// Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
+// host_show_window, whatever else asks to show it: first run's window is the only one on screen
+// until it ends. Off the Mac, nothing.
+void host_hold_window(void* ui_view);
+
 // Shows the window holding |ui_view| as host_show_window does, but right behind the browser window
 // of |above_ui_view|, neither key nor activating the app, as the windows a relaunch brings back
 // after the first.

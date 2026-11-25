@@ -297,6 +297,9 @@ struct Browser {
   CATransform3D opening_small = CATransform3DIdentity;
   BOOL opening_opaque = YES;
   BOOL opening_shadow = YES;
+
+  // Kept off screen while first run shows (host_hold_window), until host_show_window.
+  bool held = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -2026,6 +2029,84 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
+// NativeWidgetMacNSWindow's own, which a window not held goes on to, by selector.
+static IMP g_order_front;
+static IMP g_make_key_and_order_front;
+static IMP g_order_front_regardless;
+static IMP g_order_window;
+
+// A held window stays off screen whatever orders it in: Chromium shows a browser window as it makes
+// it, and again as it adds a tab, a link from another app's included, and a reopen from the Dock
+// or a second launch comes here too. Ordering out still goes through.
+static bool StaysHeld(NSWindow* window) {
+  Browser* browser = BrowserOf(window);
+  return browser && browser->held;
+}
+
+static void OrderHeldFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_order_front)(self, selector, sender);
+  }
+}
+
+static void MakeHeldKeyAndOrderFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_make_key_and_order_front)(self, selector, sender);
+  }
+}
+
+static void OrderHeldFrontRegardless(NSWindow* self, SEL selector) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL))g_order_front_regardless)(self, selector);
+  }
+}
+
+static void OrderHeldWindow(NSWindow* self,
+                            SEL selector,
+                            NSWindowOrderingMode mode,
+                            NSInteger relative_to) {
+  if (mode == NSWindowOut || !StaysHeld(self)) {
+    ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))g_order_window)(self, selector, mode,
+                                                                        relative_to);
+  }
+}
+
+// Puts |replacement| in for |selector| on |kind|, keeping what it had in |original|. Chromium's
+// browser windows all share the class, so it's done once, and the others pass through.
+static void Replace(Class kind, SEL selector, IMP replacement, IMP* original) {
+  if (class_getMethodImplementation(kind, selector) == replacement) {
+    return;
+  }
+  Method inherited = class_getInstanceMethod(kind, selector);
+  *original = method_getImplementation(inherited);
+  if (!class_addMethod(kind, selector, replacement, method_getTypeEncoding(inherited))) {
+    *original = method_setImplementation(class_getInstanceMethod(kind, selector), replacement);
+  }
+}
+
+void host_hold_window(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  NSWindow* window = browser->ui_view.window;
+  browser->window = window;
+  browser->held = true;
+  Class kind = window.class;
+  Replace(kind, @selector(orderFront:), (IMP)OrderHeldFront, &g_order_front);
+  Replace(kind, @selector(makeKeyAndOrderFront:), (IMP)MakeHeldKeyAndOrderFront,
+          &g_make_key_and_order_front);
+  Replace(kind, @selector(orderFrontRegardless), (IMP)OrderHeldFrontRegardless,
+          &g_order_front_regardless);
+  Replace(kind, @selector(orderWindow:relativeTo:), (IMP)OrderHeldWindow, &g_order_window);
+  // The core put it on screen as it made it, clear until its first frame.
+  [window orderOut:nil];
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: window held off screen\n");
+  }
+}
+
 static void PlaceTitlebarSide(Browser* browser);
 
 void host_show_window(void* ui_view) {
@@ -2041,6 +2122,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
   if (browser->sidebar_right) {
     PlaceTitlebarSide(browser);
