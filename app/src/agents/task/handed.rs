@@ -48,8 +48,11 @@ pub struct Picked {
 
 impl Picked {
     /// The composer's alone to call, with its own chips' tabs, in their order, as the user sends:
-    /// no tab's id reaches it from an agent's call, a page or typed text.
-    pub fn of_chips(space_in_view: u64, tabs: Vec<u64>) -> Self {
+    /// no tab's id reaches it from an agent's call, a page or typed text. It's the library's own,
+    /// as the composer is: nothing outside it makes a pick.
+    // Uncalled until the composer's send is wired.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn of_chips(space_in_view: u64, tabs: Vec<u64>) -> Self {
         let mut picked = Vec::with_capacity(tabs.len());
         for tab in tabs {
             if !picked.contains(&tab) {
