@@ -443,9 +443,11 @@ class Tab : public content::WebContentsObserver,
   void HandBack(const GURL& url, base::FunctionRef<void()> load);
   // Tells the window, Site Controls and the app that the tab's page is now the other engine's.
   void EngineChanged();
-  // Keeps the background colour of the page the tab shows, and tells the app of a change if a
-  // window shows the tab.
-  void BackgroundChanged();
+  // The pane shows the page or stopped showing it, for the card of one that died or for the
+  // system's engine: the colour kept for the app follows, and the app hears of it if a window
+  // shows the tab.
+  void CoverChangedSoon();
+  void CoverChanged();
   // The wait for a page to stop changing its background is over.
   void BackgroundSettled();
   void TellBackground(TabBackground::Step step);
@@ -522,10 +524,9 @@ class Tab : public content::WebContentsObserver,
   int net_error_ = 0;
   // The page base colour the tab last gave its pages, if not Chrome's.
   std::optional<SkColor> shown_on_;
-  // The background colour Chromium last reported for its page, which it reports again only once
-  // it differs, so a tab back from the system's engine has it from here.
-  std::optional<SkColor> reported_background_;
-  // The colour kept for the app, and the one wait for a page that keeps changing it.
+  // The colour kept for the app, and the one wait for a page that keeps changing it. It holds the
+  // page's own while the pane shows something else, as Chromium reports a colour again only once
+  // it differs.
   TabBackground background_;
   base::OneShotTimer background_wait_;
   std::unique_ptr<platform::SystemPage> system_page_;

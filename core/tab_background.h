@@ -1,6 +1,8 @@
 #ifndef BROWSER_CORE_TAB_BACKGROUND_H_
 #define BROWSER_CORE_TAB_BACKGROUND_H_
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -15,10 +17,19 @@ class TabBackground {
  public:
   // How long a page's background must have stayed as it is before the UI hears of a change that
   // came while it was changing. A page that animates its background reports a colour per frame it
-  // draws; the UI gets the first and, this long after the last, the one it settled on, so the
-  // sidebar is drawn twice for a fade and not once per frame. Longer than any gap between an
+  // draws; the UI gets the first and, once it has been still this long, the one it settled on, so
+  // the sidebar is drawn twice for a fade and not once per frame. Longer than any gap between an
   // animation's frames, and short enough that the line follows a page's change of theme with it.
   static constexpr base::TimeDelta kSettle = base::Milliseconds(250);
+  // The waits of one run of changes, each asked for when the one before ended with the colour
+  // still changing; the last goes on for as long as the run does. The first is the settle time,
+  // and each of the next four only what's left of it since the last change, so for about a second
+  // a run is watched as closely as a fade needs: its settled colour is told a settle time after
+  // its end. A run that outlasts that isn't a change of theme, and its waits grow, so a page that
+  // never stops fading wakes the UI thread once in two seconds and not four times a second.
+  static constexpr std::array<base::TimeDelta, 8> kWaits = {
+      kSettle, kSettle, kSettle, kSettle, kSettle,
+      base::Milliseconds(500), base::Seconds(1), base::Seconds(2)};
 
   // What the tab does next.
   struct Step {
@@ -30,7 +41,12 @@ class TabBackground {
 
   // The page's background is |argb| now, or it reports none. |shown|: a window shows the tab.
   Step Changed(std::optional<uint32_t> argb, bool shown, base::TimeTicks now);
-  // The wait a step asked for is over. One for a tab no window shows any more ends there, told
+  // Whether the pane shows something of the core's own in the page's place: the card of a page
+  // that died, or a page of the system's engine. For that long the colour kept is none, a change
+  // as any other, and the page's own is held for when the pane shows the page again.
+  Step Covered(bool covered, bool shown, base::TimeTicks now);
+  // The wait a step asked for is over: the colour is told if it has been still a settle time, or
+  // the next of kWaits is asked for. One for a tab no window shows any more ends there, told
   // nothing: the next window to show it reads color().
   Step Settled(bool shown, base::TimeTicks now);
   // The tab went to another page: a change still waiting is told now, as the new page's colour,
@@ -43,10 +59,18 @@ class TabBackground {
   bool waiting() const { return waiting_; }
 
  private:
+  // Keeps the page's colour, or none while it's covered, and says what a change asks for.
+  Step Keep(bool shown, base::TimeTicks now);
+
+  // The page's own colour, as it last reported it.
+  std::optional<uint32_t> page_;
+  bool covered_ = false;
   std::optional<uint32_t> color_;
   // When the colour last changed.
   base::TimeTicks changed_at_;
   bool waiting_ = false;
+  // Which of kWaits is under way. 0 whenever none is, so each run of changes starts short.
+  size_t wait_ = 0;
 };
 
 }  // namespace browser_core
