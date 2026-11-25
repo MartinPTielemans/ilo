@@ -53,6 +53,7 @@ mod blank_tests;
 #[cfg(test)]
 mod board_title_tests;
 mod boost;
+mod broom;
 mod browser;
 mod by_site;
 #[cfg(test)]
@@ -70,8 +71,6 @@ mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;
-#[cfg(test)]
-mod dock_dot;
 mod drag;
 mod drm_note;
 mod empty;
@@ -92,6 +91,7 @@ mod help_tests;
 mod history;
 mod hover_cards;
 mod into_folder;
+mod join;
 mod keys;
 mod launch_room;
 mod library;
@@ -122,6 +122,7 @@ mod permission;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
+mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -137,7 +138,7 @@ mod recent_tabs;
 #[cfg(test)]
 mod recent_tabs_tests;
 #[cfg(test)]
-mod recorder;
+pub(crate) mod recorder;
 mod return_mark;
 mod rows;
 mod safe_start;
@@ -172,8 +173,10 @@ mod update_banner;
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
+pub use broom::Broom;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Setting, Split, Trouble, Volume, WindowButton,
+    WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -720,6 +723,8 @@ struct Space {
     /// How each of its Live Folders' rows are drawn under its other tabs, which the rows after
     /// them make room for, and the tabs drawn in their items' places (#2979).
     live_rooms: HashMap<u64, live_folders::LiveLayout>,
+    /// The task cards its Today lists, each where it stands (`task_cards::place_cards`).
+    placed: Vec<task_cards::Placed>,
 }
 
 impl Space {
@@ -940,7 +945,8 @@ impl Space {
     /// Where its rows are in the list, from its top, under a head `head` tall.
     fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(head, &pinned, &self.live_blocks(&pinned), &today)
+        let cards = task_cards::blocks(&self.placed, &today);
+        slots(head, &pinned, &self.live_blocks(&pinned), &today, &cards)
     }
 
     /// Where each open Live Folder's runs of rows go among `pinned`, its pinned rows listed: the
@@ -1049,6 +1055,8 @@ enum Slot {
     NewTab,
     /// A run of an open Live Folder's rows, by its folder and its place among the runs (#2979).
     Live(u64, usize),
+    /// A task's card in Today, by its number, or ⌘T's slot (`task_cards::Placed`).
+    Task(u64),
 }
 
 /// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
@@ -1571,8 +1579,10 @@ pub struct Shell {
     /// The command bar an empty Space's card rests on, made as the card comes to show no page and
     /// dropped as a page shows (#4140).
     resting: Option<empty::composer::Resting>,
-    /// A new profile's first launch, or Help › Welcome to ilo, over the window while it shows.
+    /// A new profile's first launch, or Help › Welcome, in its own window while it shows.
     onboarding: Option<onboarding::Onboarding>,
+    /// First run's window, once it has opened: the host closes it as the flow ends.
+    first_run: Option<gpui::WindowHandle<onboarding::FirstRun>>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
     /// import under way goes on while the steps after it show and once the flow has ended.
     importing: Option<onboarding::Importing>,
@@ -1625,6 +1635,9 @@ pub struct Shell {
     /// Whether an assistive app reads the window being drawn, so its elements say what they are
     /// (access.rs). Each render sets it from its window.
     a11y: bool,
+    /// What a screen reader is told of a task whose conversation isn't shown as it comes to need
+    /// the user or to be done, and which telling it is (`task_cards.rs`, #4244).
+    task_told: Option<(usize, SharedString)>,
     /// The row and favicon hovered when the rows were last drawn, and that row's button: "0" for
     /// none, "1" for ✕, "−" for − and "remove" for remove, for the line check.sh waits for.
     drawn_hover: (Option<Row>, Option<u64>, &'static str),
@@ -1738,6 +1751,8 @@ pub struct Shell {
     drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
+    /// The same for the broom before it.
+    broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
     /// The window's content size at the last draw, and the frame and corner radius the page was
@@ -1887,7 +1902,7 @@ pub struct Shell {
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
-    foot: task_cards::Foot,
+    task_list: task_cards::TaskList,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
     /// in milliseconds since the Unix epoch, as the archive dates what closed.
     closed_task: Option<(SharedString, f64)>,
@@ -2222,6 +2237,7 @@ impl Shell {
             welcome: false,
             resting: None,
             onboarding: None,
+            first_run: None,
             importing: None,
             in_hint: false,
             press_closed_bar: false,
@@ -2245,6 +2261,7 @@ impl Shell {
             wheel_paged: None,
             hovered_favicon: None,
             a11y: false,
+            task_told: None,
             drawn_hover: (None, None, "0"),
             history: undo::History::default(),
             undo_offered: false,
@@ -2294,6 +2311,7 @@ impl Shell {
             drawn_copied: "shows link",
             drawn_arrow: None,
             clear_hovered: false,
+            broom_hovered: false,
             swaps: Swaps::default(),
             viewport: Size::default(),
             scale: 1.,
@@ -2368,7 +2386,7 @@ impl Shell {
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
             task_cards: Vec::new(),
-            foot: task_cards::Foot::default(),
+            task_list: task_cards::TaskList::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
@@ -2505,6 +2523,7 @@ impl Shell {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }];
         shell
     }
@@ -2558,6 +2577,7 @@ impl Shell {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }];
         shell
     }
@@ -2657,8 +2677,10 @@ impl Shell {
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
         let head = self.list_head();
-        self.shown_space()
-            .map_or_else(|| slots(head, &[], &[], &[]), |space| space.slots(head))
+        self.shown_space().map_or_else(
+            || slots(head, &[], &[], &[], &[]),
+            |space| space.slots(head),
+        )
     }
 
     /// The favorite split holding `tab`, if it's in one.
@@ -3061,6 +3083,7 @@ impl Shell {
                         shown: 0,
                         peeked: Vec::new(),
                         live_rooms: Default::default(),
+                        placed: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -3108,6 +3131,7 @@ impl Shell {
                     shown: space.shown,
                     peeked: std::mem::take(&mut space.peeked),
                     live_rooms: std::mem::take(&mut space.live_rooms),
+                    placed: std::mem::take(&mut space.placed),
                 }
             })
             .collect();
@@ -3143,7 +3167,7 @@ impl Shell {
             self.toast_spaces(made, cx);
         }
         self.task_spaces_changed(cx);
-        self.follow_dock(cx);
+        self.place_cards(cx);
         self.update_menus(cx);
         self.update_title(cx);
         cx.notify();
@@ -3262,10 +3286,10 @@ impl Shell {
         if self.form().is_some() {
             self.focus_form(cx);
         }
-        self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
         self.history_space_shown(cx);
+        self.card_space_shown(cx);
         cx.notify();
     }
 
@@ -3293,7 +3317,8 @@ impl Shell {
             .filter(|&tab| listed.insert(tab))
             .collect();
         entry.pinned = pinned;
-        entry.today = today;
+        let was = std::mem::replace(&mut entry.today, today);
+        task_cards::stand_again(&mut entry.placed, &was, &entry.today);
         for split in &splits {
             let was = entry
                 .splits
@@ -3676,7 +3701,6 @@ impl Shell {
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
-        self.follow_dock(cx);
     }
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
@@ -3825,14 +3849,18 @@ impl Shell {
 
     pub fn set_page(&mut self, tab: u64, page: Page, cx: &mut Context<Self>) {
         let developer_mode = self.developer_mode(tab);
-        // check.sh reads these lines.
+        // check.sh reads these lines. A sign-in's page's address can hold its code or a token
+        // (#4100), so its line names none of it.
         let flag = |on| if on { 1 } else { 0 };
+        let url = match crate::agents::sign_in::quiet(tab) {
+            true => "(a sign-in's page)",
+            false => &*page.url,
+        };
         log!(
-            "browser: page {tab} back {} forward {} loading {} {}",
+            "browser: page {tab} back {} forward {} loading {} {url}",
             flag(page.can_go_back),
             flag(page.can_go_forward),
             flag(page.loading),
-            page.url
         );
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
@@ -4164,14 +4192,6 @@ impl Shell {
 
     fn shown_space(&self) -> Option<&Space> {
         self.spaces.iter().find(|space| space.id == self.space)
-    }
-
-    /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
-    /// the user's, so its dot is the icon's own.
-    fn follow_dock(&self, cx: &mut Context<Self>) {
-        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
-            crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
-        }
     }
 
     /// The core let the agent with the id `agent` act in `tab`, for the activity log: it's at work
@@ -4808,7 +4828,7 @@ impl Render for Shell {
         self.step_new_space(window);
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
-        self.step_foot(window, cx);
+        self.step_task_list(window, cx);
         self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
         self.step_media_stack(window, cx);
@@ -4976,15 +4996,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        // Onboarding's transparency step shows the window's glass alone (onboarding.rs).
-        let bare = self.onboarding_bare();
-        let normal = normal && !bare;
-        let task_area = task_area.filter(|_| !bare);
         let empty_card = self.empty_card(window, cx);
-        let (under, sidebar, over, edge) = match bare {
-            true => (None, None, None, None),
-            false => (under, sidebar, over, edge),
-        };
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5082,8 +5094,8 @@ impl Render for Shell {
             .children(own_buttons)
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
-            .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
+            .children(self.task_announcer())
     }
 }
 
@@ -5101,13 +5113,25 @@ impl Shell {
         // sidebar has no line: the open tab's row runs into the page there.
         let outlined = self.card_left() > 0.;
         let meets_sidebar = self.card_left() == self.width();
-        let outline = |bounds| {
-            card_outline(
+        // A page of a colour of its own is one shape with its tab's line (join.rs). A dark one is
+        // told from a dark window by a hairline of the ink that reads on it, round the line and
+        // the page, so down the sidebar's side too.
+        let own = self.page_fill(self.selected);
+        let lit = own
+            .map(|fill| self.palette.on_fill(fill))
+            .filter(|on| on.tone == Tone::Dark);
+        let outline = |bounds| match lit {
+            Some(on) => card_outline(scaled(bounds), radius, None, on.faint(DIVIDER)),
+            None => card_outline(
                 scaled(bounds),
                 radius,
                 meets_sidebar.then_some(self.right),
-                self.palette.tone,
-            )
+                rgba(match self.palette.tone {
+                    Tone::Dark => PAGE_OUTLINE,
+                    Tone::Light => PAGE_OUTLINE_LIGHT,
+                })
+                .into(),
+            ),
         };
         let panes = self.panes(self.selected);
         let glow = BoxShadow {
@@ -5132,7 +5156,10 @@ impl Shell {
             .filter(|_| outlined)
             .map(|&bounds| outline(bounds));
         let cards = frames.iter().enumerate().map(|(index, &bounds)| {
-            card(bounds, self.palette.page).when(focused == Some(index), |card| {
+            // Under a page of a colour of its own the card is that colour, so the line and the
+            // page stay one shape while the page's view has nothing drawn.
+            let fill = own.filter(|_| index == 0).unwrap_or(self.palette.page);
+            card(bounds, fill).when(focused == Some(index), |card| {
                 card.shadow(vec![glow.clone()])
             })
         });
@@ -5209,10 +5236,8 @@ impl Shell {
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
-                    .children(self.task_foot(cx))
-                    // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
-                    // Over the players and the task's foot, which it opens over.
+                    // Over the players, which it opens over.
                     .children(self.update_banner(cx))
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
@@ -5228,7 +5253,6 @@ impl Shell {
             .children(self.recent_download_rows(cx))
             .children((!self.blank).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
-            .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
@@ -5414,8 +5438,15 @@ impl Shell {
             })
             .child(
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
+                    // No broom: what it shows is the browser's answer for the Space shown, and
+                    // Clear stands where it will with one or without.
                     let clear = still_clear(&self.palette, space.clears_last(space.shown));
-                    plate.child(today_line(&self.palette, self.hairline(), clear))
+                    plate.child(today_line(
+                        &self.palette,
+                        self.hairline(),
+                        None::<gpui::Div>,
+                        clear,
+                    ))
                 })),
             )
             .children(today.into_iter().map(row))
@@ -5458,8 +5489,17 @@ impl Shell {
             rows.push((None, self.today_gap(cx).into_any_element()));
         }
         rows.push((None, self.new_tab_row(cx).into_any_element()));
-        for tab in today {
-            rows.push((Some(tab), self.list_row(tab, cx)));
+        // The task cards among the Today tabs, each where `slots` puts it.
+        let cards = (self.shown_space())
+            .map(|space| task_cards::blocks(&space.placed, &today))
+            .unwrap_or_default();
+        for at in 0..=today.len() {
+            for &(_, n, _) in cards.iter().filter(|card| card.0 == at) {
+                rows.push((None, self.task_card(n, cx)));
+            }
+            if let Some(&tab) = today.get(at) {
+                rows.push((Some(tab), self.list_row(tab, cx)));
+            }
         }
         // A dragged row's ghost, over the rest where the pointer has it, unless it's over the
         // favorites or the page. The system draws links and files dragged in.
@@ -5611,7 +5651,7 @@ impl Shell {
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_split_folds(window, cx);
-        self.step_foot(window, cx);
+        self.step_task_list(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
         // out of that edge.
@@ -5856,7 +5896,7 @@ fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
 /// The line round a card at `bounds` where it faces the window, outside it, on every side but
 /// the one that meets the sidebar: `open` is None with no sidebar beside it, or whether that side
 /// is the right. It has no fill, as the card's own may show the window through.
-fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: Tone) -> gpui::Div {
+fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, color: Hsla) -> gpui::Div {
     let width = px(PAGE_OUTLINE_WIDTH);
     let [left, right] = [Some(false), Some(true)].map(|side| match open == side {
         true => px(0.),
@@ -5869,10 +5909,7 @@ fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: T
         .w(bounds.size.width + left + right)
         .h(bounds.size.height + 2. * width)
         .rounded(px(radius + PAGE_OUTLINE_WIDTH))
-        .border_color(rgba(match tone {
-            Tone::Dark => PAGE_OUTLINE,
-            Tone::Light => PAGE_OUTLINE_LIGHT,
-        }))
+        .border_color(color)
         .border_t(width)
         .border_b(width)
         .border_l(left)
@@ -5959,6 +5996,7 @@ fn slots(
     pinned: &[u64],
     blocks: &[(usize, u64, usize, f32)],
     today: &[u64],
+    cards: &[(usize, u64, f32)],
 ) -> HashMap<Slot, f32> {
     let rows = (pinned.iter().enumerate())
         .flat_map(|(at, &tab)| {
@@ -5969,7 +6007,12 @@ fn slots(
         })
         .chain((!today.is_empty()).then_some((Slot::Divider, TODAY_GAP)))
         .chain([(Slot::NewTab, ROW_PITCH)])
-        .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
+        .chain((0..=today.len()).flat_map(|at| {
+            let cards = (cards.iter())
+                .filter(move |card| card.0 == at)
+                .map(|&(_, n, room)| (Slot::Task(n), room));
+            cards.chain(today.get(at).map(|&tab| (Slot::Tab(tab), ROW_PITCH)))
+        }));
     let mut top = head;
     rows.map(|(slot, height)| {
         top += height;
@@ -6082,9 +6125,42 @@ pub(super) fn icon_slot(drawn: impl IntoElement) -> gpui::Div {
         .child(drawn)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The room the New Tab line's hairline had when it was last painted, and whether it was
+    /// drawn in it, for a test of a narrow sidebar's.
+    static TODAY_HAIRLINE: std::cell::Cell<Option<(Pixels, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The New Tab line's hairline in `color`, `line` thick, over the room it's laid out in. In room
+/// shorter than the line's own gap it isn't drawn: what would be left of it is a dot between the
+/// label and Clear, which reads as a fault and not as a line.
+fn today_hairline(color: Hsla, line: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |room, _, window, _| {
+            let drawn = room.size.width >= px(DIVIDER_GAP);
+            #[cfg(test)]
+            TODAY_HAIRLINE.set(Some((room.size.width, drawn)));
+            if drawn {
+                window.paint_quad(gpui::fill(room, color));
+            }
+        },
+    )
+    .flex_1()
+    .h(line)
+}
+
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
-/// the room the label leaves, then `clear`, which ends where the titles do.
-fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui::Div {
+/// the room the label leaves, where that is a line's worth, then `clear`, which ends where the
+/// titles do, with or without `broom` before it: the hairline alone gives way to that.
+fn today_line(
+    palette: &Palette,
+    line: Pixels,
+    broom: Option<impl IntoElement>,
+    clear: impl IntoElement,
+) -> gpui::Div {
     div()
         .flex_1()
         .min_w_0()
@@ -6093,7 +6169,8 @@ fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui:
         .mr(px(TITLE_END_INSET))
         .flex()
         .items_center()
-        .child(div().flex_1().h(line).bg(palette.faint(DIVIDER)))
+        .child(today_hairline(palette.faint(DIVIDER), line))
+        .children(broom)
         .child(clear)
 }
 
@@ -6522,6 +6599,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }
     }
 

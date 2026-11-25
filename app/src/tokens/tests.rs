@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "agents/wall/links.rs",
+        "0x2FC1_2FC1",
+        "ZFS's filesystem number, not a colour",
+    ),
+    (
+        "agents/wall/links.rs",
+        "0xCA45_1A4E",
+        "bcachefs's filesystem number, not a colour",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
@@ -25,16 +35,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "preview.rs",
         "const MORE_COLORS",
         "the preview's made-up Space colours",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0x8655BF",
-        "a test's made-up Space colour",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0xE0475B",
-        "a test's made-up Space colour",
     ),
     (
         "shell/undo_tests.rs",
@@ -104,6 +104,13 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
+    // foot's buttons and their key, the keys step's caps, and the picture's panel.
+    "shell.onboarding.window.track-radius",
+    "shell.onboarding.window.button-radius",
+    "shell.onboarding.window.key-radius",
+    "shell.onboarding.window.key-cap-radius",
+    "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
@@ -115,6 +122,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.recent-downloads.preview-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The two curves that take the open tab's line into its page, which round no corner.
+    "shell.join-radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",
@@ -123,6 +132,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Settings in the owner's drawing (spec-settings.md): its pages' rows at 8, the page's plane
+    // at 10 inside the window's 12, and the search field's ⌘F chip at 5.
+    "settings.form.row-radius",
+    "settings.form.panel-radius",
+    "settings.form.chip-radius",
     // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
     "settings.share-space-radius",
     "settings.share-tile-radius",
@@ -136,18 +150,37 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
-    // loop's small window at the drawing's scale.
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset.
     "shell.onboarding.sheet.slot-radius",
-    "shell.onboarding.loops.window-radius",
-    "shell.onboarding.loops.icon-radius",
-    "shell.onboarding.loops.bar-radius",
+    // First run's picture, a small browser at the drawing's scale (values-first-run.md).
+    "shell.onboarding.picture.window-radius",
+    "shell.onboarding.picture.button-radius",
+    "shell.onboarding.picture.address-radius",
+    "shell.onboarding.picture.favorite-radius",
+    "shell.onboarding.picture.favorite-mark-radius",
+    "shell.onboarding.picture.mark-radius",
+    "shell.onboarding.picture.open-tab-radius",
+    "shell.onboarding.picture.page-radius",
+    "shell.onboarding.picture.chip-radius",
+    "shell.onboarding.picture.thread-radius",
+    "shell.onboarding.picture.notice-radius",
+    "shell.onboarding.picture.notice-tile-radius",
+    "shell.onboarding.picture.bar-radius",
+    "shell.onboarding.picture.bar-row-radius",
+    "shell.onboarding.picture.bar-mark-radius",
+    "shell.onboarding.picture.phone-radius",
+    "shell.onboarding.picture.island-radius",
+    "shell.onboarding.picture.phone-space-radius",
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
     // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
     "theme-panel.segment-frame-radius",
     "theme-panel.segment-radius",
+    // A thread card's button, at the drawing's 8 (spec-thread-card).
+    "shell.task-card.button-radius",
+    // Settings' segmented track, concentric round its segments at the control radius.
+    "settings.segment-radius",
 ];
 
 #[test]

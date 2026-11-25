@@ -654,9 +654,10 @@ mod walled {
         assert_eq!(rising.risen(), refused(sentence(114)));
     }
 
-    /// A launcher that reads what it's given and never becomes anything.
+    /// A launcher that reads what it's given and never becomes anything. Not `/bin/sh`, which on
+    /// macOS execs the shell it stands for, and an exec after the watch is a launcher that rose.
     fn hung(folder: &Folder) -> Wall {
-        let script = folder.script("hung", "#!/bin/sh\nwhile read -r line; do :; done\n");
+        let script = folder.script("hung", "#!/bin/bash\nwhile read -r line; do :; done\n");
         wall_with(script, handoff(&rules(OPEN), &[]).unwrap())
     }
 

@@ -70,7 +70,7 @@ pub trait Host {
 
 /// What a task's notification says of it, once a run each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Told {
+pub enum Told {
     Done,
     NeedsYou,
 }
@@ -90,6 +90,10 @@ struct NeedsYou {
     /// Each notification posted, by its id, with the task it opens.
     posted: Vec<(u64, SharedString)>,
     next: u64,
+    /// What the last `follow` found each task came to, and whether its notification was posted
+    /// then: what a screen reader is told of in the app, and never beside a notification
+    /// (`came`).
+    came: Vec<(SharedString, Told, bool)>,
 }
 
 impl Global for NeedsYou {}
@@ -104,6 +108,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) {
         told: HashSet::new(),
         posted: Vec::new(),
         next: 1,
+        came: Vec::new(),
     });
 }
 
@@ -130,15 +135,18 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
             .map(|(_, dot)| *dot)
     };
     // A need is new as a task comes to wait, a finish only as a task ilo saw under way ends.
-    let fresh: Vec<(&Card, Told)> = (cards.iter())
+    let came: Vec<(&Card, Told)> = (cards.iter())
         .filter_map(|card| match (card.dot, was(&card.agent)) {
             (Dot::Waiting, last) if last != Some(Dot::Waiting) => Some((card, Told::NeedsYou)),
             (Dot::Done, Some(last)) if last != Dot::Done => Some((card, Told::Done)),
             _ => None,
         })
+        .collect();
+    let fresh: Vec<(&Card, Told)> = (came.iter().copied())
         .filter(|(card, told)| !state.told.contains(&(card.agent.clone(), *told)))
         .collect();
     let active = !fresh.is_empty() && when == Notify::Away && host.active();
+    let mut notified = Vec::new();
     for (card, told) in fresh {
         if active {
             // check.sh reads this line.
@@ -159,7 +167,11 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
         // check.sh reads this line, which says no more of the task than the activity log does.
         crate::log!("browser: needs you notified {id} {}", card.agent);
         host.notify(id, &said(card, told), "");
+        notified.push(&card.agent);
     }
+    state.came = (came.iter())
+        .map(|(card, told)| (card.agent.clone(), *told, notified.contains(&&card.agent)))
+        .collect();
     // A task whose card has gone is done with, so what it was told goes with it.
     state
         .told
@@ -167,6 +179,19 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
     state.last = (cards.iter())
         .map(|card| (card.agent.clone(), card.dot))
         .collect();
+}
+
+/// What the last `follow` found the task `agent` came to, to wait or to be done, and whether its
+/// notification was posted then. Nothing is told of it in the app beside a notification.
+pub fn came(agent: &str, cx: &App) -> Option<(Told, bool)> {
+    let state = cx.try_global::<NeedsYou>()?;
+    let found = state.came.iter().find(|(each, ..)| each == agent)?;
+    Some((found.1, found.2))
+}
+
+/// Whether the last `follow` posted a notification of what the task `agent` came to.
+pub fn notified(agent: &str, cx: &App) -> bool {
+    came(agent, cx).is_some_and(|(_, notified)| notified)
 }
 
 /// The user clicked notification `id`: the task whose card it opens, if it was one of this run's.
@@ -181,10 +206,11 @@ pub fn clicked(id: u64, cx: &App) -> Option<SharedString> {
     Some(agent)
 }
 
-/// A notification's words, and nothing more of the task: a ⌘T task's title, the user's ask or its
+/// A notification's words, which a screen reader is told where none is posted, and nothing more
+/// of the task: a ⌘T task's title, the user's ask or its
 /// assistant's name for it, on one line and capped; an outside agent's session's is the agent's
 /// own words, which never stand where ilo speaks, so it's named by its agent, as its card is.
-fn said(card: &Card, told: Told) -> String {
+pub fn said(card: &Card, told: Told) -> String {
     let task = match card.replies {
         // Plain text, as an ilo line takes a page's, so no direction mark in a title can turn the
         // state's word around in the system's notification.

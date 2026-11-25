@@ -757,9 +757,9 @@ expect "^browser: window $window main false\$" "the window behind Settings wasn'
 expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
 expect "^browser: window $window drew main false\$" "the window behind Settings didn't draw its dimmed glyphs"
 ../tools/window-screenshot.sh "$pid" "$out/nav-dimmed.png" all || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 # Where Settings drew the switch, which differs by OS: it logs that once a place.
 await '^browser: settings switch unload idle tabs at ' || fail "Settings didn't draw Unload tabs' switch"
 unload_switch=$(sed -n 's/^browser: settings switch unload idle tabs at //p' "$log" | tail -1)
@@ -775,8 +775,8 @@ expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen
 since $aged | grep -q "browser: tab $c without its page\$" && fail "a tab let go of its page with the switch off"
 send menu Settings…
 # Settings comes back on the section it showed last.
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't bring Settings back to the front"
-settings_drew 'Tabs & Sidebar'
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't bring Settings back to the front"
+settings_drew 'Tabs & Spaces'
 send clickkey $unload_switch
 expect '^browser: unload idle tabs on$' "a click on Unload tabs' switch didn't turn it on"
 expect "browser: tab $c without its page\$" "turning the switch on didn't unload the tab unseen 2 hours"
@@ -797,9 +797,9 @@ send state
 # the taskbar's Close window does, which Settings takes as hiding.
 if windows; then
   send menu Settings…
-  expect '^browser: settings shown Tabs & Sidebar$' \
-    "Settings… didn't show Tabs & Sidebar again after its close button"
-  settings_drew 'Tabs & Sidebar'
+  expect '^browser: settings shown Tabs & Spaces$' \
+    "Settings… didn't show Tabs & Spaces again after its close button"
+  settings_drew 'Tabs & Spaces'
   post key f4 ctrl
   expect '^browser: settings hidden$' "Alt+F4 didn't hide Settings"
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in Settings"
@@ -2241,9 +2241,14 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
       # opened on another, such as Google.
       none_since '^browser: profile [0-9]* searches with ' ||
         fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
+    elif [ "$each" = keys ]; then
+      # The keys' step, the last, has no Skip: its Return is the way in.
+      send key return
+      expect '^browser: onboarding left keys via return$' "Google: Return didn't leave the keys' step"
     else
-      send key escape
-      expect "^browser: onboarding left $each via escape\$" "Google: Esc didn't leave the $each step"
+      # Skip, as Esc is Back.
+      skip_step "$each"
+      expect "^browser: onboarding left $each via skip\$" "Google: Skip didn't leave the $each step"
     fi
   done
   expect '^browser: onboarding done$' "Google: the flow didn't end after its last step"

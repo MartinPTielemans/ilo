@@ -115,6 +115,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/bookmark.svg"),
     ),
     (
+        "icons/broom.svg",
+        include_bytes!("../../assets/icons/broom.svg"),
+    ),
+    (
         "icons/brush-cleaning.svg",
         include_bytes!("../../assets/icons/brush-cleaning.svg"),
     ),
@@ -583,6 +587,66 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/settings.svg"),
     ),
     (
+        "icons/settings-access.svg",
+        include_bytes!("../../assets/icons/settings-access.svg"),
+    ),
+    (
+        "icons/settings-apps.svg",
+        include_bytes!("../../assets/icons/settings-apps.svg"),
+    ),
+    (
+        "icons/settings-general.svg",
+        include_bytes!("../../assets/icons/settings-general.svg"),
+    ),
+    (
+        "icons/settings-links.svg",
+        include_bytes!("../../assets/icons/settings-links.svg"),
+    ),
+    (
+        "icons/settings-models.svg",
+        include_bytes!("../../assets/icons/settings-models.svg"),
+    ),
+    (
+        "icons/settings-out.svg",
+        include_bytes!("../../assets/icons/settings-out.svg"),
+    ),
+    (
+        "icons/settings-overview.svg",
+        include_bytes!("../../assets/icons/settings-overview.svg"),
+    ),
+    (
+        "icons/settings-passwords.svg",
+        include_bytes!("../../assets/icons/settings-passwords.svg"),
+    ),
+    (
+        "icons/settings-privacy.svg",
+        include_bytes!("../../assets/icons/settings-privacy.svg"),
+    ),
+    (
+        "icons/settings-search.svg",
+        include_bytes!("../../assets/icons/settings-search.svg"),
+    ),
+    (
+        "icons/settings-shortcuts.svg",
+        include_bytes!("../../assets/icons/settings-shortcuts.svg"),
+    ),
+    (
+        "icons/settings-sync.svg",
+        include_bytes!("../../assets/icons/settings-sync.svg"),
+    ),
+    (
+        "icons/settings-tabs.svg",
+        include_bytes!("../../assets/icons/settings-tabs.svg"),
+    ),
+    (
+        "icons/settings-threads.svg",
+        include_bytes!("../../assets/icons/settings-threads.svg"),
+    ),
+    (
+        "icons/settings-window.svg",
+        include_bytes!("../../assets/icons/settings-window.svg"),
+    ),
+    (
         "icons/shapes.svg",
         include_bytes!("../../assets/icons/shapes.svg"),
     ),
@@ -787,6 +851,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/window-windows-restore.svg"),
     ),
     (
+        "icons/working.svg",
+        include_bytes!("../../assets/icons/working.svg"),
+    ),
+    (
         "icons/wrench.svg",
         include_bytes!("../../assets/icons/wrench.svg"),
     ),
@@ -861,7 +929,7 @@ mod tests {
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
-            || ["loading.svg", "spaces.svg"].contains(&name)
+            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
     }
 
     /// One family: every other glyph is an outline on Lucide's grid at the one stroke, with round

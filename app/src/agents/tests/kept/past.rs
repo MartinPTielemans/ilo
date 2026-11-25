@@ -274,7 +274,13 @@ pub(crate) fn after_a_quit(title: &str, cx: &mut TestAppContext) -> (Entity<Agen
     next.browser.tabs.borrow_mut().extend(pages);
     // An outside agent's Space is another matter (#1080), and none was left.
     next.browser.agent_spaces.borrow_mut().clear();
+    // Copies of a task's attached files a crash left, after the copy and before the task's end,
+    // go with the rest of the tasks' folder, as their task is no more.
+    let copies = (next.agents).read_with(cx, |agents, _| agents.tasks_dir().join("task-9 files"));
+    std::fs::create_dir_all(&copies).unwrap();
+    std::fs::write(copies.join("seats.pdf"), "two seats").unwrap();
     (next.agents).update(cx, |agents, cx| agents.end_old_tasks(cx));
+    assert!(!copies.exists(), "a crash's copies stayed");
     assert_eq!(*next.browser.deleted.borrow(), [space]);
     assert_eq!(in_space(&next.browser, 1), users);
     assert!(in_space(&next.browser, space).is_empty());
@@ -407,6 +413,46 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     let lines = next.ilo_lines(&past, cx);
     let resumed = |kind: &&IloKind| matches!(kind, IloKind::Resumed { .. });
     assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
+}
+
+/// A done task's finding comes from this run's conversation alone: its card says it, and after a
+/// quit the task brought back, its kept card and the kept list's row say none of it, nor does the
+/// file.
+#[gpui::test]
+fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+    let run = Run::new("finding", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    run.finish(&agent, cx);
+    let finding = (run.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&agent).unwrap(), cx).finding
+    });
+    assert_eq!(finding, "Two seats at 9:05, car 4.");
+
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    (next.agents).read_with(cx, |agents, cx| {
+        let back = agents.card(agents.task(&past).unwrap(), cx);
+        assert!(back.finding.is_empty(), "{:?}", back.finding);
+        let kept = agents.kept_cards(cx);
+        assert!(
+            kept.iter().any(|card| card.agent == past.as_str()),
+            "no kept card"
+        );
+        for card in kept {
+            assert!(card.finding.is_empty(), "{:?}", card.finding);
+        }
+    });
+    for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
+        assert!(
+            !title.contains("9:05") && !about.contains("9:05"),
+            "{title} {about}"
+        );
+    }
+    let text = std::fs::read_to_string(index(&next)).unwrap();
+    assert!(!text.contains("9:05"), "the file has the finding");
 }
 
 /// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a

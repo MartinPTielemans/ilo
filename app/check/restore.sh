@@ -992,16 +992,16 @@ new_window_bar
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-# General's first row is the switch.
-if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+# When it opens is General's second group.
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   settings_drew General
 fi
-at=$(drawn "switch restore windows") || fail "Restore windows from last session has no switch"
+in_sight "segment Start fresh" || fail "When it opens has no Start fresh"
 send clickkey $at
 expect '^browser: restore windows off$' \
-  "a click on Restore windows from last session didn't turn it off"
+  "a click on Start fresh didn't turn Restore windows off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 exec 3>&-

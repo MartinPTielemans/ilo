@@ -63,9 +63,39 @@ pub struct Past {
     /// connected app's id, or a ⌘T CLI's (`agents::task_answers`). Empty for an entry from before
     /// they were kept.
     pub answers: String,
+    /// A sort of today's tabs into folders, in place of a task: then its entry is its counts, its
+    /// assistant's id in `agent`, and when it ran, and nothing else.
+    pub sorted: Option<Sorted>,
+}
+
+/// What an entry keeps of a sort of today's tabs into folders (#4252): counts alone, never a
+/// title, a site or a folder's name. One for each list handed over, folders 0 if it failed.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Sorted {
+    /// The tabs handed over, the tabs put in folders, and the folders that took them.
+    pub handed: usize,
+    pub moved: usize,
+    pub folders: usize,
 }
 
 impl Past {
+    /// A sort's entry, by `assistant`'s id, such as "claude", from `started` to `ended`.
+    pub fn sort(assistant: &str, started: u64, ended: u64, sorted: Sorted) -> Past {
+        Past {
+            id: format!("sort-{started}"),
+            title: String::new(),
+            agent: assistant.to_string(),
+            started,
+            ended,
+            pages: Vec::new(),
+            orders: 0,
+            messages: 0,
+            steps: Vec::new(),
+            answers: String::new(),
+            sorted: Some(sorted),
+        }
+    }
+
     /// What its row says under its title, with `when` it ended as the list it's in says a time:
     /// "Claude Code · 14:02 · 1 order placed · 3 pages".
     pub fn about(&self, when: &str) -> String {
@@ -122,6 +152,15 @@ impl Past {
     }
 
     fn to_json(&self) -> Value {
+        // No title or pages: a build from before sorts reads no task in the line, and skips it.
+        if let Some(sorted) = self.sorted {
+            return json!({
+                "id": self.id, "agent": self.agent, "started": self.started, "ended": self.ended,
+                "sorted": {
+                    "handed": sorted.handed, "moved": sorted.moved, "folders": sorted.folders,
+                },
+            });
+        }
         let pages: Vec<Value> = (self.pages.iter())
             .map(|(title, url)| json!({ "title": title, "url": url }))
             .collect();
@@ -156,6 +195,24 @@ impl Past {
     fn from_json(value: &Value) -> Option<Past> {
         let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
         let number = |key: &str| value.get(key).and_then(Value::as_u64);
+        if let Some(sorted) = value.get("sorted") {
+            let count = |key: &str| Some(sorted.get(key)?.as_u64()? as usize);
+            let sorted = Sorted {
+                handed: count("handed")?,
+                moved: count("moved")?,
+                folders: count("folders")?,
+            };
+            let past = Past::sort(
+                &text("agent")?,
+                number("started")?,
+                number("ended")?,
+                sorted,
+            );
+            return Some(Past {
+                id: text("id")?,
+                ..past
+            });
+        }
         let pages = (value.get("pages")?.as_array()?.iter())
             .filter_map(|page| {
                 let field = |key: &str| page.get(key).and_then(Value::as_str).map(str::to_string);
@@ -207,6 +264,7 @@ impl Past {
             messages: number("messages")? as usize,
             steps,
             answers: text("answers").unwrap_or_default(),
+            sorted: None,
         })
     }
 }

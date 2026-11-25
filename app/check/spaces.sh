@@ -1668,7 +1668,8 @@ send window 1
 # In the Library's Spaces, the first Space's top Today row dragged onto the second's card, which is
 # empty, moves its tab there as Move to does, and the Library stays open; dragged back from there,
 # it goes home (Arc's help centre, #688). Each card's tabs are under its name, 48 + 6 + 38 down, and
-# with no pinned tabs under the divider's 15, so its first row's middle is 124 down.
+# with no pinned tabs under the card's own divider, the 15 a card keeps where the sidebar has its
+# New Tab line, so the middle of its first row of 34 is 124 down.
 # The Library opens on the section it showed last, its Spaces.
 send key l cmd shift
 expect '^browser: library section spaces$' "⇧⌘L didn't open the Library on its Spaces, as it was left"

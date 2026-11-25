@@ -1,5 +1,5 @@
 # check.sh runs this at 440.
-# Settings › Sync signs the browser in to an ilo account, on an ilo-server of the run's own: SQLite,
+# Settings › Sync & Import signs the browser in to an ilo account, on an ilo-server of the run's own: SQLite,
 # DEV_MODE, which logs its sign-in codes, and a throwaway address, never the hosted server or a real
 # account. ILO_SERVER names the server's binary, built from its repo (check-linux.yml builds it);
 # without it the run skips. Sign In opens the server's page in the core's window, where the run
@@ -73,9 +73,9 @@ await 'browser: sync service disabled, not signed in$' ||
   fail "signed out, sync isn't disabled for want of an account"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
-send clickkey $(drawn "toolbar Sync")
-expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
-at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In"
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
+at=$(drawn "sync sign-in") || fail "Settings › Sync & Import didn't draw Sign In"
 ../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out.png" || fail "no window to capture"
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In didn't start signing in"
@@ -161,7 +161,7 @@ await '^browser: account On None$' || fail "the first device's recovery words di
 settings_keyboard
 # The words and Done show from FirstDevice on, where On can move them: a frame drawn once it's on.
 on='^browser: account On None$'
-at=$(drawn_after "sync done" "$on") || fail "Settings › Sync didn't show the recovery words with Done"
+at=$(drawn_after "sync done" "$on") || fail "Settings › Sync & Import didn't show the recovery words with Done"
 ../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
 send clickkey $(drawn_after "sync copy" "$on")
 copied_at=$(date +%s)
@@ -289,14 +289,14 @@ case $devices in
 *) fail "the server knows the device as \"$devices\", not by its label" ;;
 esac
 
-# Once the Spaces have reached the server, the Sync tab, shown again, says when it last synced:
-# it reads that as it shows, and nothing stops sync.
+# Once the Spaces have reached the server, the Sync & Import tab, shown again, says when it last
+# synced: it reads that as it shows, and nothing stops sync.
 send clickkey $(drawn "toolbar General")
 expect '^browser: settings tab General$' "a click on General didn't show its tab"
-send clickkey $(drawn "toolbar Sync")
-expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab again"
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab again"
 expect '^browser: sync activity synced None$' \
-  "shown again after the Spaces reached the server, Sync didn't say it had synced"
+  "shown again after the Spaces reached the server, Sync & Import didn't say it had synced"
 ../tools/window-screenshot.sh "$pid" "$out/sync-status.png" || fail "no window to capture"
 
 # A sync trouble shows only once it lasts, and the line follows sync as its cycles end, while
@@ -428,7 +428,7 @@ done
 # the server names none, its dialog would ask which, even of one.
 # Sign In as the signed-out frame draws it: the one before is the signed-in layout's (#1885).
 at=$(drawn_after "sync sign-in" '^browser: account SignedOut None$') ||
-  fail "Settings › Sync didn't draw Sign In once signed out"
+  fail "Settings › Sync & Import didn't draw Sign In once signed out"
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In, signed out, didn't start signing in again"
 for _ in $(seq 300); do

@@ -124,7 +124,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(in crate::shell) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
@@ -305,11 +305,13 @@ impl Shell {
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
             (entry, action)
         };
-        let mut items = vec![
-            command(Command::SortBySite),
-            command(Command::Clear),
-            (MenuEntry::line(), Box::new(|_, _| {})),
-        ];
+        let mut items = vec![command(Command::SortBySite)];
+        // Where the broom is drawn, dimmed as it is.
+        if self.browser.broom().is_some() {
+            items.push(command(Command::SortIntoFolders));
+        }
+        items.push(command(Command::Clear));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         let after = items.len();
         items.extend((self.empty_space_items(self.space, cx).into_iter()).map(
             |(entry, action)| {
@@ -1104,7 +1106,9 @@ impl Shell {
         markdown: bool,
         cx: &mut Context<Self>,
     ) {
-        let lines: Vec<String> = (self.folder_links(folder).into_iter())
+        let links = self.folder_links(folder);
+        let tabs: Vec<u64> = links.iter().map(|&(tab, _)| tab).collect();
+        let lines: Vec<String> = (links.into_iter())
             .map(|(tab, link)| match markdown {
                 false => link,
                 true => format!("[{}]({link})", markdown_text(&self.title(tab))),
@@ -1115,7 +1119,7 @@ impl Shell {
         } else {
             "Copied All Links"
         };
-        self.copy(&lines.join("\n"), toast, cx);
+        self.copy_from(&tabs, &lines.join("\n"), toast, cx);
     }
 
     /// A folder's Paste URL as New Tab: the clipboard's web link as a tab at the folder's top,
@@ -1737,7 +1741,7 @@ impl Shell {
     /// shown's, or as a Markdown link, as ⌥⇧⌘C does.
     fn copy_link(&mut self, tab: u64, markdown: bool, cx: &mut Context<Self>) {
         if let Some((text, toast)) = self.link_to_copy(tab, markdown) {
-            self.copy(&text, toast, cx);
+            self.copy_from(&[tab], &text, toast, cx);
         }
     }
 
