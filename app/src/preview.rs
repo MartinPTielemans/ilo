@@ -1227,8 +1227,9 @@ impl Browser for Fake {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
-    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
-    // a click doesn't change: nothing here sorts.
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
     fn broom(&self) -> Option<Broom> {
         match states::var("PREVIEW_BROOM").ok()?.as_str() {
             "idle" => Some(Broom::Idle),
