@@ -1091,14 +1091,18 @@ impl TalkView {
         Some((*from, picture))
     }
 
-    /// A picture's click: its page zooms out of it to fill the area.
-    /// A link in its answer: the thread's page shows, as its tile's click shows it.
+    /// A link in its answer: the thread's page shows, as its tile's click shows it, or standing
+    /// on one of its pages, the page beside the panel becomes it, as its button does.
     pub(super) fn show_page(&mut self, tab: u64, cx: &mut Context<Self>) {
-        // check.sh reads this line.
         log!("browser: task link {tab}");
-        self.watch(tab, cx);
+        let standing = (self.shell.upgrade()).is_some_and(|shell| shell.read(cx).task_standing());
+        match standing {
+            true => self.stand(tab, cx),
+            false => self.watch(tab, cx),
+        }
     }
 
+    /// A picture's click: its page zooms out of it to fill the area.
     fn watch(&mut self, tab: u64, cx: &mut Context<Self>) {
         let from = self
             .drawn
