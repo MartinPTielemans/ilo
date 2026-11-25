@@ -2591,6 +2591,26 @@ impl Settings {
             Some(line.into()),
             vec![clean_links],
         );
+        // The core's, for the front window's profile, read only here and after a click; no row
+        // where the core can't say (#4279).
+        let window = crate::front().0;
+        let secure = crate::update_window_in(window, cx, |shell, _| shell.secure_connections());
+        let secure = secure.flatten().map(|on| {
+            let set = move |on, cx: &mut App| {
+                crate::update_window_in(window, cx, |shell, cx| {
+                    shell.set_secure_connections(on, cx)
+                });
+            };
+            let switch = self.toggle(
+                "secure connections",
+                SECURE_CONNECTIONS,
+                on,
+                set,
+                accent,
+                cx,
+            );
+            setting(look, SECURE_CONNECTIONS, None, vec![switch])
+        });
         let prompts = unsafe { bc::bc_notification_prompts() };
         let prompts_switch = self.toggle(
             "notification prompts",
@@ -2610,7 +2630,9 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![clean_links]), Block::Rows(vec![prompts])];
+        // Second under Copy links without tracking, as the drawing has it.
+        let every_site = [clean_links].into_iter().chain(secure).collect();
+        let mut blocks = vec![Block::Rows(every_site), Block::Rows(vec![prompts])];
         let relay = unsafe { bc::bc_relay_calls() };
         let relay = self.toggle(
             "relay calls",
@@ -5416,6 +5438,9 @@ fn set_new_note(on: bool, cx: &mut App) {
     cx.set_global(shell::NewNoteOn(on));
     crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
 }
+
+/// Privacy's switch for the core's secure connections, the window's profile's (#4279).
+const SECURE_CONNECTIONS: &str = "Always use secure connections";
 
 /// Where Copy links without tracking is kept: there while it's off (#2351). The app's, not a
 /// profile's, as its copy paths are.

@@ -3183,6 +3183,31 @@ fn no_tool_touches_a_tasks_access() {
     }
 }
 
+/// No tool reads or sets Always use secure connections (#4279), for an agent from outside or a
+/// task ilo runs: the agents' browser has no call for it, and no tool's name or words offer one.
+/// Only the user's click on Settings › Privacy's switch sets it.
+#[test]
+fn no_tool_touches_secure_connections() {
+    for agent in ["claude-code", "ilo-command", "task-1"] {
+        let listed = tools::list(agent).to_string().to_lowercase();
+        for word in [
+            "secure connection",
+            "https-only",
+            "https only",
+            "https first",
+            "https-first",
+        ] {
+            assert!(!listed.contains(word), "{agent}'s tools say {word:?}");
+        }
+        for name in tools::names(agent) {
+            assert!(
+                !(name.contains("secure") || name.contains("https")),
+                "{agent} has {name}"
+            );
+        }
+    }
+}
+
 /// No tool reads a task's card or another task's steps: a card is made only for the windows
 /// (`Agents::cards` and `shown_cards`, which the windows' observer alone calls), and no tool's
 /// name offers one.

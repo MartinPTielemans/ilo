@@ -121,6 +121,9 @@ mod pair;
 mod panes;
 mod permission;
 mod portrait;
+mod secure_connections;
+#[cfg(test)]
+mod secure_connections_tests;
 #[cfg(test)]
 mod side_tests;
 mod sort_folders;
