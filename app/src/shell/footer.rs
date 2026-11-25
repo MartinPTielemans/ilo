@@ -14,11 +14,8 @@ use super::{
     access::Accessible,
     space_order::{Along, DraggedSpace},
 };
-use crate::palette::over;
 use crate::space_icon::{GLYPHS, SpaceIcon};
-use crate::tokens::shell::{
-    FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, PLUS_PLATE, SPACE_DOT_TONE,
-};
+use crate::tokens::shell::{FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, PLUS_PLATE};
 use crate::tooltip::{Anchor, Tip};
 
 /// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
@@ -203,14 +200,10 @@ impl Shell {
                 let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
                 let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
                 // The Space shown's is the only dot in colour, a tone of its first colour toward
-                // the ink, so it reads on its own window, or the ink without one; the others' are
-                // the quietest ink, a step firmer under the pointer.
+                // the ink that reads on its own window (`Palette::space_dot`), or the ink without
+                // one; the others' are the quietest ink, a step firmer under the pointer.
                 match (shown, self.space_theme(id).is_some()) {
-                    (true, true) => {
-                        let main = self.palette_of(id).swatch.main();
-                        let toned = over(main, self.palette.ink, SPACE_DOT_TONE);
-                        dot(squeezed(size, cell), toned.into())
-                    }
+                    (true, true) => dot(squeezed(size, cell), self.palette_of(id).space_dot.into()),
                     (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
                     (false, _) => dot(
                         squeezed(size, cell),

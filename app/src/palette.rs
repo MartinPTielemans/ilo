@@ -459,6 +459,9 @@ pub struct Palette {
     pub card: Rgba,
     /// The Space's mark.
     pub swatch: Swatch,
+    /// The dot of the Space shown in the foot's switcher (`solve_space_dot`); the ink with no
+    /// theme.
+    pub space_dot: Rgba,
     /// Each ground's shade, by `Ground`: the least step of the tint's colour over its plate at
     /// which the ink reads on it in every state, worked out with the palette.
     pub ground_shades: [f32; Ground::ALL.len()],
@@ -559,11 +562,13 @@ impl Palette {
         let accent = palette.solve_accent(main, &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(Some(theme), &window);
+        let space_dot = palette.solve_space_dot(swatch.main(), &window);
         Palette {
             accent,
             accent_label: label_on(accent),
             section_glyph,
             swatch,
+            space_dot,
             ..palette
         }
     }
@@ -605,6 +610,7 @@ impl Palette {
             accent: ink,
             accent_label: ink,
             section_glyph: ink,
+            space_dot: ink,
             overlay,
             dialog,
             overlay_floor: 0.,
@@ -886,6 +892,7 @@ impl Palette {
             accent: mix(self.accent, other.accent),
             accent_label: near.accent_label,
             section_glyph: mix(self.section_glyph, other.section_glyph),
+            space_dot: mix(self.space_dot, other.space_dot),
             overlay: near.overlay,
             dialog: near.dialog,
             overlay_floor: self.overlay_floor.max(other.overlay_floor),
@@ -1321,6 +1328,37 @@ impl Palette {
                 .all(|&at| contrast(c, at) >= GLYPH + BETWEEN)
         };
         nearest(accent, passes).unwrap_or(self.ink)
+    }
+
+    /// The dot of the Space shown in the foot's switcher: its first colour `SPACE_DOT_TONE` of the
+    /// way to the ink where that reads at 3:1 on the window everywhere, grain and all; otherwise
+    /// only as much nearer the ink as 3:1 needs, a hundredth at a time. It's never weaker there
+    /// than the other Spaces' dots, the ink at the quietest text's alpha. Both hold with BETWEEN to
+    /// spare, as the window between the points checked can dip under them.
+    fn solve_space_dot(&self, main: Rgba, window: &Window) -> Rgba {
+        use crate::tokens::shell::SPACE_DOT_TONE;
+        let grounds: Vec<Rgba> = (window.samples(self.layer_alpha).into_iter())
+            .flat_map(|at| [at, over(at, self.ink, GRAIN_SHIFT * window.grain)])
+            .collect();
+        let others = self.tertiary().max(self.glyph_floor);
+        let reads = |dot: Rgba| {
+            grounds.iter().all(|&at| {
+                let ratio = contrast(dot, at);
+                ratio >= GLYPH + BETWEEN
+                    && ratio >= contrast(over(at, self.ink, others), at) + BETWEEN
+            })
+        };
+        let steps = ((1. - SPACE_DOT_TONE) * 100.).round() as i32;
+        (0..=steps)
+            .map(|step| {
+                over(
+                    main,
+                    self.ink,
+                    (SPACE_DOT_TONE + step as f32 * 0.01).min(1.),
+                )
+            })
+            .find(|&dot| reads(dot))
+            .unwrap_or(self.ink)
     }
 }
 
