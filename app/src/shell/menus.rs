@@ -124,7 +124,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(in crate::shell) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
