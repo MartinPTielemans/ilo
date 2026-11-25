@@ -800,6 +800,8 @@ content::WebContents* Tab::Wake(Window& window) {
     Attach(contents);
   }
   DCHECK_EQ(web_contents(), contents);
+  // Its history came back as new entries: one the user handed an agent is bound among them.
+  handed::BoundHistory(id_);
   const bool muted = std::exchange(unloaded_, std::nullopt)->muted;
   if (muted) {
     SetMuted(true);

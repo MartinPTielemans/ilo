@@ -12,6 +12,7 @@
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -137,6 +138,8 @@ bool HandBack(bc_id tab) {
   if (!Held().erase(tab)) {
     return false;
   }
+  // Where the user left a tab they handed the agent is where its history is theirs up to.
+  handed::BoundHistory(tab);
   Blur(tab);
   return true;
 }

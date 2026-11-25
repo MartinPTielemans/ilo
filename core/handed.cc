@@ -3,11 +3,18 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/handed_place.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "components/sync/base/unique_position.h"
+#include "content/public/browser/history_traversal.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
 namespace browser_core::handed {
@@ -29,10 +36,19 @@ const syncer::UniquePosition* PlaceOf(const Space& home, bc_id row) {
   return mark && mark->home == home.id() ? &mark->node.position : nullptr;
 }
 
+// What the page of |tab| asks before it's taken to the entry at |index| of its history.
+bool MayTraverse(bc_id tab, int index) {
+  content::WebContents* contents = Tab::FromId(tab);
+  content::NavigationEntry* entry =
+      contents ? contents->GetController().GetEntryAtIndex(index) : nullptr;
+  return !entry || MayGoTo(tab, entry->GetUniqueID());
+}
+
 }  // namespace
 
 void Given(bc_id tab, bc_id home, Space::Node node) {
   Marks().insert_or_assign(tab, Mark{.home = home, .node = std::move(node)});
+  BoundHistory(tab);
 }
 
 const Mark* Of(bc_id tab) {
@@ -45,7 +61,13 @@ const std::map<bc_id, Mark>& All() {
 }
 
 void Left(bc_id tab) {
-  Marks().erase(tab);
+  if (!Marks().erase(tab)) {
+    return;
+  }
+  // Its history is all the user's again, and they go through it as they like.
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    content::SetHistoryTraversalFilter(contents, {});
+  }
 }
 
 bool Return(bc_id tab) {
@@ -80,6 +102,30 @@ bool Return(bc_id tab) {
   // The user's again, as a tab moved out of an agent's Space is (bc_tab_move_to_space).
   FillForUser(tab);
   return true;
+}
+
+void BoundHistory(bc_id tab) {
+  auto mark = Marks().find(tab);
+  content::WebContents* contents = Tab::FromId(tab);
+  if (mark == Marks().end() || !contents) {
+    return;
+  }
+  content::NavigationController& controller = contents->GetController();
+  std::vector<int> entries;
+  entries.reserve(controller.GetEntryCount());
+  for (int i = 0; i < controller.GetEntryCount(); ++i) {
+    entries.push_back(controller.GetEntryAtIndex(i)->GetUniqueID());
+  }
+  // No entry has the id 0, so a page on none yet keeps all it has for the user.
+  const content::NavigationEntry* on = controller.GetLastCommittedEntry();
+  mark->second.history.Set(entries, on ? on->GetUniqueID() : 0);
+  // By the tab's id, so it holds nothing that could be gone when it's asked.
+  content::SetHistoryTraversalFilter(contents, base::BindRepeating(&MayTraverse, tab));
+}
+
+bool MayGoTo(bc_id tab, int entry) {
+  const Mark* mark = Of(tab);
+  return !mark || mark->history.MayGoTo(entry, IsHeld(tab));
 }
 
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {

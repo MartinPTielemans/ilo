@@ -31,6 +31,7 @@
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/select_choices.h"
@@ -1725,6 +1726,12 @@ void AgentPage::History(bool forward) {
     return;
   }
   content::NavigationEntry* entry = controller.GetEntryAtOffset(forward ? 1 : -1);
+  // The history a tab had when the user handed it over is theirs, and isn't there for the agent
+  // (handed_history.h). Chromium would refuse the step by itself; the agent is told here.
+  if (entry && !handed::MayGoTo(tab_, entry->GetUniqueID())) {
+    Fail(forward ? "There's no page to go forward to." : "There's no page to go back to.");
+    return;
+  }
   if (!entry || !entry->GetURL().SchemeIsHTTPOrHTTPS()) {
     Fail("That page isn't an http or https page, the only pages agents may open.",
          BC_AGENT_FAILURE_NOT_WEB_PAGE);

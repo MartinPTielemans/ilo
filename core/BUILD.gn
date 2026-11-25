@@ -355,6 +355,15 @@ source_set("handed_give_rule") {
   ]
 }
 
+# Which entries of its history a tab the user handed an agent may be taken to, apart so
+# browser_core_unittests tests the rule alone.
+source_set("handed_history") {
+  sources = [
+    "handed_history.cc",
+    "handed_history.h",
+  ]
+}
+
 # Where a tab the user handed an agent goes among the Today tabs of the Space it left, apart so
 # browser_core_unittests tests the rule alone.
 source_set("handed_place") {
@@ -974,6 +983,7 @@ source_set("browser_core") {
     ":arrange_rule",
     ":focus_leaving_rule",
     ":handed_give_rule",
+    ":handed_history",
     ":handed_place",
     ":overlay_lend",
     ":live_folder_rule",
@@ -1322,6 +1332,7 @@ test("browser_core_unittests") {
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
     "handed_give_rule_unittest.cc",
+    "handed_history_unittest.cc",
     "handed_place_unittest.cc",
     "tile_rule_unittest.cc",
     "launch_space_rule_unittest.cc",
@@ -1397,6 +1408,7 @@ test("browser_core_unittests") {
     ":arrange_rule",
     ":focus_leaving_rule",
     ":handed_give_rule",
+    ":handed_history",
     ":handed_place",
     ":launch_space_rule",
     ":tile_rule",
