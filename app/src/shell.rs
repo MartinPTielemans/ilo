@@ -6323,8 +6323,13 @@ fn title(palette: &Palette, title: SharedString, selected: bool) -> gpui::Div {
         .min_w_0()
         .truncate()
         .text_size(px(text::BODY))
-        .text_color(palette.text(if selected { TITLE } else { UNSELECTED_TITLE }))
+        .text_color(title_ink(palette, selected))
         .child(title)
+}
+
+/// A row's title's ink, the selected row's firmer.
+fn title_ink(palette: &Palette, selected: bool) -> gpui::Hsla {
+    palette.text(if selected { TITLE } else { UNSELECTED_TITLE })
 }
 
 /// How far a fade from `from` to `to` has come `elapsed` seconds into `duration`, on the scroll

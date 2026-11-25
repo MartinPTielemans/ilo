@@ -1605,3 +1605,35 @@ fn a_task_asked_over_a_page_leaves_the_page(cx: &mut TestAppContext) {
         assert_eq!(shell.task_cards.len(), 1, "no card came in");
     });
 }
+
+/// The shown thread's card joins its stage, on the stage's ground rather than the sidebar's: its
+/// title still reads there at 4.5:1, Dark and Light, on every theme.
+#[test]
+fn the_joined_cards_title_reads_on_its_stage() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::{Appearance, Theme};
+    let mut palettes = vec![Palette::default()];
+    for appearance in Appearance::ALL {
+        for step in 0..24 {
+            let angle = step as f32 * std::f32::consts::TAU / 24.;
+            for distance in [0., 0.35, 0.7, 1.] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(distance * angle.cos(), distance * angle.sin())
+                };
+                palettes
+                    .extend([Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(&theme), tone)));
+            }
+        }
+    }
+    for palette in &palettes {
+        let stage = super::super::conversation::stage_fill(palette);
+        let ground = gpui::Rgba { a: 1., ..stage };
+        let ink = gpui::Rgba::from(super::super::title_ink(palette, true));
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(
+            ratio >= 4.5,
+            "the joined card's title is {ratio:.2}:1 on {stage:?}"
+        );
+    }
+}
