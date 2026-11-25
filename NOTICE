@@ -34,7 +34,8 @@ plus, printer, puzzle, receipt, rotate-ccw-clock, rotate-ccw, rotate-cw, rows-2,
 settings, shapes, share, shield, shield-off, shopping-basket, shuffle, skip-back, skip-forward, skull,
 sliders-horizontal, sparkles, speaker, square-check, square-mouse-pointer, square-terminal, square,
 star, sun, terminal, text-align-start,
-text-search, thumbs-up, train-front, trash, triangle, type, undo-2, ungroup, usb, user, users,
+text-search, thumbs-up, train-front, trash, triangle, triangle-alert, type, undo-2, ungroup, usb,
+user, users,
 utensils, vibrate, video, volume, volume-1, volume-2, volume-x, wrench, x, zap, zoom-in and
 zoom-out; and camera's path, drawn as
 Capture's pointer, in
@@ -62,8 +63,8 @@ row-folder-ellipsis is that folder with three dots of ours in it.
   archive, arrow-down, arrow-left, arrow-right, arrow-up-right, arrow-up, check, chevron-down,
   chevron-up, circle, clipboard, clock, code, command, compass, corner-down-left, database,
   download, external-link, folder-plus, globe, link, lock, maximize, minus, moon, panel-left,
-  pencil, plus, printer, rotate-cw, save, search, share, square, terminal, trash, triangle, type,
-  user, volume-2, volume-x, x, zoom-in and zoom-out are derived from Feather:
+  pencil, plus, printer, rotate-cw, save, search, share, square, terminal, trash, triangle,
+  triangle-alert, type, user, volume-2, volume-x, x, zoom-in and zoom-out are derived from Feather:
 
   The MIT License (MIT)
 

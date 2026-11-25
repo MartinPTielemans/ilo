@@ -244,6 +244,15 @@ fn come(received: i64, total: i64) -> String {
     }
 }
 
+/// The glyph on the tile of a file with no picture: a page, or the warning triangle for one the
+/// browser holds until it's kept or deleted.
+fn tile_glyph(download: &Download) -> &'static str {
+    match download.held {
+        true => "icons/triangle-alert.svg",
+        false => "icons/file.svg",
+    }
+}
+
 /// What a row says under its file's name: a held one and a finished one as their rows in the
 /// Library's Downloads do, and one still coming how much of it has. A paused one's bar says how
 /// far it got, and "Paused" with the sizes doesn't fit beside it.
@@ -677,7 +686,7 @@ impl Shell {
                 .bg(self.palette.plate(t::TILE_FILL))
                 .child(
                     svg()
-                        .path("icons/file.svg")
+                        .path(tile_glyph(download))
                         .size(px(t::TILE_GLYPH))
                         .text_color(self.palette.glyph(t::TILE_GLYPH_INK)),
                 ),
@@ -775,7 +784,7 @@ mod tests {
             recorder::Recorder,
         },
         DAY, HOUR, MINUTE, Outline, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, inks,
-        now, opened, plate, rows_shown, t,
+        now, opened, plate, rows_shown, t, tile_glyph,
     };
     use crate::palette::{Palette, TEXT, Tone, contrast, over};
     use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, ROWS_FROM};
@@ -1243,6 +1252,18 @@ mod tests {
         assert_eq!(rows_shown(ROWS_FROM), 0.);
         assert!(close(rows_shown((ROWS_FROM + 1.) / 2.), 0.5));
         assert_eq!(rows_shown(1.), 1.);
+    }
+
+    /// A file with no picture has a page on its tile, and one the browser holds the warning
+    /// triangle, so the row that asks something of the user is told from the rest before it's read.
+    #[test]
+    fn a_held_files_tile_wears_the_warning_triangle() {
+        let mut download = done(1, HOUR);
+        assert_eq!(tile_glyph(&download), "icons/file.svg");
+        download.state = DownloadState::Running;
+        assert_eq!(tile_glyph(&download), "icons/file.svg");
+        download.held = true;
+        assert_eq!(tile_glyph(&download), "icons/triangle-alert.svg");
     }
 
     /// A row says what its row in the Library's Downloads does, but one still coming, whose words
