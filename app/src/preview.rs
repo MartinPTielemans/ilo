@@ -2038,6 +2038,11 @@ impl Browser for Fake {
     // The preview has one window.
     fn new_window(&self, _: &mut App) {}
 
+    // It has no host to show first run's window, which opens on screen.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
+    }
+
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false

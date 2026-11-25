@@ -2314,27 +2314,22 @@ impl Browser for Engine {
         settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
     }
 
-    fn welcome_window(&self, cx: &mut App) {
-        let id = self.window;
-        cx.defer(move |cx| {
-            let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && w.regular());
-                this.or_else(|| windows.iter().find(|w| w.regular()))
-                    .cloned()
-            });
-            let Some(window) = from.and_then(|from| open_window(Some(from), None, cx)) else {
-                return;
-            };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, cx| shell.start_onboarding(None, cx));
+    fn show_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        let view = window.update(cx, |_, window, _| crate::ns_view(window));
+        if let Ok(view) = view {
+            unsafe {
+                platform::host_add_first_run(view);
+                platform::host_show_first_run();
             }
-        });
+        }
+    }
+
+    fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        unsafe { platform::host_close_first_run() };
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+        show_window_held_for_first_run();
     }
 
     fn new_private_window(&self, cx: &mut App) {
