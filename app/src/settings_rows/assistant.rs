@@ -4,6 +4,8 @@ use super::*;
 
 /// An assistant's one button to sign in, as its row says it.
 pub const SIGN_IN: &str = "Sign In";
+/// The line under the assistants' rows (draft, the lead's): what a sign-in leaves where.
+pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
 /// The row's line while its sign-in is under way.
 const UNDER_WAY: &str = "Sign in on the page that opened";
 
