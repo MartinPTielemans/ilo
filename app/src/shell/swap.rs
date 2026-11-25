@@ -24,15 +24,12 @@ pub(super) enum Swapped {
     Folder(u64),
     /// The URL field's Copy URL, a check for a while after a click.
     CopyUrl,
-    /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
-    Clear(u64),
     /// A pinned tab's or favorite's return mark, while it's away from its pinned URL.
     Away(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";
 pub(super) const LINK: &str = "icons/link.svg";
-pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
 pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";

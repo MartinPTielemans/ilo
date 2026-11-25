@@ -1789,7 +1789,6 @@ divider-gap = 9.0
 # In the sidebar the line is the New Tab line's own: after its label, to Clear or the line's end,
 # and what's kept ends this far over that line while there are tabs today.
 today-gap = 6.0
-clear-gap = 3.0
 clear-height = 20.0
 # The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
 # line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
