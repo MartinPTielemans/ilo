@@ -310,16 +310,11 @@ pub(super) enum Fold {
 
 impl Shell {
     /// A link in a thread's answer to anywhere but its own pages, at the user's click: it opens
-    /// as a tab of the user's Space, and shows, as it always has.
-    /// With ⌘ held it opens behind, as a page's link does, and the thread stays.
-    fn open_link(&mut self, url: &str, behind: bool, cx: &mut Context<Self>) {
+    /// as a tab of the user's Space, and shows, as it always has, ⌘ held or not.
+    pub(in crate::shell) fn open_link(&mut self, url: &str, cx: &mut Context<Self>) {
+        // ⌘ takes this road too: opening behind lands in the Space the window shows, the thread's
+        // while one of its pages is, and no call yet opens behind into the user's Space by its id.
         // The address is the user's to see, not the log's.
-        if behind {
-            log!("browser: task link out behind");
-            self.browser
-                .open_behind(&[url.to_string()], false, 0, 0, cx);
-            return;
-        }
         log!("browser: task link out");
         self.leave_task_area(cx);
         self.browser.open_page(url, cx);
@@ -1966,7 +1961,7 @@ impl TalkView {
                     });
                 })
             })
-            .on_click(ranges, move |index, window, cx| {
+            .on_click(ranges, move |index, _, cx| {
                 let Some(target) = targets.get(index) else {
                     return;
                 };
@@ -1979,8 +1974,7 @@ impl TalkView {
                         }
                     }
                     Linked::Web(url) => {
-                        let behind = window.modifiers().secondary(cx);
-                        shell.update(cx, |shell, cx| shell.open_link(url, behind, cx));
+                        shell.update(cx, |shell, cx| shell.open_link(url, cx));
                     }
                 }
             })

@@ -3527,8 +3527,8 @@ fn an_answers_link_shows_its_page_or_opens_the_web() {
     assert_eq!(to("javascript:alert(1)"), None);
 }
 
-/// A web link's click asks the core for a tab of the user's Space and nothing of the thread; with
-/// ⌘ it opens behind and the thread stays. No log line says the address.
+/// A web link's click asks the core for a tab of the user's Space and nothing of the thread. No
+/// log line says the address.
 #[gpui::test]
 fn a_web_links_click_opens_a_tab_of_the_users_space(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
@@ -3538,7 +3538,7 @@ fn a_web_links_click_opens_a_tab_of_the_users_space(cx: &mut TestAppContext) {
     cx.run_until_parked();
     host.take();
     shell.update(cx, |shell, cx| {
-        shell.open_link("https://elsewhere.example/a", false, cx)
+        shell.open_link("https://elsewhere.example/a", cx)
     });
     assert_eq!(
         host.opened_pages.borrow().as_slice(),
@@ -3548,18 +3548,6 @@ fn a_web_links_click_opens_a_tab_of_the_users_space(cx: &mut TestAppContext) {
     assert!(
         !calls.iter().any(|call| call.starts_with("task")),
         "the thread was asked something: {calls:?}"
-    );
-    shell.update(cx, |shell, cx| {
-        shell.open_link("https://elsewhere.example/b", true, cx)
-    });
-    let calls = host.take();
-    assert!(
-        calls.contains(&"open behind https://elsewhere.example/b false 0 0".to_string()),
-        "{calls:?}"
-    );
-    assert!(
-        !calls.iter().any(|call| call.starts_with("task")),
-        "{calls:?}"
     );
 }
 

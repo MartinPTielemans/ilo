@@ -2655,3 +2655,46 @@ fn the_panel_stands_on_another_page_at_once(cx: &mut TestAppContext) {
     let (card, laid) = frames(&shell, cx);
     assert_eq!(laid, watched(split(card).0), "it isn't in the page's part");
 }
+
+/// A web link in a thread's answer, clicked while the user watches one of the thread's pages or
+/// stands on it, ⌘ held or not, leaves the thread's area and opens as a tab of the user's own Space:
+/// nothing opens behind into the Space shown, which is the thread's, and the thread keeps the pages
+/// it had.
+#[gpui::test]
+fn a_web_link_from_a_threads_page_opens_in_the_users_space(cx: &mut TestAppContext) {
+    for standing in [false, true] {
+        let (shell, host, cx) = shell_with_task(cx);
+        watching(&shell, &host, cx);
+        if standing {
+            shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+            draw(&shell, cx);
+            assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+        }
+        let pages = shell.read_with(cx, |shell, _| shell.task_tabs(3));
+        assert_eq!(shell.read_with(cx, |shell, _| shell.space()), 1);
+        host.take();
+        host.shown.borrow_mut().clear();
+        shell.update(cx, |shell, cx| {
+            shell.open_link("https://elsewhere.example/a", cx)
+        });
+        let calls = host.take();
+        assert!(
+            !calls.iter().any(|call| call.starts_with("open behind")),
+            "standing {standing}: it opened behind into the Space shown: {calls:?}"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.task_area.is_none()),
+            "standing {standing}: the thread's area stayed"
+        );
+        assert_eq!(host.shown.borrow().as_slice(), [1], "standing {standing}");
+        assert_eq!(
+            host.opened_pages.borrow().as_slice(),
+            ["https://elsewhere.example/a"]
+        );
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_tabs(3)),
+            pages,
+            "standing {standing}: the thread's pages changed"
+        );
+    }
+}
