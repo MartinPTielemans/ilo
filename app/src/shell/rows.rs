@@ -462,8 +462,9 @@ impl Shell {
     /// `depth` folders in, to the sidebar's edge and into the page.
     fn line_join(&self, page: Rgba, depth: usize, opacity: f32) -> Div {
         let on = self.palette.on_fill(page);
-        // A dark page's shape is told from a dark window by a line of light round it.
-        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
+        // Its page's own ink in a line round the shape tells it from the window, a white page's
+        // from a light sidebar as a dark page's from a dark one.
+        let outline = Some(on.faint(DIVIDER).opacity(opacity));
         let (left, right) = match self.right {
             true => (0., PLATE_INSET),
             false => (PLATE_INSET + depth as f32 * FOLDER_INDENT, 0.),
