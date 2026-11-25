@@ -217,7 +217,9 @@ impl Popup {
             Popup::SearchEngine(_) => SEARCH_WITH.into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Assistant(cli) => {
+                format!("{} options", browser::settings_rows::assistant_name(cli)).into()
+            }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
             Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
@@ -3844,26 +3846,20 @@ impl Settings {
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
         let on = agents.read(cx).is_on();
+        // The inside switch: the user's own assistant, for threads. Other apps have theirs.
+        let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
             let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
+            self.toggle("agents", name.clone(), on, set, accent, cx)
         };
-        let model = agents.read(cx);
-        let about: SharedString = match model.trouble() {
-            Some(trouble) => trouble,
-            None if on => {
-                "On: a connected client reaches the browser through the bridge beside it.".into()
-            }
-            None => "Each asks before it sends or pays for anything.".into(),
+        // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
+        // first, as it did.
+        let about: Option<SharedString> = match agents.read(cx).trouble() {
+            Some(trouble) => Some(trouble),
+            None => (!on).then(|| "Off: no thread starts.".into()),
         };
-        let master = feature(
-            look,
-            Section::Threads.glyph(),
-            "Let agents use the browser",
-            Some(about),
-            vec![switch],
-        );
+        let master = setting(look, name, about, vec![switch]);
         let listed = agents.read(cx).listed();
         let clients: Vec<gpui::Div> = listed
             .iter()
@@ -4034,9 +4030,17 @@ impl Settings {
         }
         [
             Page::new(Section::Threads, "", threads),
-            Page::new(Section::Models, "", models),
+            Page::new(
+                Section::Models,
+                Section::Models.lede().unwrap_or_default(),
+                models,
+            ),
             Page::new(Section::Access, agents::tier::NEVER_GETS, access),
-            Page::new(Section::OtherApps, "", blocks),
+            Page::new(
+                Section::OtherApps,
+                Section::OtherApps.lede().unwrap_or_default(),
+                blocks,
+            ),
         ]
     }
 
@@ -4052,8 +4056,9 @@ impl Settings {
             };
             self.toggle("other apps", name.clone(), on, set, accent, cx)
         };
-        let line = "Each works in a Space of its own, never in your tabs.";
-        setting(&self.look, name, Some(line.into()), vec![switch])
+        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets

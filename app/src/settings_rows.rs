@@ -35,14 +35,16 @@ use crate::tokens::settings::{
 use crate::tokens::settings::{
     FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, PRIMARY,
     SCOPE_CHEVRON, SCOPE_GAP, SCOPE_HEIGHT, SCOPE_LEFT, SCOPE_LINE, SCOPE_RIGHT, SCOPE_TEXT,
-    SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS, SEGMENT_TEXT, SEGMENT_X,
+    SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS, SEGMENT_TEXT, SEGMENT_X, WORKING,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::ICON_INK;
 use crate::tokens::text::SMALL;
 
 mod assistant;
-pub use assistant::{Act, another_agent_name_row, another_agent_row, assistant_row};
+pub use assistant::{
+    Act, SIGN_IN, another_agent_name_row, another_agent_row, assistant_name, assistant_row,
+};
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
 pub type Drawn = Rc<RefCell<DrawnLog>>;
