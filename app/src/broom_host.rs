@@ -102,10 +102,11 @@ pub(crate) fn page_counts_changed(cx: &mut App) {
 }
 
 /// Whether the core can put a sort's answer in place, as today's folders: known without a run,
-/// and part of the one answer that makes the broom be. This core can't, as its header has no
-/// `bc_folder_create_today`. Nor can Windows, till its run is killed as a job object, whole.
+/// and part of the one answer that makes the broom be. The core can where its header has
+/// `bc_folder_create_today`, which build.rs reads. Windows can't, till its run is killed as a job
+/// object, whole.
 fn makes_today_folders() -> bool {
-    let core = false;
+    let core = cfg!(today_folders);
     core && cfg!(not(target_os = "windows"))
 }
 
