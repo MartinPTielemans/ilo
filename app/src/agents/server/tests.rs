@@ -205,11 +205,10 @@ fn the_pipe_is_the_servers_alone() {
 fn a_connection_without_a_valid_token_is_refused() {
     let (server, _, mut handed) = server();
     let (mut guess, answer) = Client::with(&server, "guess");
-    assert!(
-        answer["error"]
-            .as_str()
-            .unwrap()
-            .contains("Settings › Agents")
+    assert_eq!(
+        answer,
+        json!({ "error": "The token isn't one the browser gave. Connect the client again in \
+                          Settings › Other apps." })
     );
     assert_eq!(guess.read(), None, "a refused connection stayed open");
     let mut early = Client::open(&server);
@@ -646,11 +645,17 @@ fn the_bridge_carries_a_clients_stdio() {
         Cursor::new(Vec::new()),
         Output::default(),
     );
-    assert!(refused.unwrap_err().contains("Settings › Agents"));
+    assert!(refused.unwrap_err().contains(UNKNOWN_TOKEN));
     let path = server.path().to_path_buf();
     drop(server);
     let off = bridge::run(&path, TOKEN, Cursor::new(Vec::new()), Output::default());
-    assert!(off.unwrap_err().contains("agents on"));
+    let said = format!(
+        "{0} isn't running, or access for other apps is off. Open {0} and turn it on in Settings › \
+         Other apps.",
+        env!("APP_NAME")
+    );
+    assert_eq!(bridge::off(), said);
+    assert!(off.unwrap_err().contains(&said));
 }
 
 /// With other apps' agents off, an app's agent is answered as with agents off, word for word and

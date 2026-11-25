@@ -320,7 +320,8 @@ esac
 if BROWSER_AGENT_TOKEN=0 "$bridge" "$socket" < /dev/null > /dev/null 2> "$out/mcp-refused"; then
   fail "the bridge got in without the agent's token"
 fi
-grep -q 'Settings › Agents' "$out/mcp-refused" || fail "a refused bridge said: $(cat "$out/mcp-refused")"
+grep -q 'Connect the client again in Settings › Other apps\.' "$out/mcp-refused" ||
+  fail "a refused bridge said: $(cat "$out/mcp-refused")"
 # A copy from the Store names its bridge to clients by the alias its MSIX declares, which Windows
 # keeps in the user's WindowsApps folder across updates, as the package's own folder is named for
 # its version (#1442). check-windows.yml installs an MSIX of this build and names it in CHECK_MSIX.

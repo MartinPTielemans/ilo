@@ -66,6 +66,10 @@ pub enum Side {
     Outside,
 }
 
+/// What a connection is told whose token the browser didn't give.
+pub const UNKNOWN_TOKEN: &str =
+    "The token isn't one the browser gave. Connect the client again in Settings › Other apps.";
+
 /// The kind `agent` is: a task's id is inside, an app's outside, and anything else neither, which
 /// is refused.
 pub fn side(agent: &str) -> Option<Side> {
@@ -384,8 +388,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         .and_then(|first| Some(first.get("token")?.as_str()?.to_string()))
         .unwrap_or_default();
     let Some(agent) = shared.agent(&token) else {
-        let refused =
-            "The token isn't one the browser gave. Connect the client again in Settings › Agents.";
+        let refused = UNKNOWN_TOKEN;
         _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
