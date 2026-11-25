@@ -62,6 +62,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_ONBOARDING", values: "1, light, dark", shows: "the onboarding over the welcome" },
     State { name: "PREVIEW_ONBOARDING_ASSISTANTS", values: "checking, start, signed-in", shows: "the onboarding's assistants' step with its rows in that state" },
     State { name: "PREVIEW_ONBOARDING_STEP", values: "transparency, <step from 1>", shows: "the onboarding at that step" },
+    State { name: "PREVIEW_PAGE", values: "<rrggbb>[,<tab>]", shows: "the page of the tab shown, or of that tab, shown, in that colour, which its line takes" },
     State { name: "PREVIEW_PAGE_MENU", values: "<link|image|text|field>,<x>,<y>[,<key>…]", shows: "a page's menu there" },
     State { name: "PREVIEW_PAIR", values: "pin, confirm, passkey", shows: "a Bluetooth device the first tab's page pairs with" },
     State { name: "PREVIEW_PEEK", values: "1", shows: "a link of the page shown in Peek" },
