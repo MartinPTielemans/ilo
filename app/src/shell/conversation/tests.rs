@@ -34,7 +34,9 @@ pub(super) fn card() -> Card {
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
@@ -3022,4 +3024,51 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
+}
+
+/// A conversation that closes leaves its card in Latest tasks the picture its page's tile ended
+/// on, from memory, and lets the rest go; the card has none while the rail holds it, and none
+/// once it pictures another page, or is gone.
+#[gpui::test]
+fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut TestAppContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(card.clone(), cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let plate = |shell: &Entity<Shell>, card: &Card, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
+    };
+    assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
+    let request = crate::shell::picture::next_request() - 1;
+    let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
+    assert_eq!(
+        plate(&shell, &card, cx),
+        None,
+        "the rail holds it, not the card"
+    );
+
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(
+        plate(&shell, &card, cx),
+        Some((2., 2.)),
+        "the card has no picture"
+    );
+
+    // The task goes on to another page: its card no longer pictures this one.
+    let on = Card {
+        last_tab: Some(31),
+        pages: vec![30, 31],
+        ..card.clone()
+    };
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![on.clone()], cx));
+    assert_eq!(plate(&shell, &card, cx), None);
+    assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
+    let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
+    assert_eq!(held, 0, "a picture no card shows is still held");
 }

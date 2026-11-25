@@ -726,6 +726,7 @@ impl Shell {
             self.foot.slot = false;
         }
         self.task_cards = cards;
+        self.keep_plates();
         self.area_takes_space();
         if let Some(said) = told {
             let telling = self
