@@ -898,6 +898,73 @@ fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
     );
 }
 
+/// With agents never turned on, nothing looks for an assistant until Models opens: each row reads
+/// Checking… with nothing offered, and opening Models looks once and says what it found.
+#[gpui::test]
+fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    configs
+        .looked
+        .lock()
+        .unwrap()
+        .push((Cli::Claude, signed_out));
+    let agents = agents(&browser, &configs, None, cx);
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 0, "nothing looked");
+    let before = agents.read_with(cx, |agents, _| {
+        assert!(!agents.tasks_on());
+        let listed = agents.providers().into_iter();
+        listed.map(|(_, row, _)| row.offer).collect::<Vec<_>>()
+    });
+    assert_eq!(before, vec![Offer::Nothing; Cli::ALL.len()]);
+    agents.update(cx, |agents, cx| agents.models_shown(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        Cli::ALL.len(),
+        "one look"
+    );
+    let after = agents.read_with(cx, |agents, _| {
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, _)| (cli, row.offer))
+            .collect::<Vec<_>>()
+    });
+    assert!(after.contains(&(Cli::Claude, Offer::SignIn)), "{after:?}");
+    assert!(after.contains(&(Cli::Codex, Offer::Get)), "{after:?}");
+}
+
+/// Sign In on Models, with agents off, starts that assistant's own sign-in and nothing else:
+/// agents stay off, and it looks again only once the sign-in ends.
+#[gpui::test]
+fn models_sign_in_with_agents_off_turns_nothing_on(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, cx| agents.sign_in(Cli::Claude, cx));
+    cx.run_until_parked();
+    let started: Vec<Cli> = (configs.sign_ins.lock().unwrap().iter())
+        .map(|(cli, _)| *cli)
+        .collect();
+    assert_eq!(started, vec![Cli::Claude]);
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 0);
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+    });
+    let heard = configs.sign_ins.lock().unwrap()[0].1.clone();
+    let done = crate::agents::sign_in::Heard::Ended(crate::agents::sign_in::Ended::Done);
+    heard.unbounded_send(done).unwrap();
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), Cli::ALL.len());
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+    });
+}
+
 /// A Connect that fails, as when the client isn't installed, connects nothing and says why on
 /// the client's row.
 #[gpui::test]
