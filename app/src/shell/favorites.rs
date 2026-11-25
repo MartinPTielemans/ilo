@@ -4,8 +4,8 @@
 use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
-    App, Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
-    rgba, svg,
+    App, Context, Hsla, MouseButton, MouseDownEvent, Rgba, Role, canvas, div, hsla, img,
+    prelude::*, px, rgba, svg,
 };
 
 use super::return_mark::{Bitmap, Source};
@@ -132,14 +132,16 @@ impl Shell {
     pub(super) fn turning_drag(&self) -> Option<impl IntoElement + use<>> {
         let (tab, [left, top, width, height, radius], turned) = self.turning_shape()?;
         let selected = tab == self.selected && self.shown_has_plate();
-        let row_fill = if selected {
-            self.palette.shown(0.)
-        } else {
-            self.palette.hovered_row()
+        let own = self.page_fill(tab);
+        let row_fill = match (own, selected) {
+            (Some(own), _) => own.into(),
+            (None, true) => self.palette.shown(0.),
+            (None, false) => self.palette.hovered_row(),
         };
         let row_fill = self.window_fill().blend(row_fill);
-        let theme = selected.then(|| self.tile_theme(tab)).flatten();
-        let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
+        let themed = selected && own.is_none();
+        let theme = themed.then(|| self.tile_theme(tab)).flatten();
+        let (shown, ring_width, ring) = self.open_look(own, theme.as_deref());
         let tile_fill = match selected {
             true => shown,
             false => tile_fill(&self.palette, false, 1.),
@@ -204,7 +206,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .opacity((1. - turned / TURN_TITLE_FADE).max(0.))
-                        .child(title(&self.palette, self.title(tab), selected)),
+                        .child(title(&self.line_palette(tab), self.title(tab), selected)),
                 )
                 .child(icon)
                 // The ring over the rest, as the tile's border would shift the favicon in by its
@@ -488,10 +490,12 @@ impl Shell {
         };
         let developer = self.page(tab).developer_mode;
         let fill = tile_fill(&self.palette, developer, hover.unwrap_or(0.));
-        // A split's tile has the default ring, as no one icon themes it.
-        let themed = selected && self.panes(tab).len() == 1;
+        // A split's tile has the default ring, as no one icon themes it, and a page's own colour
+        // takes the theme's place.
+        let own = self.page_fill(tab);
+        let themed = selected && self.panes(tab).len() == 1 && own.is_none();
         let theme = themed.then(|| self.tile_theme(tab)).flatten();
-        let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
+        let (shown, ring_width, ring) = self.open_look(own, theme.as_deref());
         // The outline takes the ring's place.
         let ring = if selected && developer {
             gpui::transparent_black()
@@ -580,7 +584,7 @@ impl Shell {
                 .top(px(TILE_MARK_INSET))
                 .right(px(TILE_MARK_INSET))
                 .size(px(TILE_MARK))
-                .text_color(self.palette.text(SECONDARY)),
+                .text_color(self.line_palette(tab).text(SECONDARY)),
         )
     }
 
@@ -643,6 +647,7 @@ impl Shell {
 
     /// A tile's favicon, or a one-colour icon's white template on the tile it themes.
     fn tile_icon(&self, tab: u64, theme: Option<&TileTheme>, cx: &App) -> gpui::Div {
+        let palette = self.line_palette(tab);
         div()
             .size(px(FAVICON_SIZE))
             .flex()
@@ -652,7 +657,7 @@ impl Shell {
                 icon.opacity(SLEEPING_FAVICON)
             })
             .child(self.with_return_mark(
-                &self.palette,
+                &palette,
                 tab,
                 FAVICON_SIZE,
                 match theme {
@@ -660,18 +665,37 @@ impl Shell {
                         source: Source::Decoded(template.clone()),
                         drawn: FAVICON_DRAWN,
                     }),
-                    _ => self.tab_bitmap_in(&self.palette, tab),
+                    _ => self.tab_bitmap_in(&palette, tab),
                 },
                 || {
                     match theme {
                         Some(TileTheme::Flat { template, .. }) => img(template.clone())
                             .size(px(FAVICON_DRAWN))
                             .into_any_element(),
-                        _ => self.tab_icon(tab),
+                        _ => self.tab_icon_in(&palette, tab),
                     }
                 },
                 cx,
             ))
+    }
+
+    /// The open tile's fill, ring width and ring: its page's `own` colour where it stands, once
+    /// the page has reported one, a dark one with the hairline a dark page's shape has, and
+    /// otherwise the look its icon's `theme` gives it.
+    pub(super) fn open_look(
+        &self,
+        own: Option<Rgba>,
+        theme: Option<&TileTheme>,
+    ) -> (Hsla, f32, Hsla) {
+        let Some(own) = own else {
+            return shown_look(theme, &self.palette);
+        };
+        let on = self.palette.on_fill(own);
+        let ring = match on.tone {
+            Tone::Dark => on.faint(DIVIDER),
+            Tone::Light => Level::Resting.rim_in(&on),
+        };
+        (own.into(), HAIRLINE, ring)
     }
 
     /// Whether `tab` can become a favorite of the Space shown, or is one already, below the most

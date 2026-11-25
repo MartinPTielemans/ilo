@@ -3894,6 +3894,9 @@ impl Settings {
             models.push(Block::Group(self.assistants(agents, cx)));
             models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -4028,6 +4031,59 @@ impl Settings {
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            return Vec::new();
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
         ]
     }
 

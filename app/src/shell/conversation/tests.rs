@@ -24,7 +24,7 @@ use crate::tokens::shell::task_area::BESIDE;
 use crate::tokens::text;
 use crate::tooltip::text_width;
 
-fn card() -> Card {
+pub(super) fn card() -> Card {
     Card {
         agent: "task-1".into(),
         home: 1,
@@ -65,7 +65,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
 }
 
 /// Task-1's conversation as it works, `steps` steps in.
-fn conversation(steps: usize) -> Conversation {
+pub(super) fn conversation(steps: usize) -> Conversation {
     let items = (0..steps)
         .map(|key| TraceItem::Step(step(key, "Opened skyscanner.net", key + 1 == steps)))
         .collect();
@@ -91,13 +91,27 @@ fn conversation(steps: usize) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        folder: None,
     }
+}
+
+/// The request the conversation's view holds out for `tab`'s picture, as it asked for it. Not the
+/// app's counter less one: the tests run on threads of one process, which all take from it.
+fn picture_request(shell: &Entity<Shell>, tab: u64, cx: &mut VisualTestContext) -> u64 {
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.read_with(cx, |view, _| {
+        let held = view.pictures.iter().find(|(each, ..)| *each == tab);
+        held.map(|(_, request, _)| *request)
+            .expect("the view asked for no picture of the tab")
+    })
 }
 
 /// The user's Space 1 with tabs 10 and 11, 10 shown, and task-1's Space 3 with tab 30, whose card
 /// is at the top of Space 1's Today; a click on the card shows its conversation. Without motion,
 /// so the area is in place at once.
-fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+pub(super) fn shown(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
     shown_with(card(), cx)
 }
 
@@ -787,7 +801,7 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(1)), cx)
     });
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_request(&shell, 30, cx);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
@@ -1272,7 +1286,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
 
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
-fn stopped_at_order(
+pub(super) fn stopped_at_order(
     cx: &mut TestAppContext,
 ) -> (
     Entity<Shell>,
@@ -1661,6 +1675,34 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
             "ilo ended what Claude had left running",
             "",
         ),
+        (
+            IloKind::Revoked {
+                folder: "Trip".into(),
+            },
+            "ilo \u{b7} You revoked \u{201c}Trip\u{201d}",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::FolderGone {
+                folder: "Trip".into(),
+            },
+            "ilo revoked \u{201c}Trip\u{201d}: ilo couldn't find it",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::NotCopied {
+                left: LeftOut::File("seats.pdf".into()),
+            },
+            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't copy it",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            IloKind::NotCopied {
+                left: LeftOut::Files(3),
+            },
+            "ilo started this task without 3 files: ilo couldn't copy them",
+            "",
+        ),
     ];
     for (kind, whole, name) in cases {
         assert_eq!(
@@ -1686,8 +1728,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use super::words::head;
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 9] = [
+    const VERBS: [&str; 10] = [
         "stopped", "signed", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
+        "revoked",
     ];
     let every = [
         IloKind::Stopped {
@@ -1755,6 +1798,18 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             reach: Reach::Files,
         },
         IloKind::EndedLeft,
+        IloKind::Revoked {
+            folder: "Trip".into(),
+        },
+        IloKind::FolderGone {
+            folder: "Trip".into(),
+        },
+        IloKind::NotCopied {
+            left: LeftOut::File("seats.pdf".into()),
+        },
+        IloKind::NotCopied {
+            left: LeftOut::Files(3),
+        },
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1791,6 +1846,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::NotRaised { .. }
             | IloKind::LeftRunning { .. }
             | IloKind::EndedLeft
+            | IloKind::Revoked { .. }
+            | IloKind::FolderGone { .. }
+            | IloKind::NotCopied { .. }
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone
@@ -1981,7 +2039,7 @@ fn focus_command(shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext) 
 }
 
 /// Task-1's page 30 watched over its conversation from a picture's place, by the user.
-fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+pub(super) fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     use gpui::{Bounds, size};
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
     shell.update(cx, |shell, cx| {
@@ -2485,7 +2543,7 @@ fn ended(kind: IloKind) -> Conversation {
 
 /// Where the words of ilo's line 7 were drawn and how they were laid out, and where the
 /// conversation was, once it has drawn again.
-fn ilo_words(
+pub(super) fn ilo_words(
     view: &Entity<super::TalkView>,
     cx: &mut VisualTestContext,
 ) -> (
@@ -3100,6 +3158,61 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     cx.update(|_, cx| cx.set_reduce_motion(true));
 }
 
+/// Where task-1's folder chip under the reply field was drawn, with its conversation `talk`.
+fn folder_chip_with(
+    talk: Conversation,
+    cx: &mut TestAppContext,
+) -> (
+    Option<gpui::Bounds<gpui::Pixels>>,
+    Rc<Recorder>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_talk_beside(true, cx);
+        shell.set_conversation(Some(talk), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let drawn = view.read_with(cx, |view, _| view.folder_drawn.get());
+    (drawn, host, cx)
+}
+
+/// The folder a live task holds is under its reply field by its name, and its one act, Revoke,
+/// takes it back (#4101). A reply carries no files or folder, so nothing there adds one.
+#[gpui::test]
+fn the_folder_a_task_holds_is_under_its_reply_field_with_revoke(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        folder: Some("Notes".into()),
+        ..conversation(0)
+    };
+    let (drawn, host, cx) = folder_chip_with(talk, cx);
+    let chip = drawn.expect("the folder's chip under the reply field");
+    host.take();
+    cx.simulate_click(chip.center(), Modifiers::none());
+    let menu = host
+        .menus
+        .borrow()
+        .last()
+        .cloned()
+        .expect("the chip's menu");
+    assert_eq!(menu, vec![("Revoke".into(), true)], "the folder's one act");
+    cx.update(|_, cx| host.choose("Revoke", cx));
+    assert!(
+        host.take()
+            .contains(&"task task-1 RevokeFolder".to_string()),
+        "Revoke didn't take the task's folder back"
+    );
+}
+
+/// A task that holds no folder has no folder chip.
+#[gpui::test]
+fn a_task_without_a_folder_has_no_folder_chip(cx: &mut TestAppContext) {
+    let (drawn, _, _) = folder_chip_with(conversation(0), cx);
+    assert!(drawn.is_none(), "a folder chip for a task that holds none");
+}
+
 /// A conversation that closes leaves its card in Latest tasks the picture its page's tile ended
 /// on, from memory, and lets the rest go; the card has none while the rail holds it, and none
 /// once it pictures another page, or is gone.
@@ -3118,7 +3231,7 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
         shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
     };
     assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_request(&shell, 30, cx);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     assert_eq!(

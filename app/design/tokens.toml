@@ -1536,6 +1536,10 @@ card-radius = 10.0
 page-outline = 0x00000080
 page-outline-light = 0x00000029
 page-outline-width = 1.0
+# The open tab's line takes its page's own colour and runs to the sidebar's edge, where a curve of
+# this radius above it and one below take it into the page's side, so the two are one shape. A dark
+# page's shape has one hairline (divider) of the ink that reads on it round the line and the page.
+join-radius = 8.0
 # Between the pages of a split view, as in Arc. The core's is the same.
 split-gap = 10.0
 # The glow outside a split view's focused page, in its ring's colour (Arc: ≈ 8 pt).
@@ -1757,6 +1761,11 @@ divider-gap = 9.0
 today-gap = 6.0
 clear-gap = 3.0
 clear-height = 20.0
+# The broom after Clear on the New Tab line: its glyph in a box of its own, the line's gap after
+# Clear, so Clear sits the two left of where it ends alone. With nothing to sort the glyph keeps its
+# place at this much of its strength.
+broom-size = 14.0
+broom-unavailable = 0.4
 # The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
 # the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
 # sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
@@ -2494,6 +2503,91 @@ slot-inset = 10.0
 slot-radius = 10.0
 slot-rim = 0.12
 slot-ground = 0.04
+
+# First run's window of its own (spec-first-run.md; values-first-run.md, the drawing's tokens
+# f6af5434): the step in a column on the left under the row the window's buttons sit in, the
+# picture of the browser in a panel on the right. Dark's values are the drawing's; Light's follow
+# light-values.md's rule and are Proposed.
+[shell.onboarding.window]
+width = 880.0
+height = 600.0
+# The window's ground over its glass, opaque where the window has none.
+fill = 0x141416
+fill-alpha = 0.7
+light-fill = 0xe9e7e1
+light-fill-alpha = 0.7
+# The text, its quiet ink (a line, Back, Skip) and its faint one (the count); the main button is
+# the text's ink with its label in `on-primary`.
+text = 0xf3f0e8
+light-text = 0x161618
+quiet = 0.6
+light-quiet = 0.65
+faint = 0.42
+light-faint = 0.5
+on-primary = 0x161618
+light-on-primary = 0xf3f0e8
+# The step's column, the row of the window's buttons at its top, and the column's padding under
+# it: top, right, bottom, left. The Mac's buttons sit `buttons-x` in, centred on the row.
+left = 400.0
+buttons-row = 44.0
+buttons-x = 16.0
+buttons-y = 16.0
+padding = [0.0, 20.0, 20.0, 32.0]
+# Where the step is: a track with the steps so far filled, then "n of m", the welcome being 1.
+indicator-height = 22.0
+indicator-gap = 10.0
+track-width = 96.0
+track-height = 3.0
+track-radius = 2.0
+track = 0.18
+count-size = 11.0
+count-line = 14.0
+# The step's heading, in the heading face, and the line under it; the welcome's are larger, under
+# the lockup's place, which P9's mark and the name fill.
+heading-top = 22.0
+heading-right = 24.0
+heading-size = 26.0
+heading-line = 32.0
+lockup = 96.0
+welcome-top = 86.0
+welcome-size = 28.0
+welcome-line = 34.0
+line-top = 8.0
+line-size = 13.0
+line-line = 19.0
+welcome-line-top = 10.0
+welcome-line-size = 14.0
+welcome-line-line = 21.0
+# The step's own choices start this far under its words.
+body-top = 18.0
+# The foot's row: Back at its start, then the quiet Skip and the main button with ↩'s key on it.
+button-height = 32.0
+button-radius = 8.0
+button-gap = 6.0
+button-size = 13.0
+button-line = 16.0
+quiet-inset = 12.0
+main-start = 14.0
+main-end = 8.0
+main-gap = 8.0
+key-height = 18.0
+key-radius = 5.0
+key-inset = 5.0
+key-size = 10.0
+key-line = 12.0
+key = 0.12
+# The picture's panel: inset from the window's right, top and bottom, on the own-page ground with
+# a hairline inside it.
+panel-inset = 10.0
+panel-radius = 10.0
+own-page = 0x1d1d21
+own-page-alpha = 0.66
+light-own-page = 0xfbfaf7
+light-own-page-alpha = 0.66
+panel-line = 0xffffff
+panel-line-alpha = 0.07
+light-panel-line = 0x000000
+light-panel-line-alpha = 0.07
 
 # Each step's loop (#4093): ten seconds, drawn in the slot from the sidebar's own measures with
 # made-up pages, its last frame where it rests and what Reduce Motion shows.

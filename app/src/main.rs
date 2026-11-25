@@ -77,6 +77,9 @@ mod emoji;
 mod fade;
 mod find_bar;
 #[cfg(target_os = "linux")]
+#[path = "../platform/linux/first_run_window.rs"]
+mod first_run_window;
+#[cfg(target_os = "linux")]
 #[path = "../platform/linux/floats.rs"]
 mod floats;
 #[cfg(target_os = "linux")]

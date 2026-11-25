@@ -207,7 +207,7 @@ impl Shell {
                     svg()
                         .path(MARK)
                         .size(px(SPEAKER_DRAWN))
-                        .text_color(self.palette.text(SECONDARY)),
+                        .text_color(self.line_palette(tab).text(SECONDARY)),
                 )
         })
     }

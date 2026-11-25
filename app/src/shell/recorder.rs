@@ -63,6 +63,8 @@ pub(super) struct Recorder {
     pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// The in-place bar's profile is new: it has learned no agent till this goes false.
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Whether it can wall a task in with its files, as `files_available` answers.
+    pub(super) files: std::cell::Cell<bool>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -79,6 +81,8 @@ pub(super) struct Recorder {
     pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// What the broom shows, as `broom` answers: not drawn unless a test says.
+    pub(super) broom: Cell<Option<super::Broom>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
@@ -760,6 +764,14 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn broom(&self) -> Option<super::Broom> {
+        self.broom.get()
+    }
+
+    fn start_broom(&self, _: &mut App) {
+        self.record("start broom".into())
     }
 
     fn link_cards(&self) -> bool {
@@ -1866,6 +1878,10 @@ impl Browser for Recorder {
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
+    }
+
     fn start_task(
         &self,
         agent: &str,
@@ -1886,8 +1902,17 @@ impl Browser for Recorder {
                 if only { " only them" } else { "" }
             ),
         };
+        // Files and a folder by count alone, as nothing names them but the conversation.
+        let files = match start.files.files.len() {
+            0 => String::new(),
+            count => format!(" and {count} files"),
+        };
+        let folder = match start.files.folder.is_some() {
+            true => " and a folder",
+            false => "",
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}{pages}",
+            "start task {agent} {asked} from {home} at {}{model}{pages}{files}{folder}",
             start.tier.label()
         ));
     }
@@ -2098,8 +2123,17 @@ impl Browser for Recorder {
         self.record("new window".into())
     }
 
-    fn welcome_window(&self, _: &mut App) {
-        self.record("welcome window".into())
+    fn show_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run shown".into())
+    }
+
+    fn end_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run ended".into())
+    }
+
+    // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
     }
 
     fn is_default_browser(&self) -> bool {
