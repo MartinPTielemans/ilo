@@ -21,9 +21,9 @@ message SpaceEntity {
     // A Today tab, which other devices show without its page until it's clicked. Arc kept these on
     // the device; ilo syncs them (#2098).
     TODAY = 3;
-    // A folder in a Space's Today tabs (#4252), holding the Today tabs whose parent it is, which
-    // come together under it. It goes once none is left, and a device makes it only once two of
-    // its tabs are there.
+    // A folder in a Space's Today tabs (#4252), holding the Today tabs whose today_folder it is,
+    // which come together under it. It goes once none is left, and a device makes it only once two
+    // of its tabs are there. An older ilo drops it, as its id has "today:" before it.
     TODAY_FOLDER = 4;
   }
 
@@ -34,8 +34,7 @@ message SpaceEntity {
   optional Kind kind = 2;
   // A pinned tab's, folder's or Today tab's Space's id.
   optional string space = 3;
-  // The id of the folder holding a pinned tab or folder, or the today's folder holding a Today
-  // tab, without its "today:", else empty.
+  // The id of the folder holding a pinned tab or folder, else empty. Never a Today tab's.
   optional string parent = 4;
   // Its place among its siblings: a serialized sync_pb.UniquePosition.
   optional bytes position = 5;
@@ -54,4 +53,8 @@ message SpaceEntity {
   // When a device last showed a Today tab, in seconds since the Unix epoch, which auto-archive
   // counts from on every device. Sent only once it's an hour on from what the account has.
   optional int64 seen = 12;
+  // The id of the today's folder holding a Today tab, without its "today:", set only on a tab in
+  // one. An ilo without it then stops syncing Spaces, as for any field it lacks, rather than
+  // showing the tab loose and writing it back out of its folder for every device (#4252).
+  optional string today_folder = 13;
 }

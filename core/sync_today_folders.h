@@ -18,10 +18,16 @@ namespace browser_core::sync_spaces {
 inline constexpr char kTodayPrefix[] = "today:";
 
 // The id of the today's folder |tab|, a Today tab's entity, goes in, among |known|, the account's
-// entities by id: its parent's, if that's a today's folder of the same Space, else empty, so a tab
-// whose folder is unknown, pinned or another Space's stays loose.
+// entities by id: its today_folder's, if that's a today's folder of the same Space, else empty, so
+// a tab whose folder is unknown, pinned or another Space's stays loose. Its parent, a pinned
+// folder's field, never puts it in one.
 std::string TodayFolderOf(const sync_spaces_pb::SpaceEntity& tab,
                           const std::map<std::string, sync_spaces_pb::SpaceEntity>& known);
+
+// Writes |folder|, the node key of the today's folder holding |tab|, a Today tab's entity, or
+// nothing for a tab in none, so an account without today's folders is written as before them and
+// an older ilo stops syncing Spaces only once one exists.
+void SetTodayFolder(sync_spaces_pb::SpaceEntity& tab, const std::string& folder);
 
 }  // namespace browser_core::sync_spaces
 

@@ -250,7 +250,7 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       each.set_space(space_key);
       if (const Space::Node* folder = space->NodeOf(space->FolderOf(row));
           folder && folder->id.is_valid()) {
-        each.set_parent(Key(folder->id));
+        SetTodayFolder(each, Key(folder->id));
       }
       each.set_position(Bytes(node->position));
       each.set_url(url.spec());
@@ -635,9 +635,12 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     for (bool progress = true; progress && !put.empty();) {
       progress = false;
       for (auto it = put.begin(); it != put.end();) {
+        // A Today tab waits for its Space alone: its parent, a pinned folder's field, is
+        // nothing to it, and it goes in its today's folder once that's made (MakeTodayFolders).
         const bool ready =
             it->kind() == Entity::SPACE ||
-            (index.contains(it->space()) && (it->parent().empty() || index.contains(it->parent())));
+            (index.contains(it->space()) &&
+             (it->kind() == Entity::TODAY || it->parent().empty() || index.contains(it->parent())));
         if (!ready) {
           ++it;
           continue;
@@ -749,7 +752,6 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       PutTodayFolder(entity, space, here != index.end() ? here->second : Local());
       return;
     }
-    const bc_id folder = entity.parent().empty() ? 0 : index.at(entity.parent()).row;
     // A Today tab moved to another Space keeps its id, so it moves here too, as it did there: into
     // another profile's Space as a new tab of that profile's, which takes the id.
     if (here != index.end() && here->second.space != space && entity.kind() == Entity::TODAY &&
@@ -773,6 +775,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       PutToday(entity, space, row, index);
       return;
     }
+    const bc_id folder = entity.parent().empty() ? 0 : index.at(entity.parent()).row;
     // Where its place puts it among the rows directly in its folder, without it.
     size_t at = 0;
     for (bc_id sibling : space->pinned_rows()) {
