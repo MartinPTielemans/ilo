@@ -1,7 +1,7 @@
 //! What a task's assistant may do with files on this computer, by its level (#4101). One table, so
 //! nothing else decides: the wall's rules and each assistant's start are made from it.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use super::tier::Tier;
 use super::wall::Granted;
@@ -162,6 +162,9 @@ pub struct Never {
     ilo: Vec<PathBuf>,
     /// The task's own, where its run keeps what ilo gives it.
     task: Option<PathBuf>,
+    /// The cloud drives' roots where the system names them, as Windows does OneDrive's, whose
+    /// name may be a business's.
+    clouds: Vec<PathBuf>,
 }
 
 impl Never {
@@ -178,11 +181,24 @@ impl Never {
             home.join(".cache").join(name),
             home.join(".cache/browser-app"),
         ];
-        Never::of(home, ilo.to_vec(), task)
+        let mut never = Never::of(home, ilo.to_vec(), task);
+        never.clouds = ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .filter(|folder| !folder.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        never
     }
 
     pub fn of(home: PathBuf, ilo: Vec<PathBuf>, task: Option<PathBuf>) -> Never {
-        Never { home, ilo, task }
+        let clouds = Vec::new();
+        Never {
+            home,
+            ilo,
+            task,
+            clouds,
+        }
     }
 
     /// Folders refused as themselves only, as each holds the user's whole work: the home folder
@@ -202,6 +218,7 @@ impl Never {
             ]
             .map(|drive| home.join(drive)),
         );
+        folders.extend(self.clouds.iter().cloned());
         folders
     }
 
@@ -353,6 +370,13 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
     if folder.parent().is_none() {
         return true;
     }
+    // On Windows, a disk named other than as a drive or a share (a volume, a device, the verbatim
+    // forms) can reach any folder by a name none of `never`'s match.
+    if let Some(Component::Prefix(prefix)) = folder.components().next()
+        && !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(..))
+    {
+        return true;
+    }
     let folder = &key(folder);
     if never.themselves().iter().any(|own| key(own) == *folder) {
         return true;
@@ -392,7 +416,6 @@ pub fn resolved(picked: &Path) -> Option<PathBuf> {
 fn plain(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
-        use std::path::{Component, Prefix};
         let mut parts = path.components();
         let head = match parts.next() {
             Some(Component::Prefix(prefix)) => match prefix.kind() {
@@ -510,11 +533,13 @@ mod tests {
 
     #[cfg(windows)]
     fn never() -> Never {
-        Never::of(
+        let mut never = Never::of(
             PathBuf::from(r"C:\Users\sam"),
             vec![PathBuf::from(r"C:\Users\sam\AppData\Local\ilo\User Data")],
             Some(PathBuf::from(r"D:\ilo\Tasks")),
-        )
+        );
+        never.clouds = vec![PathBuf::from(r"C:\Users\sam\OneDrive - Lakeside Studio")];
+        never
     }
 
     #[cfg(not(windows))]
@@ -595,6 +620,13 @@ mod tests {
         r"d:\ILO\tasks",
         "work",
         r"C:\Users\sam\Documents\..\.ssh",
+        r"C:\Users\sam\OneDrive - Lakeside Studio",
+        r"c:\users\sam\onedrive - lakeside studio",
+        r"\\?\Volume{0c5a3f4e-1d2b-4c6d-8e9f-0a1b2c3d4e5f}\Photos",
+        r"\\.\C:\Users\sam\Documents",
+        r"\\?\C:\Users\sam\Documents",
+        r"\\?\UNC\nas\share\Photos",
+        r"\\?\Documents",
     ];
 
     #[cfg(not(windows))]
@@ -616,6 +648,7 @@ mod tests {
         r"c:\users\sam\Documents",
         r"C:\Users\sam\code\site",
         r"C:\Users\sam\OneDrive\Trip",
+        r"C:\Users\sam\OneDrive - Lakeside Studio\Plans",
         r"D:\Photos",
         r"\\nas\share\Photos",
     ];
