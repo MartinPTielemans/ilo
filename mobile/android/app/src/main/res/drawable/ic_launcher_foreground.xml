@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- The ilo mark: a lowercase i and l joined, drawn for the phone's tile. -->
+    <path
+        android:pathData="M40,44 L40,68 L46,68 L46,44 Z"
+        android:fillColor="#1B1B1F" />
+    <path
+        android:pathData="M40,36 m-3.5,0 a3.5,3.5 0 1,1 7,0 a3.5,3.5 0 1,1 -7,0"
+        android:fillColor="#FF5C38" />
+    <path
+        android:pathData="M56,40 L56,68 L62,68 L62,40 Z"
+        android:fillColor="#1B1B1F" />
+</vector>

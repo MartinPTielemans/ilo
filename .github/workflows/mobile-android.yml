@@ -1,0 +1,69 @@
+# ilo for Android (mobile/android/AGENTS.md) on GitHub's hosted Linux runners, in two jobs at
+# once: the app's unit tests and the debug APK's build. No emulator: Gradle's tests are the
+# machine's own, and the APK builds without a device, so a hosted runner is enough.
+# ci.yml calls it for a change to mobile/android/ (.github/scripts/ci-changes.cjs), so Check
+# covers it, and a change to neither starts it. By hand, on any ref:
+# gh workflow run mobile-android.yml --ref <branch>
+# It signs nothing and holds no secret: a Play upload is by hand until one is needed.
+# The system WebView is the engine, so no SDK piece beyond Gradle's own is fetched or cached.
+name: ilo for Android
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: The app's tests and debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile/android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # AGP 9.5.1 needs a JDK of 17 or newer; the image's default is one. Gradle's dependencies
+      # ride setup-java's cache, keyed on the build files, so a run downloads only what changed.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      # The SDK the image holds has its licenses accepted, and Gradle fetches whatever platform
+      # or tool it lacks by itself, as on a dev machine. local.properties stays unset, which makes
+      # Gradle look the SDK up the usual ways.
+      - name: Tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ilo-android-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+          if-no-files-found: warn
+
+  # The tree has passed once the job has, which its steps alone can't record.
+  proven:
+    name: The app passed
+    needs: [app]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/tree-proof
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: ci-mobile_android

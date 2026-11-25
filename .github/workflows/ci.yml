@@ -38,6 +38,7 @@ jobs:
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
       app_windows: ${{ steps.proven.outputs.app_windows }}
       mobile_ios: ${{ steps.proven.outputs.mobile_ios }}
+      mobile_android: ${{ steps.proven.outputs.mobile_android }}
       site: ${{ steps.detect.outputs.site }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
@@ -83,13 +84,15 @@ jobs:
           APP_MAC: ${{ steps.detect.outputs.app_mac }}
           APP_WINDOWS: ${{ steps.detect.outputs.app_windows }}
           MOBILE_IOS: ${{ steps.detect.outputs.mobile_ios }}
+          MOBILE_ANDROID: ${{ steps.detect.outputs.mobile_android }}
           BRANCH_PUSH: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
         run: |
-          for job in core_linux app_mac mobile_ios; do
+          for job in core_linux app_mac mobile_ios mobile_android; do
             case $job in
               core_linux) needed=$CORE_LINUX ;;
               app_mac) needed=$APP_MAC ;;
               mobile_ios) needed=$MOBILE_IOS ;;
+              mobile_android) needed=$MOBILE_ANDROID ;;
             esac
             if [ "$MAIN" = true ] && [ "$needed" = true ] &&
               [ -n "$(.github/scripts/tree-proven.sh "ci-$job" "$TREE")" ]; then
@@ -134,8 +137,9 @@ jobs:
     with:
       from_ci: true
 
-  # The iPhone app, for a change to mobile/ or to what it reads of the desktop's, and for no other
-  # (.github/scripts/ci-changes.cjs). A change to mobile/ alone runs this and none of the jobs above.
+  # The iPhone app, for a change to mobile/ios/ or to what it reads of the desktop's, and for no
+  # other (.github/scripts/ci-changes.cjs). A change to mobile/ios/ alone runs this and none of
+  # the jobs above.
   mobile_ios:
     name: ilo for iPhone
     needs: changes
@@ -143,6 +147,16 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/mobile-ios.yml
+
+  # The Android app, for a change to mobile/android/ and for no other. It needs no engine and no
+  # emulator: Gradle's unit tests and the APK's build are the proof (mobile/android/AGENTS.md).
+  mobile_android:
+    name: ilo for Android
+    needs: changes
+    if: needs.changes.outputs.mobile_android == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mobile-android.yml
 
   # The website, for a change to site/ and for no other, and none of the jobs above for it. On a
   # push to main it deploys too (site.yml), so it's never in the proven skip: main is what the site
@@ -168,7 +182,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux, app_mac, app_windows, mobile_ios, site]
+    needs: [changes, core_linux, app_mac, app_windows, mobile_ios, mobile_android, site]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Ilo" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- The activity sets light/dark icons at runtime from the app's own dark-mode setting,
+             which Android's uiMode doesn't follow. The values-night copy keeps the page's
+             color-scheme in step with the system, as the app's own setting does when it says
+             system. -->
+    </style>
+</resources>

@@ -21,6 +21,8 @@ Revisit when Chromium can play these sites on the Mac (a Widevine CDM we ship, o
 
 The iPhone app, `mobile/ios`, is native Swift on WebKit (`WKWebView`), the only engine iOS gives an app outside the EU and Japan. It syncs with the desktop through the ilo account.
 
+The Android app, `mobile/android`, is native Kotlin on Android's system WebView (Chromium underneath, updated by Google), taken 2026-11-22 as the iPhone app's mirror: same sync contract, same blocking lists, same certificate model. A bundled ungoogled-chromium engine on Android is not taken: it is a platform lane of its own (a patch series, per-release rebasing and hours of build per point release, and no `chrome/`-framework hosting model there), and the WebView seam in `mobile/android`'s `browser/` is where one goes if the owner takes it. Revisit when the owner wants a bundled engine, extensions support on Android, or engine-level agent access on the phone.
+
 ## 2. Base: ungoogled-chromium, with Helium and Ardia as patch sources
 
 Not raw Chromium and not all of Helium.

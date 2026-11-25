@@ -26,3 +26,9 @@ test("the split keys' table runs the core's jobs and the UI's tests on each OS",
 test("another core file runs the core's jobs alone", () => {
   assert.deepEqual(started("core/tab.cc"), ["core_linux", "engine_windows"]);
 });
+
+test("the phone's and the Android app's changes start their own job alone", () => {
+  // Each mobile platform owns its half of mobile/, so one change starts one job.
+  assert.deepEqual(started("mobile/ios/ilo/App.swift"), ["mobile_ios"]);
+  assert.deepEqual(started("mobile/android/app/src/main/res/values/strings.xml"), ["mobile_android"]);
+});
