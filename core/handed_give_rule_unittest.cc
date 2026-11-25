@@ -67,5 +67,19 @@ TEST(HandedGiveRuleTest, ATabUsingTheScreenIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
+// The answer would come once the tab is the agent's.
+TEST(HandedGiveRuleTest, ATabWhosePageAsksForAPermissionIsRefused) {
+  Tab tab = Fit();
+  tab.permission_asked = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+// An alert, a confirm, a prompt or the question whether to leave the page.
+TEST(HandedGiveRuleTest, ATabWithAPagesDialogUpIsRefused) {
+  Tab tab = Fit();
+  tab.dialog = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_give_rule

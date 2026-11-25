@@ -729,6 +729,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .camera = captures.camera,
           .microphone = captures.microphone,
           .screen = captures.screen,
+          .permission_asked = browser_core::PermissionQuestion::Pending(contents),
+          .dialog = browser_core::PageDialog::Up(tab),
       })) {
     return false;
   }

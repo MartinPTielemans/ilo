@@ -75,6 +75,11 @@ void PageDialog::Answer(bc_id tab, bc_id dialog, Reply reply) {
 }
 
 // static
+bool PageDialog::Up(bc_id tab) {
+  return std::ranges::contains(Dialogs(), tab, &Asked::tab);
+}
+
+// static
 void PageDialog::Changed(bc_id tab) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&PageDialog::Report, tab));

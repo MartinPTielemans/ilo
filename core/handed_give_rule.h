@@ -26,6 +26,12 @@ struct Tab {
   bool camera = false;
   bool microphone = false;
   bool screen = false;
+  // Its page asks the user for a permission, shown or kept for when the tab is: an allow given
+  // after the give would start the camera or the microphone in an agent's tab.
+  bool permission_asked = false;
+  // One of its page's dialogs is up, such as an alert or the question whether to leave it: none is
+  // drawn over an agent's pages.
+  bool dialog = false;
 };
 
 // Whether |tab| is given. Each of them alone refuses it.

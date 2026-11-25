@@ -2183,13 +2183,15 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
-// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is.
-// And only a Today tab of a Space the Spaces list has, at an http or https page in Chromium's
-// engine, that isn't in a split view and whose page isn't using the camera, the microphone or a
-// screen's, a window's or a tab's picture: never a pinned tab, a favorite, or a tab of a private
-// window or another window's own Space. The app asks the same before it gives one; this is the
-// answer that holds whatever asks. A hold on it from an earlier agent ends. Returns whether it
-// moved. The user's: an agent never takes the user's tabs, so agents get none.
+// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is. And
+// only a Today tab of a Space the Spaces list has, at an http or https page in Chromium's engine,
+// that isn't in a split view and whose page isn't using the camera, the microphone or a screen's, a
+// window's or a tab's picture, asks for no permission (tab_permission_asked, or a request kept for
+// when the tab is shown) and has none of its dialogs up (tab_dialog): never a pinned tab, a
+// favorite, or a tab of a private window or another window's own Space. The app asks the same
+// before it gives one; this is the answer that holds whatever asks. A hold on it from an earlier
+// agent ends. Returns whether it moved. The user's: an agent never takes the user's tabs, so agents
+// get none.
 //
 // A window showing the tab doesn't go with it: it shows what closing the tab would show next. From
 // the give until the tab leaves the agent's Space the core keeps where it left, and the tab never
