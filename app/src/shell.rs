@@ -1333,12 +1333,21 @@ enum Switch {
     Tab(u64),
 }
 
-/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
-/// the Agents say which task it made, or that it made none.
+/// What the composer's or ⌘T's ↩ started, as the shell knows it: a start asked from Space `home`,
+/// until the Agents say which task it made, or that it made none. `over` is the tab it was asked
+/// over, 0 for the empty page, which its conversation takes the place of while it still shows.
 #[derive(Clone, Debug, PartialEq)]
 enum ShowStarted {
-    Asked(u64),
-    Task(SharedString),
+    Asked { home: u64, over: u64 },
+    Task { agent: SharedString, over: u64 },
+}
+
+impl ShowStarted {
+    fn over(&self) -> u64 {
+        match self {
+            ShowStarted::Asked { over, .. } | ShowStarted::Task { over, .. } => *over,
+        }
+    }
 }
 
 pub struct Shell {
@@ -3548,8 +3557,8 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
-        // A page shown leaves the empty page the composer's start would have opened over.
-        if tab != 0 {
+        // Another page shown leaves the one the start would have opened its conversation over.
+        if (self.show_started.as_ref()).is_some_and(|started| started.over() != tab) {
             self.show_started = None;
         }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
