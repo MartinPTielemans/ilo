@@ -1918,6 +1918,10 @@ impl Browser for Engine {
         command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
+    }
+
     fn start_task(
         &self,
         agent: &str,

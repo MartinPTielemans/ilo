@@ -755,9 +755,29 @@ pub enum InPlaceKey {
     Flip,
     Escape,
     Run,
-    /// ⌫ at the start of Ask's field, with a page added: the last one added goes, as ⌘T's ask
-    /// takes its page's chip off first.
-    DropPage,
+    /// ⌫ at the start of Ask's field, with a chip after the mode: the last chip goes, as ⌘T's
+    /// ask takes its page's chip off first.
+    DropChip,
+    /// A click on the files' or the folder's chip in Ask's field, by its place in `given`.
+    Given(usize),
+}
+
+/// A chip after the pages in Ask's field at rest: the files attached to the next task, named by
+/// their count, or the folder granted to it, by its name.
+#[derive(Clone, PartialEq)]
+pub enum Given {
+    Files(SharedString),
+    Folder(SharedString),
+}
+
+impl std::fmt::Debug for Given {
+    /// Its kind alone: a folder's name is never logged (#3656), as `Names` keeps it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Files(_) => "Files",
+            Self::Folder(_) => "Folder",
+        })
+    }
 }
 
 impl gpui::EventEmitter<InPlaceKey> for CommandBar {}
@@ -817,6 +837,8 @@ pub struct CommandBar {
     /// At rest in Ask, the pages the page added for the task, each address with its title, which
     /// the field draws as chips before the input, as an ask over a page draws its page.
     added: Vec<(SharedString, SharedString)>,
+    /// And after them, the files and the folder it gave the task.
+    given: Vec<Given>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     /// The Spaces a Spaces menu lists.
@@ -1055,6 +1077,7 @@ fn new_bar(
             menu_open: None,
             favicons: HashMap::new(),
             added: Vec::new(),
+            given: Vec::new(),
             tabs: Vec::new(),
             spaces: Vec::new(),
             shown: Vec::new(),
@@ -2205,8 +2228,8 @@ impl CommandBar {
         if self.input.read(cx).selection() != (0..0) {
             return;
         }
-        if self.on_ask && !self.added.is_empty() {
-            cx.emit(InPlaceKey::DropPage);
+        if self.on_ask && !(self.added.is_empty() && self.given.is_empty()) {
+            cx.emit(InPlaceKey::DropChip);
             return cx.stop_propagation();
         }
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
@@ -4092,6 +4115,29 @@ impl CommandBar {
             .collect()
     }
 
+    /// At rest in Ask, after the pages, the files' chip and the folder's, each opening its menu.
+    fn given_chips(&self, palette: &palette::Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.on_ask {
+            return Vec::new();
+        }
+        let ink: Hsla = palette.ink.into();
+        (self.given.iter().enumerate())
+            .map(|(at, given)| {
+                let (path, name) = match given {
+                    Given::Files(name) => ("icons/file.svg", name.clone()),
+                    Given::Folder(name) => ("icons/folder.svg", name.clone()),
+                };
+                let glyph = glyph(path, CHIP_FAVICON, ink);
+                mode_chip(palette.plate(CHIP), ink, Some(glyph), name)
+                    .flex_shrink(1.)
+                    .mr(px(ADDED_GAP))
+                    .id(("given", at))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(InPlaceKey::Given(at))))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// The rows, `top` under the input's row, as many as show before the list scrolls.
     fn list(&self, rows: Vec<AnyElement>, top: f32) -> gpui::Stateful<gpui::Div> {
         let shown = rows.len().min(ROWS_SHOWN) as f32;
@@ -4198,6 +4244,7 @@ impl CommandBar {
             .items_center()
             .children(self.mode_chip(&palette))
             .children(self.added_chips(&palette))
+            .children(self.given_chips(&palette, cx))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
@@ -4216,6 +4263,20 @@ impl CommandBar {
             self.added = added;
             cx.notify();
         }
+    }
+
+    /// The files and the folder the page gave the task, which Ask's field draws after its pages.
+    pub fn set_given(&mut self, given: Vec<Given>, cx: &mut Context<Self>) {
+        if given != self.given {
+            self.given = given;
+            cx.notify();
+        }
+    }
+
+    /// The files' and the folder's chips Ask's field draws, as `set_given` gave them.
+    #[cfg(test)]
+    pub fn given(&self) -> &[Given] {
+        &self.given
     }
 
     /// The pages Ask's field draws as chips, as `set_added` gave them.

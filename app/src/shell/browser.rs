@@ -859,6 +859,15 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// What the broom on the New Tab line shows for the Space the window shows, or None where it
+    /// isn't drawn, which the browser alone decides. It tells the shell to draw again as the
+    /// answer changes, and ends `Broom::Failed` itself.
+    fn broom(&self) -> Option<super::Broom> {
+        None
+    }
+    /// The user's click on the broom: sorts the Today tabs of the Space the window shows into
+    /// folders. The user's alone: no command runs it and no agent reaches it.
+    fn start_broom(&self, _cx: &mut App) {}
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -913,6 +922,11 @@ pub trait Browser {
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
     /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
     /// calls it: no agent has a path to it.

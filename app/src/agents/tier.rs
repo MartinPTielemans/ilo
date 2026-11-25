@@ -323,6 +323,19 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
 }
 
+/// What a task starts with, as its start's entry counts it: never an address, a title or a name.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StartedWith {
+    /// The pages the user added.
+    pub pages: usize,
+    /// Whether they gave it a folder.
+    pub folder: bool,
+    /// How many files they attached.
+    pub files: usize,
+    /// Whether ilo couldn't copy those files, so it started without them.
+    pub left_out: bool,
+}
+
 /// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
 /// its level: the menu's names with how many sites, never an address.
 pub fn sites_logged(from: &Sites, to: &Sites) -> String {
@@ -335,14 +348,27 @@ pub fn sites_logged(from: &Sites, to: &Sites) -> String {
 }
 
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
-/// count alone, never an address or title.
-pub fn started_logged(tier: Tier, added: usize) -> String {
-    match added {
-        0 => format!("Started at {}", tier.label()),
-        1 => format!("Started at {} · 1 page", tier.label()),
-        added => format!("Started at {} · {added} pages", tier.label()),
+/// target, as a change's keeps `changed_logged`, with what it starts with, in this order: pages,
+/// folder, files.
+pub fn started_logged(tier: Tier, with: StartedWith) -> String {
+    let mut said = format!("Started at {}", tier.label());
+    match with.pages {
+        0 => {}
+        1 => said.push_str(" · 1 page"),
+        pages => said.push_str(&format!(" · {pages} pages")),
     }
+    if with.folder {
+        said.push_str(" · a folder");
+    }
+    match with.files {
+        0 => {}
+        1 => said.push_str(" · 1 file"),
+        files => said.push_str(&format!(" · {files} files")),
+    }
+    if with.left_out {
+        said.push_str(" · files left out");
+    }
+    said
 }
 
 /// The most of a page's text a line carries.
@@ -377,6 +403,35 @@ fn capped(text: &str, most: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The start's entry counts what the task starts with, pages, then folder, then files, and
+    /// names none of them.
+    #[test]
+    fn a_start_counts_its_pages_folder_and_files_in_that_order() {
+        let with = |pages, folder, files, left_out| StartedWith {
+            pages,
+            folder,
+            files,
+            left_out,
+        };
+        for (with, said) in [
+            (with(0, false, 0, false), "Started at Work on pages"),
+            (
+                with(1, true, 3, false),
+                "Started at Work on pages · 1 page · a folder · 3 files",
+            ),
+            (
+                with(2, false, 1, false),
+                "Started at Work on pages · 2 pages · 1 file",
+            ),
+            (
+                with(0, true, 2, true),
+                "Started at Work on pages · a folder · 2 files · files left out",
+            ),
+        ] {
+            assert_eq!(started_logged(Tier::Work, with), said, "{with:?}");
+        }
+    }
 
     #[test]
     fn each_tier_allows_all_the_one_below_does() {
