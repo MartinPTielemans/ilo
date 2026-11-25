@@ -91,12 +91,17 @@ panel_color() {
     inside && $1 == "palettes" { line = $0; sub(/^[^[]*\[/, "", line); gsub(/[] ]/, "", line); split(line, colors, ",") }
     END { first = 1; for (i = 1; i < n; i++) first += counts[i]; c = colors[first]; sub(/^0x/, "", c); print c }' design/tokens.toml
 }
+# Channel $2 of colour $1, six hex digits, as a number: 1 is red, 2 green, 3 blue. Cut out, as the
+# checks run under sh, which has no ${name:offset:length}.
+channel() {
+  echo $((0x$(printf %s "$1" | cut -c"$(($2 * 2 - 1))-$(($2 * 2))")))
+}
 # Whether colours $1 and $2, six hex digits each, are two steps of a channel apart at most, as a
 # palette's colour comes back from the field it's placed in (layout.rs's same_colors).
 near_color() {
   local i d
-  for i in 0 2 4; do
-    d=$((0x${1:$i:2} - 0x${2:$i:2}))
+  for i in 1 2 3; do
+    d=$(($(channel "$1" $i) - $(channel "$2" $i)))
     [ "$d" -le 2 ] && [ "$d" -ge -2 ] || return 1
   done
 }

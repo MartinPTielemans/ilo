@@ -175,7 +175,7 @@ echo "$red_at" | awk '{ x = substr($1, 3) - 0.5; y = substr($2, 3) + 0; exit !(x
   fail "a click at the pad's red gave $red_at, not x=0.5 y=0"
 expect "^browser: colored space $second [0-9a-f]*\$" "the pad's colour wasn't the Space's colour"
 red_color=$(grep "^browser: colored space $second " "$log" | tail -1 | cut -d' ' -f5)
-[ $((0x${red_color:0:2})) -ge 240 ] && [ $((0x${red_color:2:2})) -le 16 ] && [ $((0x${red_color:4:2})) -le 16 ] ||
+[ "$(channel "$red_color" 1)" -ge 240 ] && [ "$(channel "$red_color" 2)" -le 16 ] && [ "$(channel "$red_color" 3)" -le 16 ] ||
   fail "a click at the pad's red gave the Space $red_color"
 expect "^browser: themed space $second $red\$" "the core didn't keep the Space's theme"
 # + makes it two colours, the second the first's opposite.
