@@ -354,3 +354,34 @@ fn a_hairline_shorter_than_the_lines_gap_is_not_drawn(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A Space beside the one shown has a still broom, which can't know that Space's state. The
+/// moment it is the one shown, its broom is what the browser answers for it.
+#[gpui::test]
+fn a_space_shows_its_own_brooms_state_the_moment_it_is_the_one_shown(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11], Some(Broom::Idle));
+    shell.update(cx, |shell, cx| {
+        let space = |id| (id, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space(1), space(2)], cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            vec![20, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let (_, broom) = node(cx, Role::Button, NAME).expect("the first Space's");
+    assert!(!broom.is_disabled());
+
+    // The browser's answer is for the Space the window shows, and the other has nothing to sort.
+    host.broom.set(Some(Broom::NothingToSort));
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    cx.run_until_parked();
+    let (_, broom) = node(cx, Role::Button, NAME).expect("the second Space's");
+    assert!(broom.is_disabled());
+    let glyph = frame(&shell, cx, FRAME);
+    assert!(click(cx, &host, glyph).is_empty());
+}
