@@ -742,6 +742,13 @@ fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
     let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| shell.opt_ins(cx))
     };
+    // The table's words (P30o), the name from the constant.
+    let (name, line) = Switch::OtherApps.words();
+    assert_eq!(
+        name,
+        concat!("Let other apps' agents use ", env!("APP_NAME"))
+    );
+    assert_eq!(line, "Editors, terminal tools and scripts on this computer");
     // Just the browser, then with an assistant.
     for (key, agents) in [("down", false), ("up", true)] {
         host.agents.set(Some(!agents));

@@ -174,7 +174,7 @@ impl Switch {
             ),
             Switch::OtherApps => (
                 concat!("Let other apps' agents use ", env!("APP_NAME")),
-                "Through its command line or MCP".into(),
+                "Editors, terminal tools and scripts on this computer".into(),
             ),
             Switch::CrashReports => (
                 "Send crash reports",
