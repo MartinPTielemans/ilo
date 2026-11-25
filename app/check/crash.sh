@@ -141,7 +141,7 @@ bytes=$(wc -c < "$dump" | tr -d ' ')
 log="$out/crash-off.log"
 launch "$reports"
 await '^browser: crash report offered$' || fail "the launch after the crash didn't offer its report"
-await "^browser: toast shown $app_name quit unexpectedly\. \[send, don't send\]\$" ||
+await "^browser: toast shown $product quit unexpectedly\. \[send, don't send\]\$" ||
   fail "the offer's toast didn't show"
 await '^browser: toast settled$' || fail "the offer's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/crash-offer.png" || fail "no window to capture"

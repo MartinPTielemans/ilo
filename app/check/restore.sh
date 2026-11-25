@@ -247,7 +247,7 @@ case "$(uname)" in
 esac
 post key q cmd
 expect '^browser: command quit via ' "⌘Q didn't reach the UI"
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 post key return
 expect "$downloads_question" "⌘Q with a download running didn't ask first"
@@ -261,7 +261,7 @@ expect '^browser: library section downloads$' \
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen before the quit"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 post key return
 expect "$downloads_question" "⌘Q didn't ask again"

@@ -337,7 +337,7 @@ send click $page_point
 send key u
 expect "^browser: title $asking armed\$" "the page didn't ask to be asked before it's left"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 post key return
 expect "^browser: page $asking dialog Leave " "the quit didn't ask the page that asks before it's left"
@@ -348,7 +348,7 @@ open_from_bar "${site}welcome.html"
 kept=$tab
 kept_today=$(today)
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting, after a quit the page stopped"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting, after a quit the page stopped"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle, after a quit the page stopped"
 post key return
 expect "^browser: page $asking dialog Leave " "the second quit didn't ask the page that asks before it's left"

@@ -554,7 +554,7 @@ close_find_bar() {
 }
 if find_keys_refused; then
   echo "skip: escape and typing in the find bar, after ⌘F with the UI focused, a second ⌘F and" \
-    "⌘F with Prefer $app_name, known under #2904: on sway's Xwayland before wlroots 0.19" \
+    "⌘F with Prefer $product, known under #2904: on sway's Xwayland before wlroots 0.19" \
     "($(sway --version)) the find bar can't keep the X focus"
   send key f cmd
   expect '^browser: find bar drew ' "⌘F with the UI focused didn't open the find bar"
@@ -1084,7 +1084,7 @@ $(grep '^browser: menu shown' "$log" | tail -1)"
   send choose "$(cased "$3")"
   expect "^browser: shortcut find prefers $2\$" "$3 didn't take for Find"
 }
-prefer "Prefer Websites (checked), Prefer $app_name" ilo "Prefer $app_name"
+prefer "Prefer Websites (checked), Prefer $product" ilo "Prefer $product"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-prefer.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -1093,8 +1093,8 @@ send type y
 expect '^browser: title [0-9]* value .*y$' "the page didn't get the y typed before ⌘F"
 send key f cmd
 pressed=$step
-expect '^browser: command find via page$' "⌘F with Prefer $app_name didn't run Find at once"
-expect '^browser: find bar drew ' "⌘F with Prefer $app_name didn't open the find bar"
+expect '^browser: command find via page$' "⌘F with Prefer $product didn't run Find at once"
+expect '^browser: find bar drew ' "⌘F with Prefer $product didn't open the find bar"
 saw='^browser: title [0-9]* page saw cmd-f$'
 sed -n "/^browser: drive $pressed: /,\$p" "$log" | grep -q "$saw" &&
   fail "the page saw ⌘F with Prefer $app_name"
@@ -1104,7 +1104,7 @@ else
   send key escape
   expect '^browser: find bar hidden$' "escape didn't close the find bar"
 fi
-prefer "Prefer Websites, Prefer $app_name (checked)" websites "Prefer Websites"
+prefer "Prefer Websites, Prefer $product (checked)" websites "Prefer Websites"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
@@ -1470,14 +1470,14 @@ width=${content%x*}
 height=${content#*x}
 post key q cmd
 expect '^browser: command quit via page$' "⌘Q with the page focused didn't reach the UI"
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/quit.png" || fail "no window to capture"
 send key escape
 expect '^browser: dialog cancelled$' "escape didn't cancel quitting"
 expect '^browser: dialog hidden$' "the dialog asking to quit didn't go"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask again after Cancel"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask again after Cancel"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle again"
 # It's the driver's last command: the app doesn't report it done.
 post click $((width / 2 - 225 + 29 + 40)) $((height / 2 - 86 + 1 + 38 + 22 + 46 + 18))

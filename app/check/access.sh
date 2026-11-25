@@ -346,8 +346,8 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   await '^browser: onboarding started$' || fail "the onboarding didn't start"
   await '^browser: onboarding step intro settled$' || fail "the onboarding's welcome didn't draw"
   intro="$out/access-intro.txt"
-  read_tree "$dialog \"Welcome to $app_name.\"" > "$intro"
-  grep -q " $dialog \"Welcome to $app_name.\"" "$intro" ||
+  read_tree "$dialog \"Welcome to $product.\"" > "$intro"
+  grep -q " $dialog \"Welcome to $product.\"" "$intro" ||
     fail "the welcome isn't a dialog called by its title, Welcome to $app_name.: $intro"
   grep -q " $button \"Get Started\"" "$intro" || fail "the welcome's Get Started isn't a button: $intro"
   grep -q " $button \"Skip Setup\"" "$intro" || fail "the welcome's Skip Setup isn't a button: $intro"
