@@ -387,6 +387,8 @@ impl Shell {
                 files: std::mem::take(&mut resting.files),
                 folder: resting.folder.take(),
             },
+            // The `+` menu has no row for the user's tabs yet, so none is picked here.
+            tabs: Default::default(),
         };
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");

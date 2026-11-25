@@ -316,6 +316,30 @@ impl Browser for Core {
         unsafe { bc::bc_tab_move_to_space(tab, space) }
     }
 
+    fn shows(&self, tab: u64, space: u64, cx: &App) -> bool {
+        if space == 0 || !name(bc::bc_space_agent, space).is_empty() {
+            return false;
+        }
+        if self.space_tab_ids(space, cx).contains(&tab) {
+            return true;
+        }
+        // A favorite is in no Space's rows: its holder is the Space it belongs to under Each
+        // Space, else its profile, whose every Space shows it (spaces::favorites_changed).
+        ids(bc::bc_favorites).contains(&tab)
+            && match unsafe { bc::bc_favorite_space(tab) } {
+                0 => unsafe { bc::bc_tab_profile(tab) == bc::bc_space_profile(space) },
+                own => own == space,
+            }
+    }
+
+    fn give_tab(&self, tab: u64, space: u64, _: &mut App) -> bool {
+        unsafe { bc::bc_tab_give_to_agent(tab, space) }
+    }
+
+    fn return_tab(&self, tab: u64, _: &mut App) -> bool {
+        unsafe { bc::bc_tab_return_from_agent(tab) }
+    }
+
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
         // A private window's is never one: agents get no path into it.

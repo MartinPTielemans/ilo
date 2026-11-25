@@ -64,8 +64,22 @@ impl Browser for Engine {
         unsafe { bc::bc_window_select(self.window, tab) };
     }
 
-    fn close(&self, tab: u64, split: bool, _: &mut App) {
-        unsafe { bc::bc_tab_close(tab, split) };
+    fn close(&self, tab: u64, split: bool, cx: &mut App) {
+        // A tab of the user's a thread holds never closes while it's the thread's: their close
+        // of it returns it to their own tabs, which the activity log then says. Each pane of a
+        // split is asked, and the rest close.
+        let left = match browser::agents::global(cx) {
+            Some(agents) => agents.update(cx, |agents, cx| agents.close_leaves(tab, split, cx)),
+            None => vec![tab],
+        };
+        if left.contains(&tab) {
+            unsafe { bc::bc_tab_close(tab, split) };
+            return;
+        }
+        // The named one went back, out of its split: the others close each by itself.
+        for pane in left {
+            unsafe { bc::bc_tab_close(pane, false) };
+        }
     }
 
     fn close_below(&self, tab: u64, _: &mut App) {
@@ -76,7 +90,12 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_duplicate(tab) }
     }
 
-    fn move_to_space(&self, tab: u64, space: u64, _: &mut App) {
+    fn move_to_space(&self, tab: u64, space: u64, cx: &mut App) {
+        // A tab of the user's a thread holds is returned by their own move of it, which the
+        // activity log then says, and moves as any tab of theirs.
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.move_returns(tab, cx));
+        }
         unsafe { bc::bc_tab_move_to_space(tab, space) };
     }
 

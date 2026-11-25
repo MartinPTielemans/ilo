@@ -261,6 +261,11 @@ impl Agents {
         }
         let changed = tier::sites_logged(&task.sites, &sites);
         task.sites = sites;
+        // As the user set them, whatever a handed tab had added (task/handed.rs).
+        self.tasks.handed.sites_set(key);
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         for stop in (task.stops.iter_mut()).filter(|stop| stop.why == Why::OtherSite) {
             stop.settled = true;
         }

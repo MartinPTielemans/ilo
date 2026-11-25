@@ -293,6 +293,16 @@ pub trait Browser {
     fn task_spaces(&self) -> Vec<u64>;
     /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
     fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
+    /// Whether `space` is a Space of the user's that shows `tab` as one of its own: a pinned or
+    /// Today tab of it, or a favorite it shows. No agent's Space shows a tab in this sense.
+    fn shows(&self, tab: u64, space: u64, cx: &App) -> bool;
+    /// Gives the user's `tab` to the agent whose Space is `space`, where it's one of that agent's
+    /// pages until it goes back (bc_tab_give_to_agent). Whether it moved: the core refuses the
+    /// tabs it never gives, whatever asks. The user's send alone calls it (task/handed.rs).
+    fn give_tab(&self, tab: u64, space: u64, cx: &mut App) -> bool;
+    /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
+    /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
+    fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
     /// The user's Space a session's card shows in and its pages open into: the one the front
     /// window shows, if it's in the profile of `like`, an agent's Space, else the first of the
     /// user's in that profile; never a private window's.
@@ -1837,6 +1847,13 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
+        // A tab of the user's they returned to their own tabs is theirs again, on whatever page
+        // it's at now: a call that names it hears so, whatever its tool, an ask for it back too,
+        // and nothing of the call is run, shown, logged or kept.
+        if self.names_returned(&call.agent, &call.arguments) {
+            _ = (call.reply).send(Refused::new(task::handed::RETURNED).into());
+            return;
+        }
         self.trace_call(&call, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
@@ -1923,44 +1940,16 @@ impl Agents {
             at,
             ..
         } = call;
+        // One that waited at the fence while the user returned the tab it names hears so too.
+        if self.names_returned(&agent, &arguments) {
+            _ = reply.send(Refused::new(task::handed::RETURNED).into());
+            return;
+        }
         match tool.as_str() {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
                 self.space(&agent, cx);
-                // A tab of its own off the web is listed by its number alone, so it can close it,
-                // and one the user holds by its number and theirs, so where they go stays theirs.
-                let mut tabs = self.browser.agent_tabs(&agent, cx);
-                // A page of a task the user stopped isn't listed to its client, by number or
-                // otherwise, until they hand it back.
-                tabs.retain(|tab| !self.withheld(&agent, tab.id));
-                // A tab that came to a fenced site is listed without its page's title or address.
-                let came: HashSet<u64> = (tabs.iter())
-                    .filter(|tab| self.came_to(tab.id, cx).is_some())
-                    .map(|tab| tab.id)
-                    .collect();
-                let tabs: Vec<TabInfo> = (tabs.into_iter())
-                    .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
-                        None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => {
-                            Some(TabInfo {
-                                title: WITH_THE_USER.into(),
-                                url: "".into(),
-                                ..tab
-                            })
-                        }
-                        None if came.contains(&tab.id) => Some(TabInfo {
-                            title: fence::LISTED.into(),
-                            url: "".into(),
-                            ..tab
-                        }),
-                        None => Some(tab),
-                        Some(NOT_WEB_PAGE) => Some(TabInfo {
-                            title: OFF_THE_WEB.into(),
-                            url: "".into(),
-                            ..tab
-                        }),
-                        Some(_) => None,
-                    })
-                    .collect();
+                let tabs = self.tabs_listed(&agent, cx);
                 self.note(&agent, connection, "list_tabs", "", "");
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
@@ -2888,6 +2877,42 @@ impl Agents {
         }
     }
 
+    /// The agent's tabs as list_tabs lists them, each with what an agent may know of it.
+    fn tabs_listed(&self, agent: &str, cx: &App) -> Vec<TabInfo> {
+        // A tab of its own off the web is listed by its number alone, so it can close it,
+        // and one the user holds by its number and theirs, so where they go stays theirs.
+        let mut tabs = self.browser.agent_tabs(agent, cx);
+        // A page of a task the user stopped isn't listed to its client, by number or
+        // otherwise, until they hand it back.
+        tabs.retain(|tab| !self.withheld(agent, tab.id));
+        // A tab that came to a fenced site is listed without its page's title or address.
+        let came: HashSet<u64> = (tabs.iter())
+            .filter(|tab| self.came_to(tab.id, cx).is_some())
+            .map(|tab| tab.id)
+            .collect();
+        (tabs.into_iter())
+            .filter_map(|tab| match self.browser.off_limits(tab.id, cx) {
+                None | Some(NOT_WEB_PAGE) if self.held.contains_key(&tab.id) => Some(TabInfo {
+                    title: WITH_THE_USER.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                None if came.contains(&tab.id) => Some(TabInfo {
+                    title: fence::LISTED.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                None => Some(tab),
+                Some(NOT_WEB_PAGE) => Some(TabInfo {
+                    title: OFF_THE_WEB.into(),
+                    url: "".into(),
+                    ..tab
+                }),
+                Some(_) => None,
+            })
+            .collect()
+    }
+
     /// The tab a call names, else its default (`default_tab`); or None, having answered why.
     fn tab_for(
         &mut self,
@@ -3025,6 +3050,7 @@ impl Agents {
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);
+        self.forget_handed(tab, cx);
         self.let_go(tab, held::Event::Closed, cx);
     }
 
@@ -3080,6 +3106,7 @@ impl Agents {
         for tab in moved {
             self.left(tab, Gone::Moved);
         }
+        self.handed_left(space, &tabs, cx);
         if self.held.is_empty() {
             return;
         }
@@ -4844,6 +4871,9 @@ impl Agents {
             _ = reply.send(refused.into());
             return;
         }
+        if action == "remove_tab" && self.close_gives_back(agent, tab, &reply, cx) {
+            return;
+        }
         self.current.insert((agent.into(), connection), tab);
         let answer = match (action, pinned) {
             ("pin_tab", true) => format!("Tab {tab} is pinned already."),
@@ -4864,6 +4894,11 @@ impl Agents {
                 // Removing closes the tab with its split, so each says why before the core's
                 // close would read as the user's, and one whose page kept it open says nothing.
                 let split = self.browser.split(tab, cx);
+                // A pane the thread holds of the user's is given back first, as its own close of
+                // it does, so the removal closes none.
+                for &each in split.iter().filter(|&&each| each != tab) {
+                    self.return_tab(agent, each, task::handed::By::Thread, cx);
+                }
                 for &each in &split {
                     self.went(each, agent, Gone::Removed(tab));
                 }
@@ -5026,6 +5061,9 @@ impl Agents {
         if let Err(refused) = self.may_act(agent, tab, "close_tab", cx) {
             let act = act_of(agent, connection, call, tab, reply);
             return self.refuse(act, &site, refused, cx);
+        }
+        if self.close_gives_back(agent, tab, &reply, cx) {
+            return;
         }
         // The agent's own tab, discarded while its page is asked, doesn't wait for the page. Nor
         // does one whose page shows its dialog, which can't answer before it's gone (#3536).
@@ -5316,9 +5354,10 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match site.is_empty() {
-                true => tools::describe(action).to_string(),
-                false => format!("{} · {site}", tools::describe(action)),
+            let doing = match (task::handed::entry(action, site), site.is_empty()) {
+                (Some(whole), _) => whole,
+                (None, true) => tools::describe(action).to_string(),
+                (None, false) => format!("{} · {site}", tools::describe(action)),
             };
             self.doing.insert(agent.into(), doing.into());
         }
@@ -5597,6 +5636,10 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Moved => ToolResult::error(format!(
             "The user moved tab {tab} to a Space of their own. It's theirs now."
         )),
+        // The user's own return of it alone says they returned it.
+        held::Event::Returned => ToolResult::error(task::handed::RETURNED),
+        // It went back with its thread still under way: no longer a tab of the agent's.
+        held::Event::GivenBack { stopped: false } => ToolResult::error(NOT_ITS_SPACE),
         _ => ToolResult::failed(tools::Kind::Stopped, STOPPED),
     }
 }
@@ -5894,6 +5937,8 @@ enum Gone {
     Download,
     /// It closed as the agent removed this tab, it or one of its split, from its pinned tabs.
     Removed(u64),
+    /// The user returned it, a tab of theirs they had handed to the thread, to their own tabs.
+    Returned,
 }
 
 impl Gone {
@@ -5922,6 +5967,8 @@ impl Gone {
                 "Tab {tab} closed with its split view, as the agent removed tab {removed} from its \
                  pinned tabs."
             ),
+            // The plain answer, and nothing to carry on with: the page is the user's.
+            Gone::Returned => return task::handed::RETURNED.into(),
         };
         format!("{went} To carry on, open the page again with open_tab.")
     }

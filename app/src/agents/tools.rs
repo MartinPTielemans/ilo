@@ -871,6 +871,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     if let Some(stopped) = permission_stopped(&did.tool, &did.site) {
         return stopped;
     }
+    // A tab of the user's that went to a thread or came back: its one sentence too.
+    if let Some(handed) = super::task::handed::entry(&did.tool, &did.site) {
+        return handed;
+    }
     let site = |none: &str| match did.site.is_empty() {
         true => none.to_string(),
         false => did.site.clone(),

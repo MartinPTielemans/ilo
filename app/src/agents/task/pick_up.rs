@@ -666,8 +666,8 @@ impl Agents {
     }
 }
 
-/// How many messages of the user's `task` has.
-fn replies(task: &Task) -> usize {
+/// How many messages of the user's `task` has, after the one that started it.
+pub(super) fn replies(task: &Task) -> usize {
     (task.messages.iter())
         .filter(|message| message.who == Who::User)
         .count()
@@ -782,6 +782,7 @@ impl Task {
             rising: None,
             rewalled: Vec::new(),
             copying: false,
+            sends: Default::default(),
             names: crate::agents::files::Names::default(),
         }
     }

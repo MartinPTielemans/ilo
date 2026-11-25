@@ -804,6 +804,7 @@ fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppCon
             files: vec![missing],
             folder: None,
         },
+        tabs: Default::default(),
     };
     let page = Some(AskedOn {
         url: "https://www.example.com/trains".into(),
@@ -1107,6 +1108,7 @@ mod copying {
                 files: vec![file],
                 folder: Some(folder),
             },
+            tabs: Default::default(),
         };
         let agent = (run.agents)
             .update(cx, |agents, cx| {
