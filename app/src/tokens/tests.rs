@@ -176,8 +176,7 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.onboarding.picture.phone-radius",
     "shell.onboarding.picture.island-radius",
     "shell.onboarding.picture.phone-space-radius",
-    // The composer's switch round its parts, and a card's page inside the card (#4140).
-    "shell.composer.switch-radius",
+    // A resting card's page inside the card (#4140).
     "shell.composer.page-radius",
     // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
     "theme-panel.segment-frame-radius",
@@ -247,10 +246,6 @@ fn a_corner_inside_another_is_concentric() {
         hover_card::RECENT_ROW_RADIUS + hover_card::PADDING
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
-    assert_eq!(
-        shell::composer::SWITCH_RADIUS,
-        shell::composer::SWITCH_PART_RADIUS + shell::composer::SWITCH_INSET
-    );
     assert_eq!(
         shell::composer::CARD_RADIUS,
         shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
