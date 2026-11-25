@@ -3704,7 +3704,7 @@ fn first_words(result: &str) -> SharedString {
 /// A result's first line of text, without the marks that make it a heading, a list's item or
 /// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
 /// and what wouldn't show or would move the text around it written out. None with no text.
-fn first_line(result: &str) -> Option<SharedString> {
+pub fn first_line(result: &str) -> Option<SharedString> {
     let line = (result.lines())
         .map(|line| {
             line.trim()

@@ -1625,6 +1625,9 @@ pub struct Shell {
     /// Whether an assistive app reads the window being drawn, so its elements say what they are
     /// (access.rs). Each render sets it from its window.
     a11y: bool,
+    /// What a screen reader is told of a task whose conversation isn't shown as it comes to need
+    /// the user or to be done, and which telling it is (`task_cards.rs`, #4244).
+    task_told: Option<(usize, SharedString)>,
     /// The row and favicon hovered when the rows were last drawn, and that row's button: "0" for
     /// none, "1" for ✕, "−" for − and "remove" for remove, for the line check.sh waits for.
     drawn_hover: (Option<Row>, Option<u64>, &'static str),
@@ -2243,6 +2246,7 @@ impl Shell {
             wheel_paged: None,
             hovered_favicon: None,
             a11y: false,
+            task_told: None,
             drawn_hover: (None, None, "0"),
             history: undo::History::default(),
             undo_offered: false,
@@ -5080,6 +5084,7 @@ impl Render for Shell {
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
+            .children(self.task_announcer())
     }
 }
 
