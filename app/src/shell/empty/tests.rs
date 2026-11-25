@@ -547,28 +547,23 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     );
 }
 
-/// The bar rests with its input row level with ⌘T's bar's, nothing above it, and the group moves
-/// up only as far as it needs to fit the card, never nearer its top than `TOP`.
+/// The bar rests in the empty window's column, 150 down, under the mark's 48 and the 28 under it
+/// (the lead's drawing), and the group moves up only as far as it needs to fit the card, never
+/// nearer its top than `TOP`.
 #[test]
-fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
-    use crate::tokens::command_bar::HEIGHT;
+fn the_bar_rests_in_its_column_under_the_marks_room_and_rises_only_to_fit() {
     use crate::tokens::shell::composer::TOP;
-    let row = crate::command_bar::centered_row_middle(800.) - 40.;
-    let top = group_top(row, 720., false, false);
-    assert!(
-        (top + HEIGHT / 2. - row).abs() < 1e-3,
-        "the bar's row's middle is at {}, ⌘T's at {row}",
-        top + HEIGHT / 2.
+    let top = group_top(720., false, false);
+    assert_eq!(
+        top,
+        150. + 48. + 28.,
+        "the bar isn't 28 under a 48 mark at 150 down"
     );
     // A card 560 tall has room for the bar there, but not for the cards under it.
-    let cards = group_top(row, 560., true, true);
+    let cards = group_top(560., true, true);
     assert!(cards < top, "the cards didn't lift the group");
-    assert!(group_top(row, 400., true, true) == TOP, "it went above TOP");
-    assert_eq!(
-        group_top(row, 2000., true, true),
-        top,
-        "a tall card moved it"
-    );
+    assert!(group_top(400., true, true) == TOP, "it went above TOP");
+    assert_eq!(group_top(2000., true, true), top, "a tall card moved it");
 }
 
 /// Makes the test's window the key one, as the user's window is when they're in it.
@@ -809,6 +804,15 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         let (shell, cx, host) = window_with_no_tab(cx);
         host.private_bar.set(private);
         cx.simulate_click(middle(&shell, cx), Modifiers::none());
+        cx.simulate_input("book a table");
+        cx.simulate_keystrokes("tab enter");
+        assert_eq!(
+            composer(&shell, cx).0 || rested(&host).iter().any(|c| c.starts_with("run task")),
+            !private,
+            "private: {private}"
+        );
+    }
+}
 
 /// A thread at work in the bar's list at rest wears the turning ring before its state word, on
 /// the shell's one clock, in place of the green dot; a list with none at work asks for no frame,
@@ -832,13 +836,4 @@ fn a_working_threads_ring_turns_at_rest_and_nothing_else_asks_for_a_frame(cx: &m
         listed(Dot::Working, cx),
         "a working thread's ring doesn't turn"
     );
-}
-        cx.simulate_input("book a table");
-        cx.simulate_keystrokes("tab enter");
-        assert_eq!(
-            composer(&shell, cx).0 || rested(&host).iter().any(|c| c.starts_with("run task")),
-            !private,
-            "private: {private}"
-        );
-    }
 }
