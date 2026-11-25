@@ -344,7 +344,7 @@ press down
 judging=1
 # On through the steps as Skip goes, a click on it where each step says it's drawn, as Esc is Back,
 # each one's speech recorded as it comes.
-for _ in $(seq 12); do
+for _ in $(seq 14); do
   grep -q '^browser: onboarding done$' "$log" && break
   at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
   heard=$(wc -l < "$nvda_log")

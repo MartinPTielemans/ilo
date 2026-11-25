@@ -1119,6 +1119,18 @@ pub trait Browser {
         None
     }
     fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
+    /// Whether `setting` is on for `space`'s profile, as Settings' switch has it, or None where
+    /// Settings doesn't offer it, or before the profile has loaded.
+    fn setting(&self, _space: u64, _setting: Setting, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
+    /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
+    /// and the times Settings offers it, in its order; None before the profile has loaded.
+    fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
+        None
+    }
+    fn set_archive_after(&self, _space: u64, _seconds: f64, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
@@ -1282,6 +1294,17 @@ impl Default for Volume {
     fn default() -> Self {
         Volume(1.)
     }
+}
+
+/// A switch of Settings' own that first run shows too (Browser::setting).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Setting {
+    /// General's Reopen your windows and tabs.
+    RestoreWindows,
+    /// Ad Blocking's Block ads and trackers, in every profile.
+    AdBlocking,
+    /// Passwords' Offer to save passwords, the profile's own.
+    SavePasswords,
 }
 
 /// What's wrong with a tab's page, as the core says (BC_PAGE_ in browser_core.h). Agents read the

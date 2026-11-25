@@ -13,8 +13,10 @@
 # with the profile's list: Skip sets none, and the dark pass's ↓ and Return set the engine after the
 # default, as Settings' pop-up does. The opt-ins' shows the daily count's switch, off, as the run
 # names an endpoint, and no agents' until outside apps' have a setting of their own (#4260); the
-# dark pass turns the count's on and off again from the keyboard. The account's comes between
-# the colour and the opt-ins while
+# dark pass turns the count's on and off again from the keyboard. After the colour come the tidy
+# step, whose bar Skip leaves and the dark pass's → and Return set a stop on, and the private
+# step, whose ad blocking the dark pass turns off and on again from the keyboard. The account's
+# comes between them and the opt-ins while
 # the build names a sync server (branding/sync-server), and Skip leaves it signed out: the run never
 # signs in to the hosted server, as sync-account signs in on a server of its own. The assistant's
 # comes right after the welcome, and Skip leaves it with no assistant signed in. Help › Welcome to
@@ -86,8 +88,8 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro assistant import "*"color ${glass}${account}opt-ins keys") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the assistant, the import, the rest, the color, ${glass}${account}the opt-ins, the keys" ;;
+    "intro assistant import "*"color ${glass}tidy private ${account}opt-ins keys") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the assistant, the import, the rest, the color, ${glass}the tidy and private steps, ${account}the opt-ins, the keys" ;;
   esac
   # BROWSER_ONBOARDING gives the sheet its look but leaves the window's material the system's, so
   # on a system of the other look the captures would show a sheet on glass no user can reach.
@@ -128,6 +130,7 @@ expect '^browser: window on screen after first run$' \
   "light: the browser's window didn't come on screen as first run ended"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Skip at the colour step gave the Space one"
 grep -q '^browser: profile [0-9]* searches with ' "$log" && fail "light: Skip at the search engine step set one"
+grep -q '^browser: onboarding tidy set ' "$log" && fail "light: Skip at the tidy step set its time"
 expect '^browser: command new-tab via onboarding$' "light: the flow didn't end with the command bar"
 expect '^browser: command bar shown$' "light: the command bar didn't come up after the flow"
 capture_step light-in
@@ -290,6 +293,25 @@ if [ -n "$glass" ]; then
   skip_step transparency
   expect '^browser: onboarding left transparency via skip$' "dark: Skip didn't leave Transparency's step"
 fi
+# The bar rests at a new profile's 12 hours; → moves it a stop, which Return sets.
+expect '^browser: onboarding step tidy settled$' "dark: the tidy step didn't come"
+capture_step dark-tidy
+send key right
+expect '^browser: onboarding tidy at 1 day$' "dark: → didn't move the tidy step's bar from 12 hours"
+send key return
+expect '^browser: onboarding tidy set 1 day$' "dark: Return didn't set the tidy step's time"
+expect '^browser: onboarding left tidy via return$' "dark: Return didn't leave the tidy step"
+# From Continue, where it rests, ⇥ round to ad blocking's switch, which Space turns off and on.
+expect '^browser: onboarding step private settled$' "dark: the private step didn't come"
+capture_step dark-private
+expect '^browser: onboarding ad-blocking at ' "dark: the private step didn't draw ad blocking's switch"
+send key tab
+send key space
+expect '^browser: onboarding ad-blocking off$' "dark: ⇥ then Space didn't turn ad blocking off"
+send key space
+expect '^browser: onboarding ad-blocking on$' "dark: Space again didn't turn ad blocking back on"
+skip_step private
+expect '^browser: onboarding left private via skip$' "dark: Skip didn't leave the private step"
 if [ -n "$account" ]; then
   expect '^browser: onboarding step account settled$' "dark: the account step didn't come"
   capture_step dark-account
@@ -467,4 +489,4 @@ expect '^browser: appearance automatic$' \
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the intro, in a window of its own, which waits for Return and skips the setup at Skip Setup, then the assistant's step, the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, Transparency on the Mac, the account while the build names a sync server and the opt-ins, each left by Skip and the colour kept by Return, and the keys, left by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
+echo "ok: a new profile's first launch plays the intro, in a window of its own, which waits for Return and skips the setup at Skip Setup, then the assistant's step, the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, Transparency on the Mac, the tidy step, its time set by → and Return in dark, the private step, its ad blocking turned off and on from the keyboard, the account while the build names a sync server and the opt-ins, each left by Skip and the colour kept by Return, and the keys, left by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"

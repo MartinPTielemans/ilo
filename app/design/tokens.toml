@@ -2565,6 +2565,24 @@ key-cap = [56.0, 28.0, 8.0]
 key-cap-radius = 8.0
 key-cap-fill = 0.1
 foot = [30.0, 12.0, 16.0]
+# The tidy step's times (values-first-run.md, 27): the block's top, right and gap; the row over the
+# bar; the bar's width, height, its track's top and height; the thumb, a tick's dot and the labels'
+# width, height, size and line; the track, the part filled, the dots and the track's line at the
+# text's ink; the thumb's fill and its shadow's y, blur and alpha; the switch's card's top.
+tidy-block = [20.0, 12.0, 10.0]
+tidy-row = 28.0
+tidy-bar = [336.0, 20.0, 4.0, 12.0]
+tidy-track-radius = 6.0
+tidy-thumb = 20.0
+tidy-tick = 3.0
+tidy-labels = [60.0, 12.0, 10.0, 12.0]
+tidy-track = 0.086
+tidy-filled = 0.35
+tidy-dot = 0.45
+tidy-track-line = 0.08
+tidy-thumb-fill = 0xffffff
+tidy-thumb-shadow = [2.0, 6.0, 0.5]
+tidy-card-top = 16.0
 
 # First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
 # browser drawn from these, with made-up fixed content the same for everyone, and per step what

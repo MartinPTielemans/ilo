@@ -165,7 +165,7 @@ orca_press down
 # ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥ back to the last switch, before the
 # Skip.
 orca_switches=
-for _ in $(seq 12); do
+for _ in $(seq 14); do
   grep -q '^browser: onboarding done$' "$log" && break
   if [ -z "$orca_switches" ] && grep -q '^browser: onboarding step opt-ins' "$log"; then
     orca_switches=1

@@ -50,6 +50,8 @@ pub(super) enum Chip {
     Thread,
     Found,
     Favorites,
+    /// The private step's: what the blocker kept off the page, with no count.
+    Private,
 }
 
 impl Chip {
@@ -58,6 +60,7 @@ impl Chip {
             Chip::Thread => Some(Glyph::Ring),
             Chip::Found => Some(Glyph::Check),
             Chip::Favorites => None,
+            Chip::Private => Some(Glyph::Shield),
         }
     }
 
@@ -66,6 +69,7 @@ impl Chip {
             Chip::Thread => Some("A thread is a job you hand it, done in tabs of its own"),
             Chip::Found => None,
             Chip::Favorites => Some("Favorites sit here, in every Space"),
+            Chip::Private => Some("Ads and trackers kept off this page"),
         }
     }
 }
@@ -75,7 +79,11 @@ impl Scene {
     pub(super) fn of(step: Step) -> Scene {
         let plain = Scene::default();
         match step {
-            Step::Intro | Step::OptIns => plain,
+            Step::Intro | Step::OptIns | Step::Tidy => plain,
+            Step::Private => Scene {
+                chip: Some(Chip::Private),
+                ..plain
+            },
             Step::Assistant => Scene {
                 thread: true,
                 chip: Some(Chip::Thread),
@@ -890,6 +898,7 @@ enum Glyph {
     Plus,
     Bubble,
     Arrow,
+    Shield,
 }
 
 impl Glyph {
@@ -901,6 +910,7 @@ impl Glyph {
             Glyph::Plus => (10., Some(1.2)),
             Glyph::Bubble => (16., None),
             Glyph::Arrow => (40., Some(2.)),
+            Glyph::Shield => (16., Some(1.4)),
         }
     }
 }
@@ -960,6 +970,21 @@ fn glyph(kind: Glyph, size: f32, color: impl Into<Hsla>) -> gpui::Div {
                         path.close();
                         paths.push((path, None));
                     }
+                    // A shield, with a check in it.
+                    Glyph::Shield => {
+                        let mut path = new();
+                        path.move_to(at(8., 1.8));
+                        path.line_to(at(13., 3.7));
+                        path.line_to(at(13., 7.7));
+                        path.cubic_bezier_to(at(8., 14.2), at(13., 10.8), at(10.9, 13.1));
+                        path.cubic_bezier_to(at(3., 7.7), at(5.1, 13.1), at(3., 10.8));
+                        path.line_to(at(3., 3.7));
+                        path.close();
+                        path.move_to(at(5.8, 8.1));
+                        path.line_to(at(7.4, 9.7));
+                        path.line_to(at(10.3, 6.5));
+                        paths.push((path, None));
+                    }
                     Glyph::Arrow => {
                         let mut path = new();
                         path.move_to(at(4., 6.));
@@ -1014,6 +1039,14 @@ mod tests {
         let chip = Scene::of(Step::Import).chip;
         assert_eq!(chip, Some(Chip::Found));
         assert_eq!(Chip::Found.words(), None);
+    }
+
+    /// The private step's chip says what's kept off the page, never how much.
+    #[test]
+    fn the_private_chip_claims_no_count() {
+        assert_eq!(Scene::of(Step::Private).chip, Some(Chip::Private));
+        let words = Chip::Private.words().unwrap_or_default();
+        assert!(!words.is_empty() && !words.contains(|c: char| c.is_ascii_digit()));
     }
 
     #[test]

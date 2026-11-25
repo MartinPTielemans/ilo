@@ -480,6 +480,206 @@ impl Shell {
     }
 }
 
+impl Shell {
+    /// The tidy step: the row naming the time over the bar of Settings' times, its stops named
+    /// under it, then Settings' Reopen your windows and tabs in its card. A click or a drag on the
+    /// bar puts it at the stop nearest; the arrows move it a stop.
+    pub(super) fn tidy_step(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
+        let inks = Inks::of(colors);
+        let Some(tidy) = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.tidy.clone())
+        else {
+            return div();
+        };
+        let [top, right, gap] = t::TIDY_BLOCK;
+        let [width, height, track_top, track_height] = t::TIDY_BAR;
+        let [label_width, label_height, label_size, label_line] = t::TIDY_LABELS;
+        let [shadow_y, shadow_blur, shadow_alpha] = t::TIDY_THUMB_SHADOW;
+        let thumb = t::TIDY_THUMB;
+        let last = tidy.stops.len().saturating_sub(1).max(1);
+        // Each stop's centre along the bar, the thumb's half in from either end.
+        let x = move |at: usize| thumb / 2. + (width - thumb) * at as f32 / last as f32;
+        let at = x(tidy.at);
+        let words = tidy.stops[tidy.at].1;
+        let row = div()
+            .h(px(t::TIDY_ROW))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child("Put unpinned tabs away after")
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(words));
+        let dots = (0..tidy.stops.len()).map(move |each| {
+            let dot = t::TIDY_TICK;
+            div()
+                .absolute()
+                .left(px(x(each) - dot / 2.))
+                .top(px((height - dot) / 2.))
+                .size(px(dot))
+                .rounded_full()
+                .bg(inks.text(t::TIDY_DOT))
+        });
+        // Where the bar is drawn, which a click's place along it is read against.
+        let drawn: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>> =
+            Default::default();
+        let stop_at = move |bounds: Option<gpui::Bounds<gpui::Pixels>>,
+                            pointer: gpui::Point<gpui::Pixels>| {
+            let along = bounds.map_or(0., |bounds| f32::from(pointer.x - bounds.origin.x));
+            let along = ((along - thumb / 2.) / (width - thumb)).clamp(0., 1.);
+            (along * last as f32).round() as usize
+        };
+        let (pressed, moved) = (drawn.clone(), drawn.clone());
+        let a11y = self.a11y;
+        let count = tidy.stops.len();
+        let bar = div()
+            .id("onboarding-tidy")
+            .relative()
+            .w(px(width))
+            .h(px(height))
+            .tab_index(0)
+            .when_some(self.first_stop(Step::Tidy), |bar, stop| {
+                bar.track_focus(&stop)
+            })
+            .focus_from_keys_only()
+            .rounded(px(t::TIDY_TRACK_RADIUS))
+            .focus_visible(ring(inks.text(1.)))
+            .when(a11y, |bar| {
+                bar.role(gpui::accesskit::Role::Slider)
+                    .aria_label("Put unpinned tabs away after")
+                    .aria_min_numeric_value(0.)
+                    .aria_max_numeric_value((count - 1) as f64)
+                    .aria_numeric_value_step(1.)
+                    .aria_numeric_value(tidy.at as f64)
+                    .on_a11y_action(gpui::accesskit::Action::Increment, {
+                        let shell = cx.weak_entity();
+                        move |_, _, cx| {
+                            shell
+                                .update(cx, |shell, cx| shell.onboarding_tidy_by(1, cx))
+                                .ok();
+                        }
+                    })
+                    .on_a11y_action(gpui::accesskit::Action::Decrement, {
+                        let shell = cx.weak_entity();
+                        move |_, _, cx| {
+                            shell
+                                .update(cx, |shell, cx| shell.onboarding_tidy_by(-1, cx))
+                                .ok();
+                        }
+                    })
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    shell.onboarding_tidy(stop_at(pressed.get(), event.position), cx);
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |shell, event: &gpui::MouseMoveEvent, _, cx| {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        shell.onboarding_tidy(stop_at(moved.get(), event.position), cx);
+                    }
+                }),
+            )
+            .child(
+                gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(track_top))
+                    .w(px(width))
+                    .h(px(track_height))
+                    .rounded(px(t::TIDY_TRACK_RADIUS))
+                    .bg(inks.text(t::TIDY_TRACK))
+                    .border_1()
+                    .border_color(inks.text(t::TIDY_TRACK_LINE))
+                    .child(
+                        div()
+                            .h_full()
+                            .w(px(at))
+                            .rounded(px(t::TIDY_TRACK_RADIUS))
+                            .bg(inks.text(t::TIDY_FILLED)),
+                    ),
+            )
+            .children(dots)
+            .children(self.place(Step::Tidy, "tidy"))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(at - thumb / 2.))
+                    .top(px((height - thumb) / 2.))
+                    .size(px(thumb))
+                    .rounded_full()
+                    .bg(rgb(t::TIDY_THUMB_FILL))
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 0., shadow_alpha),
+                        offset: gpui::point(px(0.), px(shadow_y)),
+                        blur_radius: px(shadow_blur),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }]),
+            );
+        // The first stop's word starts at the bar's start and the last's ends at its end; the
+        // others sit centred under their dots, the stop the bar is at in the text's ink.
+        let labels = (tidy.stops.iter().enumerate()).map(move |(each, &(_, said))| {
+            let left = match each {
+                0 => 0.,
+                _ if each == last => width - label_width,
+                _ => x(each) - label_width / 2.,
+            };
+            let ink = match each == tidy.at {
+                true => inks.text(1.),
+                false => inks.text(inks.faint),
+            };
+            div()
+                .absolute()
+                .left(px(left))
+                .w(px(label_width))
+                .flex()
+                .map(|label| match each {
+                    0 => label.justify_start(),
+                    _ if each == last => label.justify_end(),
+                    _ => label.justify_center(),
+                })
+                .text_color(ink)
+                .child(said)
+        });
+        let labels = div()
+            .relative()
+            .w(px(width))
+            .h(px(label_height))
+            .text_size(px(label_size))
+            .line_height(px(label_line))
+            .children(labels);
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .text_size(px(t::BUTTON_SIZE))
+            .line_height(px(t::BUTTON_LINE))
+            .text_color(inks.text(1.))
+            .child(
+                div()
+                    .pt(px(top))
+                    .pr(px(right))
+                    .flex()
+                    .flex_col()
+                    .gap(px(gap))
+                    .child(row)
+                    .child(bar)
+                    .child(labels),
+            )
+            .child(
+                div()
+                    .pt(px(t::TIDY_CARD_TOP))
+                    .pr(px(right))
+                    .child(self.opt_in_rows(Step::Tidy, colors, cx)),
+            )
+    }
+}
+
 /// The keys that run `command`, as a tooltip's chips spell them, spaced: "⌘ T". None with no key.
 pub(super) fn keys_shown(command: Command, cx: &gpui::App) -> Option<String> {
     let chips = crate::shell::user_keys(cx).chips(command);

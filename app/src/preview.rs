@@ -262,6 +262,10 @@ struct Fake {
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
     daily_count: Cell<bool>,
+    /// Settings' switches first run shows too, each as it starts, on; and a tab's wait before the
+    /// archive, Settings' 12 hours.
+    settings: RefCell<HashMap<browser::shell::Setting, bool>>,
+    archive_after: Cell<f64>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
     /// The tab each Space showed as it was left, which it shows again, and its page beside shows
@@ -2085,6 +2089,24 @@ impl Browser for Fake {
         self.daily_count.set(on);
     }
 
+    fn setting(&self, _: u64, setting: browser::shell::Setting, _: &App) -> Option<bool> {
+        Some(*self.settings.borrow().get(&setting).unwrap_or(&true))
+    }
+
+    fn set_setting(&self, _: u64, setting: browser::shell::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get(), offered))
+    }
+
+    fn set_archive_after(&self, _: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(seconds);
+    }
+
     fn new_private_window(&self, _: &mut App) {}
 
     fn new_blank_window(&self, _: &mut App) {}
@@ -2845,6 +2867,8 @@ fn main() {
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
                         daily_count: Cell::new(false),
+                        settings: RefCell::default(),
+                        archive_after: Cell::new(12. * 3600.),
                         opens_on: RefCell::default(),
                         shows: Rc::default(),
                     });
@@ -4129,6 +4153,8 @@ mod tests {
                 downloads: Default::default(),
                 opt_ins: Default::default(),
                 daily_count: Default::default(),
+                settings: Default::default(),
+                archive_after: Default::default(),
                 opens_on: Default::default(),
                 shows: Default::default(),
             });

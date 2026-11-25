@@ -85,6 +85,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
 
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
+
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
     ("50%", 0.5),

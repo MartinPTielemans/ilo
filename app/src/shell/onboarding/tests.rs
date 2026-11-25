@@ -11,10 +11,10 @@ use gpui::{
     point, px,
 };
 
-use super::{END_FADE, FirstRun, OptIn, STEP_MOTION, Step};
+use super::{END_FADE, FirstRun, STEP_MOTION, Step, Switch};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
-use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
+use crate::shell::{Folders, Setting, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
@@ -625,14 +625,14 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     host.agents.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, false)]);
+    assert_eq!(offered(&shell, cx), vec![(Switch::CrashReports, false)]);
     host.take();
     shell.update(cx, |shell, cx| {
-        shell.onboarding_switch(OptIn::CrashReports, cx)
+        shell.onboarding_switch(Switch::CrashReports, cx)
     });
     cx.run_until_parked();
     assert_eq!(host.take(), vec!["crash reports true".to_string()]);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, true)]);
+    assert_eq!(offered(&shell, cx), vec![(Switch::CrashReports, true)]);
     click_skip(cx);
     in_through_the_keys(&shell, cx);
     assert_eq!(
@@ -651,7 +651,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     host.daily_count.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
-    let both = vec![(OptIn::DailyCount, false), (OptIn::CrashReports, false)];
+    let both = vec![(Switch::DailyCount, false), (Switch::CrashReports, false)];
     assert_eq!(offered(&shell, cx), both, "both off to begin with");
 }
 
@@ -674,8 +674,8 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
     };
     // The count's is set only as the step is left (the_count_is_a_switch_set_as_the_step_is_left).
     for (opt_in, set) in [
-        (OptIn::DailyCount, None),
-        (OptIn::CrashReports, Some("crash reports true")),
+        (Switch::DailyCount, None),
+        (Switch::CrashReports, Some("crash reports true")),
     ] {
         let row = frame(&shell, cx, opt_in, "row").expect("its row is drawn");
         let switch = frame(&shell, cx, opt_in, "switch").expect("its switch is drawn");
@@ -693,11 +693,11 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
         let said: Vec<String> = set.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "a click on {opt_in:?}'s switch");
     }
-    let both = vec![(OptIn::DailyCount, true), (OptIn::CrashReports, true)];
+    let both = vec![(Switch::DailyCount, true), (Switch::CrashReports, true)];
     assert_eq!(shell.update(cx, |shell, cx| shell.opt_ins(cx)), both);
     // The switches line up, in one column at the box's right edge.
     let right = |opt_in| frame(&shell, cx, opt_in, "switch").map(|switch| switch.right());
-    assert_eq!(right(OptIn::DailyCount), right(OptIn::CrashReports));
+    assert_eq!(right(Switch::DailyCount), right(Switch::CrashReports));
 }
 
 /// The daily usage count is the opt-ins' first switch while the build names a server, off, lined
@@ -713,19 +713,19 @@ fn the_count_is_a_switch_set_as_the_step_is_left(cx: &mut TestAppContext) {
     later(&shell, cx, STEP_MOTION);
     assert_eq!(
         offered(&shell, cx),
-        vec![(OptIn::DailyCount, false), (OptIn::CrashReports, false)]
+        vec![(Switch::DailyCount, false), (Switch::CrashReports, false)]
     );
-    let row = opt_in_frame(&shell, cx, OptIn::DailyCount, "row").expect("its row is drawn");
-    let switch = opt_in_frame(&shell, cx, OptIn::DailyCount, "switch").expect("its switch");
+    let row = opt_in_frame(&shell, cx, Switch::DailyCount, "row").expect("its row is drawn");
+    let switch = opt_in_frame(&shell, cx, Switch::DailyCount, "switch").expect("its switch");
     assert!(
         switch.left() >= row.left() && switch.right() <= row.right(),
         "the count's switch at {switch:?} is outside its row at {row:?}"
     );
-    let crash = opt_in_frame(&shell, cx, OptIn::CrashReports, "switch").expect("crash reports'");
+    let crash = opt_in_frame(&shell, cx, Switch::CrashReports, "switch").expect("crash reports'");
     assert_eq!(switch.right(), crash.right(), "the switches line up");
     host.take();
     cx.simulate_click(switch.center(), Modifiers::none());
-    assert_eq!(offered(&shell, cx)[0], (OptIn::DailyCount, true));
+    assert_eq!(offered(&shell, cx)[0], (Switch::DailyCount, true));
     assert!(
         host.take().is_empty(),
         "turned on, nothing is set while the step shows"
@@ -744,7 +744,7 @@ fn the_count_turned_on_and_off_again_sets_nothing(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::OptIns);
     for _ in 0..2 {
         shell.update(cx, |shell, cx| {
-            shell.onboarding_switch(OptIn::DailyCount, cx)
+            shell.onboarding_switch(Switch::DailyCount, cx)
         });
     }
     host.take();
@@ -772,7 +772,7 @@ fn skip_leaves_the_count_as_it_stands(cx: &mut TestAppContext) {
         later(&shell, cx, STEP_MOTION);
         if turned {
             shell.update(cx, |shell, cx| {
-                shell.onboarding_switch(OptIn::DailyCount, cx)
+                shell.onboarding_switch(Switch::DailyCount, cx)
             });
         }
         host.take();
@@ -839,7 +839,7 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
-        vec![(OptIn::DailyCount, true), (OptIn::CrashReports, false)],
+        vec![(Switch::DailyCount, true), (Switch::CrashReports, false)],
         "⇧⇥ from the first went back past the buttons to the last switch"
     );
 }
@@ -917,11 +917,184 @@ fn a_build_without_a_count_server_doesnt_offer_it(cx: &mut TestAppContext) {
     host.crash_reports.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, false)]);
+    assert_eq!(offered(&shell, cx), vec![(Switch::CrashReports, false)]);
+}
+
+/// A day, in the seconds Settings' times are in.
+const DAY: f64 = 24. * 3600.;
+
+/// A first window whose host has the tidy step's time, `after`, and Settings' `settings` as given.
+fn with_settings<'a>(
+    cx: &'a mut TestAppContext,
+    after: Option<f64>,
+    settings: &[(Setting, bool)],
+) -> (Entity<Shell>, &'a mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = first_window(cx);
+    host.archive_after.set(after);
+    host.settings.borrow_mut().extend(settings.iter().copied());
+    (shell, cx, host)
+}
+
+/// The tidy and private steps come after the Space's look, in the drawing's order, while the host
+/// has their settings, and are left out, the count going down, while it has none.
+#[gpui::test]
+fn the_tidy_and_private_steps_come_where_their_settings_are(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    let none = steps(&shell, cx);
+    assert!(!none.contains(&Step::Tidy) && !none.contains(&Step::Private));
+
+    let (shell, cx, _) = with_settings(
+        cx,
+        Some(DAY / 2.),
+        &[(Setting::RestoreWindows, true), (Setting::AdBlocking, true)],
+    );
+    started(&shell, cx);
+    let all = steps(&shell, cx);
+    let at = |step| all.iter().position(|&each| each == step);
+    assert!(at(Step::Color) < at(Step::Tidy), "{all:?}");
+    assert!(at(Step::Tidy) < at(Step::Private), "{all:?}");
+    assert!(at(Step::Private) < at(Step::Keys), "{all:?}");
+    assert_eq!(all.len(), none.len() + 2);
+}
+
+/// The tidy step's bar starts at the profile's own time and the arrows move it a stop, setting
+/// nothing; Continue sets the time it's at, once, and only when it moved. Skip and Back set nothing.
+#[gpui::test]
+fn the_tidy_bar_sets_its_time_as_continue_goes_on(cx: &mut TestAppContext) {
+    let at = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let tidy = shell.onboarding.as_ref()?.tidy.as_ref()?;
+            Some(tidy.stops[tidy.at].1)
+        })
+    };
+    for (keys, leave, set) in [
+        ("right", "enter", Some("archive after 1 86400")),
+        ("right right left", "enter", Some("archive after 1 86400")),
+        ("", "enter", None),
+        ("right", "skip", None),
+        ("left", "enter", None),
+    ] {
+        let (shell, cx, host) = with_settings(cx, Some(DAY / 2.), &[]);
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Tidy);
+        later(&shell, cx, STEP_MOTION);
+        assert_eq!(at(&shell, cx), Some("12 hours"), "the profile's time");
+        host.take();
+        if !keys.is_empty() {
+            cx.simulate_keystrokes(keys);
+        }
+        assert!(
+            host.take().is_empty(),
+            "{keys} set something before Continue"
+        );
+        match leave {
+            "skip" => click_skip(cx),
+            _ => cx.simulate_keystrokes(leave),
+        }
+        assert_ne!(step(&shell, cx), Some(Step::Tidy), "{leave} left the step");
+        let said: Vec<String> = set.into_iter().map(str::to_string).collect();
+        assert_eq!(host.take(), said, "{keys} then {leave}");
+    }
+}
+
+/// A click on the bar puts it at the stop nearest, and a drag along it follows the pointer.
+#[gpui::test]
+fn a_click_on_the_tidy_bar_picks_the_stop_nearest(cx: &mut TestAppContext) {
+    let (shell, cx, _) = with_settings(cx, Some(DAY / 2.), &[]);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Tidy);
+    later(&shell, cx, STEP_MOTION);
+    let bar = placed("tidy", cx).expect("the bar is drawn");
+    let at = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.onboarding.as_ref()?.tidy.as_ref().map(|t| t.at)
+        })
+    };
+    cx.simulate_click(
+        point(bar.right() - px(1.), bar.center().y),
+        Modifiers::none(),
+    );
+    assert_eq!(at(&shell, cx), Some(4), "its end is Never");
+    cx.simulate_click(
+        point(bar.left() + px(1.), bar.center().y),
+        Modifiers::none(),
+    );
+    assert_eq!(at(&shell, cx), Some(0), "its start is the first time");
+}
+
+/// Settings' times are named in the drawing's words, and a time between them is shown at the
+/// stop nearest, Never past every one.
+#[test]
+fn the_tidy_stops_are_settings_times_in_the_drawings_words() {
+    let offered = [DAY / 2., DAY, 7. * DAY, 30. * DAY, -1.];
+    let tidy = super::Tidy::of(DAY / 2., &offered).expect("a bar");
+    let words: Vec<&str> = tidy.stops.iter().map(|&(_, words)| words).collect();
+    assert_eq!(words, ["12 hours", "1 day", "1 week", "1 month", "Never"]);
+    assert_eq!(tidy.at, 0);
+    let at = |was| super::Tidy::of(was, &offered).map(|tidy| tidy.at);
+    assert_eq!(at(-1.), Some(4));
+    assert_eq!(at(2. * DAY), Some(1));
+    assert_eq!(at(365. * DAY), Some(3));
+    assert_eq!(
+        super::Tidy::of(DAY, &[3600.]),
+        None,
+        "a time with no word has no stop"
+    );
+}
+
+/// The private step shows Settings' switches as they are, each turned at once, for the Space's
+/// profile, and Skip leaves them as they stand.
+#[gpui::test]
+fn the_private_step_shows_settings_switches_as_they_are(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_settings(
+        cx,
+        None,
+        &[(Setting::AdBlocking, true), (Setting::SavePasswords, true)],
+    );
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Private);
+    later(&shell, cx, STEP_MOTION);
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.switches(Step::Private, cx))
+    };
+    let ad = Switch::Setting(Setting::AdBlocking);
+    let passwords = Switch::Setting(Setting::SavePasswords);
+    assert_eq!(shown(&shell, cx), vec![(ad, true), (passwords, true)]);
+    host.take();
+    let switch = opt_in_frame(&shell, cx, ad, "switch").expect("its switch is drawn");
+    cx.simulate_click(switch.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(host.take(), vec!["setting 1 AdBlocking false".to_string()]);
+    assert_eq!(shown(&shell, cx), vec![(ad, false), (passwords, true)]);
+    click_skip(cx);
+    assert!(host.take().is_empty(), "Skip set nothing");
+    assert_eq!(
+        host.settings.borrow().get(&Setting::AdBlocking),
+        Some(&false)
+    );
+}
+
+/// Skip Setup from the welcome leaves every one of the steps' settings as it was.
+#[gpui::test]
+fn skip_setup_leaves_the_tidy_and_private_settings(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_settings(
+        cx,
+        Some(DAY / 2.),
+        &[(Setting::RestoreWindows, true), (Setting::AdBlocking, true)],
+    );
+    started(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.onboarding_skip_setup("skip", cx));
+    later(&shell, cx, END_FADE);
+    let set: Vec<String> = (host.take().into_iter())
+        .filter(|call| call.starts_with("setting") || call.starts_with("archive"))
+        .collect();
+    assert!(set.is_empty(), "{set:?}");
 }
 
 /// The opt-ins the step offers, each with whether it's on.
-fn offered(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(OptIn, bool)> {
+fn offered(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(Switch, bool)> {
     shell.update(cx, |shell, cx| shell.opt_ins(cx))
 }
 
@@ -929,7 +1102,7 @@ fn offered(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(OptIn, boo
 fn opt_in_frame(
     shell: &Entity<Shell>,
     cx: &VisualTestContext,
-    opt_in: OptIn,
+    opt_in: Switch,
     part: &'static str,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {
     shell.read_with(cx, |shell, _| {
