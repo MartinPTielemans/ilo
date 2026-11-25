@@ -133,15 +133,30 @@ bool TakesHttpWarning(content::WebContents* contents, const GURL& url) {
   return true;
 }
 
-void LeaveNoHttpWarning(bc_id tab) {
+namespace {
+
+// Chrome's warning in |tab| if it is up.
+AskBeforeHttpDialogController* WarningIn(bc_id tab) {
   content::WebContents* contents = Window::PageOf(tab);
   tabs::TabInterface* page =
       contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   AskBeforeHttpDialogController* warning =
       page ? AskBeforeHttpDialogController::From(page) : nullptr;
-  if (!warning || !warning->HasOpenDialog()) {
+  return warning && warning->HasOpenDialog() ? warning : nullptr;
+}
+
+}  // namespace
+
+bool HasHttpWarning(bc_id tab) {
+  return WarningIn(tab) != nullptr;
+}
+
+void LeaveNoHttpWarning(bc_id tab) {
+  AskBeforeHttpDialogController* warning = WarningIn(tab);
+  if (!warning) {
     return;
   }
+  content::WebContents* contents = Window::PageOf(tab);
   if (TakesHttpWarning(contents, contents->GetLastCommittedURL())) {
     warning->CloseDialog();
   }

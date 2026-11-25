@@ -28,6 +28,10 @@ bool SetSecureConnections(Profile* profile, bool on);
 // app takes no entry inside a call of its own into the core.
 bool TakesHttpWarning(content::WebContents* contents, const GURL& url);
 
+// Whether Chrome's warning before http is up in |tab|, unanswered: only ever in a tab that is the
+// user's to answer in.
+bool HasHttpWarning(bc_id tab);
+
 // The user handed |tab| back while Chrome's warning was up in it, unanswered: the warning closes
 // and the tab is put back, as if the page had been stopped in the agent's tab it is again.
 void LeaveNoHttpWarning(bc_id tab);
