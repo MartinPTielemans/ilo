@@ -1327,8 +1327,8 @@ impl TalkView {
                         shell
                             .update(cx, |shell, cx| {
                                 let covers = !shell.talk_beside;
-                                if shell.watched_task_page().is_none() && !(typing && covers) {
-                                    shell.watch_row(tab, true, cx);
+                                if !(typing && covers) {
+                                    shell.open_needing_page(tab, cx);
                                 }
                             })
                             .ok();
