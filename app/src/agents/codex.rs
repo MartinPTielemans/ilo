@@ -37,6 +37,8 @@ struct Inner {
     failure: Option<Failure>,
     /// When the reasoning under way started.
     thinking: Option<Instant>,
+    /// The model the user picked for its next turns, by id, which each turn names from then on.
+    model: Option<String>,
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
@@ -58,6 +60,11 @@ pub fn begin(stdin: &Mutex<Option<ChildStdin>>, state: &State, first: &str) -> s
             },
         }),
     )
+}
+
+/// The model the next turns run on, from the user's pick.
+pub fn set_model(state: &State, model: &str) {
+    state.inner.lock().unwrap().model = Some(model.to_string());
 }
 
 /// Sends the user's message as a turn, or keeps it for when the thread is there or the turn under
@@ -97,14 +104,21 @@ fn next_turn(stdin: &Mutex<Option<ChildStdin>>, inner: &mut Inner) -> std::io::R
     };
     inner.starting = true;
     inner.next += 1;
+    let params = turn_params(&thread, &text, inner.model.as_deref());
     write_line(
         stdin,
-        &json!({
-            "id": TURNS + inner.next,
-            "method": "turn/start",
-            "params": { "threadId": thread, "input": [{ "type": "text", "text": text }] },
-        }),
+        &json!({ "id": TURNS + inner.next, "method": "turn/start", "params": params }),
     )
+}
+
+/// A turn's params: the thread, the message, and the model the user picked for it, if they did,
+/// which holds for the turns after it too.
+fn turn_params(thread: &str, text: &str, model: Option<&str>) -> Value {
+    let mut params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text }] });
+    if let Some(model) = model {
+        params["model"] = json!(model);
+    }
+    params
 }
 
 /// What a line of Codex's says, answering what it asks on the way.
@@ -411,4 +425,17 @@ pub fn servers_in(text: &str) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+#[cfg(test)]
+mod tests {
+    /// A turn names the model only once the user picked one, and then its id.
+    #[test]
+    fn a_turn_names_the_model_the_user_picked() {
+        let plain = super::turn_params("t1", "Go on", None);
+        assert_eq!(plain.get("model"), None);
+        let picked = super::turn_params("t1", "Go on", Some("gpt-b"));
+        assert_eq!(picked["model"], "gpt-b");
+        assert_eq!(picked["input"][0]["text"], "Go on");
+    }
 }

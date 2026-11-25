@@ -1045,6 +1045,43 @@ impl TalkView {
         shell.read(cx).watched_task_page().map(|(_, tab)| tab)
     }
 
+    /// The model trigger's menu, the bar's own, hanging under it: the thread's assistant's models
+    /// alone, the one it runs on checked. Only the user's pick here changes it, from the next
+    /// message.
+    fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(trigger), Some(menu)) = (
+            self.model_drawn.get(),
+            cx.try_global::<crate::menu::EntriesMenu>(),
+        ) else {
+            return;
+        };
+        let menu = menu.0.clone();
+        let agent = self.agent.to_string();
+        let Some((ids, items)) =
+            crate::agents::global(cx).and_then(|agents| agents.read(cx).thread_model_menu(&agent))
+        else {
+            return;
+        };
+        let view = cx.entity().downgrade();
+        let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
+            let action = (closed.chosen())
+                .and_then(|item| ids.get(item))
+                .map(|(id, _)| TaskAction::PickModel(id.clone()));
+            let closed = |view: &mut Self, cx: &mut Context<Self>| {
+                view.menu_open = None;
+                cx.notify();
+                if let Some(action) = action {
+                    view.act(action, cx);
+                }
+            };
+            view.update(cx, closed).ok();
+        });
+        self.menu_open = Some(MODEL);
+        cx.notify();
+        let at = point(trigger.left(), trigger.bottom() + px(CHOICES_MENU_DROP));
+        menu(items, at, false, window, chosen, cx);
+    }
+
     /// The level chip's menu, for the task shown: the Shell holds the window's menus.
     /// The level trigger's menu, the bar's own (choices.rs), hanging under it: the thread's level
     /// checked. Only the user's pick here changes it, through the press its refusal's button
@@ -2827,8 +2864,9 @@ impl TalkView {
     }
 
     /// The composer's row under its field, the bar's own (choices.rs): the thread's level, which
-    /// opens its menu (#4094), the folder it holds (#4101), its model, which it reads and can't
-    /// change while its program runs, and the round button: Stop while it works and nothing is
+    /// opens its menu (#4094), the folder it holds (#4101), its model, which opens its assistant's
+    /// models where its program takes another for the next message and is plain words elsewhere,
+    /// and the round button: Stop while it works and nothing is
     /// typed, else Send, which does nothing with nothing typed. A reply never carries files or a
     /// folder, so there's no way to add one here.
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
@@ -2866,11 +2904,17 @@ impl TalkView {
                 cx.listener(|view, _, window, cx| view.level_menu(window, cx)),
             )),
         };
-        let model = (shown.and_then(|shown| shown.model.clone())).map(|(mark, said)| {
+        // The model opens its menu where the thread's program takes another for its next message;
+        // elsewhere it's plain words.
+        let model = (shown.and_then(|shown| shown.model.clone())).map(|(mark, said, opens)| {
+            let click: Option<Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>> = opens
+                .then(|| {
+                    Box::new(cx.listener(|view, _, window, cx| view.model_menu(window, cx))) as _
+                });
             let trigger = choices::Trigger {
                 id: MODEL,
                 at: self.model_drawn.clone(),
-                click: None,
+                click,
             };
             (Some(mark), said, trigger)
         });

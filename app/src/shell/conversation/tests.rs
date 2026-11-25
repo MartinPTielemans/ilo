@@ -2772,6 +2772,37 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     view.read_with(cx, |view, _| view.level_drawn.get().is_some())
 }
 
+/// A thread's model whose program can't take another for the next message is its words alone: a
+/// click on them opens no menu and doesn't wear a plate.
+#[gpui::test]
+fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
+    type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let shown_menu: Shown = Rc::default();
+    let into = shown_menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
+        )))
+    });
+    shell.update(cx, |shell, cx| {
+        let talk = Conversation {
+            model: Some(("icons/claude.svg", "Claude Code \u{b7} Opus".into(), false)),
+            ..conversation(1)
+        };
+        shell.set_conversation(Some(talk), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let words = view.read_with(cx, |view, _| view.model_drawn.get());
+    let words = words.expect("the model's words drawn");
+    cx.simulate_click(words.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(shown_menu.borrow().is_none(), "a menu showed");
+    assert_eq!(view.read_with(cx, |view, _| view.menu_open), None);
+}
+
 /// The composer's level trigger says the thread's own level, at Look only and at Full access,
 /// and a click on it opens the bar's own level menu (choices.rs) under it, that level checked,
 /// wearing its plate while it's open. A pick there is the user's press on the thread, the one way

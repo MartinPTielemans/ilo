@@ -10373,6 +10373,82 @@ mod tasks {
         );
     }
 
+    /// A going thread's model opens its assistant's group alone where its program takes another
+    /// model for the next message, Codex's; Claude's keeps the one it started on, with no menu. A
+    /// pick holds only a model of the list the menu was built from, and is the next run's too.
+    #[gpui::test]
+    fn a_going_codex_thread_takes_another_model_and_claudes_keeps_its_own(cx: &mut TestAppContext) {
+        use crate::agents::ready::Models;
+        let (agents, _) = ready(None, cx);
+        agents.update(cx, |agents, _| {
+            let listed = Models {
+                listed: [("gpt-a", "GPT A"), ("gpt-b", "GPT B")]
+                    .map(|(id, name)| (id.to_string(), name.to_string()))
+                    .into(),
+                default: Some("GPT A".into()),
+            };
+            let found = Found {
+                ready: Ready::SignedIn,
+                program: Some("/opt/codex".into()),
+                models: Some(listed),
+                ..Default::default()
+            };
+            agents.tasks.found.insert(Cli::Codex, found);
+        });
+        let codex = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Codex, "Compare passes", page(), 1, Tier::default(), cx)
+            })
+            .expect("started");
+        let claude = start(&agents, "Find a flight", cx);
+        let menu = |agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (agents.thread_model_menu(agent)).map(|(_, items)| crate::menu::described(&items))
+            })
+        };
+        let model = |agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| {
+                agents.conversation(agent, cx).unwrap().model
+            })
+        };
+        assert_eq!(
+            menu(&claude, cx),
+            None,
+            "Claude's program can't take another model"
+        );
+        assert!(
+            !model(&claude, cx).unwrap().2,
+            "Claude's model opens nothing"
+        );
+        assert!(model(&codex, cx).unwrap().2, "Codex's model opens its menu");
+        assert_eq!(
+            menu(&codex, cx).as_deref(),
+            Some("Codex's default [GPT A] (checked), GPT A, GPT B")
+        );
+
+        let pick = |agent: &str, id: &str, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| {
+                agents.task_action(agent, TaskAction::PickModel(id.into()), cx)
+            });
+        };
+        pick(&codex, "gpt-b", cx);
+        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        assert_eq!(
+            menu(&codex, cx).as_deref(),
+            Some("Codex's default [GPT A], GPT A, GPT B (checked)")
+        );
+        let next_run = |agent: &str, cli, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.launch_model(agent, cli))
+        };
+        assert_eq!(next_run(&codex, Cli::Codex, cx).as_deref(), Some("gpt-b"));
+        // A model the list doesn't have changes nothing, nor does a pick on Claude's thread.
+        pick(&codex, "gpt-z", cx);
+        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        let before = model(&claude, cx);
+        pick(&claude, "gpt-b", cx);
+        assert_eq!(model(&claude, cx), before);
+    }
+
     /// The Model menu as the user sees it.
     fn model_menu(agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext) -> String {
         agents.read_with(cx, |agents, _| {

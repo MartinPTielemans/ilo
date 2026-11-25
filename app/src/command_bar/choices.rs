@@ -163,8 +163,11 @@ pub fn row(row: Row) -> gpui::Div {
     let model_ink = if form.model_dim { inks.dim } else { inks.text };
     let model = model.map(|(mark, said, model)| {
         let mark = mark.filter(|_| form.mark);
+        // A chevron, and a button to a screen reader, only on a trigger that opens; one that
+        // can't is the model's words alone.
+        let opens = model.click.is_some();
         trigger(model)
-            .when(a11y, |model| {
+            .when(a11y && opens, |model| {
                 model.role(Role::Button).aria_label(said.clone())
             })
             .pl(px(if mark.is_some() {
@@ -176,7 +179,9 @@ pub fn row(row: Row) -> gpui::Div {
             .gap(px(MODEL_GAP))
             .children(mark.map(|mark| glyph(mark, MODEL_MARK, inks.text)))
             .child(words(said, model_ink))
-            .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
+            .when(opens, |model| {
+                model.child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
+            })
     });
     let (fill, ink) = match round {
         Round::Go { ready: true } | Round::Stop => (inks.primary, inks.on_primary),
