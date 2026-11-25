@@ -90,9 +90,6 @@ use crate::tokens::text;
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
 pub(crate) const MOVE: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
-/// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
-/// Windows once it has hidden: a page's question is answered then.
-const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
 /// The Mac's dialog lets go of the clicks and the keyboard as it starts leaving, and the keys wait
 /// for its hide all the same, so a click on the page as it leaves isn't lost to it (#3681). Linux's
 /// lets go of both as it holds the keys (overlays::dialog_leaving).
@@ -709,7 +706,7 @@ pub fn choose(label: &str, cx: &mut App) -> bool {
 
 /// Asks a page's `question`, the dialog `id` of `tab`, over its tab's card or pane, `over` in the
 /// window with corners of `radius`, in place of any page's that shows or waits, once any other
-/// dialog has gone, and calls `answered` with the answer once the dialog has gone. Asked again, it
+/// dialog has gone, and calls `answered` with the answer as the dialog starts to leave. Asked again, it
 /// only moves to `over`, with what was typed, and comes to rest or goes live. A click on the
 /// card's dim does nothing, as the page waits. At rest (`rests`), over a split view's pane the
 /// user isn't in, it shows without the keyboard: a click on a button answers, and one anywhere
@@ -752,9 +749,9 @@ pub fn ask_page(
                     cx.notify();
                     return;
                 }
-                // Answered, it leaves with its answer, which the page hears once it has gone, so
-                // the question asked again till then, as its pane's focus moves, isn't new. Taken
-                // back, it has no answer, and it's asked again below, as its tab shows again.
+                // Answered, it leaves, and its page has the answer already, so the question asked
+                // again while it leaves, as its pane's focus moves, isn't new. Taken back, it has
+                // no answer, and it's asked again below, as its tab shows again.
                 if asked.answered.is_none() {
                     return;
                 }
@@ -1088,12 +1085,15 @@ impl Dialog {
         // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
         // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
         // At rest the page beside has the keys already.
-        if !asked.rests {
-            self.host.hold_keys();
-        }
-        if LETS_GO_AS_IT_LEAVES {
-            self.host.let_go();
-        }
+        let (host, holds) = (self.host.clone(), !asked.rests);
+        let lets_go = move || {
+            if holds {
+                host.hold_keys();
+            }
+            if LETS_GO_AS_IT_LEAVES {
+                host.let_go();
+            }
+        };
         let (answered, also_chosen) = match answer {
             Some(Answer::Also) => (None, asked.also_chosen.take()),
             Some(answer) => {
@@ -1111,18 +1111,24 @@ impl Dialog {
             }
             None => (None, None),
         };
-        // On Linux the page has the keyboard back as the dialog starts leaving (Host::hold_keys),
-        // and Chromium drops its keys until its question is answered, so it's answered then: ⌘L
-        // typed right after Esc opens the command bar (#1711, #1963). After this update, as the
-        // core's answer can come back to the dialog.
+        // A page's question is answered when the user answers, and the exit is only motion: its
+        // page goes on, or a quit it stopped stays stopped, while the dialog leaves (#4172). The
+        // answer goes before the dialog lets go, as Chromium drops a page's keys and clicks until
+        // its question is answered: ⌘L typed right after Esc opens the command bar (#1711, #1963),
+        // and a click that passes the dialog leaving finds the page with its answer. After this
+        // update, as the core's answer can come back to the dialog.
         let answered = match answered {
-            Some((answered, reply))
-                if PAGE_ANSWERED_AS_IT_LEAVES && asked.source == Source::Page =>
-            {
-                cx.defer(move |cx| answered(reply, cx));
+            Some((answered, reply)) if asked.source == Source::Page => {
+                cx.defer(move |cx| {
+                    answered(reply, cx);
+                    lets_go();
+                });
                 None
             }
-            answered => answered,
+            answered => {
+                lets_go();
+                answered
+            }
         };
         asked._leave = Some(cx.spawn(async move |dialog, cx| {
             cx.background_executor()

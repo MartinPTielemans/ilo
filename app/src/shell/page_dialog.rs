@@ -82,7 +82,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// The user answered the dialog `id` of `tab`'s page, once the dialog has gone.
+    /// The user answered the dialog `id` of `tab`'s page, as the dialog starts to leave.
     pub fn answer_page_dialog(
         &mut self,
         tab: u64,
