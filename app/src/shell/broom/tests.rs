@@ -11,8 +11,10 @@ use gpui::{
 use super::{Broom, FRAME, NAME, SORTING, failed_said, glyph_ink};
 use crate::palette::{Palette, Tone};
 use crate::product::PRODUCT;
-use crate::shell::{CLEAR_HIT_OUT, Folders, Shell, recorder::Recorder};
-use crate::tokens::shell::{BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP};
+use crate::shell::{CLEAR_HIT_OUT, Folders, Shell, TODAY_HAIRLINE, recorder::Recorder};
+use crate::tokens::shell::{
+    BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP, SIDEBAR_MIN, SIDEBAR_WIDTH,
+};
 
 const STATES: [Broom; 4] = [
     Broom::Idle,
@@ -322,4 +324,33 @@ fn the_broom_says_its_name_under_the_pointer(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(glyph.center(), gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     assert!(host.take().iter().any(|call| call == "tooltip none"));
+}
+
+/// As the sidebar narrows, the line's hairline is drawn while it has the line's own gap of room
+/// and not in less, where it would be a dot between the label and Clear: with Clear alone, with
+/// the broom after it, and with a failed sort's word in Clear's place.
+#[gpui::test]
+fn a_hairline_shorter_than_the_lines_gap_is_not_drawn(cx: &mut TestAppContext) {
+    for broom in [None, Some(Broom::Idle), Some(Broom::Failed)] {
+        let (shell, cx, _) = window(cx, vec![10, 11], broom);
+        let (mut whole, mut stub) = (false, false);
+        // From wider than the sidebar opens, where the failed sort's word still leaves the line
+        // room, to narrower than it goes.
+        for width in (SIDEBAR_MIN as u32 / 2..=SIDEBAR_WIDTH as u32 + 120).rev() {
+            TODAY_HAIRLINE.set(None);
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_width = width as f32;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let (room, drawn) = TODAY_HAIRLINE.get().unwrap_or((px(0.), false));
+            assert_eq!(drawn, room >= px(DIVIDER_GAP), "{broom:?} at {width}");
+            whole |= drawn;
+            stub |= !drawn && room > px(0.);
+        }
+        assert!(
+            whole && stub,
+            "{broom:?}: a line, then room for less than one"
+        );
+    }
 }
