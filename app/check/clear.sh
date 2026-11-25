@@ -1724,8 +1724,7 @@ if [ "$drm_done" = "Safari's engine" ]; then
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
   new_window_bar
   send window 2
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  resting_key t "private window"
   send insert "127.0.0.1:$port/engine.html?private"
   send key return
   expect "^browser: loaded [0-9]* http://127.0.0.1:$port/engine.html?private\$" \
