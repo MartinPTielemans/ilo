@@ -32,6 +32,12 @@ share a page asks for passes once Chrome's own checks have let it by and before 
 read or the system's sheet is shown, asks g_browser_core_no_share for the frame after Chrome's own
 refusals there, and answers a refused one as it answers those: PERMISSION_DENIED.
 
+chrome/browser/ui/web_applications/web_app_dialog_utils.cc. ShowWebAppInstallFlowDialog, which
+every dialog that asks whether to install a page as an app passes as it would be made (a page's
+own install prompt, the browser's install commands, Chrome's own offer), asks
+g_browser_core_no_app_install for the page beside Chrome's own refusal there for a page that
+isn't shown, and a refused one ends the same way: the install is declined with no dialog made.
+
 chrome/browser/download/chrome_download_manager_delegate.cc.
 ChromeDownloadManagerDelegate::RequestConfirmation, which Chrome asks before it puts a sheet up
 for where a download's file goes, asks g_browser_core_takes_download_question first, with the
@@ -164,6 +170,35 @@ diff --color -ruN a/chrome/browser/printing/print_view_manager.cc b/chrome/brows
    std::move(callback).Run(/*should_proceed=*/true);
  #endif
  }
+diff --color -ruN a/chrome/browser/ui/web_applications/web_app_dialog_utils.cc b/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
+--- a/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
++++ b/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
+@@ -68,6 +68,11 @@
+ #include "components/metrics/structured/structured_metrics_client.h"  // nogncheck
+ #endif
+ 
++// browser_core: whether the page in |contents| is refused the dialog that
++// asks whether to install it as an app, which the core says of a page in an
++// agent's Space the user doesn't hold (//browser_core/hooks.h).
++bool (*g_browser_core_no_app_install)(content::WebContents* contents) = nullptr;
++
+ namespace web_app {
+ 
+ namespace {
+@@ -98,8 +103,12 @@
+   // in the middle of which the installation might be cancelled if the user
+   // changes tabs, or closes the web contents. Explicitly exit the install
+   // flow earlier if that happens.
++  // browser_core: an install the core refuses ends here the same way, with no
++  // dialog made.
+   if (!initiator_web_contents ||
+-      initiator_web_contents->GetVisibility() == content::Visibility::HIDDEN) {
++      initiator_web_contents->GetVisibility() == content::Visibility::HIDDEN ||
++      (g_browser_core_no_app_install &&
++       g_browser_core_no_app_install(initiator_web_contents.get()))) {
+     CHECK(install_tracker);
+     install_tracker->ReportResult(webapps::MlInstallUserResponse::kIgnored);
+     std::move(web_app_acceptance_callback)
 diff --color -ruN a/chrome/browser/webshare/share_service_impl.cc b/chrome/browser/webshare/share_service_impl.cc
 --- a/chrome/browser/webshare/share_service_impl.cc
 +++ b/chrome/browser/webshare/share_service_impl.cc
