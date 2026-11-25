@@ -2796,6 +2796,23 @@ tile-name-line = 14.0
 tile-name-gap = 8.0
 tile-unticked = 0.4
 profile-gap = 24.0
+# First run's list says what comes with the browser picked as chips under the browsers (the
+# drawing, step 22): `kinds-top` under them, a label 11/14 in the detail, `kinds-label-gap` over a
+# wrap of chips `kind-chip-gap` apart. A chip is `kind-chip-height` high, fully round, its 12/16
+# label `kind-chip-inset` in, filled with the ink at `kind-chip-fill` while it comes; one that
+# never comes by itself, the passwords file, is that ink as a hairline round it instead, its
+# label in the detail.
+kinds-top = 16.0
+kinds-label = 11.0
+kinds-label-line = 14.0
+kinds-label-gap = 8.0
+kind-chip-height = 26.0
+kind-chip-radius = 13.0
+kind-chip-inset = 11.0
+kind-chip-gap = 6.0
+kind-chip-text = 12.0
+kind-chip-line = 16.0
+kind-chip-fill = 0.2
 
 [shell.import.motion]
 # Seconds. A card comes as a task's chips do ([shell.task.motion] chips, chips-stagger,

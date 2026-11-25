@@ -421,6 +421,19 @@ fn the_default_browser_step_says_each_systems_way(cx: &mut TestAppContext) {
     assert!(!host.take().contains(&"make default browser".to_string()));
 }
 
+/// Not Now, the default browser step's Skip, goes on without asking the system, which leaves
+/// Settings' notice that it isn't the default.
+#[gpui::test]
+fn not_now_goes_on_without_asking(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    host.take();
+    click_skip(cx);
+    assert_ne!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert!(!host.take().contains(&"make default browser".to_string()));
+}
+
 /// A browser that's already the default has no step asking to make it one.
 #[gpui::test]
 fn a_default_browser_leaves_its_step_out(cx: &mut TestAppContext) {
@@ -1533,9 +1546,10 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
 }
 
 /// The import step says what the state its view shows is for, with its button and its corner:
-/// the list "Bring your stuff." with Import from the browser used last and Skip; ↩ shows that
-/// browser's choices, "What comes from Arc.", with Import and Back, and its view has no buttons of
-/// its own; Esc goes back to the list, keeping the step, and Esc there goes back a step.
+/// the list "Bring your stuff." with Import from the browser used last and Skip; a browser's
+/// choices, which a wait for access ends on, "What comes from Arc.", with Import and Back, and its
+/// view has no buttons of its own; Esc goes back to the list, keeping the step, and Esc there goes
+/// back a step.
 #[gpui::test]
 fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
     use crate::import::Corner;
@@ -1556,7 +1570,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
-    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Import));
     let choose = guide(cx);
@@ -1581,15 +1595,13 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     );
 }
 
-/// ↩ at the list brings the browser picked, and ↩ at its choices imports it: once read, the flow
-/// goes on by itself while the rest comes in.
+/// ↩ at the list imports the browser picked at once, as the drawing's Import from … does: once
+/// read, the flow goes on by itself while the rest comes in.
 #[gpui::test]
 fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let browser = Rc::new(Browser::new(None));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     // The step shows the Spaces arriving while Work's profile loads, and holds on them once in.
@@ -1621,8 +1633,6 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let browser = Rc::new(Browser::new(None));
     let (shell, cx, view) = importing_from(browser, cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     waited(cx, crate::import::STALL.as_secs_f32());
@@ -1666,12 +1676,6 @@ fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
     assert_eq!(button(cx).as_deref(), Some("Import from Firefox"));
     cx.simulate_keystrokes("up");
     assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "What comes from Chrome."
-    );
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -1782,20 +1786,13 @@ fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
     };
     let home = chrome(name, &[("Default", "Me")], std::time::SystemTime::now());
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    let (shell, cx, _) = importing_from(browser.clone(), cx);
     let weak = shell.downgrade();
     browser.reads_shell(move |cx| {
         if let Some(shell) = weak.upgrade() {
             shell.read(cx);
         }
     });
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "What comes from Chrome.",
-        "Chrome wasn't read"
-    );
     match press {
         Press::Return => cx.simulate_keystrokes("enter"),
         Press::Click => {
@@ -1863,16 +1860,17 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
-    // On the sheet, ⇥ from the step's button goes round to Back, then Skip.
+    // On the sheet, ⇥ from the step's button goes round to Back, then Skip, which this step,
+    // asking, calls Not Now.
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    assert_eq!(keyed(cx), Some((Role::Button, "Not Now".into())));
     press("enter", cx);
     assert_eq!(
         step(&shell, cx),
         Some(Step::Color),
-        "↩ on Skip skipped one step"
+        "↩ on Not Now skipped one step"
     );
     assert_eq!(
         keyed(cx),
@@ -2276,9 +2274,9 @@ fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
     let drawn = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.drawn());
-    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
-    assert_eq!(drawn(cx), Some("pick"), "↩ shows the browser's choices");
+    assert_eq!(drawn(cx), Some("pick"), "the browser's choices show");
     click_back(cx);
     cx.run_until_parked();
     assert_eq!(
