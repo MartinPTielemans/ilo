@@ -174,6 +174,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.conversation.radius",
     // A held step's buttons, at the drawing's 8.
     "shell.conversation.ilo.held-button-radius",
+    // The page buttons in the panel beside a page, at the drawing's 8.
+    "shell.conversation.panel.page-radius",
 ];
 
 #[test]

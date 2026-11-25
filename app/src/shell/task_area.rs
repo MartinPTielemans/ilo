@@ -467,6 +467,42 @@ impl Shell {
         true
     }
 
+    /// Standing on one of the task's pages, the user stands on its `tab` instead, at once, as a tab
+    /// switch is: it goes back into the picture the page it replaces would have. Says whether it
+    /// did.
+    pub fn stand_on_task_page(
+        &mut self,
+        tab: u64,
+        picture: Option<PagePicture>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(area) = &self.task_area else {
+            return false;
+        };
+        let Some(thumb) = area.page.as_ref().map(|page| page.thumb) else {
+            return false;
+        };
+        if !self.task_standing() || !self.task_tabs(area.space).contains(&tab) {
+            return false;
+        }
+        if area.page.as_ref().is_some_and(|page| page.tab == tab) {
+            return true;
+        }
+        self.show_watched(
+            Watched {
+                tab,
+                thumb,
+                picture,
+                asked: false,
+                zoom: Zoom::Rest,
+                by_ilo: false,
+                guarded: false,
+            },
+            cx,
+        );
+        true
+    }
+
     /// The area watches `page`, in place of the one it watched, and the core shows it.
     fn show_watched(&mut self, page: Watched, cx: &mut Context<Self>) {
         let (tab, page_by_ilo) = (page.tab, page.by_ilo);

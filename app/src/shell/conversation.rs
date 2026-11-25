@@ -6,7 +6,7 @@
 //! Space's tab, ⌘W closes the card, and ⌘. stops the task.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -52,6 +52,7 @@ use crate::tokens::shell::conversation::ilo::{
     NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
+use crate::tokens::shell::conversation::panel;
 use crate::tokens::shell::conversation::{
     ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
     BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
@@ -207,6 +208,8 @@ pub struct TalkView {
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// What each tile's word said when that was logged last.
     said_logged: RefCell<HashMap<u64, &'static str>>,
+    /// The thread's pages the user has stood on, which its panel's head shows at full strength.
+    visited: HashSet<u64>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
@@ -433,6 +436,7 @@ impl Shell {
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
+                    visited: HashSet::new(),
                     stop_logged: Rc::default(),
                     stale: false,
                     shimmering: false,
@@ -1054,6 +1058,18 @@ impl TalkView {
             .ok();
     }
 
+    /// The user's click on one of the panel's page buttons: the page beside it is `tab` at once,
+    /// as a tab switch is, with no zoom out of the button.
+    fn stand(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let picture = (self.pictures.iter().find(|(each, ..)| *each == tab))
+            .and_then(|(_, _, picture)| picture.clone());
+        // check.sh reads this line.
+        log!("browser: task {} page {tab}", self.agent);
+        self.shell
+            .update(cx, |shell, cx| shell.stand_on_task_page(tab, picture, cx))
+            .ok();
+    }
+
     /// Whether a trace or a line of one is open: as the user left it, else a trace while its
     /// stretch is under way, and a line not.
     pub(super) fn is_open(&self, fold: Fold, running: bool) -> bool {
@@ -1238,6 +1254,80 @@ impl TalkView {
             .gap(px(BUBBLE_X))
             .child(words)
             .children(stop)
+    }
+
+    /// The head of the panel beside a page, in the stage's header's place: the thread's title, then
+    /// its pages as buttons, the one shown on a plate and those the user hasn't stood on quiet. A
+    /// click stands on that page.
+    fn panel_head(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
+        let palette = look.palette;
+        let shown = self.shown.as_ref();
+        let title = shown.map(|shown| shown.title.clone()).unwrap_or_default();
+        let tabs = shown.map_or_else(Vec::new, |shown| shown.tabs.clone());
+        let on = self.beside(cx);
+        let plate = match palette.tone {
+            Tone::Dark => panel::PAGE_PLATE,
+            Tone::Light => panel::LIGHT_PAGE_PLATE,
+        };
+        let shell = self.shell.upgrade();
+        let pages = tabs.into_iter().map(|(tab, site)| {
+            let row = (shell.as_ref()).and_then(|shell| shell.read(cx).tabs.get(&tab).cloned());
+            let name = (row.as_ref().map(|row| row.title.clone()))
+                .filter(|title| !title.is_empty())
+                .unwrap_or(site);
+            let icon = match row.and_then(|row| row.favicon) {
+                Some(image) => img(image).size(px(panel::PAGE_ICON)).into_any_element(),
+                None => svg()
+                    .path(PAGE_GLYPH)
+                    .size(px(panel::PAGE_ICON))
+                    .text_color(palette.text(SECONDARY))
+                    .into_any_element(),
+            };
+            let shown = on == Some(tab);
+            div()
+                .id(("conversation-panel-page", tab))
+                .when(look.a11y, |page| page.role(Role::Button).aria_label(name))
+                .flex_none()
+                .size(px(panel::PAGE))
+                .rounded(px(panel::PAGE_RADIUS))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .when(shown, |page| page.bg(rgba(plate)))
+                .when(!shown && !self.visited.contains(&tab), |page| {
+                    page.opacity(panel::UNVISITED)
+                })
+                .child(icon)
+                .on_click(cx.listener(move |view, _, _, cx| view.stand(tab, cx)))
+        });
+        div()
+            .flex_none()
+            .w_full()
+            .h(px(panel::HEAD))
+            .pl(px(panel::HEAD_LEFT))
+            .pr(px(panel::HEAD_RIGHT))
+            .flex()
+            .items_center()
+            .gap(px(panel::HEAD_GAP))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(text::BODY))
+                    .line_height(px(panel::TITLE_LINE))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.text(TITLE))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .gap(px(panel::PAGES_GAP))
+                    .children(pages),
+            )
     }
 
     /// Stop ⌘., which comes and goes with the work it stops: at the end of a task's foot line, or
@@ -3700,6 +3790,11 @@ impl Render for TalkView {
             return div().into_any_element();
         };
         self.settle_folds(now, still);
+        if look.standing
+            && let Some(tab) = self.beside(cx)
+        {
+            self.visited.insert(tab);
+        }
         // A shorter or narrower window keeps the newest line in view while the user reads at the
         // end, as the scroll keeps its distance from the top.
         let viewport = window.viewport_size();
@@ -3761,7 +3856,9 @@ impl Render for TalkView {
         let pages = (self.shown.as_ref()).is_some_and(|shown| !shown.tabs.is_empty());
         let wide =
             (self.drawn_at.get()).map_or(window.viewport_size().width, |area| area.size.width);
-        let across = pages && f32::from(wide) < RAIL_BREAKPOINT;
+        // Beside a page, the panel's head has the pages, and there's no rail.
+        let standing = look.standing;
+        let across = pages && !standing && f32::from(wide) < RAIL_BREAKPOINT;
         let middle = shut(
             div()
                 .flex_1()
@@ -3770,6 +3867,12 @@ impl Render for TalkView {
                 .flex()
                 .justify_center()
                 .mb(px(REPLY_GAP))
+                // The lines' plates hang out of their text, which is BODY_X in.
+                .when(standing, |middle| {
+                    middle
+                        .px(px(panel::BODY_X - TRACE_HANG))
+                        .pt(px(panel::BODY_TOP))
+                })
                 .child(
                     div()
                         .size_full()
@@ -3777,19 +3880,24 @@ impl Render for TalkView {
                         .child(lines),
                 ),
         );
+        // Beside a page, the reply field and its row are in from the panel's sides.
+        let foot = |part: gpui::Div| part.when(standing, |part| part.px(px(panel::FOOT)));
+        let head = match standing {
+            true => self.panel_head(&look, cx),
+            false => on_column(self.header(&look, cx).into_any_element()),
+        };
         let column = div()
             .flex_1()
             .min_w_0()
             .h_full()
-            .px(px(INSET))
-            .pt(px(TOP))
-            .pb(px(REPLY_BOTTOM))
+            .when(!standing, |column| column.px(px(INSET)).pt(px(TOP)))
+            .pb(px(if standing { panel::FOOT } else { REPLY_BOTTOM }))
             .flex()
             .flex_col()
             .text_size(px(TEXT))
             .line_height(px(TEXT_LINE))
             .text_color(palette.text(TITLE))
-            .child(shut(on_column(self.header(&look, cx).into_any_element())))
+            .child(shut(head))
             .children(across.then(|| {
                 div()
                     .flex_none()
@@ -3802,16 +3910,18 @@ impl Render for TalkView {
                 (self.replies && self.in_field().is_none())
                     .then(|| self.live(&look, cx))
                     .flatten()
-                    .map(|live| shut(on_column(live.into_any_element()))),
+                    .map(|live| shut(foot(on_column(live.into_any_element())))),
             )
-            .child(shut(on_column(self.reply(&look, cx).into_any_element())))
+            .child(shut(foot(on_column(
+                self.reply(&look, cx).into_any_element(),
+            ))))
             // With ilo's line and Start Again in the field's place there is no level to set, so
             // the row goes with the field (#4105).
             .children(
                 (self.replies && self.in_field().is_none())
-                    .then(|| shut(on_column(self.composer(&look, cx).into_any_element()))),
+                    .then(|| shut(foot(on_column(self.composer(&look, cx).into_any_element())))),
             );
-        let rail = (pages && !across).then(|| {
+        let rail = (pages && !across && !standing).then(|| {
             div()
                 .flex_none()
                 .w(px(RAIL_WIDTH))

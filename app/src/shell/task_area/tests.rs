@@ -2539,3 +2539,32 @@ fn the_panel_stands_between_the_sidebar_and_the_page() {
     );
     assert_eq!(page.right(), narrow.right());
 }
+
+/// Standing on one of a task's pages, a click on another in the panel's head stands on it at once,
+/// as a tab switch is, with no zoom, in the page's part beside the panel. Not standing, or for a
+/// tab that isn't the task's, nothing changes.
+#[gpui::test]
+fn the_panel_stands_on_another_page_at_once(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    assert!(
+        !shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, cx)),
+        "it stood on a page with no panel beside it"
+    );
+    shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+    draw(&shell, cx);
+    host.take();
+    assert!(!shell.update(cx, |shell, cx| shell.stand_on_task_page(10, None, cx)));
+    assert!(host.take().is_empty(), "the user's own tab was selected");
+    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, cx)));
+    assert!(
+        host.take().contains(&"select 31".to_string()),
+        "the core wasn't asked for tab 31"
+    );
+    assert_eq!(zoom(&shell, cx), Zoom::Rest, "it zoomed");
+    core_shows_task(&shell, cx, 31);
+    draw(&shell, cx);
+    let (card, laid) = frames(&shell, cx);
+    assert_eq!(laid, watched(split(card).0), "it isn't in the page's part");
+}

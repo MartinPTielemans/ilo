@@ -3285,6 +3285,30 @@ composer-top = 6.0
 composer-chevron = 10.0
 composer-chevron-gap = 4.0
 
+[shell.conversation.panel]
+# The panel beside a page (spec-thread-stage.md, screens 5 and 6), standing in the stage's header
+# and rail. Its head is `head` high, `head-left` and `head-right` in, `head-gap` apart: the
+# thread's title at the body size on `title-line`, at semibold, the scale's weight nearest the
+# drawing's 590; then the thread's pages as buttons `pages-gap` apart, each `page` square at
+# `page-radius`, the page's icon at `page-icon`. The page shown wears `page-plate`, a page the user
+# hasn't been to is at `unvisited`. The log is under it, its text `body-x` in and `body-top` down,
+# and the reply field and its row are `foot` in from the panel's sides and foot.
+head = 50.0
+head-left = 16.0
+head-right = 10.0
+head-gap = 8.0
+title-line = 18.0
+pages-gap = 2.0
+page = 28.0
+page-radius = 8.0
+page-icon = 14.0
+page-plate = 0xf3f0e838
+light-page-plate = 0x16161838
+unvisited = 0.55
+body-x = 16.0
+body-top = 6.0
+foot = 12.0
+
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it
 # shares): only what changes while the conversation shows moves. What the user sent goes from the
