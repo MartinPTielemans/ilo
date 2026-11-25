@@ -44,9 +44,12 @@ use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::mark::INK as MARK_INK;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
-    ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
-    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
-    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+    ARM, BELOW as ILO_BELOW, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP, COMPOSER_TOP,
+    GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL, HELD_BUTTON_HOVER, HELD_BUTTON_RADIUS,
+    HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X, HELD_BUTTONS_GAP, HELD_GAP, HELD_NOTE,
+    HELD_NOTE_LINE, HELD_ON_PRIMARY, HELD_PRIMARY, HELD_REASON, HELD_REASON_LINE, HELD_TOP,
+    INK as ILO_INK, LIGHT_HELD_BUTTON_FILL, LIGHT_HELD_ON_PRIMARY, LIGHT_HELD_PRIMARY, NOTE_INK,
+    NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
@@ -2611,13 +2614,22 @@ impl TalkView {
         );
         // What it says more starts under its words.
         let under = px(ILO_GLYPH + TRACE_GAP);
-        let body = words::body(&line.kind, name.as_deref().unwrap_or("")).map(|body| {
-            div()
+        let buttons = ilo::drawn(line, self.beside(cx));
+        // A held step's line (one with buttons) sets what's under it as one column, 6 down: the
+        // reason in text-2, the buttons, then the quiet line (spec-thread-stage.md).
+        let held = !buttons.is_empty();
+        let body = words::body(&line.kind, name.as_deref().unwrap_or("")).map(|body| match held {
+            true => div()
+                .text_size(px(HELD_REASON))
+                .line_height(px(HELD_REASON_LINE))
+                .text_color(palette.gray(TRACE_NOTE))
+                .child(body),
+            false => div()
                 .pl(under)
                 .mt(px(TEXT_TOP))
                 .line_height(px(ILO_TEXT_LINE))
                 .text_color(ink)
-                .child(body)
+                .child(body),
         });
         let link = words::link(&line.kind).map(|words| {
             let drawn = self.ilo_links.clone();
@@ -2626,8 +2638,7 @@ impl TalkView {
                 .id(SharedString::from(format!("ilo-{key}-link")))
                 .when(look.a11y, |link| link.role(Role::Link).aria_label(words))
                 .relative()
-                .pl(under)
-                .mt(px(NOTE_TOP))
+                .when(!held, |link| link.pl(under).mt(px(NOTE_TOP)))
                 .text_size(px(text::SMALL))
                 .text_color(palette.gray(NOTE_INK))
                 .cursor_pointer()
@@ -2645,29 +2656,42 @@ impl TalkView {
                 )
                 .on_click(cx.listener(|view, _, _, cx| view.open_off_limits(cx)))
         });
-        let buttons = ilo::drawn(line, self.beside(cx));
         let note = words::note(&buttons).map(|note| {
             div()
                 .id(("ilo-note", line.key))
                 .when(look.a11y, |under| under.role(Role::Label).aria_label(note))
-                .pl(under)
-                .mt(px(NOTE_TOP))
-                .text_size(px(text::SMALL))
-                .text_color(palette.gray(NOTE_INK))
+                .text_size(px(HELD_NOTE))
+                .line_height(px(HELD_NOTE_LINE))
+                .text_color(answer_text_3(&palette))
                 .child(note)
         });
-        let row = (!buttons.is_empty()).then(|| {
-            div()
-                .pl(under)
-                .mt(px(BUTTONS_TOP))
-                .flex()
-                .flex_wrap()
-                .gap(px(BUTTONS_GAP))
-                .children(
-                    (buttons.into_iter().enumerate())
-                        .map(|(at, button)| self.ilo_button(line, (at, button), look, cx)),
-                )
+        let row = held.then(|| {
+            div().flex().flex_wrap().gap(px(HELD_BUTTONS_GAP)).children(
+                (buttons.into_iter().enumerate())
+                    .map(|(at, button)| self.ilo_button(line, (at, button), look, cx)),
+            )
         });
+        let under_line = match held {
+            true => vec![
+                div()
+                    .pl(under)
+                    .mt(px(HELD_TOP))
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(HELD_GAP))
+                    .children(body)
+                    .children(link.map(|link| link.into_any_element()))
+                    .children(row)
+                    .children(note)
+                    .into_any_element(),
+            ],
+            false => body
+                .map(|body| body.into_any_element())
+                .into_iter()
+                .chain(link.map(|link| link.into_any_element()))
+                .collect(),
+        };
         div()
             .id(("ilo-line", line.key))
             // The line is a group by its own words as drawn, and its buttons are in it.
@@ -2679,10 +2703,7 @@ impl TalkView {
             .items_start()
             .mb(px(ILO_BELOW))
             .child(head)
-            .children(body)
-            .children(link)
-            .children(row)
-            .children(note)
+            .children(under_line)
             .into_any_element()
     }
 
@@ -2706,7 +2727,7 @@ impl TalkView {
         let drawn = self.ilo_drawn.clone();
         let hovered = self.ilo_hovered.clone();
         let id = SharedString::from(format!("ilo-{}-{button:?}", line.key));
-        page_chip(look.palette, id, words::button(button), None)
+        held_button(look.palette, id, words::button(button), at == 0)
             .when(look.a11y, |chip| {
                 chip.role(Role::Button).aria_label(words::button(button))
             })
@@ -2876,6 +2897,49 @@ fn rolled(
 /// rule under the glyph above them.
 /// The user's message's plate: the drawing's dark plate in Dark, the ink at a card's strength in
 /// Light (light-values.md, Proposed).
+/// A held step's button: the first on `primary` with `on-primary` words at semibold, the second
+/// on `button` at medium.
+fn held_button(
+    palette: super::Palette,
+    id: impl Into<ElementId>,
+    words: impl Into<SharedString>,
+    first: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let dark = palette.tone == Tone::Dark;
+    let pick = |dark_value: u32, light_value: u32| -> Hsla {
+        rgba(if dark { dark_value } else { light_value }).into()
+    };
+    let (fill, ink, weight) = match first {
+        true => (
+            pick(HELD_PRIMARY, LIGHT_HELD_PRIMARY),
+            pick(HELD_ON_PRIMARY, LIGHT_HELD_ON_PRIMARY),
+            FontWeight::SEMIBOLD,
+        ),
+        false => (
+            pick(HELD_BUTTON_FILL, LIGHT_HELD_BUTTON_FILL),
+            palette.text(TITLE),
+            FontWeight::MEDIUM,
+        ),
+    };
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(HELD_BUTTON))
+        .px(px(HELD_BUTTON_X))
+        .flex()
+        .items_center()
+        .rounded(px(HELD_BUTTON_RADIUS))
+        .bg(fill)
+        .hover(|style| style.opacity(HELD_BUTTON_HOVER))
+        .cursor_pointer()
+        .whitespace_nowrap()
+        .text_size(px(HELD_BUTTON_TEXT))
+        .line_height(px(HELD_BUTTON_TEXT_LINE))
+        .font_weight(weight)
+        .text_color(ink)
+        .child(words.into())
+}
+
 fn answer_text_3(palette: &super::Palette) -> Hsla {
     match palette.tone {
         Tone::Dark => rgba(TEXT_3).into(),

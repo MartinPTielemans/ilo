@@ -172,6 +172,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // user's message, rounder than a row as the drawing's bubble is.
     "shell.task.tile-radius",
     "shell.conversation.radius",
+    // A held step's buttons, at the drawing's 8.
+    "shell.conversation.ilo.held-button-radius",
 ];
 
 #[test]

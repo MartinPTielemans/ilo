@@ -3235,20 +3235,43 @@ lines-below = 16.0
 # conversation, drawn as the trace's lines are, flat and unboxed. An ilo line is the trace's line
 # with ilo's mark at `glyph` before its words, the mark in its own ink and the words at `ink` of
 # the full ink, the text's (spec-thread-stage.md, ilo's own line); what it says more is under its
-# words, and its buttons, the conversation's page chips, under that, with a note under a button
-# that needs one. A name it takes from a page, the button it stopped at or a site, is cut to
-# `quoted-chars` and drawn in the title's ink, apart from ilo's words. A refusal repeated is one
+# words; a held step's reason, buttons and note are set as below. A name it takes from a page,
+# the button it stopped at or a site, is cut to `quoted-chars` and drawn in the title's ink, apart
+# from ilo's words. A refusal repeated is one
 # line, its count at its end in the trace's note ink.
 glyph = 16.0
 ink = 1.0
 quoted-chars = 40.0
 text-top = 1.0
 text-line = 17.0
-buttons-top = 9.0
-buttons-gap = 6.0
 note-top = 8.0
 note-ink = 0.6
 below = 12.0
+# A held step (spec-thread-stage.md, screen 6): under its line, `held-top` down, a column `held-gap`
+# apart: the reason at `held-reason`/`held-reason-line` in text-2, the buttons `held-buttons-gap`
+# apart, each `held-button` high, `held-button-x` at each side, at `held-button-radius`, words at
+# `held-button-text`/`held-button-text-line`, the first on `primary` with `on-primary` words, the
+# second on `button`; then the quiet line at `held-note`/`held-note-line` in text-3. Under the
+# pointer a button shows at `held-button-hover`.
+held-top = 6.0
+held-gap = 10.0
+held-reason = 13.0
+held-reason-line = 19.0
+held-buttons-gap = 8.0
+held-button = 26.0
+held-button-x = 11.0
+held-button-radius = 8.0
+held-button-text = 12.0
+held-button-text-line = 16.0
+held-button-hover = 0.88
+held-primary = 0xf3f0e8ff
+light-held-primary = 0x161618ff
+held-on-primary = 0x161618ff
+light-held-on-primary = 0xf3f0e8ff
+held-button-fill = 0xf3f0e81a
+light-held-button-fill = 0x1616181a
+held-note = 12.0
+held-note-line = 16.0
 # A button that widens what the agent may do takes no press for this long, in seconds, after its
 # line comes or moves under the pointer, as Chromium's permission prompts do: an agent decides when
 # such a line comes, and the user's press may have been meant for what was there before.
