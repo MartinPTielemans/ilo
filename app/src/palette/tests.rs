@@ -1987,3 +1987,39 @@ fn the_ink_on_a_pages_colour_is_the_colours_alone_not_the_windows() {
     assert_eq!(dark.on_fill(rgb(0x101014)).ink, rgb(PAPER));
     assert_eq!(dark.on_fill(rgb(0xffffff)).ink, rgb(INK));
 }
+
+/// The foot's buttons' plates tell from the window around them at TELLS at every level, in either
+/// look: the Library button's under the pointer and while the Library is open, and the +'s one
+/// plate, under the pointer and while its menu is up. The first row's plate under the pointer,
+/// which the + had, tells at 1.15 there.
+///
+/// As the tests above, it knows the palette's own account of the window and no real material.
+#[test]
+fn the_foots_plates_tell_from_the_window_at_every_level() {
+    use crate::tokens::shell::{LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE, PLUS_PLATE};
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(None, tone);
+            let open = match tone {
+                Tone::Dark => LIBRARY_OPEN_PLATE,
+                Tone::Light => LIGHT_LIBRARY_OPEN_PLATE,
+            };
+            let window = fine_window(&palette);
+            for (name, alpha) in [
+                ("the Library button's under the pointer", STATE_HOVERED),
+                ("the Library button's while it's open", open),
+                ("the +'s", PLUS_PLATE),
+            ] {
+                let plate = Rgba::from(palette.plate(alpha));
+                let told = (window.iter())
+                    .map(|&at| contrast(over(at, plate, plate.a), at))
+                    .fold(f32::MAX, f32::min);
+                assert!(
+                    told >= TELLS,
+                    "{level:?} {tone:?}: {name} tells at {told:.3}"
+                );
+            }
+        }
+    }
+}

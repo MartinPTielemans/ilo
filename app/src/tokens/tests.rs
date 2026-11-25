@@ -176,6 +176,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.composer.page-radius",
     // Settings' segmented track, concentric round its segments at the control radius.
     "settings.segment-radius",
+    // The foot's plates in the owner's drawing (spec-library-foot-theme.md): 28 square at 8.
+    "shell.foot-plate-radius",
 ];
 
 #[test]

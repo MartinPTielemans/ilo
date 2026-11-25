@@ -129,6 +129,9 @@ use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
+use crate::tokens::shell::{
+    FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
+};
 
 #[cfg(test)]
 use crate::tokens::shell::library::FILTER_X;
@@ -4313,12 +4316,20 @@ impl Shell {
         }
     }
 
+    /// Whether the footer's Library button wears its plate: while the Library is open, which with
+    /// the sidebar receding under it is as long as the button is still seen.
+    pub(super) fn library_lit(&self) -> bool {
+        self.library_open
+    }
+
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
     /// its glyph and name over a bar of how far they've got. The pointer resting on it shows the
-    /// recent downloads over it.
+    /// recent downloads over it. While the Library is open it wears a plate, its glyph in the
+    /// text's ink.
     pub(super) fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let progress = downloads_progress(&self.downloads);
         let command = Command::ViewLibrary;
+        let lit = self.library_lit();
         div()
             .id("library")
             .when(self.a11y, |button| {
@@ -4355,9 +4366,24 @@ impl Shell {
                     shell.hover_kinds_menu(event.position, cx)
                 }),
             )
+            .when(lit, |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .left(px((LIBRARY_BUTTON - FOOT_PLATE) / 2.))
+                        .top(px((FOOT_ROW - FOOT_PLATE) / 2.))
+                        .size(px(FOOT_PLATE))
+                        .rounded(px(FOOT_PLATE_RADIUS))
+                        .bg(self.palette.plate(match self.palette.tone {
+                            Tone::Dark => LIBRARY_OPEN_PLATE,
+                            Tone::Light => LIGHT_LIBRARY_OPEN_PLATE,
+                        })),
+                )
+            })
             // A task's card folding into it bumps its glyph as it lands.
             .child({
                 let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                let alpha = if lit { LIBRARY_OPEN_GLYPH } else { alpha };
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))

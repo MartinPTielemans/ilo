@@ -502,9 +502,10 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
-        // The name row and the menu control say so after this if the menu is their own.
+        // The name row, the menu control and the + say so after this if the menu is their own.
         self.name_menu = false;
         self.app_menu = false;
+        self.plus_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -516,6 +517,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         shell.app_menu = false;
+                        shell.plus_menu = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -1747,6 +1749,7 @@ impl Shell {
 
     /// The + button's menu, by Arc's menus' names for what it makes (ours: Arc's + menu isn't
     /// recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have one.
+    /// The + keeps its plate while it's up.
     pub(super) fn plus_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let mut items = vec![
             ("New Space…", Command::NewSpace),
@@ -1786,6 +1789,8 @@ impl Shell {
             entries,
             position,
             Box::new(move |chosen, shell, cx| {
+                // The + lets its plate go.
+                cx.notify();
                 let Some(at) = chosen else {
                     return;
                 };
@@ -1801,6 +1806,8 @@ impl Shell {
             }),
             cx,
         );
+        self.plus_menu = self.menu_open;
+        cx.notify();
     }
 
     /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's

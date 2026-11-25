@@ -1796,6 +1796,18 @@ plus-inset = 10.0
 foot-glyph = 16.0
 # The Library button, at the foot's left.
 library-button = 36.0
+# The foot's two buttons while what they open is up, as the redesign draws them: a plate 28 across
+# with corners of 8. The Library button's is the shown plate's ink while the Library is open, 0.20
+# on a dark window and 0.16 on a light one, under its glyph in the text's. The +'s is the button
+# plate's, 0.10, while its menu is up, and that box is where the + takes the pointer. Under the
+# pointer the + has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells
+# from the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
+foot-plate = 28.0
+foot-plate-radius = 8.0
+library-open-plate = 0.2
+light-library-open-plate = 0.16
+library-open-glyph = 1.0
+plus-plate = 0.1
 # A Space's dot is 7 across and the dots are 10 apart. A Space with an icon keeps the pitch it
 # had: the redesign draws dots alone.
 space-pitch = 17.0
