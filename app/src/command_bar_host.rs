@@ -406,7 +406,6 @@ fn start_thread(
             tier,
             model: model.clone(),
             pages: Vec::new(),
-            only_added: false,
             // The bar's composer has no `+` yet: a path reaches a task only from the panel.
             files: Default::default(),
         };
