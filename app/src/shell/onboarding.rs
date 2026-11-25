@@ -279,6 +279,8 @@ pub(super) struct Onboarding {
     /// The card's size and corners the host last shaped the window to, so it's told only of a
     /// change: on the entry's frames, and once as it ends.
     shaped: Option<(f32, f32, f32)>,
+    /// The assistants' step has looked for their programs since it last came.
+    looked: bool,
     /// The progress knot's fraction as it last left, the one it's going to, and when it set off.
     progress: (f32, f32, Instant),
     /// When the last step was left, for the card's fade.
@@ -402,6 +404,7 @@ impl Onboarding {
         self.step = step;
         self.since = now;
         self.settled = false;
+        self.looked = false;
     }
 
     /// How long a step's content takes to come.
@@ -519,6 +522,7 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
+            looked: false,
             progress: (0., 0., now),
             ending: None,
             light: appearance.and_then(|name| match name {
@@ -1145,6 +1149,20 @@ impl Shell {
         })
     }
 
+    /// Looks for the assistants' programs once each time their step comes, so its rows say what's
+    /// on this computer; Agents runs nothing while threads are off.
+    fn onboarding_look(&mut self, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        if onboarding.step != Step::Assistant || std::mem::replace(&mut onboarding.looked, true) {
+            return;
+        }
+        if let Some(agents) = crate::agents::global(cx) {
+            cx.defer(move |cx| agents.update(cx, |agents, cx| agents.look_for_task_agents(cx)));
+        }
+    }
+
     /// The card in first run's `window` while it shows, stepping its motion; none once it has
     /// ended, as the window goes.
     pub(super) fn onboarding_layer(
@@ -1153,6 +1171,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let rest = self.onboarding_rest(cx);
+        self.onboarding_look(cx);
         let glass = self.blurred;
         let still = crate::motion::still(cx);
         let onboarding = self.onboarding.as_mut()?;
