@@ -2466,7 +2466,8 @@ fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     started(&shell, cx);
     assert_eq!(
         steps(&shell, cx).get(1),
@@ -2541,7 +2542,8 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::Cli;
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
@@ -2595,7 +2597,8 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
         CONTROL_GAP, END_GAP, GLYPH_PLATE, GLYPH_PLATE_GAP, PADDING, ROW_X,
     };
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
