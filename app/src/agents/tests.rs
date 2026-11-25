@@ -582,7 +582,13 @@ fn agents_running(
     let folder = std::env::temp_dir().join(format!("agents-ui-{}-{number}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
     let socket = address(&folder);
-    cx.new(|_| Agents::new(browser, configs, path, socket, bridge))
+    let agents = cx.new(|_| Agents::new(browser, configs, path, socket, bridge));
+    // Other apps' agents on, as the agents of most tests are the user's connected apps: a new
+    // profile's off is other_apps.rs's.
+    agents.update(cx, |agents, _| {
+        (agents.others).store(true, std::sync::atomic::Ordering::SeqCst)
+    });
+    agents
 }
 
 /// The app's Agents, on a made-up browser and clients, for another view's tests: each task CLI
@@ -12663,6 +12669,7 @@ pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
 mod notes;
+mod other_apps;
 #[cfg(unix)]
 mod rewall;
 mod sign_ins;
