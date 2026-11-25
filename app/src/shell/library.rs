@@ -131,7 +131,6 @@ use crate::tokens::shell::{
     FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
 };
 
-#[cfg(test)]
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
@@ -4567,9 +4566,9 @@ mod tests {
         COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
         FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X,
         Item, LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_RIGHT,
-        SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x,
-        download_menu_items, downloads_progress, library_band, panel_at_rest, past_end, plus_x,
-        receded_opacity, spaces_width,
+        SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, day_heading,
+        download_menu_items, downloads_progress, history_list, library_band, panel_at_rest,
+        past_end, plus_x, receded_opacity, spaces_width,
     };
     use std::rc::Rc;
 
