@@ -168,6 +168,9 @@ pub struct Conversation {
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
+    /// The model it runs on, as the composer's model trigger reads it, with its assistant's mark:
+    /// its CLI's name and the model's, or its default's row. None for an outside agent's session.
+    pub model: Option<(&'static str, SharedString)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -1239,6 +1242,13 @@ impl Agents {
             folder: (task.ended.is_none() && task.files.folder.is_some())
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
+            model: task.cli.map(|cli| {
+                let words = match task.model.is_empty() {
+                    true => model_default(cli),
+                    false => format!("{} \u{b7} {}", cli.name(), task.model),
+                };
+                (cli.glyph(), words.into())
+            }),
         })
     }
 

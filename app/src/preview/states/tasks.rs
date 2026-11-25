@@ -430,6 +430,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         only_added: false,
         finished: Vec::new(),
         folder: None,
+        model: None,
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);

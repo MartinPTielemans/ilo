@@ -40,32 +40,37 @@ use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
     TraceStep, told_line,
 };
+use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
+use crate::command_bar::choices;
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
-use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
+use crate::tokens::command_bar::CHIP as BAR_CHIP;
+use crate::tokens::command_bar::CHOICES_MENU_DROP;
 use crate::tokens::mark::INK as MARK_INK;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
-    ARM, BELOW as ILO_BELOW, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP, COMPOSER_TOP,
-    GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL, HELD_BUTTON_HOVER, HELD_BUTTON_RADIUS,
-    HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X, HELD_BUTTONS_GAP, HELD_GAP, HELD_NOTE,
-    HELD_NOTE_LINE, HELD_ON_PRIMARY, HELD_PRIMARY, HELD_REASON, HELD_REASON_LINE, HELD_TOP,
-    INK as ILO_INK, LIGHT_HELD_BUTTON_FILL, LIGHT_HELD_ON_PRIMARY, LIGHT_HELD_PRIMARY, NOTE_INK,
-    NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+    ARM, BELOW as ILO_BELOW, COMPOSER_TOP, GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL,
+    HELD_BUTTON_HOVER, HELD_BUTTON_RADIUS, HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X,
+    HELD_BUTTONS_GAP, HELD_GAP, HELD_NOTE, HELD_NOTE_LINE, HELD_ON_PRIMARY, HELD_PRIMARY,
+    HELD_REASON, HELD_REASON_LINE, HELD_TOP, INK as ILO_INK, LIGHT_HELD_BUTTON_FILL,
+    LIGHT_HELD_ON_PRIMARY, LIGHT_HELD_PRIMARY, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
+    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::panel;
 use crate::tokens::shell::conversation::{
     ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
     BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
-    CHIPS_TOP, CODE_FILL, COLUMN, CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK,
-    CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH, FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON,
-    FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW,
-    LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
-    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
-    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
-    REPLY_KEY_END, REPLY_RIM, SAID_GAP, SAID_INK, SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND,
+    CHIPS_TOP, CODE_FILL, COLUMN, COMPOSER_ARROW, COMPOSER_FIELD, COMPOSER_FIELD_X, COMPOSER_LINE,
+    COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
+    COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
+    CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK, CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH,
+    FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON, FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP,
+    LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP,
+    META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL,
+    PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP,
+    PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
+    REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK, SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND,
     SHIMMER_PERIOD, SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE,
     TITLE_LINE, TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
     TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
@@ -79,9 +84,7 @@ use crate::tokens::shell::task::{
     TILE_PICTURE, TILE_RADIUS, TILE_RING, TILE_RING_STROKE,
 };
 use crate::tokens::text;
-use crate::tokens::toast::{
-    CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
-};
+use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_GAP};
 
 actions!(conversation, [SendReply, StopTask]);
 
@@ -261,8 +264,11 @@ pub struct TalkView {
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
-    /// Where the level's chip under the reply field was drawn, if the last frame drew it.
+    /// Where the composer's level trigger was drawn, if the last frame drew it, and its model's.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    model_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The composer's trigger whose menu is open, which wears its plate while it is.
+    menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
     folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the user was typing in the reply field as the last frame drew, the field having
@@ -412,7 +418,7 @@ impl Shell {
             return self.close_task(cx);
         }
         let left = self.talk_agent();
-        let (space, name, replies) = (card.space, card.name.clone(), card.replies);
+        let (space, replies) = (card.space, card.replies);
         let view = match self.talk.take() {
             // Opened again, it shows its newest line, as the task went on while it was away.
             Some(talk) if talk.agent == agent => {
@@ -429,8 +435,7 @@ impl Shell {
                 // The reply's placeholder follows the appearance, as the lines do (#1659).
                 let colors = Self::form_colors(cx);
                 let reply = cx.new(|cx| {
-                    (TextInput::new(format!("Reply to {name}"), cx).follows(colors))
-                        .placeholder_after_caret()
+                    (TextInput::new(words::REPLY, cx).follows(colors)).placeholder_after_caret()
                 });
                 let shell = cx.weak_entity();
                 let ilo_stops = std::array::from_fn(|_| cx.focus_handle());
@@ -468,6 +473,8 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    model_drawn: Rc::default(),
+                    menu_open: None,
                     folder_drawn: Rc::default(),
                     typing: false,
                     take_over_drawn: Rc::default(),
@@ -787,6 +794,12 @@ impl TalkView {
                     self.tell(ilo_spoken(line, &conversation.name).into());
                 }
             }
+            // The field says what typing there does: steers the thread at work, else replies.
+            let at_work = conversation.stoppable && conversation.live == Live::Working;
+            let placeholder = words::reply_field(at_work);
+            self.reply.update(cx, |reply, cx| {
+                reply.set_placeholder(placeholder.into(), cx)
+            });
             self.shown = Some(conversation);
             cx.notify();
         }
@@ -907,7 +920,7 @@ impl TalkView {
                     None,
                 )
                 .width;
-            let width = (words + px(2. * REPLY_INSET)).min(field.size.width);
+            let width = (words + px(2. * COMPOSER_FIELD_X)).min(field.size.width);
             let from = Bounds {
                 origin: field.origin,
                 size: size(width, field.size.height),
@@ -1011,17 +1024,48 @@ impl TalkView {
     }
 
     /// The level chip's menu, for the task shown: the Shell holds the window's menus.
-    fn tier_menu(&self, clicked: gpui::Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(shown) = &self.shown else {
+    /// The level trigger's menu, the bar's own (choices.rs), hanging under it: the thread's level
+    /// checked. Only the user's pick here changes it, through the press its refusal's button
+    /// makes; there's no agent path to it.
+    fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(shown) = &self.shown else { return };
+        let (Some(trigger), Some(menu)) = (
+            self.level_drawn.get(),
+            cx.try_global::<crate::menu::EntriesMenu>(),
+        ) else {
             return;
         };
-        let (agent, tier, only) = (self.agent.clone(), shown.tier, shown.only_added);
-        let chip = self.level_drawn.get();
-        self.shell
-            .update(cx, |shell, cx| {
-                shell.task_tier_menu(agent, tier, only, chip, clicked, cx)
-            })
-            .ok();
+        let menu = menu.0.clone();
+        let mut items = choices::level_entries(shown.tier);
+        // A thread kept to the sites added keeps its way out to any site, which it can't narrow
+        // back to, as it never had the others.
+        let any_site = shown.only_added.then(|| {
+            items.push(MenuEntry::line());
+            items.push(MenuEntry::named(ANY_SITE, true));
+            items.push(MenuEntry::named(ONLY_ADDED, false).checked(true));
+            items.len() - 2
+        });
+        let view = cx.entity().downgrade();
+        let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
+            let picked = closed.chosen();
+            let action = match picked {
+                Some(item) if Some(item) == any_site => Some(TaskAction::PickAnySite),
+                Some(item) => Tier::ALL.get(item).map(|tier| TaskAction::PickTier(*tier)),
+                None => None,
+            };
+            let closed = |view: &mut Self, cx: &mut Context<Self>| {
+                view.menu_open = None;
+                cx.notify();
+                if let Some(action) = action {
+                    view.act(action, cx);
+                }
+            };
+            view.update(cx, closed).ok();
+        });
+        self.menu_open = Some(LEVEL);
+        cx.notify();
+        let at = point(trigger.left(), trigger.bottom() + px(CHOICES_MENU_DROP));
+        menu(items, at, false, window, chosen, cx);
     }
 
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
@@ -1428,24 +1472,10 @@ impl TalkView {
                 .opacity(opacity);
             match stoppable {
                 true => {
-                    let logged = self.stop_logged.clone();
-                    let at = canvas(
-                        move |bounds, _, _| {
-                            if logged.replace(Some(bounds)) != Some(bounds) {
-                                // check.sh reads this line, to click it.
-                                log!(
-                                    "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
-                                    f32::from(bounds.origin.x),
-                                    f32::from(bounds.origin.y),
-                                    f32::from(bounds.size.width),
-                                    f32::from(bounds.size.height)
-                                );
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full();
+                    let told = stop_told(self.stop_logged.clone());
+                    let at = canvas(move |bounds, _, _| told(bounds), |_, _, _, _| {})
+                        .absolute()
+                        .size_full();
                     chip.relative()
                         .child(at)
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -2537,7 +2567,12 @@ impl TalkView {
                 CHIP_HEIGHT,
                 CHIP_X,
             ),
-            false => (REPLY_FILL, RADIUS, REPLY_HEIGHT, REPLY_INSET),
+            false => (
+                REPLY_FILL,
+                COMPOSER_RADIUS,
+                COMPOSER_FIELD,
+                COMPOSER_FIELD_X,
+            ),
         };
         let from = landing.from;
         let at = |from: Pixels, to: Pixels| between(f32::from(from), f32::from(to));
@@ -2607,46 +2642,38 @@ impl TalkView {
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
         let palette = look.palette;
-        // The key that sends it, in the command bar's hint key, as a button with a key shows it.
-        let send = div()
-            .flex_none()
-            .h(px(PAGE_CHIP_HEIGHT))
-            .px(px(HINT_KEY_X))
-            .flex()
-            .items_center()
-            .rounded(px(CHIP_RADIUS))
-            .bg(palette.plate(BAR_CHIP))
-            .border_1()
-            .border_color(palette.plate(HINT_KEY_RIM))
-            .text_size(px(text::SMALL))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(palette.text(KEY_COLOR))
-            .child(super::key_name("enter", super::OFF_THE_MAC));
-        div()
-            .id("conversation-reply")
+        let form = Composer::of(look.standing);
+        // The field, growing with its words, then the row of choices, in one box.
+        let field = div()
+            .id("conversation-field")
             .relative()
-            .flex_none()
-            .h(px(REPLY_HEIGHT))
-            .pl(px(REPLY_INSET))
-            .pr(px(REPLY_KEY_END))
+            .min_h(px(form.field))
+            .px(px(form.field_x))
             .flex()
             .items_center()
-            .gap(px(REPLY_KEY_END))
-            .rounded(px(RADIUS))
-            .bg(palette.plate(REPLY_FILL))
-            .border_1()
-            .border_color(palette.plate(REPLY_RIM))
+            .text_size(px(form.text))
+            .line_height(px(form.line))
             .font_weight(FontWeight::NORMAL)
             .on_click(cx.listener(move |_, _, window, cx| {
                 window.focus(&reply.focus_handle(cx), cx);
             }))
             .child(div().flex_1().min_w_0().child(self.reply.clone()))
-            .child(send)
             .child(
                 canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
                     .absolute()
                     .size_full(),
-            )
+            );
+        div()
+            .id("conversation-reply")
+            .flex_none()
+            .flex()
+            .flex_col()
+            .rounded(px(form.radius))
+            .bg(palette.plate(REPLY_FILL))
+            .border_1()
+            .border_color(palette.plate(COMPOSER_RIM))
+            .child(field)
+            .child(self.choices(&form, look, cx))
     }
 
     /// The live line over the reply field while the task works: the step under way, else
@@ -2737,45 +2764,75 @@ impl TalkView {
         )
     }
 
-    /// The composer's row under the reply field: the task's access on a chip,
-    /// which opens its menu (#4094), the folder the task holds on the next (#4101), and Stop at
-    /// the row's end. A reply never carries files or a folder, so there's no way to add one here.
-    fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
+    /// The composer's row under its field, the bar's own (choices.rs): the thread's level, which
+    /// opens its menu (#4094), the folder it holds (#4101), its model, which it reads and can't
+    /// change while its program runs, and the round button: Stop while it works and nothing is
+    /// typed, else Send, which does nothing with nothing typed. A reply never carries files or a
+    /// folder, so there's no way to add one here.
+    fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let palette = look.palette;
-        let tier = self
-            .shown
-            .as_ref()
-            .map(|shown| shown.tier)
-            .unwrap_or_default();
-        let drawn = self.level_drawn.clone();
-        let chip = page_chip(palette, "conversation-tier", tier.label(), None)
-            .relative()
-            .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
-                view.tier_menu(event.position(), cx)
-            }))
-            .child(
-                svg()
-                    .flex_none()
-                    .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
-                    .path("icons/chevron-down.svg")
-                    .size(px(COMPOSER_CHEVRON))
-                    .text_color(palette.glyph(CHIP_KEY)),
-            )
-            .child(
-                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-            );
-        div()
-            .mt(px(COMPOSER_TOP))
-            .flex()
-            .items_center()
-            .child(chip)
-            .children(self.folder_chip(look, cx))
-            .child(div().flex_1())
-            .children(self.stop(look, cx))
+        let shown = self.shown.as_ref();
+        let tier = shown.map(|shown| shown.tier).unwrap_or_default();
+        let typed = !self.reply.read(cx).text().trim().is_empty();
+        let stoppable = shown.is_some_and(|shown| shown.stoppable);
+        let round = match (stoppable, typed) {
+            (true, false) => choices::Round::Stop,
+            _ => choices::Round::Go { ready: typed },
+        };
+        let (said, go): (
+            SharedString,
+            Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>,
+        ) = match round {
+            choices::Round::Stop => (
+                words::STOP.into(),
+                Box::new(cx.listener(|view, _, _, cx| {
+                    view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
+                })),
+            ),
+            choices::Round::Go { .. } => (
+                words::REPLY.into(),
+                Box::new(cx.listener(|view, _, window, cx| view.send_reply(window, cx))),
+            ),
+        };
+        let logged = self.stop_logged.clone();
+        let round_at = (round == choices::Round::Stop)
+            .then(|| Box::new(stop_told(logged)) as Box<dyn Fn(Bounds<Pixels>)>);
+        let level = choices::Trigger {
+            id: LEVEL,
+            at: self.level_drawn.clone(),
+            click: Some(Box::new(
+                cx.listener(|view, _, window, cx| view.level_menu(window, cx)),
+            )),
+        };
+        let model = (shown.and_then(|shown| shown.model.clone())).map(|(mark, said)| {
+            let trigger = choices::Trigger {
+                id: MODEL,
+                at: self.model_drawn.clone(),
+                click: None,
+            };
+            (Some(mark), said, trigger)
+        });
+        choices::row(choices::Row {
+            form: form.row,
+            inks: choices::Inks {
+                text: palette.text(TITLE),
+                dim: palette.gray(SECONDARY),
+                plate: palette.plate(BAR_CHIP),
+                primary: palette.accent.into(),
+                on_primary: palette.accent_label.into(),
+            },
+            a11y: look.a11y,
+            level: (tier, level),
+            model,
+            held: self
+                .folder_chip(look, cx)
+                .map(|chip| chip.into_any_element())
+                .into_iter()
+                .collect(),
+            open: self.menu_open,
+            round: ("conversation-round", said, round, go),
+            round_at,
+        })
     }
 
     /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
@@ -3197,6 +3254,84 @@ fn held_button(
         .font_weight(weight)
         .text_color(ink)
         .child(words.into())
+}
+
+/// The composer's triggers, by their elements' ids.
+const LEVEL: &str = "conversation-level";
+const MODEL: &str = "conversation-model";
+
+/// Where Stop was drawn, kept in `logged` and logged as it moves, for check.sh to click it.
+fn stop_told(logged: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl Fn(Bounds<Pixels>) + 'static {
+    move |bounds| {
+        if logged.replace(Some(bounds)) != Some(bounds) {
+            // check.sh reads this line, to click it.
+            log!(
+                "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height)
+            );
+        }
+    }
+}
+
+/// The sizes the composer is drawn at: the stage's, or the panel's beside a page.
+struct Composer {
+    radius: f32,
+    field: f32,
+    field_x: f32,
+    text: f32,
+    line: f32,
+    row: choices::Form,
+}
+
+impl Composer {
+    fn of(standing: bool) -> Self {
+        let stage = choices::Form {
+            height: COMPOSER_ROW,
+            under: COMPOSER_ROW_UNDER,
+            left: COMPOSER_ROW_X,
+            right: COMPOSER_ROW_X,
+            gap: COMPOSER_ROW_GAP,
+            round: COMPOSER_ROUND,
+            arrow: COMPOSER_ARROW,
+            square: COMPOSER_SQUARE,
+            square_radius: COMPOSER_SQUARE_RADIUS,
+            ..choices::Form::BAR
+        };
+        match standing {
+            false => Composer {
+                radius: COMPOSER_RADIUS,
+                field: COMPOSER_FIELD,
+                field_x: COMPOSER_FIELD_X,
+                text: COMPOSER_TEXT,
+                line: COMPOSER_LINE,
+                row: stage,
+            },
+            true => Composer {
+                radius: panel::COMPOSER_RADIUS,
+                field: panel::COMPOSER_FIELD,
+                field_x: panel::COMPOSER_FIELD_X,
+                text: panel::COMPOSER_TEXT,
+                line: panel::COMPOSER_LINE,
+                row: choices::Form {
+                    height: panel::COMPOSER_ROW,
+                    left: panel::COMPOSER_ROW_X,
+                    right: panel::COMPOSER_ROW_X,
+                    level_x: panel::COMPOSER_LEVEL_X,
+                    text: panel::COMPOSER_LEVEL,
+                    line: panel::COMPOSER_LEVEL_LINE,
+                    mark: false,
+                    model_dim: true,
+                    round: panel::COMPOSER_ROUND,
+                    arrow: panel::COMPOSER_ARROW,
+                    square: panel::COMPOSER_SQUARE,
+                    ..stage
+                },
+            },
+        }
+    }
 }
 
 /// What the assistant itself says in a trace, an opened thought or its note on a step: text-2
@@ -4099,15 +4234,11 @@ impl Render for TalkView {
                     .flatten()
                     .map(|row| shut(foot(row))),
             )
-            .child(shut(foot(on_column(
-                self.reply(&look, cx).into_any_element(),
-            ))))
             // With ilo's line and Start Again in the field's place there is no level to set, so
             // the row goes with the field (#4105).
-            .children(
-                (self.replies && self.in_field().is_none())
-                    .then(|| shut(foot(on_column(self.composer(&look, cx).into_any_element())))),
-            );
+            .child(shut(foot(on_column(
+                self.reply(&look, cx).into_any_element(),
+            ))));
         let rail = (pages && !across && !standing).then(|| {
             div()
                 .flex_none()

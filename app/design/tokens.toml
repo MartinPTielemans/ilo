@@ -3382,19 +3382,37 @@ shimmer-band = 0.3
 # The question's answers, and the result's Open, under its text.
 chips-top = 10.0
 chips-below = 16.0
-# The reply field: the ink at `reply-fill` with a hairline of it at `reply-rim` inside its edge, so
-# it reads as a field (#1080), and the key that sends it in a chip at its end, the command bar's
-# hint key, `reply-key-end` in from it.
+# The composer's fill, the field's: the ink at `reply-fill` (#1080). Where a thread takes no reply,
+# its line stands `reply-height` high in the composer's place.
 reply-height = 34.0
-reply-inset = 12.0
 reply-fill = 0.1
-reply-rim = 0.14
-reply-key-end = 7.0
 reply-bottom = 20.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:
 # the window's material under them is the system's, so no fade's colour can match it.
 lines-below = 16.0
+
+# The composer at the column's foot (spec-thread-stage.md): in the field's fill (`reply-fill`) at
+# `composer-radius`, with a 1 px inner line of white at `composer-rim`, no blur, no shadow. The field
+# is `composer-field` high for a line, `composer-field-x` in, its words `composer-text` on
+# `composer-line`; under it the row of choices, the bar's own (command_bar/choices.rs), `composer-row`
+# high with `composer-row-under` of it under the items, `composer-row-x` in, `composer-row-gap`
+# apart; its round button `composer-round`, its arrow `composer-arrow`, Stop's square
+# `composer-square` at `composer-square-radius`.
+composer-radius = 16.0
+composer-rim = 0.05
+composer-field = 44.0
+composer-field-x = 16.0
+composer-text = 14.0
+composer-line = 21.0
+composer-row = 46.0
+composer-row-under = 6.0
+composer-row-x = 8.0
+composer-row-gap = 2.0
+composer-round = 30.0
+composer-arrow = 14.0
+composer-square = 10.0
+composer-square-radius = 2.0
 
 [shell.conversation.ilo]
 # Ours (#4086, no asks; the owner's dev build tunes these): what ilo itself says in a task's
@@ -3444,11 +3462,8 @@ held-note-line = 16.0
 arm = 0.5
 # The live line is the trace's step under way, on the page the task stands on, with Take over at
 # the column's end.
-# The composer's row under the reply field: the task's access on a chip, which opens its menu, and
-# Stop at the row's end.
+# It stands `composer-top` over the composer.
 composer-top = 6.0
-composer-chevron = 10.0
-composer-chevron-gap = 4.0
 
 [shell.conversation.panel]
 # The panel beside a page (spec-thread-stage.md, screens 5 and 6), standing in the stage's header
@@ -3482,6 +3497,25 @@ row-left = 4.0
 row-gap = 8.0
 live = 12.0
 live-line = 16.0
+# The composer, reduced: `composer-radius`, the field `composer-field` high and `composer-field-x`
+# in, its words `composer-text` on `composer-line`; the row `composer-row` high, `composer-row-x` in,
+# the level `composer-level-x` in at `composer-level`/`composer-level-line`, the model in text-2
+# without its mark, the round button `composer-round` with Stop's square at `composer-square`. The
+# drawing gives no arrow or space under the row here: `composer-arrow` is the stage's less one, by
+# the round button's, and the row keeps the stage's `composer-row-under`.
+composer-radius = 14.0
+composer-field = 38.0
+composer-field-x = 12.0
+composer-text = 13.0
+composer-line = 18.0
+composer-row = 40.0
+composer-row-x = 6.0
+composer-level-x = 7.0
+composer-level = 12.0
+composer-level-line = 16.0
+composer-round = 28.0
+composer-arrow = 13.0
+composer-square = 9.0
 
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it

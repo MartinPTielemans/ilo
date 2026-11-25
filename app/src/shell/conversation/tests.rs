@@ -1,6 +1,7 @@
 //! A task's card and its conversation in the page area, on a host that records what the shell asks
 //! of the core.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
@@ -15,7 +16,9 @@ use crate::agents::task::{
     Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use crate::agents::tier::{Tier, Why};
+use crate::command_bar::choices;
 use crate::product::PRODUCT;
+use crate::shell::MenuEntry;
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::text_input::TextInput;
@@ -102,6 +105,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         only_added: false,
         finished: Vec::new(),
         folder: None,
+        model: None,
     }
 }
 
@@ -1264,7 +1268,7 @@ fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
     );
 }
 
-/// The reply field's "Reply to …" follows a switch between light and dark while the conversation
+/// The reply field's placeholder follows a switch between light and dark while the conversation
 /// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
 #[gpui::test]
 fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
@@ -1293,6 +1297,35 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
         "light and dark drew the same placeholder"
     );
     assert_eq!(colours[0], colours[2]);
+}
+
+/// The reply field says what typing there does (Z-who): `Steer it, or ask` while the thread is at
+/// work, `Reply` while it waits on the user and once it can't be stopped, as when it's done.
+#[gpui::test]
+fn the_reply_field_says_steer_while_at_work_and_reply_otherwise(cx: &mut TestAppContext) {
+    use crate::agents::task::Live;
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    let mut said = Vec::new();
+    for (live, stoppable) in [
+        (Live::Working, true),
+        (Live::Asked, true),
+        (Live::Working, false),
+        (Live::Working, true),
+    ] {
+        talk.live = live;
+        talk.stoppable = stoppable;
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        cx.run_until_parked();
+        said.push(shell.read_with(cx, |shell, cx| {
+            let talk = shell.talk.as_ref().expect("the conversation");
+            talk.view.read(cx).reply.read(cx).placeholder().to_string()
+        }));
+    }
+    let (steer, reply) = (super::words::STEER, super::words::REPLY);
+    assert_eq!(said, [steer, reply, reply, steer]);
 }
 
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
@@ -2702,19 +2735,29 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     view.read_with(cx, |view, _| view.level_drawn.get().is_some())
 }
 
-/// The chip under the reply field says the task's own level, at Look only and at Full access,
-/// and a click on it opens the level's menu: names only, that level checked, where it may go and
-/// Settings. A pick there is the user's press on the task, the one way its level changes.
+/// The composer's level trigger says the thread's own level, at Look only and at Full access,
+/// and a click on it opens the bar's own level menu (choices.rs) under it, that level checked,
+/// wearing its plate while it's open. A pick there is the user's press on the thread, the one way
+/// its level changes. A thread kept to the sites added has its way out to any site there too.
 #[gpui::test]
-fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContext) {
+fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut TestAppContext) {
+    type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    for tier in [Tier::Look, Tier::Full] {
+    let shown_menu: Shown = Rc::default();
+    let into = shown_menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
+        )))
+    });
+    for (tier, only_added) in [(Tier::Look, false), (Tier::Full, false), (Tier::Work, true)] {
         shell.update(cx, |shell, cx| {
             shell.set_talk_beside(true, cx);
             shell.set_conversation(
                 Some(Conversation {
                     tier,
+                    only_added,
                     ..ended(IloKind::KeptHere)
                 }),
                 cx,
@@ -2722,55 +2765,52 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
         });
         view.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
-        let chip = view.read_with(cx, |view, _| view.level_drawn.get());
-        let chip = chip.expect("the level chip drawn");
-        host.take();
-        cx.simulate_click(chip.center(), Modifiers::none());
+        let trigger = view.read_with(cx, |view, _| view.level_drawn.get());
+        let trigger = trigger.expect("the level trigger drawn");
+        cx.simulate_click(trigger.center(), Modifiers::none());
         cx.run_until_parked();
-        let rows: Vec<(String, bool)> = (host.menus.borrow().last().cloned())
-            .expect("a click on the chip showed no menu")
-            .into_iter()
-            .map(|(title, enabled)| (title.to_string(), enabled))
+        let (items, chosen) = (shown_menu.borrow_mut().take()).expect("no menu showed");
+        let rows: Vec<(String, bool, bool)> = (items.iter())
+            .map(|item| (item.title.to_string(), item.enabled, item.checked))
             .collect();
-        let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+        let mut expected: Vec<(String, bool, bool)> = (choices::level_entries(tier).iter())
+            .map(|item| (item.title.to_string(), item.enabled, item.checked))
+            .collect();
+        if only_added {
+            expected.extend([
+                (String::new(), false, false),
+                ("Any site".into(), true, false),
+                ("Only the sites you add".into(), false, true),
+            ]);
+        }
+        assert_eq!(rows, expected, "the level menu's rows at {tier:?}");
         assert_eq!(
-            rows,
-            vec![
-                row("Look only", true),
-                row("Work on pages", true),
-                row("Full access", true),
-                row("", false),
-                row("Any site", true),
-                row("Only the sites you add", false),
-                row("", false),
-                row("Settings…", true),
-            ],
-            "the level menu's rows at {tier:?}"
+            view.read_with(cx, |view, _| view.menu_open),
+            Some("conversation-level"),
+            "the trigger wears its plate while its menu is open"
         );
-        let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
-        let at = |each: Tier| tier == each;
+        host.take();
+        let pick = match only_added {
+            false => 1,
+            true => expected.len() - 2,
+        };
+        cx.update(|window, cx| chosen(crate::menu::Closed::Chose(pick), window, cx));
+        cx.run_until_parked();
+        let pressed = match only_added {
+            false => "task task-1 PickTier(Work)",
+            true => "task task-1 PickAnySite",
+        };
         assert_eq!(
-            checked,
-            [
-                at(Tier::Look),
-                at(Tier::Work),
-                at(Tier::Full),
-                false,
-                true,
-                false,
-                false,
-                false
-            ],
-            "the menu checks {tier:?}, the task's own level"
+            host.take(),
+            vec![pressed.to_string()],
+            "the pick is the user's press"
+        );
+        assert_eq!(
+            view.read_with(cx, |view, _| view.menu_open),
+            None,
+            "its plate went"
         );
     }
-    host.take();
-    cx.update(|_, cx| host.choose("Work on pages", cx));
-    assert_eq!(
-        host.take(),
-        vec!["task task-1 PickTier(Work)".to_string()],
-        "the pick is the user's press on the task"
-    );
 }
 
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.

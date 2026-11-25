@@ -61,6 +61,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         only_added: false,
         finished: Vec::new(),
         folder: None,
+        model: None,
     }
 }
 

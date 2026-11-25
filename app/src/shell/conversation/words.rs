@@ -337,3 +337,18 @@ pub fn note(buttons: &[IloButton]) -> Option<&'static str> {
     (buttons.contains(&IloButton::Raise(Tier::Full)))
         .then_some("Full access lasts for this thread only.")
 }
+
+/// The reply field's placeholder while its thread is at work (Z-who): typing there steers it.
+pub const STEER: &str = "Steer it, or ask";
+
+/// The reply field's placeholder otherwise (Z-who), and the name of the button that sends what's
+/// typed, whoever is at work: the user reads ilo as the one at work, never the assistant.
+pub const REPLY: &str = "Reply";
+
+/// The reply field's placeholder, as its thread is `at_work` or not.
+pub fn reply_field(at_work: bool) -> &'static str {
+    match at_work {
+        true => STEER,
+        false => REPLY,
+    }
+}

@@ -104,6 +104,10 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // A thread's composer, as spec-thread-stage.md draws it: the panel's box at 14, Stop's square
+    // at 2.
+    "shell.conversation.panel.composer-radius",
+    "shell.conversation.composer-square-radius",
     // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
     // foot's buttons and their key, the keys step's caps, and the picture's panel.
     "shell.onboarding.window.track-radius",
