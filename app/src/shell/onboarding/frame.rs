@@ -235,7 +235,7 @@ pub(super) fn main_button(
         .text_color(rgb(inks.on_primary))
         .text_size(px(t::BUTTON_SIZE))
         .line_height(px(t::BUTTON_LINE))
-        .font_weight(FontWeight(t::MAIN_WEIGHT))
+        .font_weight(FontWeight::SEMIBOLD)
         .hover(|style| style.opacity(0.9))
         .focus_visible(ring(inks.text(1.)))
         .child(chip)
@@ -262,7 +262,7 @@ impl Shell {
             false => (t::HEADING_TOP, t::HEADING_SIZE, t::HEADING_LINE),
         };
         let heading = display_text(title, size, height, cx)
-            .font_weight(FontWeight(t::HEADING_WEIGHT))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(inks.text(1.));
         let (line_top, line_size, line_height) = match welcome {
             true => (

@@ -2560,6 +2560,12 @@ fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
         let Some(at) = step(&shell, cx) else {
             break;
         };
+        // Left from the last step, the flow is ending and its Skip goes with it.
+        if shell.read_with(cx, |shell, _| {
+            shell.onboarding.as_ref().unwrap().ending.is_some()
+        }) {
+            break;
+        }
         if at != Step::Intro {
             later(&shell, cx, STEP_MOTION);
             if let Some(skip) = placed("skip", cx) {

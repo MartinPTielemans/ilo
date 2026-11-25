@@ -80,7 +80,11 @@ impl FirstRun {
 
 impl Render for FirstRun {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let flow = (self.shell).update(cx, |shell, cx| shell.onboarding_layer(window, cx));
+        // The shell names what it draws for a screen reader by the window it draws in, this one.
+        let flow = (self.shell).update(cx, |shell, cx| {
+            shell.a11y = window.is_a11y_active();
+            shell.onboarding_layer(window, cx)
+        });
         let a11y = self.shell.read(cx).a11y;
         // Off the Mac the window manager draws no title bar, so the UI draws the close.
         let own_close = (!cfg!(target_os = "macos")
