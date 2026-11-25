@@ -49,7 +49,9 @@ fn card() -> Card {
         title: "Lisbon museum hours".into(),
         status: "Most open at 10".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot: Dot::Done,
         word: Word::for_dot(Dot::Done),
@@ -61,7 +63,7 @@ fn card() -> Card {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     }
 }

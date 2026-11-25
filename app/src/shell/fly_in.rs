@@ -7,8 +7,9 @@ use std::{collections::HashSet, time::Duration};
 use gpui::{AnyElement, App, Context, Task, Window, div, img, prelude::*, px, svg};
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, NAV_SIZE, SECONDARY, Shell, library::LIBRARY_BACK_INSET,
+    Download, DownloadState, FOOTER_HEIGHT, SECONDARY, Shell, library::LIBRARY_BACK_INSET,
 };
+use crate::tokens::shell::LIBRARY_BUTTON;
 use crate::tokens::shell::library::{BIN, BIN_RIGHT, BIN_UP};
 
 /// Arc's: 1.10 s from where it leaves to the bin, at a steady speed across, on a parabola whose top
@@ -110,7 +111,7 @@ impl Shell {
     fn bin_center(&self) -> (f32, f32) {
         let height = f32::from(self.viewport.height);
         (
-            self.column_x() + LIBRARY_BACK_INSET + NAV_SIZE / 2. + BIN_RIGHT,
+            self.column_x() + LIBRARY_BACK_INSET + LIBRARY_BUTTON / 2. + BIN_RIGHT,
             height - FOOTER_HEIGHT / 2. - BIN_UP,
         )
     }

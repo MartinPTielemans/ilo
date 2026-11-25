@@ -32,8 +32,17 @@ impl Agents {
     /// else the act's own, as an open's is. A second connection would otherwise pass the access
     /// the user set on a task, and the refusal's line would change another task's.
     pub(super) fn judged_task(&self, act: &Act) -> Option<&super::task::Task> {
-        (self.page_task(&act.agent, act.tab.max(act.started_in)))
+        (self.page_task(&act.agent, act.page()))
             .or_else(|| self.acting_task(&act.agent, act.connection, act.call))
+    }
+
+    /// The access the log's entry names for what `agent` did on `connection` to the page in
+    /// `tab`, or with 0 to none: the one its act was judged at (`judged_task`), so that of the
+    /// task under way that holds the page, else the connection's own. An entry never names a
+    /// level the act wasn't held to.
+    pub(super) fn entry_tier(&self, agent: &str, connection: u64, tab: u64) -> Tier {
+        let own = || self.tier_of(agent, connection, 0);
+        (self.page_task(agent, tab)).map_or_else(own, |task| task.tier)
     }
 
     /// Why `act` on `site` is one a tier may refuse, from what would have asked (`why`), or None

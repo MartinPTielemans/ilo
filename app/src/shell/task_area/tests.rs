@@ -1146,7 +1146,9 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         title: "Find a flight".into(),
         status: SharedString::default(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -1158,7 +1160,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     let hold = |why: &str, cx: &mut VisualTestContext| {
@@ -1504,7 +1506,9 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         title: "Find a flight".into(),
         status: status.to_string().into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -1516,7 +1520,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {
@@ -1849,9 +1853,11 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         retry: false,
         fix: None,
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {
@@ -1909,9 +1915,11 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         retry: false,
         fix: None,
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     let held = |tab: u64| {
@@ -2102,7 +2110,9 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         title: "Find a flight".into(),
         status: "Clicking “Tickets”".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
@@ -2114,7 +2124,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {

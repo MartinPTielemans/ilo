@@ -955,7 +955,7 @@ expect "^browser: page $held unloaded 0\$" "the unloaded pinned tab didn't load 
 expect "^browser: loaded $held ${site}alerts.html\$" "the pinned tab's page didn't load again once shown"
 alert_up $held "the pinned tab loaded again"
 # The Today tab at the top, under the pinned row, takes the alert down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
+send click 100 $(($(row 0 | cut -d' ' -f2) + 34))
 expect '^browser: dialog withdrawn$' "the pinned tab's alert stayed up over another tab"
 send middleclick $(pinned_row 0)
 expect '^browser: command close-tab via sidebar$' \

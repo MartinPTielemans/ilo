@@ -1,5 +1,5 @@
 # check.sh runs this at 380.
-# An MCP client reaches the browser through the bridge beside it once Settings › Agents is on and
+# An MCP client reaches the browser through the bridge beside it once Settings › Threads is on and
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
 # its first call that acts on a tab starts its card, one for each connection. Unnamed, the card
@@ -56,18 +56,19 @@
 # outlined as the label's text with no ref (#3656). It sends requests to its tab's site, carrying a session it
 # never sees, and a change isn't part of Work on pages: ilo refuses it and it's never sent, a POST
 # whose override says GET too. A change without the agent's sentence of what it does is refused
-# for that first (#3548). Settings › Agents opens each request to the agent's sentence, where it
+# for that first (#3548). Settings › Other apps opens each request to the agent's sentence, where it
 # went and what it sent, or that the refused one wasn't, and names each by the method sent. Paying,
 # an order, a message as the user and a bank's site are stopped at Work on pages too, nothing
 # asked (#4086): each is ilo's line in the conversation with Give Full access, which the keys
-# press, and at Full access each goes through, with no answer kept for Settings › Agents to list.
-# A site the user adds to Settings › Agents' Off limits is refused whatever the task's access, an
+# press, and at Full access each goes through, with no answer kept for Settings › Other apps to
+# list.
+# A site the user adds to Settings › Access' Off limits is refused whatever the task's access, an
 # open of it and each call on a
 # tab that came there by a link, which gives nothing of the page meanwhile (#3724). A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
-# the client's connection. Turning Settings › Agents off takes the socket away and drops a client
+# the client's connection. Turning Settings › Threads off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
 # restarted, its done, sent while its handoff waits on the user, ends its task once that's answered,
 # and its next task ends 3 s after it closed its last page (#3652). Its tools offer it nothing of
@@ -2622,27 +2623,27 @@ addEventListener("message", (event) => {
   # A delete is a change as a POST is, whatever its sentence says.
   draft='{"method":"DELETE","path":"/api/items/7","what":"Tidy up the old draft so your list is cleaner."}'
   change_stopped "$draft" 1
-  # Settings › Agents lists each request by what it did, and a press opens it to where it went and
-  # what it sent, or, for a change ilo refused, that it wasn't sent (#2326). Each row's name holds
-  # its entry's id, which counts up, and its method.
+  # Settings › Other apps lists each request by what it did, and a press opens it to where it went
+  # and what it sent, or, for a change ilo refused, that it wasn't sent (#2326). Each row's name
+  # holds its entry's id, which counts up, and its method.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
   fi
-  settings_drew Agents
-  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Agents drew no change"
+  settings_drew 'Other apps'
+  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Other apps drew no change"
   refused_id=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu | tail -1)
   read_id=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -nu | tail -1)
   [ -n "$read_id" ] && [ -n "$refused_id" ] ||
-    fail "Settings › Agents didn't list the read and the refused change: $(grep '^browser: settings request ' "$log")"
+    fail "Settings › Other apps didn't list the read and the refused change: $(grep '^browser: settings request ' "$log")"
   # Opens the request $1, sent with the method $2, and checks its line says it shows $3. The oldest
   # first, the lowest, so a row opened doesn't move the next one. The name is whole, as in_sight
   # finds a scrolled row by its fixed text.
   open_request() {
-    in_sight "request $1 $2" || fail "Settings › Agents didn't draw request $1"
+    in_sight "request $1 $2" || fail "Settings › Other apps didn't draw request $1"
     send clickkey $at
     expect "^browser: settings request $1 opened " "a click on request $1 didn't open it"
     shown=$(sed -n "s/^browser: settings request $1 opened //p" "$log" | tail -1)
@@ -2655,29 +2656,29 @@ addEventListener("message", (event) => {
   [ "$said" = "$(printf '%s' "$milk" | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["what"])')" ] ||
     fail "request $refused_id opened to the agent's sentence \"$said\""
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
-  # Back to General, for the visits below to click Agents.
+  # Back to General, for the visits below to click Other apps.
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   # A POST whose override header says GET is a change too, as a server may take either: it goes
-  # nowhere, and Settings › Agents names it by the method sent.
+  # nowhere, and Settings › Other apps names it by the method sent.
   oats='{"method":"POST","path":"/api/items","headers":{"X-HTTP-Method-Override":"GET"},"body":{"title":"Oats"},"what":"Add Oats to the list."}'
   change_stopped "$oats" 1
   grep -q 'Oats' "$out/site.log" && fail "the refused overridden POST reached the site"
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
   fi
-  settings_drew Agents
+  settings_drew 'Other apps'
   # A frame logs its rows after its drew line, the newest first, so the newest is in once one is.
-  expect '^browser: settings request [0-9]* [A-Z]* at ' "Settings › Agents drew no request after the refused overridden POST"
+  expect '^browser: settings request [0-9]* [A-Z]* at ' "Settings › Other apps drew no request after the refused overridden POST"
   newest=$(sed -n 's/^browser: settings request \([0-9]*\) \([A-Z]*\) at .*/\1 \2/p' "$log" | sort -n | tail -1)
   [ "${newest#* }" = POST ] && [ "${newest% *}" -gt "$refused_id" ] ||
-    fail "Settings › Agents didn't name the overridden POST by the method sent: its newest request is $newest"
+    fail "Settings › Other apps didn't name the overridden POST by the method sent: its newest request is $newest"
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   send key w cmd
@@ -3687,16 +3688,20 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   say_steps
   bank_steps
 
-  # Settings › Agents has no answer kept for good to list or revoke (#4086): nothing was asked, and
-  # the access the user gave above is that task's alone.
+  # Settings › Other apps has no answer kept for good to list or revoke (#4086): nothing was asked,
+  # and the access the user gave above is that task's alone.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar Agents")
-  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
-  settings_drew Agents
+  send clickkey $(drawn "toolbar Other apps")
+  expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
+  settings_drew 'Other apps'
   grep -q '^browser: settings revoke ' "$log" &&
-    fail "Settings › Agents listed an answer kept for good to revoke: $(grep '^browser: settings revoke ' "$log" | tail -1)"
+    fail "Settings › Other apps listed an answer kept for good to revoke: $(grep '^browser: settings revoke ' "$log" | tail -1)"
+  # Off limits is Access'.
+  send clickkey $(drawn "toolbar Access")
+  expect '^browser: settings tab Access$' "a click on Access didn't show its section"
+  settings_drew Access
   # Off limits (#3724): Add Site… opens a field with the keyboard, where Return adds the site
   # typed, which the list then shows with its Remove, and Remove takes it off.
   fence_add() {
@@ -3865,7 +3870,8 @@ for (const each of document.querySelectorAll('iframe, object'))
   went=$(call open_tab "{\"url\":\"localhost:$port/to-pension.html\"}")
   fence_tab=$(printf '%s\n' "$went" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$fence_tab" ] || fail "open_tab to-pension.html answered: $went"
-  # A read the tab sends from its page, which Settings › Agents lists under the refusals to come.
+  # A read the tab sends from its page, which Settings › Other apps lists under the refusals to
+  # come.
   sent=$(call request "{\"tab\":$fence_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\"}]}")
   case "$sent" in *"GET /api/me → 200"*) ;; *) fail "a read from the tab beside the site off limits answered: $sent" ;; esac
   # Comes to the site by the link.
@@ -3907,18 +3913,18 @@ for (const each of document.querySelectorAll('iframe, object'))
   # Off the site, the tab is the agent's to read again.
   went=$(call navigate "{\"tab\":$fence_tab,\"url\":\"localhost:$port/to-pension.html\"}")
   case "$went" in *'link "Pension"'*) ;; *) fail "off the site off limits again, the tab answered: $went" ;; esac
-  # Settings › Agents' log has the refusals at the tab that came there, in the words of using the
-  # site, over the read the tab sent before them.
+  # Settings › Other apps' log has the refusals at the tab that came there, in the words of using
+  # the site, over the read the tab sent before them.
   had=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -n | tail -1)
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings for the refusals' log"
   settings_drew
-  # Settings shows the section it was last on, Agents since the foot's capture.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section for the log"
+  # Settings shows the section it was last on, Access since the foot's capture.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section for the log"
   fi
-  settings_drew Agents
+  settings_drew 'Other apps'
   # The read's row is the newest that opens, under the refusals: with it in sight, they show over
   # it. They open nothing, so draw no name. Its id is past every read's drawn before.
   for _ in $(seq 100); do
@@ -3926,8 +3932,8 @@ for (const each of document.querySelectorAll('iframe, object'))
     [ "${newest:-0}" -gt "${had:-0}" ] && break
     sleep 0.1
   done
-  [ "${newest:-0}" -gt "${had:-0}" ] || fail "Settings › Agents drew no read under the refusals"
-  in_sight "request $newest GET" || fail "Settings › Agents didn't draw the read under the refusals"
+  [ "${newest:-0}" -gt "${had:-0}" ] || fail "Settings › Other apps drew no read under the refusals"
+  in_sight "request $newest GET" || fail "Settings › Other apps didn't draw the read under the refusals"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-fence-log.png" || fail "no window to capture"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after the refusals' log"
@@ -4207,7 +4213,7 @@ STOP
   kill -0 "$bridge_pid" 2>/dev/null && fail "the bridge stayed connected once the user stopped its client"
   exec 4>&- 5<&-
 
-  # Off in Settings › Agents takes the socket away and drops a client connected.
+  # Off in Settings › Threads takes the socket away and drops a client connected.
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
@@ -4215,12 +4221,12 @@ STOP
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  # Agents, unless Settings came back on it.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  # Threads, unless Settings came back on it.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Threads$'; then
+    send clickkey $(drawn "toolbar Threads")
+    expect '^browser: settings tab Threads$' "a click on Threads didn't show its section"
   fi
-  settings_drew Agents
+  settings_drew Threads
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
@@ -4504,7 +4510,7 @@ if [ "$driven" = 1 ]; then
     "a change refused at Work on pages and never sent," \
     "refused for its missing sentence before that," \
     "a delete's too," \
-    "each opening in Settings › Agents to the agent's sentence," \
+    "each opening in Settings › Other apps to the agent's sentence," \
     "where it went and what it sent or didn't," \
     "asks a page's beforeunload handler first," \
     "with no dialog," \
@@ -4547,7 +4553,7 @@ if [ "$driven" = 1 ]; then
     "each stop ilo's line with Give Full access on screen as the log draws it ($follows% of its place changed)," \
     "which the keys press," \
     "and each goes through at Full access," \
-    "with no answer kept for Settings › Agents to list," \
+    "with no answer kept for Settings › Other apps to list," \
     "a site off limits refused at Full access too," \
     "its open and each call on a tab that came there$needs_said," \
     "and off takes the socket away;" \

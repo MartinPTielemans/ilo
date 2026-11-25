@@ -44,6 +44,7 @@ use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
     LIGHT_SELECTED_SHADOW_Y,
 };
+use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
@@ -981,6 +982,24 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha.max(self.overlay_glyph_floor))
     }
 
+    /// How strong the quiet ink is here, for a label that's read after the text beside it: pass it
+    /// to `text` or `glyph`, whose floors still hold.
+    pub fn secondary(&self) -> f32 {
+        match self.tone {
+            Tone::Dark => TEXT_SECONDARY,
+            Tone::Light => LIGHT_TEXT_SECONDARY,
+        }
+    }
+
+    /// How strong the quietest ink is here, for what nothing depends on: a count, Clear, a control
+    /// that can't act.
+    pub fn tertiary(&self) -> f32 {
+        match self.tone {
+            Tone::Dark => TEXT_TERTIARY,
+            Tone::Light => LIGHT_TEXT_TERTIARY,
+        }
+    }
+
     /// Ink or Paper at `alpha`, as it is: for what needn't read, such as a disabled glyph or a
     /// shadow.
     pub fn faint(&self, alpha: f32) -> Hsla {
@@ -1363,6 +1382,11 @@ impl Swatch {
         } else {
             paper
         })
+    }
+
+    /// The Space's first colour, the one its gradient starts from.
+    pub fn main(&self) -> Rgba {
+        self.from
     }
 
     /// The swatch, `size` across, on any of `behind`.

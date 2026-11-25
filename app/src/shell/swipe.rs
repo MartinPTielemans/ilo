@@ -685,6 +685,7 @@ mod tests {
             name: format!("Space {id}").into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: Default::default(),
             profile: 0,
             agent: Default::default(),

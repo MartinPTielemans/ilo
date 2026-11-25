@@ -39,9 +39,9 @@ fn needs_you(site: &str) -> SharedString {
 
 /// A done card's second line, with no finding: when it ended (Z6, after the wording pass).
 fn done_at(card: &Card) -> SharedString {
-    match card.ended_at.is_empty() {
+    match card.ended_time.is_empty() {
         true => state_line(card),
-        false => format!("Done · {}", card.ended_at).into(),
+        false => format!("Done · {}", card.ended_time).into(),
     }
 }
 

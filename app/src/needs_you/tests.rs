@@ -46,7 +46,9 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -58,7 +60,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     }
 }

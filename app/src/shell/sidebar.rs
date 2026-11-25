@@ -980,7 +980,7 @@ mod tests {
         drag::detents::{row_y, shell_with},
         recorder::Recorder,
     };
-    use crate::tokens::shell::{FOOTER_HEIGHT, WINDOW_BUTTON_Y};
+    use crate::tokens::shell::{FOOTER_HEIGHT, PLUS_INSET, WINDOW_BUTTON_Y};
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
     /// back. Spaces made one after another are told of together. None for the window's first
@@ -1299,7 +1299,7 @@ mod tests {
     fn the_wheel_brings_the_marker_only_for_a_row_wholly_scrolled_out(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
-        cx.simulate_resize(size(px(1000.), px(340.)));
+        cx.simulate_resize(size(px(1000.), px(320.)));
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
@@ -1333,7 +1333,7 @@ mod tests {
         // At the list's top the last row still shows its top: a move past it marks nothing.
         assert_eq!(wheel(cx, 50.), None, "a marker for a row that still shows");
         // Shorter, the row is wholly under the list's bottom at its top.
-        cx.simulate_resize(size(px(1000.), px(300.)));
+        cx.simulate_resize(size(px(1000.), px(280.)));
         shell.update(cx, |shell, cx| shell.set_selected(12, cx));
         draw(&shell, cx);
         let markers: Vec<_> = (0..8).map(|_| wheel(cx, 10.)).collect();
@@ -2093,7 +2093,7 @@ mod tests {
     }
 
     /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 10
-    /// past it, and beside the + the 8 past that.
+    /// past it, and beside the + what's past its plate.
     #[gpui::test]
     fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
         let (shell, _, cx) = edge_window(cx);
@@ -2101,8 +2101,18 @@ mod tests {
         assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 11., header));
         assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., header));
         let foot = 600. - FOOTER_HEIGHT / 2.;
-        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., foot));
-        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., foot));
+        assert!(!takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET - 1.,
+            foot
+        ));
+        assert!(takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET + 1.,
+            foot
+        ));
     }
 
     /// A drag from the edge that ends over a row's close button, the sidebar stopped at its

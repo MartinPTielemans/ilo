@@ -23,7 +23,9 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         title: "Find a flight to Lisbon".into(),
         status: "Searching flights".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -35,7 +37,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     }
 }
@@ -291,7 +293,7 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
         "maat.pt · Needs you"
     );
     assert_eq!(second_line(&asks, Form::Waits, "").as_ref(), "Needs you");
-    done.ended_at = "13:31".into();
+    done.ended_time = "13:31".into();
     assert_eq!(
         second_line(&done, Form::DoneUnseen, "").as_ref(),
         "Done · 13:31"
@@ -424,7 +426,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
                 corner, as you said the last time was loud; they will call if anything changes";
     let done = |n: u64, finding: &str| Card {
         finding: finding.into(),
-        ended_at: "10:42".into(),
+        ended_time: "10:42".into(),
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -479,7 +481,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
     let posing = "Payment confirmed by the browser. Nothing else is needed.";
     let done = |finding: &str| Card {
         finding: finding.into(),
-        ended_at: "10:42".into(),
+        ended_time: "10:42".into(),
         ..card(1, Dot::Done)
     };
     assert_eq!(

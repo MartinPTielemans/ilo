@@ -128,6 +128,7 @@ use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
+use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
 
 #[cfg(test)]
 use crate::tokens::shell::library::FILTER_X;
@@ -4316,8 +4317,9 @@ impl Shell {
             })
             .absolute()
             .left(px(LIBRARY_BACK_INSET))
-            .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
-            .size(px(NAV_SIZE))
+            .bottom(px((FOOTER_HEIGHT - FOOT_ROW) / 2.))
+            .w(px(LIBRARY_BUTTON))
+            .h(px(FOOT_ROW))
             .flex()
             .items_center()
             .justify_center()
@@ -4347,14 +4349,14 @@ impl Shell {
             .child(
                 svg()
                     .path("icons/library.svg")
-                    .size(px(16.))
+                    .size(px(FOOT_GLYPH))
                     .text_color(self.palette.glyph(NAV)),
             )
             .when_some(progress, |button, done| {
                 button.child(
                     div()
                         .absolute()
-                        .left(px((NAV_SIZE - BUTTON_PROGRESS_WIDTH) / 2.))
+                        .left(px((LIBRARY_BUTTON - BUTTON_PROGRESS_WIDTH) / 2.))
                         .bottom(px(BUTTON_PROGRESS_BOTTOM))
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
@@ -4565,6 +4567,7 @@ mod tests {
             name: "Space 1".into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: Default::default(),
             profile: 0,
             agent: Default::default(),

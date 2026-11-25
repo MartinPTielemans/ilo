@@ -212,13 +212,15 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         replies: true,
         title: title.into(),
         status: status.into(),
-        // The working task's last steps and the page it's on, which its plate on the composer
-        // page names.
+        // The working task's last steps. The preview has no pictures, so no card has a plate.
         steps: match dot {
             Dot::Working => WORKING_STEPS.map(SharedString::from).to_vec(),
             _ => Vec::new(),
         },
-        last_site: (dot == Dot::Working).then(|| "encore.example".into()),
+        last_tab: None,
+        // A done task's status is its answer's first line, Latest tasks' one line.
+        line: (dot == Dot::Done).then(|| status.into()),
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -239,7 +241,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         retry: false,
         fix: None,
         visited: Vec::new(),
-        ended_at: Default::default(),
+        ended_time: Default::default(),
         finding: Default::default(),
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
