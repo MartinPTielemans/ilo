@@ -1089,7 +1089,8 @@ mod tests {
     }
 
     /// In dark and light alike, each step of a control stands further off its group than the
-    /// last, its line least and a name most, so a press shows more than the pointer does.
+    /// last, a name most, so a press shows more than the pointer does. The line is no further
+    /// off than a control's plate: the drawing gives the hairline and a button one strength.
     #[test]
     fn each_step_stands_further_off_the_group() {
         for dark in [true, false] {
@@ -1102,7 +1103,8 @@ mod tests {
                 look.detail,
                 look.ink,
             ];
-            for pair in steps.windows(2) {
+            assert!(contrast(&look, look.line) <= contrast(&look, look.control));
+            for pair in steps[1..].windows(2) {
                 assert!(
                     contrast(&look, pair[0]) < contrast(&look, pair[1]),
                     "{dark} {pair:?}"
@@ -1120,7 +1122,7 @@ mod tests {
     fn the_quiet_text_reads_in_dark_and_light() {
         use crate::palette::contrast;
         use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
-        use crate::tokens::settings::{SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::settings::{SEARCH_HINT, SEARCH_PLACEHOLDER, SECTION_TEXT};
         use crate::tokens::shell::library::LIBRARY_PLATE;
         for dark in [true, false] {
             let look = Look::settings(dark);
@@ -1131,11 +1133,6 @@ mod tests {
             let on = |under: Rgba, alpha: f32| (under.blend(base.opacity(alpha)), under);
             let chip = |fill: f32, text: f32| on(look.surface.blend(base.opacity(fill)), text);
             let field = ground.blend(base.opacity(LIBRARY_PLATE));
-            let secondary = if dark {
-                TEXT_SECONDARY
-            } else {
-                LIGHT_TEXT_SECONDARY
-            };
             let quiet = [
                 ("a row's line", (look.detail, look.surface)),
                 ("an off feature's name", (look.off(), look.surface)),
@@ -1144,7 +1141,7 @@ mod tests {
                 ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
                 ("None", chip(CHIP, CHIP_NONE_TEXT)),
                 ("a section", on(ground, SECTION_TEXT)),
-                ("Search", on(field, secondary)),
+                ("Search", on(field, SEARCH_PLACEHOLDER)),
                 ("⌘F", on(field, SEARCH_HINT)),
             ];
             for (what, (text, under)) in quiet {

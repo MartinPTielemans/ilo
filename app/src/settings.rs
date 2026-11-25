@@ -59,8 +59,8 @@ use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
     GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
-    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
@@ -1087,10 +1087,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
                     return Colors::default();
                 };
                 let settings = settings.read(cx);
-                // The field's "Search" is the rows' grey over the field's own plate, not over a
-                // group's.
+                // The field's "Search" over the field's own plate, not over a group's.
                 Colors {
-                    placeholder: settings.look.detail.into(),
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
                     ..settings.look.field()
                 }
             })

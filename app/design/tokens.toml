@@ -1157,6 +1157,9 @@ foot-glyph-alpha = 0.4
 # to the sidebar's hovered 0.12 and back over 600 ms.
 search-gap = 0.0
 search-hint = 0.66
+# "Search" in the field, at the alpha that reads at 4.5:1 on its plate (#1636), until the drawn
+# field comes with the search's page (S15).
+search-placeholder = 0.66
 search-clear = 18.0
 search-clear-glyph = 10.0
 search-clear-fill = 0.2
