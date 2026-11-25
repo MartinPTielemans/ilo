@@ -1930,13 +1930,8 @@ pub struct Shell {
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
-    task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether a task's conversation stands beside the page it watches, with what the strip under
-    /// the page says in it, and the composer's row under its reply (#4095, #4094). Only the preview
-    /// sets it until the task's ilo lines are wired (#4086).
-    talk_beside: bool,
-    /// The words the strip last said, and for which tab, which check.sh reads as they change.
-    task_strip_said: RefCell<Option<(u64, String)>>,
+    /// Where the page watched was last placed, which check.sh reads to press in it.
+    task_page_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tabs whose player × put away until their page plays again.
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
@@ -2395,9 +2390,7 @@ impl Shell {
             task_closing: None,
             task_core: 0,
             task_live_logged: None,
-            task_strip_drawn: Rc::default(),
-            talk_beside: false,
-            task_strip_said: RefCell::default(),
+            task_page_at: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_stack: Default::default(),

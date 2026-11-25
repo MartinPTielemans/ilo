@@ -7,8 +7,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Hsla, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Role, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div,
+    AnyElement, App, Bounds, ClickEvent, Div, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, canvas, div,
     prelude::FluentBuilder, px, svg,
 };
 
@@ -183,41 +183,14 @@ pub fn row(row: Row) -> gpui::Div {
                 model.child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
             })
     });
-    let (fill, ink) = match round {
-        Round::Go { ready: true } | Round::Stop => (inks.primary, inks.on_primary),
-        Round::Go { ready: false } => (inks.plate, inks.dim),
-    };
-    let face = match round {
-        Round::Stop => div()
-            .size(px(form.square))
-            .rounded(px(form.square_radius))
-            .bg(ink)
-            .into_any_element(),
-        Round::Go { .. } => glyph("icons/arrow-up.svg", form.arrow, ink),
-    };
-    let round = div()
-        .id(round_id)
-        .when(a11y, |round| {
-            round.role(Role::Button).aria_label(round_said)
-        })
-        .relative()
-        .size(px(form.round))
-        .ml(px(START_SPACE))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .bg(fill)
-        .on_click(go)
-        .child(face)
-        .when_some(round_at, |round, told| {
-            round.child(
-                canvas(move |bounds, _, _| told(bounds), |_, _, _, _| {})
-                    .absolute()
-                    .size_full(),
-            )
-        });
+    let round = round_button(
+        form,
+        inks,
+        a11y,
+        (round_id, round_said, round, go),
+        round_at,
+    )
+    .ml(px(START_SPACE));
     div()
         .h(px(form.height))
         .flex_none()
@@ -232,6 +205,48 @@ pub fn row(row: Row) -> gpui::Div {
         .child(div().flex_1())
         .children(model)
         .child(round)
+}
+
+/// The round button in `form`: Start or Send, or Stop's square, told where it's drawn by `at`.
+pub fn round_button(
+    form: Form,
+    inks: Inks,
+    a11y: bool,
+    (id, said, round, go): (&'static str, SharedString, Round, Click),
+    at: Option<Box<dyn Fn(Bounds<Pixels>) + 'static>>,
+) -> Stateful<Div> {
+    let (fill, ink) = match round {
+        Round::Go { ready: true } | Round::Stop => (inks.primary, inks.on_primary),
+        Round::Go { ready: false } => (inks.plate, inks.dim),
+    };
+    let face = match round {
+        Round::Stop => div()
+            .size(px(form.square))
+            .rounded(px(form.square_radius))
+            .bg(ink)
+            .into_any_element(),
+        Round::Go { .. } => glyph("icons/arrow-up.svg", form.arrow, ink),
+    };
+    div()
+        .id(id)
+        .when(a11y, |round| round.role(Role::Button).aria_label(said))
+        .relative()
+        .size(px(form.round))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(fill)
+        .on_click(go)
+        .child(face)
+        .when_some(at, |round, told| {
+            round.child(
+                canvas(move |bounds, _, _| told(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
+        })
 }
 
 /// The level trigger's menu: the three levels, `current` checked, then the line every level holds

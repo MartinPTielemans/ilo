@@ -350,7 +350,7 @@ impl Shell {
         // The strip's stop went with its page, or as its chips changed, or the foot's with its
         // task or as its group closed.
         if let Some(stop) = self.keyed_strip
-            && !self.ring_stops().contains(&Some(stop))
+            && !self.ring_stops(cx).contains(&Some(stop))
             && !self.foot_stops().contains(&stop)
         {
             self.leave_strip("strip", cx);

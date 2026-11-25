@@ -12,6 +12,7 @@ use gpui::{
 
 use super::Fold;
 
+use crate::agents::Status;
 use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
@@ -755,10 +756,10 @@ fn a_needs_you_page_opens_once_the_page_left_is_back(cx: &mut TestAppContext) {
     );
 }
 
-/// A page ilo would open by itself over the reply field doesn't open while the user types there:
-/// the field keeps the keyboard and its text, and the tile that needs them is in sight.
+/// A page ilo opens by itself while the user types in the reply field opens beside the panel, which
+/// keeps the field: the field keeps the keyboard and its text.
 #[gpui::test]
-fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext) {
+fn a_needs_you_page_opens_beside_the_reply_field_in_use(cx: &mut TestAppContext) {
     let reply = needs_you_beside_typing(
         |reply, window, cx| reply.set_text("Two seats".into(), 9, window, cx),
         cx,
@@ -766,10 +767,10 @@ fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext)
     assert_eq!(reply, "Two seats");
 }
 
-/// A composition under way is typing too, before the input method commits a word of it: a page
-/// opening then would take the keyboard mid-word. The field holds the marked text in its text.
+/// A composition under way is typing too, before the input method commits a word of it: the page
+/// opening beside it takes no keyboard mid-word. The field holds the marked text in its text.
 #[gpui::test]
-fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext) {
+fn a_needs_you_page_keeps_a_composition_under_way(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler;
     let reply = needs_you_beside_typing(
         |reply, window, cx| reply.replace_and_mark_text_in_range(None, "か", None, window, cx),
@@ -779,7 +780,7 @@ fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext
 }
 
 /// Types into the focused reply field with `type_in`, turns a tile to Needs you, checks ilo
-/// opened no page over the field and left it the keyboard, and gives back the field's text.
+/// opened the page beside the panel and left the field the keyboard, and gives back its text.
 fn needs_you_beside_typing(
     type_in: impl FnOnce(&mut TextInput, &mut gpui::Window, &mut gpui::Context<TextInput>),
     cx: &mut TestAppContext,
@@ -830,9 +831,9 @@ fn needs_you_beside_typing(
         cx.run_until_parked();
     }
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watched_task_page()),
-        None,
-        "the page covered the reply field the user types in"
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(31),
+        "the page that needs the user didn't open beside the panel"
     );
     let calls = host.take();
     assert!(!calls.iter().any(|call| call == "focus page"), "{calls:?}");
@@ -984,9 +985,12 @@ fn under_a_page_going_back_only_the_pictures_take_a_press(cx: &mut TestAppContex
     );
 
     cx.simulate_click(seatmap.center(), Modifiers::none());
+    let calls = host.take();
     assert!(
-        host.take().contains(&"select 31".to_string()),
-        "the picture under the page didn't watch it"
+        calls.contains(&"select 31".to_string()),
+        "the picture under the page didn't watch it: {calls:?}, {seatmap:?} now {:?}, {:?}",
+        picture(31, cx),
+        shell.read_with(cx, |shell, _| shell.task_shown()),
     );
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
@@ -2156,79 +2160,51 @@ fn on_an_ilo_button(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) 
     })
 }
 
-/// Over a page of the task's watched from its conversation the Focus command keys no line, whose
-/// buttons aren't in sight: with the keyboard the window's it goes back to the conversation, to
-/// its reply field, and rings nothing, and the command again, with the line drawn, is what rings
-/// a button.
+/// Beside a page of the task's watched, the Focus command keys the newest line in the panel, never
+/// the page, and the page stays watched; the command again gives the keyboard back.
 #[gpui::test]
-fn the_focus_command_over_a_page_watched_goes_back_and_keys_no_line(cx: &mut TestAppContext) {
+fn the_focus_command_beside_a_page_watched_keys_the_panels_line(cx: &mut TestAppContext) {
     let (shell, host, view, cx) = stopped_at_order(cx);
     watch_page(&shell, cx);
     host.take();
     focus_command(&shell, "ui", cx);
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
-        Some((3, None)),
-        "the key didn't go back to the conversation"
+        Some((3, Some(30))),
+        "the key left the page"
     );
-    assert!(
-        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
-        "the key over a page watched keyed a line"
-    );
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
     let calls = host.take();
     assert!(
         !calls.iter().any(|call| call == "focus page"),
         "the key gave a page the keyboard: {calls:?}"
     );
-    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
-    assert!(
-        cx.update(|window, _| reply.is_focused(window)),
-        "the reply field hasn't the keyboard"
-    );
-    cx.simulate_keystrokes("enter space");
-    assert!(
-        !host
-            .take()
-            .iter()
-            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
-        "a key after it pressed an ilo line's button"
-    );
     focus_command(&shell, "ui", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key again kept the keys"
+    );
 }
 
-/// A page the user has keeps the view and the key: one they hold from its agent, as a sign-in
-/// handed to them or one taken over, whoever has the keyboard, and one with the keyboard. The
-/// key from the page stays the page's.
+/// A page the user has stays watched whatever the Focus command does, from the UI's keys or the
+/// page's: one they hold from its agent, as a sign-in handed to them, and one with the keyboard.
 #[gpui::test]
-fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext) {
+fn the_focus_command_never_leaves_a_page_the_user_has(cx: &mut TestAppContext) {
     use crate::agents::Status;
-    let (shell, host, view, cx) = stopped_at_order(cx);
+    let (shell, host, _, cx) = stopped_at_order(cx);
     watch_page(&shell, cx);
-    let nothing = |why: &str, cx: &mut VisualTestContext| {
-        host.take();
+    let stays = |why: &str, cx: &mut VisualTestContext| {
         focus_command(&shell, "ui", cx);
         focus_command(&shell, "page", cx);
-        assert_eq!(host.take(), Vec::<String>::new(), "{why}");
         assert_eq!(
             shell.read_with(cx, |shell, _| shell.task_shown()),
             Some((3, Some(30))),
             "{why}: the page was left"
         );
-        assert!(
-            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
-            "{why}: a line was keyed"
-        );
-        for key in ["alt-shift-cmd-a", "ctrl-shift-a"] {
-            assert!(
-                !shell.update(cx, |shell, cx| shell.run_ilo_page_key(key, false, cx)),
-                "{why}: the key was kept from the page"
-            );
-        }
     };
     // The page has the keyboard, as after a click in it.
     host.page_keys.set(Some(true));
-    nothing("the page has the keyboard", cx);
+    stays("the page has the keyboard", cx);
     // The user holds it, with the keyboard in the UI, as after a click in the sidebar.
     host.page_keys.set(Some(false));
     let held = Status {
@@ -2240,13 +2216,12 @@ fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     cx.run_until_parked();
-    nothing("the user holds the page", cx);
+    stays("the user holds the page", cx);
 }
 
-/// The keys on a line end the moment its conversation is no longer what the area draws, under a
-/// page watched over it or with the area closed, and never come back by themselves: drawn again,
-/// no button is ringed and no key presses one until the Focus command, whose guard counts from
-/// then.
+/// The keys on a line end the moment its conversation is no longer what the area draws, as with
+/// the area closed, and never come back by themselves: drawn again, no button is ringed and no key
+/// presses one until the Focus command, whose guard counts from then.
 #[gpui::test]
 fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
     let (shell, host, view, cx) = stopped_at_order(cx);
@@ -2274,13 +2249,15 @@ fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
     };
     focus_command(&shell, "ui", cx);
     assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
-    watch_page(&shell, cx);
-    unkeyed("a page watched over it", cx);
-    // Back at the conversation, long after: nothing is keyed, and no key presses.
-    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    // The area closes with the keys on the line, and shows the conversation again.
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    unkeyed("the area closed", cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
-    unkeyed("drawn again", cx);
+    unkeyed("shown again", cx);
+    // Long after, no key presses.
     stood(&view, cx);
     host.take();
     cx.simulate_keystrokes("enter space");
@@ -2294,19 +2271,6 @@ fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
         Vec::<String>::new(),
         "the guard didn't count"
     );
-
-    // The area closes with the keys on the line, and shows the conversation again.
-    shell.update(cx, |shell, cx| shell.close_task(cx));
-    cx.run_until_parked();
-    unkeyed("the area closed", cx);
-    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
-    cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
-    unkeyed("shown again", cx);
-    stood(&view, cx);
-    host.take();
-    cx.simulate_keystrokes("enter space");
-    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
 }
 
 /// Keys that end as a window of the app's own takes the keyboard, as the command bar opened over
@@ -2783,7 +2747,6 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     let (shell, _host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(ended(kind)), cx);
     });
     view.update(cx, |_, cx| cx.notify());
@@ -2845,7 +2808,6 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
     });
     for (tier, only_added) in [(Tier::Look, false), (Tier::Full, false), (Tier::Work, true)] {
         shell.update(cx, |shell, cx| {
-            shell.set_talk_beside(true, cx);
             shell.set_conversation(
                 Some(Conversation {
                     tier,
@@ -3214,15 +3176,15 @@ fn the_page_row_names_only_the_step_under_way() {
     );
 }
 
-/// Beside its page, Take Over stands once on the lines, on the task's own step under way, which
-/// is on the page it takes: a helper's line under way has none, as its page is another.
+/// Take Over is drawn once, in the panel's page row, for the task's own step under way on the page
+/// it takes, never on a line: a helper's line under way has none, as its page is another.
 #[gpui::test]
 fn a_helpers_line_has_no_take_over(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(with_helpers(4)), cx);
     });
+    watch_page(&shell, cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -3287,7 +3249,6 @@ fn folder_chip_with(
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(talk), cx);
     });
     view.update(cx, |_, cx| cx.notify());
@@ -3636,7 +3597,6 @@ fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(conversation(3)), cx);
     });
     watch_page(&shell, cx);
@@ -3774,4 +3734,272 @@ fn a_users_message_in_the_panel_fits_its_column() {
         "the stage's {stage:?} would fit the panel"
     );
     assert!(panel.text < stage.text && panel.line < stage.line);
+}
+
+/// Task-1's card `card` and conversation `talk`, standing on tab 30 with the panel beside it.
+fn standing_with(
+    card: Card,
+    talk: Conversation,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    Rc<Recorder>,
+    Entity<super::TalkView>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown_with(card, cx);
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    watch_page(&shell, cx);
+    // The core shows the task's Space and its page, as once the page is in place.
+    shell.update(cx, |shell, cx| {
+        shell.set_space(3, cx);
+        shell.set_selected(30, cx);
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    redraw(&shell, &view, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    (shell, host, view, cx)
+}
+
+fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    view.update(cx, |_, cx| cx.notify());
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// The ring's stops once round from the window's Tab, the task's header left out, each checked as
+/// drawn where it rings: a page the user holds is gone into and left again, as the user's is.
+fn ring_round(
+    shell: &Entity<Shell>,
+    view: &Entity<super::TalkView>,
+    host: &Recorder,
+    cx: &mut VisualTestContext,
+) -> Vec<String> {
+    use crate::shell::page_ends::STOPS_DRAWN;
+    assert!(
+        shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)),
+        "Tab from the window rang nothing"
+    );
+    let mut rung = Vec::new();
+    for _ in 0..8 {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        redraw(shell, view, cx);
+        let Some(stop) = shell.read_with(cx, |shell, _| shell.keyed_strip) else {
+            panic!("the ring left the page's stops after {rung:?}");
+        };
+        let name = format!("{stop:?}");
+        if rung.contains(&name) {
+            break;
+        }
+        assert!(
+            STOPS_DRAWN.with(|drawn| drawn.borrow().contains_key(&stop)),
+            "the ring is on {stop:?}, which isn't drawn"
+        );
+        rung.push(name);
+        host.take();
+        shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+        if shell.read_with(cx, |shell, _| shell.keyed_strip).is_none() {
+            assert_eq!(host.take(), ["focus page first"], "after {stop:?}");
+            rung.push("into the page".into());
+            // Later than the press that went in, which a page with nothing to focus hands back.
+            assert!(shell.update(cx, |shell, cx| {
+                shell.page_ends.entered = None;
+                shell.tab_focus_leaving(30, false, cx)
+            }));
+        }
+    }
+    rung.retain(|stop| !stop.starts_with("Header"));
+    rung
+}
+
+/// The page row in each of its cases, and an outside app's panel, which has no composer: what the
+/// ring goes round, and that Return on each of its buttons does what a click on it does. The
+/// thread works on the page shown: its words and Take Over. The user holds it: the page itself,
+/// in the words' place, and Hand Back. The thread ended with the page to move: Open alone. An outside
+/// app's session: its words, Take Over and Stop, the one row with two.
+#[gpui::test]
+fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "".into())],
+    };
+    let yours = Conversation {
+        live: Live::Yours {
+            tab: 30,
+            site: None,
+        },
+        ..conversation(3)
+    };
+    let done = Card {
+        dot: Dot::Done,
+        word: Word::for_dot(Dot::Done),
+        open: vec![(30, "skyscanner.net".into())],
+        ..card()
+    };
+    let ended = Conversation {
+        stoppable: false,
+        ..conversation(3)
+    };
+    let session = Card {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        replies: false,
+        ..card()
+    };
+    let session_talk = Conversation {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        lines: vec![
+            Line::Step(step(0, "Read the page", false)),
+            Line::Step(step(1, "Clicking “Tickets”", true)),
+        ],
+        ..conversation(0)
+    };
+    let cases = [
+        (
+            "working",
+            card(),
+            conversation(3),
+            None,
+            vec!["Page", "TakeOver"],
+            StripStop::TakeOver,
+        ),
+        (
+            "yours",
+            card(),
+            yours,
+            Some(held),
+            vec!["into the page", "HandBack"],
+            StripStop::HandBack,
+        ),
+        ("ended", done, ended, None, vec!["Open"], StripStop::Open),
+        (
+            "session",
+            session.clone(),
+            session_talk.clone(),
+            None,
+            vec!["Page", "TakeOver", "Stop"],
+            StripStop::Stop,
+        ),
+    ];
+    for (case, card, talk, status, ring, button) in cases {
+        let calls = |pressed: bool, cx: &mut TestAppContext| {
+            let (shell, host, view, cx) = standing_with(card.clone(), talk.clone(), cx);
+            if let Some(status) = status.clone() {
+                shell.update(cx, |shell, cx| shell.set_agent_status(vec![status], cx));
+                redraw(&shell, &view, cx);
+            }
+            let went = ring_round(&shell, &view, &host, cx);
+            assert_eq!(went, ring, "{case}: the ring's round");
+            shell.update(cx, |shell, cx| shell.leave_strip("test", cx));
+            STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+            redraw(&shell, &view, cx);
+            let at = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&button).copied());
+            let at = at.unwrap_or_else(|| panic!("{case}: {button:?} isn't drawn"));
+            host.take();
+            match pressed {
+                true => shell.update(cx, |shell, cx| shell.key_strip_show(button, cx)),
+                false => cx.simulate_click(at.center(), Modifiers::none()),
+            }
+            cx.run_until_parked();
+            let calls: Vec<String> = (host.take().into_iter())
+                .filter(|call| !call.starts_with("focus") && !call.starts_with("picture"))
+                .collect();
+            assert!(!calls.is_empty(), "{case}: {button:?} did nothing");
+            calls
+        };
+        assert_eq!(
+            calls(true, cx),
+            calls(false, cx),
+            "{case}: Return on {button:?} didn't do what its click does"
+        );
+    }
+
+    // An outside app's panel has no composer, where a task's has one.
+    let (_, _, view, _) = standing_with(session, session_talk, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.reply_drawn.get()), None);
+    let (_, _, view, _) = standing_with(card(), conversation(3), cx);
+    assert!(
+        view.read_with(cx, |view, _| view.reply_drawn.get())
+            .is_some()
+    );
+}
+
+/// The page row has one button at a time, by what the thread is doing on the page shown, and
+/// none for a page the thread isn't on; an outside app's session adds its Stop while it works.
+#[gpui::test]
+fn the_page_row_holds_one_case_at_a_time(cx: &mut TestAppContext) {
+    use super::{PageRow, RowCase};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let row = |talk: Conversation, open: Option<&str>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.read_with(cx, |view, _| {
+            view.page_row_for(30, open.map(str::to_string))
+        })
+    };
+    let working = row(conversation(3), None, cx);
+    assert!(
+        matches!(working.case, Some(RowCase::Working(_))),
+        "{working:?}"
+    );
+    assert!(!working.stop);
+    let held = Conversation {
+        live: Live::Yours {
+            tab: 30,
+            site: None,
+        },
+        ..conversation(3)
+    };
+    assert!(matches!(row(held, None, cx).case, Some(RowCase::Yours(_))));
+    let elsewhere = Conversation {
+        on: Some(31),
+        ..conversation(3)
+    };
+    assert_eq!(
+        row(elsewhere, None, cx),
+        PageRow::default(),
+        "a row for a page it isn't on"
+    );
+    let ended = Conversation {
+        stoppable: false,
+        ..conversation(3)
+    };
+    assert_eq!(
+        row(ended.clone(), Some("Open skyscanner.net"), cx).case,
+        Some(RowCase::Ended("Open skyscanner.net".into()))
+    );
+    assert_eq!(row(ended, None, cx), PageRow::default());
+}
+
+/// The panel's head has the page shown's speaker only while the page plays or is muted, and its
+/// click mutes or unmutes the page as a row's does.
+#[gpui::test]
+fn the_panels_speaker_is_there_while_the_page_plays_or_is_muted(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = standing_with(card(), conversation(3), cx);
+    let speaker = |cx: &mut VisualTestContext| {
+        redraw(&shell, &view, cx);
+        view.read_with(cx, |view, _| view.speaker_drawn.get())
+    };
+    assert_eq!(speaker(cx), None, "a silent page has a speaker");
+    let playing = Page {
+        url: "https://skyscanner.net/".into(),
+        audible: true,
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, playing.clone(), cx));
+    let at = speaker(cx).expect("a playing page has no speaker");
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert_eq!(*host.muted.borrow(), [(30, true)]);
+    let muted = Page {
+        audible: false,
+        muted: true,
+        ..playing
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, muted, cx));
+    assert!(speaker(cx).is_some(), "a muted page has no speaker");
 }

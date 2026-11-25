@@ -2011,23 +2011,11 @@ tag-inset = 5.0
 tag-radius = 6.0
 
 [shell.task-area]
-# Ours (Agent task), as Arc and Dia have no tasks: a task's page watched in the page area has its
-# strip under it, not over it, as GPUI can't draw over a page. The strip is this tall at the
-# card's foot, the page's bottom edge this far up from the card's, and its back, words and chips
-# this far apart. The back is a chevron in a close button's box, on a plate under the pointer; the
-# words say who works and what it does; the chips are the toast's, its key after its words.
-strip = 40.0
-page-room = 46.0
-# Its chips are quiet while the agent works, and only when it waits on the user is the answer it
-# waits for, Hand Back, the one primary, in the Space's accent, its key in the accent's label at
-# this (#1080). The card's glyph leads the words, `gap` from back and from them.
-primary-key = 0.75
-gap = 10.0
-back = 26.0
-back-glyph = 16.0
-# Standing on one of its pages with the conversation beside it (#4095), the conversation is a panel
-# this wide at the card's left, between the sidebar and the page, at most half the card, and the
-# page its own shape this far to its right.
+# Ours (Agent task), as Arc and Dia have no tasks. A task's page is watched one way, standing on it
+# with the conversation beside it (#4095): the conversation is a panel this wide at the card's
+# left, between the sidebar and the page, at most half the card, and the page its own shape this
+# far to its right. The panel holds what a strip under the page would, as GPUI can't draw over a
+# page.
 beside = 300.0
 beside-gap = 8.0
 
@@ -3467,11 +3455,14 @@ arm = 0.5
 # thread's title at the body size on `title-line`, at semibold, the scale's weight nearest the
 # drawing's 590; then the thread's pages as buttons `pages-gap` apart, each `page` square at
 # `page-radius`, the page's icon at `page-icon`. The page shown wears `page-plate`, a page the user
-# hasn't been to is at `unvisited`. The log is under it, its text `body-x` in and `body-top` down,
+# hasn't been to is at `unvisited`. Left of them, while the page shown plays or is muted, its
+# speaker, a `speaker` glyph in the icon ink on a button the pages' size. The log is under it, its text `body-x` in and `body-top` down,
 # and the reply field and its row are `foot` in from the panel's sides and foot. Over the field,
-# `foot-gap` above it, the page's row while the thread works on the page shown: `row` high, `row-left`
-# in, `row-gap` apart, the step's ring, the live line at `live`/`live-line` in text-2, then Take Over
-# as a held step's second button.
+# `foot-gap` above it, the page's row for the page shown: `row` high, `row-left` in, `row-gap`
+# apart. While the thread works on it, the step's ring, the live line at `live`/`live-line` in
+# text-2, then Take Over as a held step's second button; while the user holds it, the live line and
+# Hand Back; once the thread has ended with it, Open alone. An outside app's session, which has no
+# composer here, has Stop at its right end in the composer's round button's form.
 head = 50.0
 head-left = 16.0
 head-right = 10.0
@@ -3481,6 +3472,7 @@ pages-gap = 2.0
 page = 28.0
 page-radius = 8.0
 page-icon = 14.0
+speaker = 16.0
 page-plate = 0xf3f0e838
 light-page-plate = 0x16161838
 unvisited = 0.55

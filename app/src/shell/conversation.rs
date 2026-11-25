@@ -28,6 +28,7 @@ use super::{
     agent_bar::stop_keys,
     browser::{Browser, Page},
     menus::{MenuAction, MenuEntry},
+    page_ends::StripStop,
     picture::{PagePicture, next_request},
     ring, row_spring,
     task_cards::PageWord,
@@ -47,7 +48,6 @@ use crate::text_input::TextInput;
 use crate::tokens::command_bar::CHIP as BAR_CHIP;
 use crate::tokens::command_bar::CHOICES_MENU_DROP;
 use crate::tokens::mark::INK as MARK_INK;
-use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL, HELD_BUTTON_HOVER,
     HELD_BUTTON_RADIUS, HELD_BUTTON_TEXT, HELD_BUTTON_TEXT_LINE, HELD_BUTTON_X, HELD_BUTTONS_GAP,
@@ -82,6 +82,7 @@ use crate::tokens::shell::task::{
     RAIL_WORD, RAIL_WORD_LINE, RING_TRACK, STATUS, TILE_FILL, TILE_LINE, TILE_LINE_ON,
     TILE_PICTURE, TILE_RADIUS, TILE_RING, TILE_RING_STROKE,
 };
+use crate::tokens::shell::{HAIRLINE, ICON_INK};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_GAP};
 
@@ -281,15 +282,18 @@ pub struct TalkView {
     menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
     folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether the user was typing in the reply field as the last frame drew, the field having
-    /// the keyboard and words in it: a page ilo opens by itself mustn't cover those.
-    typing: bool,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// The page row's case as last logged, with the page it was for.
+    row_logged: Cell<Option<(u64, &'static str)>>,
     /// Where the last frame drew the live line's Hand Back, while the user has the task's page.
     hand_back_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the panel's head drew the page's speaker this frame.
+    speaker_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether the view was last drawn as the panel beside a page, so `drawn_at` is the panel's.
+    drawn_standing: Cell<bool>,
     /// Whether an assistive app reads the window, as the last frame found: its lines have roles
     /// and names only then, so with none running a frame costs what it did (#4244).
     a11y: bool,
@@ -497,11 +501,13 @@ impl Shell {
                     model_drawn: Rc::default(),
                     menu_open: None,
                     folder_drawn: Rc::default(),
-                    typing: false,
                     take_over_drawn: Rc::default(),
+                    row_logged: Cell::default(),
                     hand_back_drawn: Rc::default(),
+                    speaker_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
+                    drawn_standing: Cell::default(),
                     a11y: false,
                     spoken: None,
                     answer_due: false,
@@ -1396,6 +1402,8 @@ impl TalkView {
             Tone::Dark => panel::PAGE_PLATE,
             Tone::Light => panel::LIGHT_PAGE_PLATE,
         };
+        // Before the pages, whose buttons read the shell as they're drawn.
+        let speaker = self.speaker(on, look, cx);
         let shell = self.shell.upgrade();
         let pages = tabs.into_iter().map(|(tab, site)| {
             let row = (shell.as_ref()).and_then(|shell| shell.read(cx).tabs.get(&tab).cloned());
@@ -1448,6 +1456,7 @@ impl TalkView {
                     .text_color(palette.text(TITLE))
                     .child(title),
             )
+            .children(speaker)
             .child(
                 div()
                     .flex_none()
@@ -1457,26 +1466,102 @@ impl TalkView {
             )
     }
 
-    /// The page's row over the panel's reply field, while the thread works on the page the user
-    /// stands on: the step's ring and the step under way, with Take Over; on a page the user took
-    /// over, what `words::live` says of it, with Hand Back. None otherwise.
-    fn page_row(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
-        let on = self.beside(cx)?;
-        let (working, said, action) = match &shown.live {
-            Live::Working if shown.on == Some(on) => {
-                let step = under_way(&shown.lines)?;
-                (true, step.title.clone(), TaskAction::TakeOver(on))
-            }
-            Live::Yours { tab, .. } if *tab == on => (
-                false,
-                words::live(&shown.live)?.into(),
-                TaskAction::HandBack(on),
-            ),
-            _ => return None,
-        };
+    /// The page shown's speaker, left of the page buttons, drawn only while the page plays or is
+    /// muted: crossed while it's muted, and a click mutes or unmutes it, as a row's does.
+    fn speaker(
+        &self,
+        on: Option<u64>,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let tab = on?;
+        let page = self.shell.upgrade()?.read(cx).page(tab);
+        (page.audible || page.muted).then_some(())?;
         let palette = look.palette;
-        let ring = working.then(|| {
+        let drawn = self.speaker_drawn.clone();
+        Some(
+            div()
+                .id("conversation-speaker")
+                .relative()
+                .child(
+                    canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+                .when(look.a11y, |speaker| {
+                    let said = if page.muted { "Unmute" } else { "Mute" };
+                    speaker.role(Role::Button).aria_label(said)
+                })
+                .flex_none()
+                .size(px(panel::PAGE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .child(
+                    svg()
+                        .path(super::rows::speaker_glyph(page.muted))
+                        .size(px(panel::SPEAKER))
+                        .text_color(palette.glyph(ICON_INK)),
+                )
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.shell
+                        .update(cx, |shell, cx| shell.toggle_mute(tab, cx))
+                        .ok();
+                })),
+        )
+    }
+
+    /// What the page row holds for `on`, the page stood on, `open` the words of Open while the
+    /// thread has ended with that page to move. ilo's line in the field's place goes with the
+    /// field's row (#4105).
+    pub(super) fn page_row_for(&self, on: u64, open: Option<String>) -> PageRow {
+        let Some(shown) = self.shown.as_ref() else {
+            return PageRow::default();
+        };
+        if self.replies && self.in_field().is_some() {
+            return PageRow::default();
+        }
+        let case = match &shown.live {
+            Live::Working if shown.stoppable && shown.on == Some(on) => {
+                under_way(&shown.lines).map(|step| RowCase::Working(step.title.clone()))
+            }
+            Live::Yours { tab, .. } if shown.stoppable && *tab == on => {
+                words::live(&shown.live).map(|said| RowCase::Yours(said.into()))
+            }
+            _ => None,
+        };
+        PageRow {
+            case: case.or_else(|| open.map(|open| RowCase::Ended(open.into()))),
+            stop: !self.replies && shown.stoppable,
+        }
+    }
+
+    /// The page's row over the panel's reply field, for the page the user stands on: while the
+    /// thread works on it, the step's ring and the step under way with Take Over; on a page the
+    /// user took over, what `words::live` says of it with Hand Back; once the thread has ended
+    /// with the page to move, Open. An outside app's session has its Stop at the row's end, in
+    /// the round button's form, as it has no composer. None with nothing to hold.
+    fn page_row(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let on = self.beside(cx)?;
+        let shell = self.shell.upgrade()?;
+        let row = self.page_row_for(on, shell.read(cx).task_strip_open(on));
+        let case = match &row.case {
+            Some(RowCase::Working(_)) => "working",
+            Some(RowCase::Yours(_)) => "yours",
+            Some(RowCase::Ended(_)) => "ended",
+            None => "stop",
+        };
+        let logged = (row != PageRow::default()).then_some((on, case));
+        if self.row_logged.replace(logged) != logged
+            && let Some((on, case)) = logged
+        {
+            // check.sh reads this line: which of its cases the row is in, and nothing of the page.
+            log!("browser: page row {on} {case}");
+        }
+        logged?;
+        let palette = look.palette;
+        let ring = matches!(row.case, Some(RowCase::Working(_))).then(|| {
             ring::ring(
                 STEP_RING,
                 STEP_RING_STROKE,
@@ -1485,29 +1570,117 @@ impl TalkView {
                 palette.text(TITLE),
             )
         });
-        let (id, label, drawn) = match action {
-            TaskAction::HandBack(_) => {
-                let drawn = self.hand_back_drawn.clone();
-                let drawn: Box<dyn Fn(Bounds<Pixels>)> = Box::new(move |at| drawn.set(Some(at)));
-                ("conversation-hand-back", words::HAND_BACK, drawn)
-            }
-            _ => {
-                let drawn = self.take_over_drawn.clone();
-                let drawn: Box<dyn Fn(Bounds<Pixels>)> =
-                    Box::new(move |at| drawn.borrow_mut().push(at));
-                ("conversation-take-over", words::TAKE_OVER, drawn)
-            }
-        };
-        let button = held_button(palette, id, label, false)
-            .relative()
-            .child(
-                canvas(move |bounds, _, _| drawn(bounds), |_, _, _, _| {})
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
+        let said = (row.case.as_ref()).and_then(|case| case.said().cloned());
+        let words = said.clone().map(|said| {
+            div()
+                .id("conversation-page-words")
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(panel::LIVE))
+                .line_height(px(panel::LIVE_LINE))
+                .text_color(palette.gray(TRACE_NOTE))
+                .child(said)
+        });
+        let button = row.case.as_ref().map(|case| {
+            let (id, label, drawn): (_, SharedString, Box<dyn Fn(Bounds<Pixels>)>) = match case {
+                RowCase::Working(_) => {
+                    let drawn = self.take_over_drawn.clone();
+                    let drawn = Box::new(move |at| drawn.borrow_mut().push(at));
+                    ("conversation-take-over", words::TAKE_OVER.into(), drawn)
+                }
+                RowCase::Yours(_) => {
+                    let drawn = self.hand_back_drawn.clone();
+                    (
+                        "conversation-hand-back",
+                        words::HAND_BACK.into(),
+                        Box::new(move |at| drawn.set(Some(at))),
+                    )
+                }
+                RowCase::Ended(open) => {
+                    let told = open_told(on, shell.read(cx).foot.strip_open.clone());
+                    ("conversation-open", open.clone(), Box::new(told))
+                }
+            };
+            let click: Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)> = match case {
+                RowCase::Working(_) => Box::new(
+                    cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(on), cx)),
+                ),
+                RowCase::Yours(_) => Box::new(
+                    cx.listener(move |view, _, _, cx| view.act(TaskAction::HandBack(on), cx)),
+                ),
+                RowCase::Ended(_) => Box::new(cx.listener(move |view, _, _, cx| {
+                    view.shell
+                        .update(cx, |shell, cx| {
+                            let (Some(agent), from) =
+                                (shell.task_strip_agent(), shell.foot.strip_open.get())
+                            else {
+                                return;
+                            };
+                            // check.sh reads this line.
+                            log!("browser: command open-task-pages via page row");
+                            shell.open_task_pages(agent, Some(on), from, cx);
+                        })
+                        .ok();
+                })),
+            };
+            (
+                case.button(),
+                label.clone(),
+                held_button(palette, id, label, false)
+                    .relative()
+                    .child(
+                        canvas(move |bounds, _, _| drawn(bounds), |_, _, _, _| {})
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    )
+                    .on_click(click),
             )
-            .on_click(cx.listener(move |view, _, _, cx| view.act(action.clone(), cx)));
+        });
+        // An outside app's session: Stop in the composer's round button's form, as it has none.
+        let stop = row.stop.then(|| {
+            let form = Composer::of(true).row;
+            let go: Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)> =
+                Box::new(cx.listener(|view, _, _, cx| {
+                    view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
+                }));
+            let told: Box<dyn Fn(Bounds<Pixels>)> = Box::new(stop_told(self.stop_logged.clone()));
+            choices::round_button(
+                form,
+                self.inks(look),
+                false,
+                (
+                    "conversation-row-stop",
+                    words::STOP.into(),
+                    choices::Round::Stop,
+                    go,
+                ),
+                Some(told),
+            )
+        });
+        // Each is the ring's stop as well as the pointer's, so the keyboard reaches what's drawn.
+        let shell = shell.read(cx);
+        let words = words.map(|words| {
+            shell.strip_stop(
+                words,
+                StripStop::Page,
+                said.unwrap_or_default(),
+                panel::PAGE_RADIUS,
+            )
+        });
+        let button = button
+            .map(|(stop, label, button)| shell.strip_stop(button, stop, label, HELD_BUTTON_RADIUS));
+        let stop = stop.map(|stop| {
+            shell.strip_stop(
+                stop,
+                StripStop::Stop,
+                words::STOP.into(),
+                panel::COMPOSER_ROUND / 2.,
+            )
+        });
+        let spring = words.is_none().then(|| div().flex_1());
         Some(
             div()
                 .flex_none()
@@ -1519,18 +1692,23 @@ impl TalkView {
                 .items_center()
                 .gap(px(panel::ROW_GAP))
                 .children(ring)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(panel::LIVE))
-                        .line_height(px(panel::LIVE_LINE))
-                        .text_color(palette.gray(TRACE_NOTE))
-                        .child(said),
-                )
-                .child(button),
+                .children(words)
+                .children(spring)
+                .children(button)
+                .children(stop),
         )
+    }
+
+    /// The composer row's inks, which the page row's Stop shares.
+    fn inks(&self, look: &Look) -> choices::Inks {
+        let palette = look.palette;
+        choices::Inks {
+            text: palette.text(TITLE),
+            dim: palette.gray(SECONDARY),
+            plate: palette.plate(BAR_CHIP),
+            primary: primary(palette).0,
+            on_primary: primary(palette).1,
+        }
     }
 
     /// Stop ⌘., which comes and goes with the work it stops: at the end of a task's foot line, or
@@ -1692,19 +1870,13 @@ impl TalkView {
                 log!("browser: task picture {tab} says {says}");
                 // Once, as it turns: a tile the user scrolls away again stays away, and its page
                 // opens as itself unless the user has put another of the task's pages there.
-                // Nor while the user types in the reply field the page would cover: the tile in
-                // sight is enough, and the field keeps the keyboard and what's in it.
+                // The panel beside it keeps the reply field, so it covers nothing the user types.
                 if said == Some(PageWord::NeedsYou) {
                     self.rail_scroll.scroll_to_item(index);
-                    let (shell, typing) = (self.shell.clone(), self.typing);
+                    let shell = self.shell.clone();
                     cx.defer(move |cx| {
                         shell
-                            .update(cx, |shell, cx| {
-                                let covers = !shell.talk_beside;
-                                if !(typing && covers) {
-                                    shell.open_needing_page(tab, cx);
-                                }
-                            })
+                            .update(cx, |shell, cx| shell.open_needing_page(tab, cx))
                             .ok();
                     });
                 }
@@ -2114,9 +2286,7 @@ impl TalkView {
                             let says = self.says(step, TRACE_GLYPH + TRACE_GAP, look);
                             nest.child(line).children(says)
                         }
-                        HelperRow::Step => {
-                            nest.children(self.step_line(step, true, false, look, cx))
-                        }
+                        HelperRow::Step => nest.children(self.step_line(step, true, look, cx)),
                         HelperRow::Nothing => nest,
                     }
                 }
@@ -2277,7 +2447,7 @@ impl TalkView {
         look: &Look,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        self.step_line(step, glyph, glyph, look, cx)
+        self.step_line(step, glyph, look, cx)
     }
 
     /// How far round the running ring is now, on the shell's breath, which draws the next frame
@@ -2291,12 +2461,11 @@ impl TalkView {
         turned
     }
 
-    /// As `step`, which may be the `live` line beside the page or, as a helper's, never is.
+    /// As `step`, with its glyph or, as a helper's, without.
     fn step_line(
         &self,
         step: &TraceStep,
         glyph: bool,
-        live: bool,
         look: &Look,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
@@ -2320,45 +2489,7 @@ impl TalkView {
         if opens {
             line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
         }
-        // Beside the page, the step under way on it is the live line, with Take over at its end,
-        // unless the user stands on the page, whose strip has it.
-        let live = (self.shown.as_ref())
-            .filter(|shown| {
-                look.beside && !look.standing && live && step.running && shown.stoppable
-            })
-            .and_then(|shown| shown.on);
-        let drawn = self.take_over_drawn.clone();
-        let line = match live {
-            None => line.into_any_element(),
-            Some(tab) => div()
-                .w_full()
-                .flex()
-                .items_center()
-                .child(div().flex_1().min_w_0().flex().child(line))
-                .child(
-                    page_chip(
-                        look.palette,
-                        "conversation-take-over",
-                        words::TAKE_OVER,
-                        None,
-                    )
-                    .relative()
-                    .child(
-                        canvas(
-                            move |bounds, _, _| drawn.borrow_mut().push(bounds),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                    )
-                    .on_click(
-                        cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
-                    ),
-                )
-                .into_any_element(),
-        };
+        let line = line.into_any_element();
         let line = risen(line, self.motion.came(Key::Step(step.key)), look);
         let palette = look.palette;
         // What a line opens to starts under its title.
@@ -2785,7 +2916,6 @@ impl TalkView {
     /// typed, else Send, which does nothing with nothing typed. A reply never carries files or a
     /// folder, so there's no way to add one here.
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
-        let palette = look.palette;
         let shown = self.shown.as_ref();
         let tier = shown.map(|shown| shown.tier).unwrap_or_default();
         let typed = !self.reply.read(cx).text().trim().is_empty();
@@ -2835,13 +2965,7 @@ impl TalkView {
         });
         choices::row(choices::Row {
             form: form.row,
-            inks: choices::Inks {
-                text: palette.text(TITLE),
-                dim: palette.gray(SECONDARY),
-                plate: palette.plate(BAR_CHIP),
-                primary: primary(palette).0,
-                on_primary: primary(palette).1,
-            },
+            inks: self.inks(look),
             a11y: look.a11y,
             level: (tier, level),
             model,
@@ -3288,6 +3412,23 @@ fn held_button(
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "conversation-level";
 const MODEL: &str = "conversation-model";
+
+/// Where the page row's Open for `tab` was drawn, kept in `at`, which it opens from, and logged as
+/// it moves, for check.sh to click it.
+fn open_told(tab: u64, at: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl Fn(Bounds<Pixels>) + 'static {
+    move |bounds| {
+        if at.replace(Some(bounds)) != Some(bounds) {
+            // check.sh reads this line, to click it.
+            log!(
+                "browser: page row open {tab} at {:.0} {:.0} {:.0} {:.0}",
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height)
+            );
+        }
+    }
+}
 
 /// Where Stop was drawn, kept in `logged` and logged as it moves, for check.sh to click it.
 fn stop_told(logged: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl Fn(Bounds<Pixels>) + 'static {
@@ -4014,8 +4155,6 @@ struct Look {
     thread_pages: Vec<(u64, SharedString)>,
     /// A page watched is going back into its picture over it, which hides what's under it.
     behind: bool,
-    /// The conversation stands beside the page it watches (`Shell::talk_beside`).
-    beside: bool,
     /// The user stands on one of its pages, the conversation in a panel beside it.
     standing: bool,
     /// An assistive app reads the window (`TalkView::a11y`).
@@ -4054,6 +4193,17 @@ impl Look {
 }
 
 impl Shell {
+    /// What the panel's page row holds for `tab` while the user stands on it, which the ring's
+    /// stops follow, so it never rings one the row doesn't draw.
+    pub(super) fn page_row_shown(&self, tab: u64, cx: &gpui::App) -> PageRow {
+        let Some(talk) = self.talk.as_ref().filter(|_| self.task_standing()) else {
+            return PageRow::default();
+        };
+        talk.view
+            .read(cx)
+            .page_row_for(tab, self.task_strip_open(tab))
+    }
+
     /// The favicon of an open tab at `url`, if one has it.
     fn favicon_at(&self, url: &str) -> Option<Arc<Image>> {
         (self.tabs.values())
@@ -4241,8 +4391,6 @@ fn helper_tabs(lines: &[Line]) -> Vec<u64> {
 
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let reply = self.reply.read(cx);
-        self.typing = reply.focus_handle(cx).is_focused(window) && !reply.text().is_empty();
         self.a11y = window.is_a11y_active();
         self.step_ilo_keys(window, cx);
         let now = Instant::now();
@@ -4272,7 +4420,6 @@ impl Render for TalkView {
                     .filter_map(|tab| Some((tab, shell.tabs.get(&tab)?.page.url.clone())))
                     .collect(),
                 behind: shell.task_page_going_back(),
-                beside: shell.talk_beside,
                 standing: shell.task_standing(),
                 a11y: self.a11y,
             }
@@ -4295,6 +4442,8 @@ impl Render for TalkView {
         self.folder_drawn.set(None);
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
+        self.reply_drawn.set(None);
+        self.speaker_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.
@@ -4345,10 +4494,14 @@ impl Render for TalkView {
         // The task's pages stand in a rail at the area's right edge, or, where the column at its
         // least and the rail don't both fit, in a row under the header. With no page, no rail.
         let pages = (self.shown.as_ref()).is_some_and(|shown| !shown.tabs.is_empty());
-        let wide =
-            (self.drawn_at.get()).map_or(window.viewport_size().width, |area| area.size.width);
         // Beside a page, the panel's head has the pages, and there's no rail.
         let standing = look.standing;
+        // The panel's width, drawn last beside a page, is never the area's: going back, the
+        // pictures would lay out across for a frame before standing in the rail.
+        let was_standing = self.drawn_standing.replace(standing);
+        let wide = (self.drawn_at.get())
+            .filter(|_| !was_standing)
+            .map_or(window.viewport_size().width, |area| area.size.width);
         let across = pages && !standing && f32::from(wide) < RAIL_BREAKPOINT;
         let middle = shut(
             div()
@@ -4398,16 +4551,18 @@ impl Render for TalkView {
             }))
             .child(middle)
             .children(
-                (standing && self.replies && self.in_field().is_none())
+                standing
                     .then(|| self.page_row(&look, cx))
                     .flatten()
                     .map(|row| shut(foot(row))),
             )
             // With ilo's line and Start Again in the field's place there is no level to set, so
-            // the row goes with the field (#4105).
-            .child(shut(foot(on_column(
-                self.reply(&look, cx).into_any_element(),
-            ))));
+            // the row goes with the field (#4105). An outside app's session has no composer
+            // beside its page: its user talks to it in its own app.
+            .children(
+                (self.replies || !standing)
+                    .then(|| shut(foot(on_column(self.reply(&look, cx).into_any_element())))),
+            );
         let rail = (pages && !across && !standing).then(|| {
             div()
                 .flex_none()
@@ -4546,6 +4701,43 @@ mod tests;
 
 /// The step under way at the end of a task's lines, if one is: the last trace's last step while
 /// it runs, or a session's last step line. A step that ended or was refused isn't.
+/// What the panel's page row holds for the page stood on. One button at most, but for an outside
+/// app's session, which has no composer and so its Stop at the row's right end.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct PageRow {
+    pub(super) case: Option<RowCase>,
+    pub(super) stop: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum RowCase {
+    /// The thread works on the page: the step under way, with Take Over.
+    Working(SharedString),
+    /// The user holds the page: what `words::live` says of it, with Hand Back.
+    Yours(SharedString),
+    /// The thread has ended with this page to move to the user's Space: Open, as its words say.
+    Ended(SharedString),
+}
+
+impl RowCase {
+    /// The ring's stop on the row's button.
+    pub(super) fn button(&self) -> StripStop {
+        match self {
+            RowCase::Working(_) => StripStop::TakeOver,
+            RowCase::Yours(_) => StripStop::HandBack,
+            RowCase::Ended(_) => StripStop::Open,
+        }
+    }
+
+    /// The row's words before its button, which the ring's page stop rings: none beside Open.
+    pub(super) fn said(&self) -> Option<&SharedString> {
+        match self {
+            RowCase::Working(said) | RowCase::Yours(said) => Some(said),
+            RowCase::Ended(_) => None,
+        }
+    }
+}
+
 fn under_way(lines: &[Line]) -> Option<&TraceStep> {
     let step = match lines.last()? {
         Line::Trace(trace) => match trace.items.last()? {

@@ -4550,13 +4550,22 @@ fn place(
     }
 }
 
-/// A session's lines: its traces' steps, each a line of its own, newest last.
+/// A session's lines: its traces' steps, each a line of its own, newest last, in the product's
+/// own words alone: nothing its client says beyond its title, neither a step's note nor a
+/// thought's text.
 fn steps(lines: Vec<Line>) -> Vec<Line> {
     (lines.into_iter())
         .flat_map(|line| match line {
             Line::Trace(trace) => (trace.items.into_iter())
                 .filter_map(|item| match item {
-                    TraceItem::Step(step) => Some(Line::Step(step)),
+                    TraceItem::Step(step) => Some(Line::Step(TraceStep {
+                        says: SharedString::default(),
+                        opens: match step.opens {
+                            Opens::Thought(_) => Opens::Nothing,
+                            opens => opens,
+                        },
+                        ..step
+                    })),
                     TraceItem::Said(_) | TraceItem::Helper { .. } => None,
                 })
                 .collect(),
@@ -5215,6 +5224,56 @@ fn end_old_task_files(tasks: &std::path::Path) {
 #[cfg(test)]
 mod finished_tests {
     use super::*;
+
+    /// An outside app's session shows the product's own step lines alone: never its client's note
+    /// on a step, nor a thought's text, though its title and what the step opened stay.
+    #[test]
+    fn a_sessions_lines_say_nothing_its_client_says() {
+        let step = |key, opens| TraceStep {
+            key,
+            glyph: "icons/globe.svg",
+            title: "Opened tickets.example".into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens,
+            under: "".into(),
+            page: None,
+            says: "Checking the prices first".into(),
+        };
+        let lines = vec![Line::Trace(Trace {
+            key: 0,
+            running: false,
+            took: None,
+            started: None,
+            items: vec![
+                TraceItem::Step(step(0, Opens::Text("tickets.example".into()))),
+                TraceItem::Said("I'll book it".into()),
+                TraceItem::Step(step(1, Opens::Thought("Book the cheapest".into()))),
+            ],
+        })];
+        let shown = steps(lines);
+        let steps: Vec<&TraceStep> = (shown.iter())
+            .filter_map(|line| match line {
+                Line::Step(step) => Some(step),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            steps.len(),
+            shown.len(),
+            "a line of its client's words: {shown:?}"
+        );
+        assert_eq!(steps.len(), 2);
+        assert!(steps.iter().all(|step| step.says.is_empty()), "{steps:?}");
+        assert_eq!(steps[0].opens, Opens::Text("tickets.example".into()));
+        assert_eq!(steps[1].opens, Opens::Nothing, "a thought's text shows");
+        assert!(
+            steps
+                .iter()
+                .all(|step| step.title == "Opened tickets.example")
+        );
+    }
 
     /// Each answer stands over its own foot; what the assistant said along the way has none,
     /// though its words are the same.

@@ -3210,12 +3210,7 @@ fn main() {
                             let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| {
-                                        if states::var_os("PREVIEW_TASK").is_some() {
-                                            shell.set_talk_beside(true, cx);
-                                        }
-                                        shell.show_task(agent.into(), cx)
-                                    })
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
