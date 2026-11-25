@@ -1717,11 +1717,11 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
 #[gpui::test]
 fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) {
     use super::words::head;
-    use crate::agents::task::ilo::SignedInWith;
+    use crate::agents::task::ilo::{SignedInWith, Unchecked};
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 10] = [
+    const VERBS: [&str; 11] = [
         "stopped", "signed", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
-        "revoked",
+        "revoked", "found",
     ];
     let every = [
         IloKind::Stopped {
@@ -1801,6 +1801,32 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::NotCopied {
             left: LeftOut::Files(3),
         },
+        IloKind::LinksOut {
+            folder: "Trip".into(),
+            count: 1,
+            every: false,
+        },
+        IloKind::LinksOut {
+            folder: "Trip".into(),
+            count: 2,
+            every: true,
+        },
+        IloKind::LinksUnchecked {
+            folder: "Trip".into(),
+            unchecked: Unchecked::Folder,
+        },
+        IloKind::LinksUnchecked {
+            folder: "Trip".into(),
+            unchecked: Unchecked::Part,
+        },
+        IloKind::LinksUnchecked {
+            folder: "Trip".into(),
+            unchecked: Unchecked::Inside(1),
+        },
+        IloKind::LinksUnchecked {
+            folder: "Trip".into(),
+            unchecked: Unchecked::Inside(3),
+        },
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1840,6 +1866,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::Revoked { .. }
             | IloKind::FolderGone { .. }
             | IloKind::NotCopied { .. }
+            | IloKind::LinksOut { .. }
+            | IloKind::LinksUnchecked { .. }
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone

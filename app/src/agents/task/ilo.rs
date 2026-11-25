@@ -4,8 +4,9 @@
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
 //! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
 //! And of a task with files (#4101) whose assistant ilo couldn't limit to them: that it started
-//! without them, stayed at its level or went back to it, or stopped; and that ilo couldn't end
-//! everything its assistant had started, or later did.
+//! without them, stayed at its level or went back to it, or stopped; that ilo couldn't end
+//! everything its assistant had started, or later did; and what the check as a run ended found of
+//! links leading out of its folder.
 //!
 //! An ilo line is its own kind of entry, never a message. Only the app makes one, from its own
 //! events: nothing an agent sends, no tool's argument and no page's text becomes one, so nothing
@@ -119,6 +120,19 @@ pub enum IloKind {
     FolderGone { folder: SharedString },
     /// ilo couldn't copy the files the user attached, so the task started without them.
     NotCopied { left: LeftOut },
+    /// The check as a walled run ended found `count` links in `folder` leading out of it (X10).
+    /// `every` where the folder keeps no change time to trust, so they're every leaving link in
+    /// it, the user's own too, which the line shows and never deletes.
+    LinksOut {
+        folder: SharedString,
+        count: usize,
+        every: bool,
+    },
+    /// The same check couldn't read all of `folder` (X11), under X10 when both came.
+    LinksUnchecked {
+        folder: SharedString,
+        unchecked: Unchecked,
+    },
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -159,6 +173,18 @@ pub enum Reach {
     Folder(SharedString),
     Files,
     Both(SharedString),
+}
+
+/// What of a folder the check for links couldn't read, one at a time, the widest first: a walk
+/// that read nothing, or stopped short, can't say how many folders it missed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unchecked {
+    /// The folder itself couldn't be opened.
+    Folder,
+    /// The walk stopped short, at its limit of entries or of time.
+    Part,
+    /// It couldn't read this many folders inside it.
+    Inside(usize),
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
@@ -203,6 +229,11 @@ pub enum IloButton {
     /// The command bar opens with what the task was first asked, to ask it anew: nothing is sent
     /// until the user sends it.
     StartAgain,
+    /// The system's file manager shows the first link the check found, or the folder it couldn't
+    /// read.
+    RevealLink,
+    /// The links the check found go, `count` of them: the user's alone, never an agent's.
+    DeleteLinks(usize),
 }
 
 impl IloButton {
@@ -262,6 +293,18 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
         | IloKind::NotCopied { .. } => Vec::new(),
+        // Where they are, and their end: a list of every leaving link is the user's own links
+        // too, so it's only shown.
+        IloKind::LinksOut { every: true, .. } => vec![IloButton::RevealLink],
+        IloKind::LinksOut { count, .. } => {
+            vec![IloButton::RevealLink, IloButton::DeleteLinks(*count)]
+        }
+        // A walk cut short has no one place it missed.
+        IloKind::LinksUnchecked {
+            unchecked: Unchecked::Part,
+            ..
+        } => Vec::new(),
+        IloKind::LinksUnchecked { .. } => vec![IloButton::RevealLink],
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
         IloKind::Gone
         | IloKind::NotKept
@@ -305,7 +348,9 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
-        | IloKind::NotCopied { .. } => None,
+        | IloKind::NotCopied { .. }
+        | IloKind::LinksOut { .. }
+        | IloKind::LinksUnchecked { .. } => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
         IloKind::Gone
         | IloKind::NotKept

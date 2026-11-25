@@ -19,7 +19,7 @@ use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
 use super::kept::Keep;
-use super::wall::{Wall, WallRefused, leftovers};
+use super::wall::{Found, Wall, WallRefused, leftovers, links_outside};
 
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -150,6 +150,9 @@ pub enum Out {
     /// What the sweep after a walled run's end found: everything its assistant started was
     /// ended, or not. The run has ended, so this is the last of it and never its task's next.
     Swept(Result<leftovers::Swept, leftovers::SweepFailed>),
+    /// What the walk after that sweep found in the run's granted folder: links leading out of
+    /// it, or parts it couldn't read. After Swept, and only where it found something.
+    Links(Found),
 }
 
 /// What a task's output tells of one of its helpers, for its line in the conversation. A label:
@@ -428,21 +431,37 @@ impl Drop for Process {
                 .name("task-reap".into())
                 .spawn(move || {
                     _ = child.wait();
-                    reaped(walled.as_deref(), run, answer);
+                    reaped(walled, run, answer);
                 });
         }
     }
 }
 
-/// After a run's end and its reap: the sweep of what its wall still holds, answered to its task.
-/// A run with no wall has nothing to sweep and says nothing.
-fn reaped(walled: Option<&Wall>, run: u32, answer: Option<(String, UnboundedSender<Event>)>) {
-    let Some(swept) = walled.and_then(Wall::sweep_after) else {
+/// After a run's end and its reap: the sweep of what its wall still holds, answered to its task,
+/// then for a wall with a folder the walk for the links the run left leading out of it, answered
+/// only where it found something. Both once, here, off the UI thread.
+fn reaped(walled: Option<Arc<Wall>>, run: u32, answer: Option<(String, UnboundedSender<Event>)>) {
+    let Some(wall) = walled else {
         return;
     };
-    if let Some((agent, events)) = answer {
-        let out = Out::Swept(swept);
+    let swept = wall.sweep_after();
+    let Some((agent, events)) = answer else {
+        return;
+    };
+    let tell = |out| {
+        let agent = agent.clone();
         _ = events.unbounded_send(Event { agent, run, out });
+    };
+    if let Some(swept) = swept {
+        tell(Out::Swept(swept));
+    }
+    if wall.folder().is_none() {
+        return;
+    }
+    let walked = links_outside(&wall);
+    if walked.any() {
+        let walked = Arc::new(walked);
+        tell(Out::Links(Found { walked, wall }));
     }
 }
 

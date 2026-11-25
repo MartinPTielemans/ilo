@@ -29,6 +29,7 @@ use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
+pub(super) mod links;
 mod pick_up;
 pub(super) mod revoke;
 pub(super) mod rewall;
@@ -472,6 +473,9 @@ pub struct Task {
     /// answers: what anything it left running could still reach, and its place's name, which a
     /// kept task's row carries while that sweep isn't clean.
     pub(super) ran_walled: Vec<(u32, Given, Option<String>)>,
+    /// What the check for links leading out of its folder found as each walled run of its ended,
+    /// in memory alone (links.rs).
+    pub(in crate::agents) links: Vec<links::Checked>,
     /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
     pub(super) restart: Option<rewall::Restart>,
     /// While ilo copies its attached files, before its assistant first starts: nothing starts or
@@ -771,6 +775,11 @@ pub enum TaskAction {
     /// Revoke on the folder's chip under the reply field: only the user's press takes a folder
     /// back, as on Settings › Agents › Folders in use.
     RevokeFolder,
+    /// Show in Finder on the line of the check for links, by its key: the system's file manager
+    /// is the window's to open (engine.rs), at `Agents::link_to_reveal`.
+    RevealLink(usize),
+    /// Delete Links on that line, by its key: only the user's press removes them.
+    DeleteLinks(usize),
 }
 
 /// What the composer starts a task with beside what was asked: the user's picks on its line, which
@@ -1124,6 +1133,8 @@ impl Agents {
             TaskAction::PagesBack => self.pages_back(agent, cx),
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
             TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
+            TaskAction::RevealLink(_) => {}
+            TaskAction::DeleteLinks(key) => self.delete_links(agent, key, cx),
         }
         (None, None)
     }
@@ -1814,6 +1825,7 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             ran_walled: Vec::new(),
+            links: Vec::new(),
             restart: None,
             copying: false,
         };
@@ -2161,6 +2173,10 @@ impl Agents {
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
         }
+        // And so does the check for links its folder had after it.
+        if let Out::Links(found) = out {
+            return self.links_found(&agent, found, cx);
+        }
         // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
@@ -2252,7 +2268,7 @@ impl Agents {
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
             Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
-            Out::Swept(_) => {}
+            Out::Swept(_) | Out::Links(_) => {}
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -3339,6 +3355,7 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             ran_walled: Vec::new(),
+            links: Vec::new(),
             restart: None,
             copying: false,
         });

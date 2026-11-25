@@ -5,7 +5,7 @@
 use crate::agents::kept;
 use crate::agents::task::Live;
 use crate::agents::task::ilo::{
-    HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
+    HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith, Unchecked,
 };
 use crate::agents::tier::{self, Tier, Why};
 use crate::product::PRODUCT;
@@ -180,6 +180,23 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             format!("started this thread without {files} files: {PRODUCT} couldn't copy them"),
             None,
         ),
+        // X10 and X11: what the check as a run ended found in the folder, and what it couldn't
+        // read, never "no links" for a walk cut short.
+        IloKind::LinksOut {
+            folder, count: 1, ..
+        } => ("found 1 link in".into(), Some(folder.to_string())),
+        IloKind::LinksOut { folder, count, .. } => {
+            (format!("found {count} links in"), Some(folder.to_string()))
+        }
+        IloKind::LinksUnchecked { folder, unchecked } => (
+            match unchecked {
+                Unchecked::Folder => "couldn't check".into(),
+                Unchecked::Part => "couldn't check all of".into(),
+                Unchecked::Inside(1) => "couldn't check 1 folder inside".into(),
+                Unchecked::Inside(count) => format!("couldn't check {count} folders inside"),
+            },
+            Some(folder.to_string()),
+        ),
         IloKind::Resumed { tier } => (format!("resumed this thread at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply after a quit too, so the words name no end; the reply field
@@ -244,6 +261,8 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),
         } => Some(format!(": {PRODUCT} couldn't copy it")),
+        IloKind::LinksOut { .. } => Some(" pointing outside it".into()),
+        IloKind::LinksUnchecked { .. } => Some(" for links".into()),
         _ => None,
     }
 }
@@ -283,7 +302,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
-        | IloKind::NotCopied { .. } => None,
+        | IloKind::NotCopied { .. }
+        | IloKind::LinksOut { .. }
+        | IloKind::LinksUnchecked { .. } => None,
         IloKind::Resumed { .. } => None,
         IloKind::KeptHere
         | IloKind::Gone
@@ -311,6 +332,13 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",
+        // The app's own words for the system's file manager.
+        IloButton::RevealLink => match crate::shell::OFF_THE_MAC {
+            true => "Show in Folder",
+            false => "Show in Finder",
+        },
+        IloButton::DeleteLinks(1) => "Delete Link",
+        IloButton::DeleteLinks(_) => "Delete Links",
     }
 }
 

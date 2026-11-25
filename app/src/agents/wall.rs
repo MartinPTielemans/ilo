@@ -220,6 +220,16 @@ impl Wall {
             place: None,
         }
     }
+
+    /// The wall of a task given `folder` that went up now, for a test of what's read in it as
+    /// the run ends: no launcher, as nothing starts inside it.
+    #[cfg(test)]
+    pub(crate) fn granted_for_test(folder: Granted) -> Wall {
+        Wall {
+            folder: Some(folder),
+            ..Wall::for_test(None)
+        }
+    }
 }
 
 impl Granted {
@@ -319,6 +329,41 @@ pub struct Walked {
     pub root_unread: bool,
     /// Set when the walk stopped short, so the line says it checked part of the folder.
     pub stopped: Option<Stop>,
+}
+
+impl Walked {
+    /// Whether its task's line has anything to say: a link found, or a part of the folder it
+    /// couldn't read. A clean walk says nothing.
+    pub fn any(&self) -> bool {
+        !self.links.is_empty() || self.unread > 0 || self.root_unread || self.stopped.is_some()
+    }
+}
+
+/// What the walk at a walled run's end found, for its task's line and that line's buttons alone,
+/// with the wall it was walked in, which Delete Links removes them from. It stays in memory: what
+/// it lists is the user's own folder's layout.
+#[derive(Clone)]
+pub struct Found {
+    pub walked: std::sync::Arc<Walked>,
+    pub wall: std::sync::Arc<Wall>,
+}
+
+impl std::fmt::Debug for Found {
+    /// Counts alone, never a path, as what holds one may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Found")
+            .field("links", &self.walked.links.len())
+            .field("unread", &self.walked.unread)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for Found {
+    /// The same walk, of the same wall.
+    fn eq(&self, other: &Found) -> bool {
+        std::sync::Arc::ptr_eq(&self.walked, &other.walked)
+            && std::sync::Arc::ptr_eq(&self.wall, &other.wall)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

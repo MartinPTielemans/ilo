@@ -652,6 +652,14 @@ impl Browser for Engine {
     fn task(&self, agent: SharedString, action: browser::agents::task::TaskAction, _: &mut App) {
         let window = self.window;
         agents_core::update(move |agents, cx| {
+            // Show in Finder on the check for links' line opens the file manager, as a Boost's
+            // file's does.
+            if let browser::agents::task::TaskAction::RevealLink(line) = action {
+                if let Some(path) = agents.link_to_reveal(&agent, line) {
+                    boosts_host::show_file(&path);
+                }
+                return;
+            }
             let (opened, _) = agents.task_action(&agent, action, cx);
             // Open shows the tab it moved into the user's Space, in the window it was opened from.
             if let Some(tab) = opened {

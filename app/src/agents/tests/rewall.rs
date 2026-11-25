@@ -1529,3 +1529,5 @@ fn stop_while_a_restart_waits_drops_it(cx: &mut TestAppContext) {
     assert_eq!(run_of(&run, &agent, cx), 0);
     assert_eq!(run.state(&agent, cx), State::Stopped);
 }
+
+mod links;

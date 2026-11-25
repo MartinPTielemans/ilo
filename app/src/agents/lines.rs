@@ -259,7 +259,8 @@ impl Agents {
 
     /// ilo's lines of `task`'s refusals and of the rest that happened to it, in the order they
     /// came, each with how many of the task's messages and steps came before it, for `fold` to
-    /// place among them. An ended task's have no buttons.
+    /// place among them. An ended task's have no buttons, but for its stopped line's and the
+    /// check for links' (links.rs).
     pub(super) fn ilo_lines(&self, task: &Task, cx: &App) -> Vec<Mark> {
         let ended = task.ended.is_some();
         let pages = self.pages(task, cx);
@@ -349,6 +350,8 @@ impl Agents {
                 made.push((came.appeared, mark));
             }
         }
+        // And the checks for links as its walled runs ended, X11 under X10.
+        made.extend(super::task::links::lines(task));
         made.sort_by_key(|(appeared, mark)| (mark.after, mark.traced, *appeared));
         made.into_iter().map(|(_, mark)| mark).collect()
     }

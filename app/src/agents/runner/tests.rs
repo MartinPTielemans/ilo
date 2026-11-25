@@ -857,15 +857,61 @@ fn a_walled_runs_reap_answers_its_task_with_the_sweep() {
     let wall = Wall::for_test(None).in_place(Arc::new(place));
     let (events, mut heard) = futures::channel::mpsc::unbounded();
     let to = || Some(("task".to_string(), events.clone()));
-    reaped(Some(&wall), 7, to());
+    reaped(Some(Arc::new(wall)), 7, to());
     let event = heard.try_recv().unwrap();
     let swept = leftovers::Swept { ended: 0, walks: 1 };
     assert_eq!((event.agent.as_str(), event.run), ("task", 7));
     assert_eq!(event.out, Out::Swept(Ok(swept)));
-    reaped(Some(&Wall::for_test(None)), 8, to());
+    reaped(Some(Arc::new(Wall::for_test(None))), 8, to());
     reaped(None, 9, to());
     assert!(heard.try_recv().is_err(), "nothing more was said");
     _ = std::fs::remove_dir_all(&root);
+}
+
+/// A walled run with a folder: after the sweep's answer, the walk of its folder answers with the
+/// links the run left leading out of it, with the wall they're in. A clean folder, or a run whose
+/// task hears nothing of it, says nothing more.
+#[cfg(unix)]
+#[test]
+fn a_walled_run_with_a_folder_answers_with_its_links_after_the_sweep() {
+    let base = std::env::temp_dir().join(format!("ilo-reaped-links-{}", std::process::id()));
+    let (folder, outside) = (base.join("folder"), base.join("outside"));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let base = base.canonicalize().unwrap();
+    let folder = base.join("folder");
+    let walled = |place: &str| {
+        let place = leftovers::Place::make(&base.join(place)).unwrap();
+        let granted = crate::agents::wall::Granted::picked_for_test(folder.clone());
+        Arc::new(Wall::granted_for_test(granted).in_place(Arc::new(place)))
+    };
+    let (events, mut heard) = futures::channel::mpsc::unbounded();
+    let to = || Some(("task".to_string(), events.clone()));
+    let clean = walled("clean");
+    reaped(Some(clean), 7, to());
+    assert!(matches!(heard.try_recv().unwrap().out, Out::Swept(Ok(_))));
+    assert!(
+        heard.try_recv().is_err(),
+        "a clean folder says nothing more"
+    );
+
+    let wall = walled("left");
+    std::os::unix::fs::symlink(base.join("outside"), folder.join("out")).unwrap();
+    reaped(Some(wall.clone()), 8, to());
+    assert!(matches!(heard.try_recv().unwrap().out, Out::Swept(Ok(_))));
+    let event = heard.try_recv().unwrap();
+    assert_eq!((event.agent.as_str(), event.run), ("task", 8));
+    let Out::Links(found) = event.out else {
+        panic!("no links after the sweep");
+    };
+    assert!(Arc::ptr_eq(&found.wall, &wall));
+    let paths: Vec<_> = found.walked.links.iter().map(|link| &link.path).collect();
+    assert_eq!(paths, [&PathBuf::from("out")]);
+    // Its Debug, which a log may print, counts.
+    assert_eq!(format!("{found:?}"), "Found { links: 1, unread: 0, .. }");
+    reaped(Some(walled("unheard")), 9, None);
+    assert!(heard.try_recv().is_err(), "nothing more was said");
+    _ = std::fs::remove_dir_all(&base);
 }
 
 /// Claude's start has its provider's search and never its fetch, walled or not. The wall's hosts

@@ -897,6 +897,7 @@ impl Task {
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
+            links: Vec::new(),
             names: crate::agents::files::Names::default(),
         }
     }

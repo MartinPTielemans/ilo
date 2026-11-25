@@ -2510,6 +2510,8 @@ impl TalkView {
             IloKind::EndedLeft => "icons/check.svg",
             IloKind::Revoked { .. } | IloKind::FolderGone { .. } => "icons/folder.svg",
             IloKind::NotCopied { .. } => "icons/file.svg",
+            IloKind::LinksOut { .. } => "icons/link.svg",
+            IloKind::LinksUnchecked { .. } => "icons/circle-alert.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone
@@ -2704,6 +2706,8 @@ impl TalkView {
                 self.start_again(cx);
                 None
             }
+            IloButton::RevealLink => Some(TaskAction::RevealLink(line)),
+            IloButton::DeleteLinks(_) => Some(TaskAction::DeleteLinks(line)),
         };
         if let Some(action) = action {
             self.act(action, cx);
