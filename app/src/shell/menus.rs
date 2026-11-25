@@ -332,10 +332,7 @@ impl Shell {
             }),
         )];
         // A private window's Space has no folders, and nothing to change.
-        if self.one_space() {
-            items.push((MenuEntry::line(), Box::new(|_, _| {})));
-            items.push(self.top_bar_item(cx));
-        } else {
+        if !self.one_space() {
             let new_folder =
                 MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
             items.push((
@@ -345,9 +342,6 @@ impl Shell {
                     shell.run(Command::NewFolder, "sidebar", cx)
                 }),
             ));
-            items.push((MenuEntry::line(), Box::new(|_, _| {})));
-            // The window's view, by the sidebar's own items and before the Space's.
-            items.push(self.top_bar_item(cx));
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
             // Its Profile submenu's items name their parent by where it is, now further down.
             let after = items.len();
@@ -361,17 +355,6 @@ impl Shell {
             );
         }
         items
-    }
-
-    /// Show Top Bar or Hide Top Bar, by whether it's on, with its key: in the sidebar's empty
-    /// space's menu, and the whole of the bar's own, where the way out is seen (#3160).
-    pub(super) fn top_bar_item(&self, cx: &App) -> (MenuEntry, MenuAction) {
-        let title = super::commands::top_bar_title(self.top_bar);
-        let entry = MenuEntry::new(title, true).shortcut(Command::ToggleTopBar, user_keys(cx));
-        (
-            entry,
-            Box::new(|shell, cx| shell.run(Command::ToggleTopBar, "sidebar", cx)),
-        )
     }
 
     /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc

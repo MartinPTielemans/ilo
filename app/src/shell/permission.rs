@@ -256,8 +256,6 @@ impl Shell {
         // card hangs under it, where the page makes room for it (little_card).
         match self.little.is_some() {
             true => (LITTLE_BAR, CARD_INSET),
-            // Under the bar, at the top of the sidebar's list, where the field was.
-            false if self.bar_on() => (URL_FIELD_TOP, PLATE_INSET),
             false => (URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP, PLATE_INSET),
         }
     }

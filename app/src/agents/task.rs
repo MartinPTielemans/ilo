@@ -418,8 +418,10 @@ pub struct Task {
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
     asking: Option<(u64, mpsc::Sender<ToolResult>)>,
-    /// Its access, which only the user changes and which ends with it: never kept, so Full access
-    /// is never remembered.
+    /// Its access, which only the user raises and which ends with it: never kept, so Full access
+    /// is never remembered. An outside client's starts at what the user left that client's others
+    /// at, and comes down to an ended one's as it takes that one's page (`starting_tier`,
+    /// `left_at`).
     pub tier: Tier,
     /// The sites it may use.
     pub sites: Sites,
@@ -491,6 +493,9 @@ pub struct Session {
     last: Option<Instant>,
     /// When its title from its sites last changed, which the next change waits RENAMING after.
     renamed: Option<Instant>,
+    /// The user picked a level on another task of its client's after it ended, so its own is no
+    /// longer one that client's tasks are held to.
+    passed: bool,
 }
 
 impl Task {
@@ -2420,6 +2425,8 @@ impl Agents {
                 space != 0 && agents.browser.space_of(tab, cx) == space
             })
         };
+        // A page an ended task of its client's held comes at no more than that task's access.
+        let left = did.tab.and_then(|tab| self.left_at(key, tab));
         // A page of another session under way stays its card's, though this one acts on it.
         let others = |agents: &Self, tab: u64| {
             (agents.tasks.tasks.iter()).any(|task| {
@@ -2438,6 +2445,7 @@ impl Agents {
             && !session.tabs.contains(&tab)
         {
             session.tabs.push(tab);
+            task.tier = task.tier.min(left.unwrap_or(task.tier));
         }
         // An ask is done once asked: the wait for the answer is the user's.
         let ended = (did.tool == "ask").then_some(at);
@@ -2567,6 +2575,52 @@ impl Agents {
                 && (task.session.as_ref())
                     .is_some_and(|session| session.agent == agent && session.tabs.contains(&tab))
         })
+    }
+
+    /// The outside client `agent`'s tasks whose access its others are held to: each under way,
+    /// and each that ended with no level picked on another of that client's since.
+    fn held_to<'a>(&'a self, agent: &'a str) -> impl Iterator<Item = &'a Task> {
+        (self.tasks.tasks.iter()).filter(move |task| {
+            (task.session.as_ref()).is_some_and(|session| session.agent == agent && !session.passed)
+        })
+    }
+
+    /// The access a new task of the outside client `agent`'s starts at. A level the user lowered
+    /// outlives its task, for that client, until they pick again: it's the lowest of where every
+    /// task starts and of the tasks the client's are held to, so never Full access, which no
+    /// task is given but by the user. Only the tasks ilo holds say it: nothing is kept for it.
+    pub(super) fn starting_tier(&self, agent: &str) -> Tier {
+        let held = self.held_to(agent).map(|task| task.tier);
+        held.fold(Tier::default(), Tier::min)
+    }
+
+    /// The access the session `key` takes the page `tab` at, if it's lower than its own: the
+    /// lowest of the ended tasks of its client's that held the page and are still held to. The
+    /// one place ilo changes a task's access, and only downward: the user raises it on its chip.
+    fn left_at(&self, key: &str, tab: u64) -> Option<Tier> {
+        let agent = &self.task(key)?.session.as_ref()?.agent;
+        let held = |task: &&Task| {
+            task.state != State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.tabs.contains(&tab))
+        };
+        self.held_to(agent).filter(held).map(|task| task.tier).min()
+    }
+
+    /// The user picked a level on the task `key`: the levels its client's other ended tasks were
+    /// left at are passed, and its own is the one held to.
+    pub(super) fn picked_past(&mut self, key: &str) {
+        let Some(agent) =
+            (self.task(key)).and_then(|task| Some(task.session.as_ref()?.agent.clone()))
+        else {
+            return;
+        };
+        for task in &mut self.tasks.tasks {
+            let (picked, ended) = (task.agent == key, task.state != State::Working);
+            if let Some(session) = (task.session.as_mut()).filter(|session| session.agent == agent)
+            {
+                session.passed = !picked && ended;
+            }
+        }
     }
 
     /// Tells the task `key` ilo runs what ilo has to say, `text`, which is ilo's own: now if it's
@@ -2767,7 +2821,9 @@ impl Agents {
             quiet: None,
             last: None,
             renamed: None,
+            passed: false,
         };
+        let tier = self.starting_tier(&call.agent);
         self.tasks.tasks.push(Task {
             agent: key.clone(),
             cli: None,
@@ -2799,7 +2855,7 @@ impl Agents {
             waiting: None,
             writing: None,
             named: None,
-            tier: Tier::default(),
+            tier,
             sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
