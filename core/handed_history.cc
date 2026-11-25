@@ -7,8 +7,8 @@ void Bound::Set(const std::vector<int>& entries, int current) {
   users_.erase(current);
 }
 
-bool Bound::MayGoTo(int entry, bool held) const {
-  return held || !users_.contains(entry);
+bool Bound::MayGoTo(int entry, bool held, bool from_page) const {
+  return (held && !from_page) || !users_.contains(entry);
 }
 
 }  // namespace browser_core::handed_history

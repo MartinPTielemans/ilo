@@ -47,9 +47,13 @@ bool Return(bc_id tab);
 void BoundHistory(bc_id tab);
 
 // Whether |tab| may be taken to the entry of its history with the id |entry|
-// (NavigationEntry::GetUniqueID): any, unless it's handed. What Chromium asks before each
-// traversal of a handed tab, and what the agent's back and forward ask first, to say why not.
-bool MayGoTo(bc_id tab, int entry);
+// (NavigationEntry::GetUniqueID), by a page's own traversal (|from_page|) or the browser's: any,
+// unless it's handed. What Chromium asks before each traversal of a handed tab.
+bool MayGoTo(bc_id tab, int entry, bool from_page);
+
+// The same for the agent's own back and forward, which ask first, to say why not: never the
+// user's step, whoever holds the tab.
+bool AgentMayGoTo(bc_id tab, int entry);
 
 // Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left,
 // each of them |home|'s own or another handed tab that left it.

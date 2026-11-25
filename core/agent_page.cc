@@ -1728,7 +1728,7 @@ void AgentPage::History(bool forward) {
   content::NavigationEntry* entry = controller.GetEntryAtOffset(forward ? 1 : -1);
   // The history a tab had when the user handed it over is theirs, and isn't there for the agent
   // (handed_history.h). Chromium would refuse the step by itself; the agent is told here.
-  if (entry && !handed::MayGoTo(tab_, entry->GetUniqueID())) {
+  if (entry && !handed::AgentMayGoTo(tab_, entry->GetUniqueID())) {
     Fail(forward ? "There's no page to go forward to." : "There's no page to go back to.");
     return;
   }

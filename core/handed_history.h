@@ -3,7 +3,7 @@
 // handed on and on those made since, and nothing takes the tab to another, whoever asks: the
 // agent's back and forward, the app's, the page's history.back(), forward() and go(), or its
 // navigation.back(), forward() and traverseTo(). Chromium takes them all through one function,
-// which asks here first (chromium-core-history-traversal.patch).
+// which asks here first and says whether a page asked (chromium-core-history-traversal.patch).
 
 #ifndef BROWSER_CORE_HANDED_HISTORY_H_
 #define BROWSER_CORE_HANDED_HISTORY_H_
@@ -22,8 +22,11 @@ class Bound {
   void Set(const std::vector<int>& entries, int current);
 
   // Whether the tab may be taken to |entry|. While the user holds the tab (|held|: they took it
-  // over, or the agent handed it off), they drive it, and the history is theirs.
-  bool MayGoTo(int entry, bool held) const;
+  // over, or the agent handed it off), they drive it, and the history is theirs: the browser's own
+  // back, forward and go to an entry pass. A page's own traversal (|from_page|) is never a step of
+  // theirs: an agent can put the tab in the user's hands at will, and a page it steered to could
+  // then go to an entry of the user's by itself, for the thread to read once it's handed back.
+  bool MayGoTo(int entry, bool held, bool from_page) const;
 
  private:
   std::set<int> users_;

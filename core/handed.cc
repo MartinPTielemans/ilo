@@ -36,12 +36,13 @@ const syncer::UniquePosition* PlaceOf(const Space& home, bc_id row) {
   return mark && mark->home == home.id() ? &mark->node.position : nullptr;
 }
 
-// What the page of |tab| asks before it's taken to the entry at |index| of its history.
-bool MayTraverse(bc_id tab, int index) {
+// What the page of |tab| asks before it's taken to the entry at |index| of its history, by a page
+// (|from_page|) or by the browser.
+bool MayTraverse(bc_id tab, int index, bool from_page) {
   content::WebContents* contents = Tab::FromId(tab);
   content::NavigationEntry* entry =
       contents ? contents->GetController().GetEntryAtIndex(index) : nullptr;
-  return !entry || MayGoTo(tab, entry->GetUniqueID());
+  return !entry || MayGoTo(tab, entry->GetUniqueID(), from_page);
 }
 
 }  // namespace
@@ -123,9 +124,14 @@ void BoundHistory(bc_id tab) {
   content::SetHistoryTraversalFilter(contents, base::BindRepeating(&MayTraverse, tab));
 }
 
-bool MayGoTo(bc_id tab, int entry) {
+bool MayGoTo(bc_id tab, int entry, bool from_page) {
   const Mark* mark = Of(tab);
-  return !mark || mark->history.MayGoTo(entry, IsHeld(tab));
+  return !mark || mark->history.MayGoTo(entry, IsHeld(tab), from_page);
+}
+
+bool AgentMayGoTo(bc_id tab, int entry) {
+  const Mark* mark = Of(tab);
+  return !mark || mark->history.MayGoTo(entry, /*held=*/false, /*from_page=*/false);
 }
 
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {

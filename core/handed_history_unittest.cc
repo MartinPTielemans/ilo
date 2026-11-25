@@ -35,35 +35,38 @@ class Tab {
   }
 
   // The agent's back and forward tools, and the app's own back and forward:
-  // NavigationController::GoBack and GoForward.
-  bool Back() { return Step(-1); }
-  bool Forward() { return Step(1); }
+  // NavigationController::GoBack and GoForward. The browser's, as the app's go to an entry of its
+  // back button's list is (bc_tab_go_to_history, NavigationController::GoToOffset).
+  bool Back() { return Step(-1, /*from_page=*/false); }
+  bool Forward() { return Step(1, /*from_page=*/false); }
+  bool GoToEntry(int offset) { return Step(offset, /*from_page=*/false); }
   // The page's history.back(), history.forward() and history.go(n):
-  // NavigationControllerImpl::GoToOffsetFromRenderer.
-  bool HistoryGo(int offset) { return Step(offset); }
+  // NavigationControllerImpl::GoToOffsetFromRenderer, with the frame that asked.
+  bool HistoryGo(int offset) { return Step(offset, /*from_page=*/true); }
   // The page's navigation.back() and navigation.forward(), which the renderer makes a
   // traverseTo() of the entry next to its own, and navigation.traverseTo(key), which names any
-  // entry of the tab: NavigationControllerImpl::NavigateToNavigationApiKey.
-  bool NavigationBack() { return Step(-1); }
-  bool NavigationForward() { return Step(1); }
+  // entry of the tab: NavigationControllerImpl::NavigateToNavigationApiKey, with the frame too.
+  bool NavigationBack() { return Step(-1, /*from_page=*/true); }
+  bool NavigationForward() { return Step(1, /*from_page=*/true); }
   bool TraverseTo(int entry) {
     for (size_t i = 0; i < entries_.size(); ++i) {
       if (entries_[i] == entry) {
-        return GoTo(i);
+        return GoTo(i, /*from_page=*/true);
       }
     }
     return false;
   }
 
  private:
-  bool Step(int offset) {
+  bool Has(int index) const { return index >= 0 && index < static_cast<int>(entries_.size()); }
+
+  bool Step(int offset, bool from_page) {
     const int index = static_cast<int>(on_) + offset;
-    return index >= 0 && index < static_cast<int>(entries_.size()) &&
-           GoTo(static_cast<size_t>(index));
+    return Has(index) && GoTo(static_cast<size_t>(index), from_page);
   }
 
-  bool GoTo(size_t index) {
-    if (!bound_.MayGoTo(entries_[index], held_)) {
+  bool GoTo(size_t index, bool from_page) {
+    if (!bound_.MayGoTo(entries_[index], held_, from_page)) {
       return false;
     }
     on_ = index;
@@ -174,16 +177,76 @@ TEST(HandedHistory, WhileTheUserHoldsTheTabTheirBackGoesBehindTheEntryItWasHande
   EXPECT_TRUE(tab.Back());
   EXPECT_TRUE(tab.Back());
   EXPECT_EQ(tab.on(), 1);
-  EXPECT_TRUE(tab.HistoryGo(2));
-  EXPECT_TRUE(tab.TraverseTo(1));
+  EXPECT_TRUE(tab.Forward());
+  EXPECT_TRUE(tab.GoToEntry(-1));
   EXPECT_EQ(tab.on(), 1);
+}
+
+// The agent can put the tab in the user's hands at will (hand_off), so a page isn't the user
+// because they hold the tab: by each of its roads it stays where the thread's entries end.
+TEST(HandedHistory, WhileTheUserHoldsTheTabThePagesHistoryBackStaysBound) {
+  Tab tab = Handed();
+  tab.TakeOver();
+  EXPECT_FALSE(tab.HistoryGo(-1));
+  EXPECT_FALSE(tab.HistoryGo(1));
+  EXPECT_EQ(tab.on(), 2);
+}
+
+TEST(HandedHistory, WhileTheUserHoldsTheTabThePagesHistoryGoStaysBound) {
+  Tab tab = Handed();
+  tab.Open(10);
+  tab.Open(11);
+  tab.TakeOver();
+  EXPECT_FALSE(tab.HistoryGo(-3));
+  EXPECT_EQ(tab.on(), 11);
+}
+
+TEST(HandedHistory, WhileTheUserHoldsTheTabThePagesNavigationBackStaysBound) {
+  Tab tab = Handed();
+  tab.TakeOver();
+  EXPECT_FALSE(tab.NavigationBack());
+  EXPECT_FALSE(tab.NavigationForward());
+  EXPECT_EQ(tab.on(), 2);
+}
+
+TEST(HandedHistory, WhileTheUserHoldsTheTabThePagesTraverseToStaysBound) {
+  Tab tab = Handed();
+  tab.Open(10);
+  tab.TakeOver();
+  EXPECT_FALSE(tab.TraverseTo(1));
+  EXPECT_EQ(tab.on(), 10);
+}
+
+TEST(HandedHistory, WhileTheUserHoldsTheTabAPageGoesBackToAnEntryTheThreadMade) {
+  Tab tab = Handed();
+  tab.Open(10);
+  tab.Open(11);
+  tab.TakeOver();
+  EXPECT_TRUE(tab.HistoryGo(-1));
+  EXPECT_TRUE(tab.NavigationForward());
+  EXPECT_TRUE(tab.TraverseTo(10));
+  // And onto the entry the tab was handed on.
+  EXPECT_TRUE(tab.HistoryGo(-1));
+  EXPECT_EQ(tab.on(), 2);
+}
+
+// Where the user went by themselves is no more a page's to leave by its own road than before.
+TEST(HandedHistory, APageTheUserWentBackToWhileHoldingGoesNoFurtherByItself) {
+  Tab tab({1, 2, 3, 4}, 2);
+  tab.Bind();
+  tab.TakeOver();
+  ASSERT_TRUE(tab.Back());
+  EXPECT_EQ(tab.on(), 2);
+  EXPECT_FALSE(tab.HistoryGo(-1));
+  EXPECT_FALSE(tab.TraverseTo(4));
+  EXPECT_EQ(tab.on(), 2);
 }
 
 TEST(HandedHistory, AtHandBackTheBoundMovesToTheEntryTheTabIsOn) {
   Tab tab = Handed();
   tab.Open(10);
   tab.TakeOver();
-  ASSERT_TRUE(tab.TraverseTo(1));
+  ASSERT_TRUE(tab.GoToEntry(-2));
   tab.HandBack();
   // On 1 now, with 2 and 10 ahead: what's ahead is what the user left there, the thread's old
   // entry too.
