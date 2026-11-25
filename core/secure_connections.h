@@ -7,11 +7,10 @@
 
 #include "browser_core/public/browser_core.h"
 
-class GURL;
 class Profile;
 
 namespace content {
-class WebContents;
+class NavigationHandle;
 }  // namespace content
 
 namespace browser_core {
@@ -21,12 +20,12 @@ namespace browser_core {
 bool SecureConnections(Profile* profile, bool* on);
 bool SetSecureConnections(Profile* profile, bool on);
 
-// g_browser_core_no_http_warning: whether Chrome shows no warning for |url|, which answered only
-// over http and was stopped in |contents|. In an agent's tab it shows none: the core puts the tab
-// back, to the page it had or closed if it had none, after one activity entry that names |url|'s
-// host, both after this call, since a page can't be left from inside its own load's end and the
-// app takes no entry inside a call of its own into the core.
-bool TakesHttpWarning(content::WebContents* contents, const GURL& url);
+// g_browser_core_no_http_warning: whether Chrome shows no warning for the page of |navigation|,
+// which answered only over http and was stopped in its tab. In an agent's tab it shows none: the
+// core puts the tab back, to the page it had or closed if it had none, after one activity entry
+// that names the page's host, both after this call, since a page can't be left from inside its
+// own load's end and the app takes no entry inside a call of its own into the core.
+bool TakesHttpWarning(content::NavigationHandle* navigation);
 
 // Whether Chrome's warning before http is up in |tab|, unanswered: only ever in a tab that is the
 // user's to answer in.

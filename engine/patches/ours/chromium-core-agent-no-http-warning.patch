@@ -4,8 +4,9 @@ dialog whose Continue to site loads the page over http and remembers the site: t
 press.
 
 https_only_mode_tab_helper.cc: where Chrome would show the warning, the tab helper asks the core
-first; the core answers for the tab the page is in and, in an agent's, puts the tab back itself,
-so no warning ever exists there. The helper holds no rule of its own.
+first, handing it the navigation that was stopped; the core answers for the tab the page is in
+and, in an agent's, puts the tab back itself, so no warning ever exists there. The helper holds
+no rule of its own.
 
 ask_before_http_dialog_controller.cc: the two paragraphs that name the browser take the name the
 core hands them, the app's, or else the name the text had; and the Learn more link, which opens a
@@ -34,20 +35,19 @@ one fails this hunk, loudly.
  
 +// browser_core: an agent's tab has no warning before http
 +// (//browser_core/hooks.h).
-+bool (*g_browser_core_no_http_warning)(content::WebContents* contents,
-+                                       const GURL& url) = nullptr;
++bool (*g_browser_core_no_http_warning)(
++    content::NavigationHandle* navigation) = nullptr;
 +
  HttpsOnlyModeTabHelper::~HttpsOnlyModeTabHelper() = default;
  
  void HttpsOnlyModeTabHelper::DidStartNavigation(
-@@ -73,6 +79,12 @@
+@@ -73,6 +79,11 @@
            security_interstitials::features::kHttpsFirstDialogUi) &&
        is_navigation_fallback_ &&
        !navigation_handle->GetURL().SchemeIsCryptographic()) {
 +    // browser_core: the core has taken the tab, and puts it back.
 +    if (g_browser_core_no_http_warning &&
-+        g_browser_core_no_http_warning(navigation_handle->GetWebContents(),
-+                                       navigation_handle->GetURL())) {
++        g_browser_core_no_http_warning(navigation_handle)) {
 +      return;
 +    }
      auto* tab = tabs::TabInterface::MaybeGetFromContents(

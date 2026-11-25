@@ -18,6 +18,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
@@ -136,8 +137,9 @@ bool SetSecureConnections(Profile* profile, bool on) {
   return true;
 }
 
-bool TakesHttpWarning(content::WebContents* contents, const GURL& url) {
-  return Takes(contents, url, secure_connections_rule::kEntryAction);
+bool TakesHttpWarning(content::NavigationHandle* navigation) {
+  return Takes(navigation->GetWebContents(), navigation->GetURL(),
+               secure_connections_rule::kEntryAction);
 }
 
 namespace {
