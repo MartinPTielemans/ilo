@@ -41,7 +41,16 @@ second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
 expect '^browser: field Space name has the keyboard$' "New Space's name didn't have the keyboard"
 send type frames
 send key return
-open_from_bar "http://localhost:$port/two.html"
+# The new Space shows no page, so ⌘T gives its resting bar the keyboard, which lights no plate for
+# New Tab (#4140): open_from_bar's steps without the plate's.
+before=$(today)
+resting_key t "new Space"
+send type "http://localhost:$port/two.html"
+send key return
+expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for two.html didn't open at the top of Today"
+tab=$(today | cut -d' ' -f1)
+expect "^browser: selected $tab\$" "the tab for two.html wasn't shown"
+expect "^browser: loaded $tab http://localhost:$port/two.html\$" "two.html didn't load in its tab"
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space"
 open_from_bar "http://localhost:$port/one.html"

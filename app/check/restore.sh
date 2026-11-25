@@ -161,8 +161,7 @@ expect '^browser: field Space name has the keyboard$' "New Space's name didn't h
 send type reading list
 send key return
 expect "^browser: create space $second reading list\$" "return didn't name the Space"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
+resting_key t "new Space"
 send type "http://localhost:$port/one.html"
 send key return
 expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"

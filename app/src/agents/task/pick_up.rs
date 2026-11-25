@@ -20,7 +20,7 @@ use crate::agents::helpers::Helpers;
 use crate::agents::kept::cards::{self, Picture};
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
-use crate::agents::tier::{Sites, Tier};
+use crate::agents::tier::Tier;
 use crate::tokens::shell::composer::CARDS;
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
@@ -857,6 +857,7 @@ impl Task {
             title,
             model: SharedString::default(),
             model_id: None,
+            effort: None,
             added: Vec::new(),
             state,
             ended: Some(at),
@@ -878,7 +879,6 @@ impl Task {
             writing: None,
             named: None,
             tier: Tier::default(),
-            sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
             picked_from: None,

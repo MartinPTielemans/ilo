@@ -15,7 +15,7 @@ use super::{
     CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
-use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
+use crate::tokens::shell::library::{COLUMN_WIDTH, SEARCH_HEIGHT, SEARCH_TOP, SEARCH_X};
 
 const WIDTH: f32 = 1000.;
 
@@ -300,6 +300,42 @@ fn in_full_screen_the_side_moves_the_edge(cx: &mut TestAppContext) {
     );
 }
 
+/// The Library's search field is over the list on either side, never over the column of sections:
+/// a press on the column at the field's height leaves the keyboard where it was, and one just inside
+/// the list's edge gives it to the field.
+#[gpui::test]
+fn the_search_field_is_over_the_list_on_either_side(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.section = Section::Downloads;
+        shell.set_library(true, cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    draw(&shell, cx);
+    let keys = |x: f32, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.blur(cx));
+        let at = point(px(x), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| shell.read(cx).library_search_keys(window, cx))
+    };
+    assert!(
+        !keys(COLUMN_WIDTH - 16., &shell, cx),
+        "a press on the column of sections went to the search field"
+    );
+    assert!(
+        keys(COLUMN_WIDTH + SEARCH_X + 16., &shell, cx),
+        "a press just inside the list's edge didn't reach the search field"
+    );
+    side(true, &shell, cx);
+    let list = shell.read_with(cx, |shell, _| shell.library_x());
+    assert!(
+        keys(list + SEARCH_X + 16., &shell, cx),
+        "on the right, a press just inside the list's edge, at {list}, didn't reach the search field"
+    );
+}
+
 /// Open on the right, the Library takes the sidebar's side, list then sections, so the sections
 /// stay at the window's edge: the card's edge meets the list's, the empty list's line is drawn in
 /// the list, and a right-click on Archived Tabs is heard where the column says it drew the button,
@@ -343,7 +379,7 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         titles.iter().any(|(title, _)| title == "Clear Archive")
     };
-    let middle = SECTION_X + SECTION_WIDTH / 2.;
+    let middle = COLUMN_WIDTH / 2.;
     let right = archive(&shell, cx);
     assert_eq!(
         right.x,

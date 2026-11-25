@@ -1049,11 +1049,11 @@ impl TalkView {
         let Some(shown) = &self.shown else {
             return;
         };
-        let (agent, tier, only) = (self.agent.clone(), shown.tier, shown.only_added);
+        let (agent, tier) = (self.agent.clone(), shown.tier);
         let chip = self.level_drawn.get();
         self.shell
             .update(cx, |shell, cx| {
-                shell.task_tier_menu(agent, tier, only, chip, clicked, cx)
+                shell.task_tier_menu(agent, tier, chip, clicked, cx)
             })
             .ok();
     }
@@ -2687,7 +2687,6 @@ impl TalkView {
         let action = match button {
             IloButton::TakeOver => tab.map(TaskAction::TakeOver),
             IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
-            IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
             IloButton::PagesBack => Some(TaskAction::PagesBack),
             // It only shows the page, as its picture's click does.

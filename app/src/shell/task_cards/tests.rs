@@ -713,6 +713,142 @@ fn a_waiting_card_lists_in_every_space(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), ["task-2", "task-1", "10", "11"]);
 }
 
+/// Spaces 1 and 2 of the user's and task 1's own, with Space 2 of `profile` showing its tab 20.
+fn away_in_space_2(
+    cx: &mut TestAppContext,
+    first: Vec<Card>,
+    profile: u64,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let (shell, host, cx) = with_task_spaces(cx, first);
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64, name: &str, profile: u64, agent: &str| {
+            (
+                id,
+                name.to_string().into(),
+                None,
+                profile,
+                "".into(),
+                agent.to_string().into(),
+                "".into(),
+            )
+        };
+        shell.set_spaces(
+            vec![
+                space(1, "Space 1", 0, ""),
+                space(2, "Space 2", profile, ""),
+                space(101, "Find a flight to Lisbon", 0, "Claude"),
+            ],
+            cx,
+        );
+        let tabs = vec![20, 21];
+        shell.set_tabs(2, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_space(2, cx);
+        shell.set_selected(20, cx);
+        // Space 2 in place, as its slide in from the side has ended.
+        shell.settle = None;
+        shell.slides.clear();
+    });
+    cx.run_until_parked();
+    host.take();
+    (shell, host, cx)
+}
+
+/// A waiting task's card lists at the top of the Space looked at, and goes from there the moment
+/// the task stops waiting, answered, stopped or done; its card in its own Space stays. At work,
+/// stopped or done, a card never lists outside its own Space.
+#[gpui::test]
+fn a_waiting_card_leaves_the_space_looked_at_when_it_stops_waiting(cx: &mut TestAppContext) {
+    let (shell, _, cx) = away_in_space_2(cx, cards(&[(1, Dot::Working)]), 0);
+    assert_eq!(today(&shell, cx), ["20", "21"]);
+    for (stops, dot) in [
+        ("answered", Dot::Working),
+        ("stopped", Dot::Ended),
+        ("done", Dot::Done),
+    ] {
+        shell.update(cx, |shell, cx| {
+            shell.set_task_cards(cards(&[(1, Dot::Waiting)]), cx)
+        });
+        assert_eq!(today(&shell, cx), ["task-1", "20", "21"], "waiting");
+        assert_eq!(form(&shell, "task-1", cx), Some(Form::Waits));
+        shell.update(cx, |shell, cx| shell.set_task_cards(cards(&[(1, dot)]), cx));
+        assert_eq!(today(&shell, cx), ["20", "21"], "{stops}");
+        let home = shell.read_with(cx, |shell, _| {
+            let space = shell.spaces.iter().find(|space| space.id == 1).unwrap();
+            space
+                .placed
+                .iter()
+                .map(|card| card.agent.clone())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(home, ["task-1"], "{stops}: its own Space");
+    }
+}
+
+/// The walkers pass a waiting card by in the Space looked at as in its own: ⌘1–9 and the next and
+/// previous tab land on that Space's tabs alone.
+#[gpui::test]
+fn the_walkers_pass_a_waiting_card_by_away_from_its_space(cx: &mut TestAppContext) {
+    let (shell, host, cx) = away_in_space_2(cx, cards(&[(1, Dot::Waiting)]), 0);
+    assert_eq!(today(&shell, cx), ["task-1", "20", "21"]);
+    let run = |command: Command, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run(command, "test", cx));
+        cx.run_until_parked();
+        let asked = host.take();
+        let selected: Vec<String> = (asked.iter())
+            .filter(|line| line.starts_with("select "))
+            .cloned()
+            .collect();
+        assert!(
+            !asked.iter().any(|line| line.starts_with("task ")),
+            "{command:?} touched the task: {asked:?}"
+        );
+        if let Some(tab) = selected.last() {
+            let tab: u64 = tab.trim_start_matches("select ").parse().unwrap();
+            shell.update(cx, |shell, cx| shell.set_selected(tab, cx));
+        }
+        selected
+    };
+    assert_eq!(run(Command::SelectTab(1), &shell, cx), ["select 21"]);
+    assert_eq!(run(Command::SelectTab(0), &shell, cx), ["select 20"]);
+    assert!(run(Command::SelectTab(2), &shell, cx).is_empty());
+    assert_eq!(run(Command::SelectLastTab, &shell, cx), ["select 21"]);
+    assert_eq!(run(Command::NextTab, &shell, cx), ["select 20"]);
+    assert_eq!(run(Command::PreviousTab, &shell, cx), ["select 21"]);
+    assert_eq!(shell.read_with(cx, |shell, _| shell.space), 2);
+}
+
+/// A waiting card shows in a Space of another profile too, and its Show Page goes to the task's
+/// own Space, as showing a page of another Space does, and stands on the page it waits on.
+#[gpui::test]
+fn show_page_away_goes_to_the_tasks_space_across_profiles(cx: &mut TestAppContext) {
+    let first = vec![paged(1, Dot::Waiting, &[1010, 1011])];
+    let (shell, host, cx) = away_in_space_2(cx, first, 7);
+    assert_eq!(today(&shell, cx), ["task-1", "20", "21"]);
+    still(cx);
+    tick(5.);
+    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    draw(&shell, cx);
+    host.take();
+    host.shown.borrow_mut().clear();
+    let button = STOPS_DRAWN
+        .with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied())
+        .expect("Show Page");
+    cx.simulate_click(button.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*host.shown.borrow(), [1]);
+    // The core shows Space 1, as it does for any Space shown.
+    shell.update(cx, |shell, cx| shell.set_space(1, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((101, 1010))
+    );
+    let asked = host.take();
+    assert!(asked.contains(&"select 1010".to_string()), "{asked:?}");
+    let told = |line: &&String| line.starts_with("task ") || line.starts_with("focus page");
+    assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
+}
+
 /// A card whose home Space is gone lists in no Space, waiting or not, a session's as a task's: the
 /// list knows a card by its home alone, and the Library still lists its task.
 #[gpui::test]

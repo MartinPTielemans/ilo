@@ -73,6 +73,7 @@ impl Folders {
             launcher: None,
             tmp: None,
             place: None,
+            listener: None,
         };
         sleep(Duration::from_millis(30));
         wall
@@ -373,6 +374,7 @@ fn a_task_with_no_folder_has_no_links() {
         launcher: None,
         tmp: None,
         place: None,
+        listener: None,
     };
     assert_eq!(walk(&wall), Walked::default());
 }

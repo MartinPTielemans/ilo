@@ -1,17 +1,13 @@
 //! How an act meets its task's access (tier.rs): the one decision point, `check`, runs what the
 //! tier allows and refuses the rest at once, telling the agent and putting ilo's line in the task's
-//! conversation. Nothing waits for the user, and only the user raises a tier or changes a task's
-//! Sites: ilo lowers an outside client's task only to what the user left another of its at
-//! (`starting_tier`, `left_at`).
+//! conversation. Nothing waits for the user, and only the user raises a tier: ilo lowers an outside
+//! client's task only to what the user left another of its at (`starting_tier`, `left_at`).
 
 use gpui::Context;
 
 use super::task::rewall::Change;
-use super::tier::{self, Sites, Stop, Tier, Why};
-use super::{
-    Act, Agents, CHANGES_ASK, Call, DOWNLOADS, FENCED, OTHER_SITE, Refused, UNSAVED, act_of, fence,
-    page, site, tools,
-};
+use super::tier::{self, Stop, Tier, Why};
+use super::{Act, Agents, CHANGES_ASK, DOWNLOADS, FENCED, Refused, UNSAVED, page, tools};
 
 /// What the log names a change of a task's access, which its entry's target says.
 pub const ACCESS_ACTION: &str = "access";
@@ -27,7 +23,7 @@ impl Agents {
             .map_or(Tier::default(), |task| task.tier)
     }
 
-    /// The task `act` is held to, by its access and its Sites: the one under way that holds its
+    /// The task `act` is held to, by its access: the one under way that holds its
     /// page, or the page that started its download, whichever of its client's connections calls,
     /// else the act's own, as an open's is. A second connection would otherwise pass the access
     /// the user set on a task, and the refusal's line would change another task's.
@@ -51,7 +47,6 @@ impl Agents {
         let bank = || page::opening_risk(site).is_some();
         match why {
             Some(FENCED) => Some(Why::Fenced),
-            Some(OTHER_SITE) => Some(Why::OtherSite),
             Some(page::ORDER) => Some(Why::Order),
             Some(page::SENDS) if bank() => Some(Why::Bank),
             Some(page::SENDS) => Some(Why::Message),
@@ -69,22 +64,6 @@ impl Agents {
     pub(super) fn said_never(&self, agent: &str, site: &str) -> bool {
         let answers = self.grants.get(&self.answers_of(agent));
         answers.and_then(|sites| sites.get(site)) == Some(&false)
-    }
-
-    /// Whether the task's Sites leave out where `act` goes or what it's on: an open's address, or
-    /// its tab's page. A download comes from wherever the site keeps its files, so it isn't asked.
-    pub(super) fn off_sites(&self, act: &Act, cx: &gpui::App) -> bool {
-        let Some(task) = self.judged_task(act) else {
-            return false;
-        };
-        if task.sites == Sites::Any || act.download != 0 {
-            return false;
-        }
-        let url = match act.url.is_empty() {
-            true => self.browser.tab(act.tab, cx).url.to_string(),
-            false => act.url.clone(),
-        };
-        !task.sites.allows(self.browser.url_site(&url).as_deref())
     }
 
     /// Refuses `act` on `site` for `why` at `tier`: the agent hears why at once, the log keeps it,
@@ -163,37 +142,6 @@ impl Agents {
         self.refuse(act, &site, refused, cx);
     }
 
-    /// A call on `tab`, whose page is outside the task's Sites as the tab came there by itself, is
-    /// refused as an open there would be; any other goes on.
-    pub(super) fn sites_call(
-        &mut self,
-        call: Call,
-        tab: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<Call> {
-        let url = self.browser.tab(tab, cx).url.to_string();
-        let Some(task) = (self.page_task(&call.agent, tab))
-            .or_else(|| self.acting_task(&call.agent, call.connection, call.id))
-        else {
-            return Some(call);
-        };
-        if task.sites.allows(self.browser.url_site(&url).as_deref()) {
-            return Some(call);
-        }
-        let site = site(&url);
-        let mut act = act_of(
-            &call.agent,
-            call.connection,
-            call.id,
-            tab,
-            call.reply.clone(),
-        );
-        act.action = fence::CAME_ACTION;
-        act.what = fence::arrival(&site);
-        self.check(act, site, Some(OTHER_SITE), cx);
-        None
-    }
-
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
     /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
     /// One with files goes up only if its wall of the new level does, and starts again inside
@@ -247,28 +195,6 @@ impl Agents {
             let change = Change::Level { from, raised };
             self.rewall(key, change, tier::changed_turn(from, tier), cx);
         }
-        cx.notify();
-    }
-
-    /// The user sets the sites the task `key` may use: on one that has ended, those its next reply
-    /// works on. The log keeps the change as it keeps a level's, by the menu's names and a count.
-    pub fn set_sites(&mut self, key: &str, sites: Sites, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key) else {
-            return;
-        };
-        if task.sites == sites {
-            return;
-        }
-        let changed = tier::sites_logged(&task.sites, &sites);
-        task.sites = sites;
-        for stop in (task.stops.iter_mut()).filter(|stop| stop.why == Why::OtherSite) {
-            stop.settled = true;
-        }
-        let (agent, connection) = match &task.session {
-            Some(session) => (session.agent.clone(), session.connection),
-            None => (task.agent.clone(), 0),
-        };
-        self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
         cx.notify();
     }
 

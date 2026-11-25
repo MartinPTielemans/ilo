@@ -44,7 +44,7 @@ use crate::tokens::text::SMALL;
 mod assistant;
 pub use assistant::{
     Act, SIGN_IN, SIGN_INS_STAY, another_agent_name_row, another_agent_row, assistant_name,
-    assistant_row,
+    assistant_name_alone, assistant_row,
 };
 
 /// The places `drawn` logged, one a control, shared by a view's controls.

@@ -366,13 +366,9 @@ mod mac {
         let (mut beside, _) = inside(&other, "echo up; read line");
         assert!(held(shell.id(), &mark) && held(job, &mark));
         assert!(!held(std::process::id(), &mark) && !held(beside.id(), &mark));
-        // Whether `set -m` gave the job a group of its own, read for the run, not yet asserted.
+        // `set -m` gave the job a group of its own, so ending the shell's group leaves it running.
         let group = |pid: u32| unsafe { libc::getpgid(pid as libc::pid_t) };
-        eprintln!(
-            "the shell's group {}, the job's {}",
-            group(shell.id()),
-            group(job)
-        );
+        assert!(group(job) > 0 && group(job) != group(shell.id()));
         let swept = sweep(&mark).unwrap();
         assert!(swept.ended >= 2, "{swept:?}");
         assert_eq!(shell.wait().unwrap().signal(), Some(libc::SIGKILL));

@@ -285,6 +285,7 @@ impl command_bar::Host for Bar {
         page: Option<(SharedString, SharedString)>,
         tier: browser::agents::tier::Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -327,7 +328,7 @@ impl command_bar::Host for Bar {
             shell.fold_started(folded, cx);
             shell.bar_starting();
         });
-        start_thread(cli, asked, page, tier, model, window, cx);
+        start_thread(cli, asked, page, tier, model, effort, window, cx);
     }
 
     fn run_task_at_rest(
@@ -336,6 +337,7 @@ impl command_bar::Host for Bar {
         asked: &str,
         tier: browser::agents::tier::Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -343,7 +345,7 @@ impl command_bar::Host for Bar {
         };
         let window = front().0;
         update_window_in(window, cx, |shell, _| shell.bar_starting());
-        start_thread(cli, asked, None, tier, model, window, cx);
+        start_thread(cli, asked, None, tier, model, effort, window, cx);
     }
 
     fn set_up_agents(&self, cx: &mut App) {
@@ -393,6 +395,7 @@ fn start_thread(
     page: Option<browser::agents::task::AskedOn>,
     tier: browser::agents::tier::Tier,
     model: Option<String>,
+    effort: Option<&'static str>,
     window: bc::bc_id,
     cx: &mut App,
 ) {
@@ -405,8 +408,8 @@ fn start_thread(
         let start = browser::agents::task::Start {
             tier,
             model: model.clone(),
+            effort: effort.map(String::from),
             pages: Vec::new(),
-            only_added: false,
             // Nothing rides the bar's start: it draws no `+`, and a path reaches a task only from
             // the system's panel off one, by the user's own pick (#4101).
             files: Default::default(),

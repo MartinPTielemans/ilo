@@ -95,7 +95,6 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
-        only_added: false,
         folder: None,
     }
 }
@@ -1365,10 +1364,6 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         said(&stopped(Why::Fenced)),
         "stopped Claude from going to seatmap.example"
     );
-    assert_eq!(
-        said(&stopped(Why::OtherSite)),
-        "stopped Claude from going to seatmap.example"
-    );
     let signed_in = IloKind::SignedIn {
         tab: 30,
         site: "tickets.example".into(),
@@ -2399,11 +2394,11 @@ fn a_buttons_place_for_the_checks_holds_no_word_of_its_line(cx: &mut TestAppCont
             })
             .expect("no ilo line")
     });
-    // The same stop at another site's door, where the line says the site.
+    // The same stop at an Off limits site's door, where the line says the site.
     let mut site = order.clone();
     if let IloKind::Stopped { at, why, .. } = &mut site {
         *at = "seatmap.example".into();
-        *why = Why::OtherSite;
+        *why = Why::Fenced;
     }
     let yours = IloKind::Yours {
         tab: 30,
@@ -2720,9 +2715,6 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
                 row("Work on pages", true),
                 row("Full access", true),
                 row("", false),
-                row("Any site", true),
-                row("Only the sites you add", false),
-                row("", false),
                 row("Settings…", true),
             ],
             "the level menu's rows at {tier:?}"
@@ -2731,16 +2723,7 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
         let at = |each: Tier| tier == each;
         assert_eq!(
             checked,
-            [
-                at(Tier::Look),
-                at(Tier::Work),
-                at(Tier::Full),
-                false,
-                true,
-                false,
-                false,
-                false
-            ],
+            [at(Tier::Look), at(Tier::Work), at(Tier::Full), false, false],
             "the menu checks {tier:?}, the task's own level"
         );
     }
