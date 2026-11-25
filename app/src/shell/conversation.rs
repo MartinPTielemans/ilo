@@ -198,6 +198,9 @@ pub struct TalkView {
     replies: bool,
     /// Its pages' pictures, by tab: the request out for each, and the picture once it came.
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
+    /// The requests out for pages whose picture could have been given to an agent when asked,
+    /// which a kept card may keep if it still could when the picture comes.
+    keeps_asked: Vec<u64>,
     /// The pages the core last answered with no picture of, which the next action asks again.
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
@@ -341,8 +344,6 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
-        // It asks again at Work on pages, whatever the composer had picked.
-        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -436,6 +437,7 @@ impl Shell {
                     reply,
                     replies,
                     pictures: Vec::new(),
+                    keeps_asked: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
@@ -510,8 +512,10 @@ impl Shell {
         }
         let watched = self.watched_task_page().is_some();
         let (view, browser) = (talk.view.clone(), self.browser.clone());
+        let tabs = conversation.as_ref().map(|shown| &shown.tabs[..]);
+        let keeps = self.keeps_pictures(tabs.unwrap_or_default(), cx);
         match view.update(cx, |view, cx| {
-            view.set(conversation, watched, &*browser, cx)
+            view.set(conversation, watched, &*browser, &keeps, cx)
         }) {
             Some(stale) => self.stale_pictures.extend(stale),
             None => self.close_task(cx),
@@ -531,8 +535,10 @@ impl Shell {
     pub(super) fn retake_talk_pictures(&mut self, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
         let (view, browser) = (talk.view.clone(), self.browser.clone());
+        let tabs = (view.read(cx).shown.as_ref()).map(|shown| shown.tabs.clone());
+        let keeps = self.keeps_pictures(&tabs.unwrap_or_default(), cx);
         let stale = view.update(cx, |view, cx| match view.shown.clone() {
-            Some(shown) if view.stale => view.set(Some(shown), false, &*browser, cx),
+            Some(shown) if view.stale => view.set(Some(shown), false, &*browser, &keeps, cx),
             _ => None,
         });
         self.stale_pictures.extend(stale.unwrap_or_default());
@@ -597,7 +603,11 @@ impl Shell {
             .map(|(.., picture)| picture.clone())
     }
 
-    /// A picture the conversation asked for came: whether it was one of its own.
+    /// A picture the conversation asked for came, or the core had none: whether it was one of its
+    /// own. Its task's card is told of it, to keep for its Done, if it could have been given to an
+    /// agent both when it was asked and now, and told it has none if it couldn't, picture or not;
+    /// with no picture of a page that could be kept, it keeps what it had. A private window tells
+    /// it nothing.
     pub(super) fn talk_pictured(
         &mut self,
         request: u64,
@@ -605,12 +615,39 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(talk) = &self.talk else { return false };
-        let view = talk.view.clone();
+        let (agent, view) = (talk.agent.clone(), talk.view.clone());
+        let asked = view.read(cx).asked(request);
         let Some(old) = view.update(cx, |view, cx| view.pictured(request, picture, cx)) else {
             return false;
         };
         self.stale_pictures.extend(old);
+        if let (Some((tab, keeps)), false) = (asked, self.private) {
+            match (keeps && self.keeps_picture(tab, cx), picture) {
+                (false, _) => self.browser.card_pictured(agent, tab, None, cx),
+                (true, Some(picture)) => {
+                    let image = Some(picture.image());
+                    self.browser.card_pictured(agent, tab, image, cx)
+                }
+                (true, None) => {}
+            }
+        }
         true
+    }
+
+    /// Whether a picture of `tab` taken now could have been given to an agent: by the agents'
+    /// rules, and not while its page uses the camera or the microphone, shares a screen, a window
+    /// or a tab, or is captured. Never in a private window.
+    fn keeps_picture(&self, tab: u64, cx: &gpui::App) -> bool {
+        let page = self.page(tab);
+        let in_use = page.camera || page.microphone || page.sharing || page.shared;
+        !self.private && !in_use && self.browser.keeps_picture(tab, cx)
+    }
+
+    /// Those of `tabs` whose picture taken now could be kept.
+    fn keeps_pictures(&self, tabs: &[(u64, SharedString)], cx: &gpui::App) -> Vec<u64> {
+        (tabs.iter().map(|(tab, _)| *tab))
+            .filter(|tab| self.keeps_picture(*tab, cx))
+            .collect()
     }
 
     /// ⌘. with a conversation shown: its task stops, if it works or waits on the user.
@@ -673,6 +710,7 @@ impl TalkView {
         conversation: Option<Conversation>,
         watched: bool,
         browser: &dyn Browser,
+        keeps: &[u64],
         cx: &mut Context<Self>,
     ) -> Option<Vec<Arc<RenderImage>>> {
         let conversation = conversation.filter(|shown| shown.agent == self.agent)?;
@@ -696,9 +734,13 @@ impl TalkView {
         } else if moved {
             self.stale = false;
             let mut pictures = Vec::new();
+            self.keeps_asked.clear();
             for (tab, _) in &conversation.tabs {
                 let old = self.pictures.iter_mut().find(|(each, ..)| each == tab);
                 let request = next_request();
+                if keeps.contains(tab) {
+                    self.keeps_asked.push(request);
+                }
                 pictures.push((
                     *tab,
                     request,
@@ -854,6 +896,13 @@ impl TalkView {
         let old = entry.2.replace(picture.clone());
         cx.notify();
         Some(old.map(|old| old.image()).into_iter().collect())
+    }
+
+    /// The page `request` asked for a picture of, and whether that picture could have been given
+    /// to an agent when it was asked.
+    fn asked(&self, request: u64) -> Option<(u64, bool)> {
+        let (tab, ..) = self.pictures.iter().find(|(_, each, _)| *each == request)?;
+        Some((*tab, self.keeps_asked.contains(&request)))
     }
 
     /// `tab`'s picture, which it no longer holds.
@@ -2152,10 +2201,10 @@ impl TalkView {
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
-    /// With Settings › Agents' Tasks from the command bar off, the line says so in the field's
-    /// place, as the task takes no more.
+    /// With the inside switch off, the line says so in the field's place, as the task takes no
+    /// more.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).tasks_on());
+        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).threads());
         let quiet = match (self.replies, tasks_off) {
             (false, _) => {
                 let name = self

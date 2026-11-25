@@ -529,14 +529,6 @@ impl Browser for Engine {
         list_captures(cx);
     }
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        unsafe { bc::bc_hover_kinds() as u32 }
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        unsafe { bc::bc_set_hover_kinds(kinds as c_int) };
-    }
-
     fn trash(&self, path: &str, _: &mut App) -> bool {
         CString::new(path).is_ok_and(|path| unsafe { platform::host_trash(path.as_ptr()) })
     }
@@ -675,6 +667,20 @@ impl Browser for Engine {
     fn show_task(&self, _: SharedString, _: &mut App) {
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
+    }
+
+    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<gpui::RenderImage>>,
+        _: &mut App,
+    ) {
+        agents_core::update(move |agents, cx| agents.card_pictured(&agent, tab, picture, cx));
     }
 
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -1922,30 +1928,6 @@ impl Browser for Engine {
         browser::agents::wall::available().is_ok()
     }
 
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: browser::agents::task::Start,
-        _: &mut App,
-    ) {
-        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
-        agents_core::update(move |agents, cx| {
-            let cli = browser::agents::runner::Cli::from_id(&agent);
-            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
-            // The composer's ↩ opens the view of the task it started alone, or of none.
-            let shell = WINDOWS.with_borrow(|windows| {
-                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, _| {
-                    shell.composed_started(started.map(Into::into))
-                });
-            }
-        });
-    }
-
     fn field_window_typing(&self, cx: &mut App) -> bool {
         find_bar::typing(self.window, cx)
             || offer::typing(self.window, cx)
@@ -2193,14 +2175,14 @@ impl Browser for Engine {
 
     // Every build has the agents' server. The first launch picks its steps before the first
     // frame, when agents_core makes the Agents, and a new profile's are off until then.
-    fn agents(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).is_on()))
+    fn threads(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).threads()))
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_on(on, cx));
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
         }
     }
 

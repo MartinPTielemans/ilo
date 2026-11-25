@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 /// Fewer of today's tabs than this outside a folder leave nothing to sort.
-pub const FEWEST: usize = 2;
+pub const FEWEST: usize = 4;
 /// The most tabs one sort hands over: the first ones, in the list's order.
 pub const MOST: usize = 100;
 /// The most characters of a title or a host handed over.
@@ -66,7 +67,8 @@ pub enum Failed {
     TooLong,
     /// It ended with a failure, said too much, or said something other than folders.
     Unread,
-    /// It was ended before it answered: the window went, turned private, or the browser quit.
+    /// It was ended before it answered: its window closed, the switch turned off, or the browser
+    /// quit.
     Ended,
 }
 
@@ -449,10 +451,14 @@ fn exited(child: &mut Child) -> bool {
 
 /// A new folder of the run's own, only the user's to read.
 fn folder() -> io::Result<PathBuf> {
+    // The process's count keeps two runs in one tick of the clock apart (the Mac's ticks are
+    // microseconds); the time keeps a folder left by an earlier process of the same id apart.
+    static RUNS: AtomicU64 = AtomicU64::new(0);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let name = format!(
-        "ilo-sort-{}-{}",
+        "ilo-sort-{}-{}-{}",
         std::process::id(),
+        RUNS.fetch_add(1, Ordering::Relaxed),
         stamp.unwrap_or_default().as_nanos()
     );
     let folder = std::env::temp_dir().join(name);

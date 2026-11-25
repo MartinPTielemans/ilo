@@ -79,7 +79,8 @@ fn started_without_the_variables_the_assistant_keeps_kinds_of_its_own() {
 }
 
 /// With the switch off a task's assistant starts with the arguments it had before helpers, each
-/// one and their order: none of its own tools, and nothing that names a helper.
+/// one and their order: of its own tools only its provider's search, and nothing that names a
+/// helper.
 #[test]
 fn off_claude_starts_with_the_arguments_it_had() {
     let had = [
@@ -91,7 +92,7 @@ fn off_claude_starts_with_the_arguments_it_had() {
         "--verbose",
         "--include-partial-messages",
         "--tools",
-        "",
+        "WebSearch",
         "--strict-mcp-config",
         "--mcp-config",
         "/tmp/Tasks/task-1.json",
@@ -104,7 +105,7 @@ fn off_claude_starts_with_the_arguments_it_had() {
         "--disable-slash-commands",
         "--no-session-persistence",
         "--allowedTools",
-        "mcp__ilo__open_tab,mcp__ilo__read_page,mcp__ilo__title,mcp__ilo__ask,mcp__ilo__finish",
+        "mcp__ilo__open_tab,mcp__ilo__read_page,mcp__ilo__title,mcp__ilo__ask,mcp__ilo__finish,WebSearch",
         "--model",
         "haiku",
         "--append-system-prompt-file",
@@ -114,8 +115,8 @@ fn off_claude_starts_with_the_arguments_it_had() {
 }
 
 /// On, it gets the one tool that starts a helper and ilo's kind of helper, which has the browser's
-/// tools without the task's own and without the tool that starts one. Nothing else changes: what
-/// it's allowed stays the browser's tools alone.
+/// tools without the task's own and without the tool that starts one, and the search its task
+/// has. Nothing else changes: what it's allowed stays the browser's tools and that search.
 #[test]
 fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     let (off, mut on) = (claude_args(&launch(false)), claude_args(&launch(true)));
@@ -129,8 +130,8 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     assert!(denied.contains(&"Agent(fork)"), "{denied:?}");
     assert!(!denied.iter().any(|each| each.contains(KIND)), "{denied:?}");
     let tools = on.iter().position(|arg| arg == "--tools").unwrap() + 1;
-    assert_eq!(on[tools], TOOLS[0]);
-    on[tools] = String::new();
+    assert_eq!(on[tools], format!("{},WebSearch", TOOLS[0]));
+    on[tools] = "WebSearch".into();
     assert_eq!(on, off, "more than the helper tool and the kinds changed");
 
     let kinds: Value = serde_json::from_str(&kinds).expect("the kinds aren't JSON");
@@ -139,7 +140,11 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     let has: Vec<&str> = (kinds[KIND]["tools"].as_array().unwrap().iter())
         .map(|tool| tool.as_str().unwrap())
         .collect();
-    assert_eq!(has, ["mcp__ilo__open_tab", "mcp__ilo__read_page"]);
+    // The search its task has, never a fetch.
+    assert_eq!(
+        has,
+        ["mcp__ilo__open_tab", "mcp__ilo__read_page", "WebSearch"]
+    );
     assert!(!kinds[KIND]["prompt"].as_str().unwrap().is_empty());
     // The task is told the kind by the name it's described under.
     assert!(instructions().contains(KIND));
@@ -491,5 +496,8 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
     let args = claude_args(&launch);
     let kinds: Value = serde_json::from_str(args.last().unwrap()).unwrap();
     let has = kinds[KIND]["tools"].to_string();
-    assert_eq!(has, r#"["mcp__ilo__open_tab","mcp__ilo__read_page"]"#);
+    assert_eq!(
+        has,
+        r#"["mcp__ilo__open_tab","mcp__ilo__read_page","WebSearch"]"#
+    );
 }

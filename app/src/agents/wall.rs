@@ -539,8 +539,9 @@ mod tests {
                 }
             }
         }
-        // The composer's panel, and this file's tests.
+        // This file's tests alone: no surface grants one until the composer's `+` brings the
+        // system's panel back (#4140).
         makers.sort();
-        assert_eq!(makers, ["folder_panel.rs", "wall.rs"]);
+        assert_eq!(makers, ["wall.rs"]);
     }
 }

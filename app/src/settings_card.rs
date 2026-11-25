@@ -362,10 +362,14 @@ impl Card {
                 // Under the held title and over the fade, in the window's points, where a press
                 // on a control lands: one drawn past them is under the card's edge, or behind
                 // them. check.sh reads this line, to scroll a control into sight first (#1950).
+                // Each only while it's drawn: at the top nothing is held, and the search's first
+                // found name stands where a held title would.
                 let card = f32::from(bounds.origin.y);
+                let (held, more) = shows;
                 let sight = (
-                    (card + HELD_TITLE).round() as i32,
-                    (card + f32::from(bounds.size.height) - FADE).round() as i32,
+                    (card + if held { HELD_TITLE } else { 0. }).round() as i32,
+                    (card + f32::from(bounds.size.height) - if more { FADE } else { 0. }).round()
+                        as i32,
                 );
                 if sight_logged.replace(Some(sight)) != Some(sight) {
                     crate::log!("browser: settings card shows {} to {}", sight.0, sight.1);
