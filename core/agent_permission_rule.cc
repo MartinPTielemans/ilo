@@ -8,6 +8,8 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
       return false;
     case Kind::kClipboardWrite:
       return agent_space_rule::Refuses(agent_space_rule::Ask::kCopy, tab);
+    case Kind::kPrint:
+      return tab.agents && !tab.held;
     default:
       return tab.agents;
   }
@@ -73,6 +75,8 @@ const char* CodeWord(Kind kind) {
       return "file_handle";
     case Kind::kColorPicker:
       return "color_picker";
+    case Kind::kPrint:
+      return "print";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";

@@ -50,6 +50,16 @@ bool NoFileHandle(content::GlobalRenderFrameHostId frame, bool site_storage);
 // where the user clicks: a page in an agent's Space, held or not, with its entry.
 bool NoColorPicker(content::RenderFrameHost* frame);
 
+// Whether the page in |frame| gets no print preview: a page in an agent's Space the user doesn't
+// hold, with its entry. |by_users_command| says the browser's own Print command started it, not
+// the page, and what the user does makes no entry.
+bool NoPrint(content::RenderFrameHost* frame, bool by_users_command);
+
+// Closes a print preview open over the page in |contents| if the page is refused one now, as the
+// preview's own Cancel does: where the user's hold of a tab ends and where a tab of theirs
+// becomes an agent's, so none stays over a page a thread works on.
+void ClosePrintPreview(content::WebContents* contents);
+
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
 // |contents|, if it's in an agent's Space: once per document and kind, however often the page
 // asks, and after the task that refused it, since the app takes no entry inside a call of its own

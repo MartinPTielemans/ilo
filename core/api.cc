@@ -25,6 +25,7 @@
 #include "browser_core/agent_close.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
@@ -769,6 +770,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
     return false;
   }
   browser_core::handed::Given(tab, home, left);
+  // A print preview the user had open over it doesn't ride into the agent's Space.
+  browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));
   // No window shows it any more, and it had the size of the user's window: an agent's page's own
   // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
   // the user, it takes the size of the window that shows it.
@@ -2926,6 +2929,11 @@ void bc_tab_view_source(bc_id id) {
 void bc_tab_print(bc_id id) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+  // A page in an agent's Space that the user doesn't hold isn't theirs to print.
+  if (contents &&
+      browser_core::NoPrint(contents->GetPrimaryMainFrame(), /*by_users_command=*/true)) {
+    return;
+  }
   // Chrome's command prints its Browser's active tab, which is the one its window shows.
   if (tab && tab->IsActivated() && chrome::CanPrint(tab->GetBrowserWindowInterface())) {
     chrome::Print(tab->GetBrowserWindowInterface());

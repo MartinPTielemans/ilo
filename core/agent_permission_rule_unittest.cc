@@ -30,11 +30,12 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
   }
 }
 
-// The user holding the tab changes one answer: their own copy writes the clipboard.
-TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForACopy) {
+// The user holding the tab changes two answers: their own copy writes the clipboard, and a print
+// is theirs to make.
+TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForACopyAndAPrint) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
-    if (kind == Kind::kClipboardWrite) {
+    if (kind == Kind::kClipboardWrite || kind == Kind::kPrint) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -120,6 +121,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceHasNoColorPicker) {
 // It reads the user's screen, not the page: the user holding the tab opens none for its page.
 TEST(AgentPermissionRule, AHeldTabHasNoColorPickerEither) {
   EXPECT_TRUE(Refuses(Kind::kColorPicker, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabPrints) {
+  EXPECT_FALSE(Refuses(Kind::kPrint, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsRefusedAPrint) {
+  EXPECT_TRUE(Refuses(Kind::kPrint, kAgents));
+}
+
+// While the user holds the tab a print works as in a tab of theirs, their own command's and the
+// page's.
+TEST(AgentPermissionRule, AHeldTabPrints) {
+  EXPECT_FALSE(Refuses(Kind::kPrint, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsAskedAsEver) {

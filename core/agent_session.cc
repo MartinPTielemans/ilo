@@ -12,6 +12,7 @@
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
@@ -141,6 +142,8 @@ bool HandBack(bc_id tab) {
   // Where the user left a tab they handed the agent is where its history is theirs up to.
   handed::BoundHistory(tab);
   Blur(tab);
+  // A print preview the user opened while they held the tab doesn't stay over a thread's page.
+  ClosePrintPreview(Tab::FromId(tab));
   return true;
 }
 

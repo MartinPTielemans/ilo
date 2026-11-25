@@ -49,6 +49,8 @@ enum class Kind {
   kFileHandle,
   // The system's colour picker, which hands a page the colour of the screen where the user clicks.
   kColorPicker,
+  // A print of the page, which draws a preview over it and the system's print sheet after.
+  kPrint,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
@@ -59,8 +61,8 @@ inline constexpr size_t kKinds = static_cast<size_t>(Kind::kLeftAsToday) + 1;
 
 // Whether the browser refuses |kind| to a page in |tab|, whatever the profile has saved for its
 // site. Nothing in a tab of the user's and nothing left as today. In an agent's Space every other
-// kind, held or not, but a write to the clipboard, which the user's own copy needs at a step they
-// do themselves.
+// kind, held or not, but the two the user's own doing needs at a step they do themselves: a write
+// to the clipboard, for their copy, and a print, which a held tab has as a tab of theirs does.
 bool Refuses(Kind kind, const agent_space_rule::Tab& tab);
 
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one

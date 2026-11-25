@@ -707,6 +707,7 @@ void Install(const bc_host& host) {
   g_browser_core_no_media_access = &NoMediaAccess;
   g_browser_core_no_clipboard_write = &NoClipboardWrite;
   g_browser_core_no_file_handle = &NoFileHandle;
+  g_browser_core_no_print = &NoPrint;
   g_browser_core_refuse_passkey = &RefuseAgentPasskey;
 #if BUILDFLAG(IS_MAC)
   g_browser_core_touch_id_keychain_group = &platform::PasskeyKeychainGroup;

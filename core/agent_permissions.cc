@@ -11,12 +11,16 @@
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "chrome/browser/printing/print_preview_dialog_controller.h"
+#include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/request_type.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_controller.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 
@@ -215,6 +219,33 @@ bool NoColorPicker(content::RenderFrameHost* frame) {
   }
   NoteRefused(Kind::kColorPicker, frame);
   return true;
+}
+
+bool NoPrint(content::RenderFrameHost* frame, bool by_users_command) {
+  if (!frame || !agent_permission_rule::Refuses(
+                    Kind::kPrint, RuleTabOf(content::WebContents::FromRenderFrameHost(frame)))) {
+    return false;
+  }
+  if (!by_users_command) {
+    NoteRefused(Kind::kPrint, frame);
+  }
+  return true;
+}
+
+void ClosePrintPreview(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kPrint, RuleTabOf(contents))) {
+    return;
+  }
+  auto* previews = printing::PrintPreviewDialogController::GetInstance();
+  content::WebContents* preview =
+      previews ? previews->GetPrintPreviewForContents(contents) : nullptr;
+  content::WebUI* ui = preview ? preview->GetWebUI() : nullptr;
+  if (!ui || !ui->GetController()) {
+    return;
+  }
+  if (auto* print_preview = ui->GetController()->GetAs<printing::PrintPreviewUI>()) {
+    print_preview->OnClosePrintPreviewDialog();
+  }
 }
 
 void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* frame) {

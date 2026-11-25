@@ -400,4 +400,10 @@ CONTENT_EXPORT extern bool (*g_browser_core_no_clipboard_write)(content::RenderF
 CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRenderFrameHostId frame,
                                                             bool site_storage);
 
+// chrome/browser/printing/print_view_manager.cc: whether the page in |frame| is refused a print
+// preview, asked in PrintViewManager::RejectPrintPreviewRequestIfRestricted, which every preview
+// passes before its dialog is made. |by_users_command| says the browser's own Print command
+// started it, not the page. One refused ends as a restricted preview does, and its page goes on.
+extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_users_command);
+
 #endif  // BROWSER_CORE_HOOKS_H_
