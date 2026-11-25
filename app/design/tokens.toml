@@ -2981,7 +2981,8 @@ count = 4
 # along the whole of its outline, which is the plate and the button's box under it as one
 # shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
 # tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
-# panel's, the near bottom one square where it runs into the button.
+# panel's, the near bottom one square where it runs into the button. The fill and the line are the
+# drawing's floating fill and rim, held here until a menu takes the same: then one source for both.
 fill = 0x3030_36eb
 light-fill = 0xf6f5_f1eb
 rim = 0xffff_ff1a
