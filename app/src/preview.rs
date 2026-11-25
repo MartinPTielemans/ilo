@@ -3886,17 +3886,17 @@ fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App)
     let (_, models) = task::model_menu("", &first, models.default.as_deref(), models.listed);
     let mut items = vec![
         MenuEntry::search("Search models"),
-        heading(Cli::Claude.name()),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
     ];
     items.extend(models.into_iter().map(|entry| MenuEntry {
         over: false,
         ..entry
     }));
     items.extend([
-        heading(Cli::Codex.name()),
-        MenuEntry::named("Sign In", true).kept(),
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
         MenuEntry::line(),
-        MenuEntry::named("Settings", true).kept(),
+        MenuEntry::named("Settings", true).kept().out(),
     ]);
     let keys: Vec<String> = (keys.split(','))
         .map(str::trim)

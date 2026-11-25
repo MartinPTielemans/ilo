@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use super::*;
+use crate::agents::runner::Cli;
 use crate::text_input::{self, Chosen, FieldMenu, korean};
 
 /// A host that records what the bar asks of it, but its suggestions and its window's height, and
@@ -282,6 +283,12 @@ impl Host for Recorder {
             .push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
         self.anchors.borrow_mut().push(anchor);
     }
+}
+
+/// An assistant's heading in the model menu as `choice_menu` writes it: its name as Settings'
+/// page has it, from Settings' own source, so the two can't say it differently.
+fn settings_heading(cli: Cli) -> String {
+    format!("# {}", crate::settings_rows::assistant_name(cli))
 }
 
 /// The agents the host offers: each ready, at its limit if it has a reset time. Claude offers
@@ -3660,11 +3667,11 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
         rows,
         [
             "? Search models",
-            "# claude",
+            &settings_heading(Cli::Claude),
             "claude's default",
             "✓ Haiku",
             "Sonnet",
-            "# codex",
+            &settings_heading(Cli::Codex),
             "codex's default",
             "- ",
             "Settings",
@@ -4005,7 +4012,7 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(
         rows[1..5],
         [
-            "# claude",
+            &settings_heading(Cli::Claude),
             "- claude's default (Limit resets 18:00)",
             "- Haiku (Limit resets 18:00)",
             "- Sonnet (Limit resets 18:00)",
@@ -4027,7 +4034,13 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     let (rows, chosen) = bar.choice_menu(true);
     assert_eq!(
         rows,
-        ["? Search models", "# Codex", "Sign In", "- ", "Settings"]
+        [
+            "? Search models",
+            &settings_heading(Cli::Codex),
+            "Sign In",
+            "- ",
+            "Settings"
+        ]
     );
     bar.pick(chosen, 2);
     assert_eq!(bar.calls(), ["sign in codex"]);

@@ -2456,8 +2456,10 @@ impl CommandBar {
     /// The model trigger's menu, under it: each assistant by its own name, then the models it
     /// offers, its default first and the one the thread starts on checked; one at its limit says
     /// when it resets, and one not signed in has Sign In, which starts its own sign-in as
-    /// Settings' does; then Settings › Agents. Over them all a field narrows them as the user
-    /// types, leaving Sign In and Settings whatever is typed; a pick is still one of these rows.
+    /// Settings' does; then Settings › Agents. Each assistant's heading is its name as Settings'
+    /// page has it. Over them all a field narrows them as the user types: an assistant with no
+    /// model matching goes, heading and all, as Sign In does, and Settings stays whatever is
+    /// typed; a pick is still one of these rows.
     fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agents = self.task_agents.clone().unwrap_or_default();
         let (on, chosen) = match self.composer_assistant() {
@@ -2466,8 +2468,15 @@ impl CommandBar {
         };
         let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
         let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
+        // Settings' name for the assistant, so the two never say it differently.
+        let label = |id: &SharedString, name: &SharedString| -> SharedString {
+            match crate::agents::runner::Cli::from_id(id) {
+                Some(cli) => crate::settings_rows::assistant_name(cli).into(),
+                None => name.clone(),
+            }
+        };
         for agent in &agents.agents {
-            items.push(heading(agent.name.clone()));
+            items.push(heading(label(&agent.id, &agent.name)));
             picks.push(ModelPick::Nothing);
             let at_limit = agent
                 .resets
@@ -2493,14 +2502,14 @@ impl CommandBar {
             }
         }
         for (id, name) in &agents.signed_out {
-            items.push(heading(name.clone()));
+            items.push(heading(label(id, name)));
             picks.push(ModelPick::Nothing);
-            items.push(MenuEntry::named(SIGN_IN, true).kept());
+            items.push(MenuEntry::named(SIGN_IN, true).offer().out());
             picks.push(ModelPick::SignIn(id.clone()));
         }
         items.push(MenuEntry::line());
         picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept());
+        items.push(MenuEntry::named(SETTINGS, true).kept().out());
         picks.push(ModelPick::Settings);
         let bar = cx.entity().downgrade();
         let chosen = Box::new(

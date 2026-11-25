@@ -865,6 +865,12 @@ overlap = 4.0
 # A menu's search field, its first row, as the model menu's (Z9): a row's text at a row's inset,
 # with a line under it in the line's ink, so the field stands apart from the rows it narrows.
 field-row = 32.0
+# The search glyph at the field's left, in the checks' column (spec-bar-composer Model), centred
+# on it where it's wider.
+search-glyph = 14.0
+# The out arrow after a row that leaves the menu for a page of its own, as the model menu's Sign In
+# and Settings do (spec-bar-composer Model).
+out-arrow = 12.0
 # The safe triangle keeps a submenu open while the pointer is on its way to it, and ends once the
 # pointer rests this long in it, in seconds, what's under it lit then: in every menu, the capture
 # menu's Add to Board too (#4108).
