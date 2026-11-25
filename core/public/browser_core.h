@@ -2198,14 +2198,16 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 // is gone. Moving the tab to a Space of the user's (bc_tab_move_to_space) takes it back too, to
 // the top of that Space. No agent's close closes it (bc_agent_close_tab).
 //
-// The history the tab had is the user's: for as long as the agent has it, nothing takes the tab
-// to an entry it had at the give other than the one it was on, not the agent's back or forward
-// (bc_agent_page), the app's (bc_tab_go_back, bc_tab_go_forward), nor the page's own script,
-// which then does nothing. While the user holds the tab (bc_tab_take_back, bc_agent_hand_off)
-// they go through all of it, and from bc_tab_hand_back the entry it's on then is the one the
-// agent can't go behind or past. The session keeps the tab as the user's, with the Space it left,
-// and the account's other devices see it there as it was. Its page has an agent's page's size
-// from the give.
+// The history the tab had is the user's: for as long as the agent has it, nothing takes the tab to
+// an entry it had at the give other than the one it was on, not the agent's back or forward
+// (bc_agent_page), the app's (bc_tab_go_back, bc_tab_go_forward), nor the page's own script, which
+// then does nothing. Its state says so: can_go_back and can_go_forward are true only over an entry
+// the step may take it to, and bc_tab_history lists only those. While the user holds the tab
+// (bc_tab_take_back, bc_agent_hand_off) their own back, forward and bc_tab_go_to_history go through
+// all of it, the page's own script still through none of what the tab had, and from
+// bc_tab_hand_back the entry it's on then is the one the agent can't go behind or past. The session
+// keeps the tab as the user's, with the Space it left, and the account's other devices see it there
+// as it was. Its page has an agent's page's size from the give.
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
 
 // Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's

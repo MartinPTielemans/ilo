@@ -996,7 +996,9 @@ void Tab::Load(const GURL& url, base::FunctionRef<void()> load) {
 bool Tab::CanGoBack() {
   content::NavigationController& history = web_contents()->GetController();
   if (!system_page_) {
-    return history.CanGoBack();
+    // Lit only over an entry the step may take it to: of a tab the user handed an agent, the
+    // history it had then is theirs (handed_history.h).
+    return history.CanGoBack() && handed::MayStep(id_, -1);
   }
   if (system_page_->can_go_back()) {
     return true;
@@ -1013,7 +1015,7 @@ bool Tab::CanGoBack() {
 
 bool Tab::CanGoForward() {
   return system_page_ ? system_page_->can_go_forward()
-                      : web_contents()->GetController().CanGoForward();
+                      : web_contents()->GetController().CanGoForward() && handed::MayStep(id_, 1);
 }
 
 void Tab::GoBack() {
@@ -1059,6 +1061,10 @@ void Tab::ListHistory(bool forward) {
     const int step = forward ? 1 : -1;
     for (int i = saved.current + step; i >= 0 && i < static_cast<int>(saved.history.size());
          i += step) {
+      // Only the pages it may be taken to: a row that did nothing would be a row too many.
+      if (!handed::MayStep(id_, i - saved.current)) {
+        continue;
+      }
       const sessions::SerializedNavigationEntry& entry = saved.history[i];
       pages.push_back({i - saved.current, entry.virtual_url(), entry.virtual_url().spec(),
                        base::UTF16ToUTF8(entry.title()), nullptr});
@@ -1555,8 +1561,8 @@ void Tab::ReportState() {
     const int current = unloaded_ ? unloaded_->current : 0;
     const bc_tab_state state = {
         .url = url.c_str(),
-        .can_go_back = current > 0,
-        .can_go_forward = current + 1 < count,
+        .can_go_back = current > 0 && handed::MayStep(id_, -1),
+        .can_go_forward = current + 1 < count && handed::MayStep(id_, 1),
         .loading = false,
         .unloaded = true,
         .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),

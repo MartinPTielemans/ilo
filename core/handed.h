@@ -55,6 +55,12 @@ bool MayGoTo(bc_id tab, int entry, bool from_page);
 // user's step, whoever holds the tab.
 bool AgentMayGoTo(bc_id tab, int entry);
 
+// Whether |tab|'s own step to the entry |offset| from the one it's on, -1 for back and 1 for
+// forward, is one it may take: what its back and forward are lit by, and its history's list made
+// of. Any for a tab that isn't handed, and none for a handed one without its page, unless the user
+// holds it: its history is bound again as its page is made.
+bool MayStep(bc_id tab, int offset);
+
 // Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left,
 // each of them |home|'s own or another handed tab that left it.
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node);

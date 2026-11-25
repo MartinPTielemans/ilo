@@ -134,6 +134,18 @@ bool AgentMayGoTo(bc_id tab, int entry) {
   return !mark || mark->history.MayGoTo(entry, /*held=*/false, /*from_page=*/false);
 }
 
+bool MayStep(bc_id tab, int offset) {
+  if (!Of(tab)) {
+    return true;
+  }
+  content::WebContents* contents = Tab::FromId(tab);
+  if (!contents) {
+    return IsHeld(tab);
+  }
+  const content::NavigationEntry* entry = contents->GetController().GetEntryAtOffset(offset);
+  return entry && MayGoTo(tab, entry->GetUniqueID(), /*from_page=*/false);
+}
+
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {
   std::vector<handed_place::Row> today;
   today.reserve(rows.size());

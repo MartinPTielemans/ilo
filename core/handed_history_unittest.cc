@@ -40,6 +40,10 @@ class Tab {
   bool Back() { return Step(-1, /*from_page=*/false); }
   bool Forward() { return Step(1, /*from_page=*/false); }
   bool GoToEntry(int offset) { return Step(offset, /*from_page=*/false); }
+  // Whether the tab's back and forward are lit (bc_tab_state): only over an entry that step may
+  // take it to.
+  bool CanBack() const { return May(-1); }
+  bool CanForward() const { return May(1); }
   // The page's history.back(), history.forward() and history.go(n):
   // NavigationControllerImpl::GoToOffsetFromRenderer, with the frame that asked.
   bool HistoryGo(int offset) { return Step(offset, /*from_page=*/true); }
@@ -59,6 +63,11 @@ class Tab {
 
  private:
   bool Has(int index) const { return index >= 0 && index < static_cast<int>(entries_.size()); }
+
+  bool May(int offset) const {
+    const int index = static_cast<int>(on_) + offset;
+    return Has(index) && bound_.MayGoTo(entries_[index], held_, /*from_page=*/false);
+  }
 
   bool Step(int offset, bool from_page) {
     const int index = static_cast<int>(on_) + offset;
@@ -240,6 +249,28 @@ TEST(HandedHistory, APageTheUserWentBackToWhileHoldingGoesNoFurtherByItself) {
   EXPECT_FALSE(tab.HistoryGo(-1));
   EXPECT_FALSE(tab.TraverseTo(4));
   EXPECT_EQ(tab.on(), 2);
+}
+
+TEST(HandedHistory, BackAndForwardAreLitOnlyOverAnEntryTheTabMayBeTakenTo) {
+  Tab tab = Handed();
+  EXPECT_FALSE(tab.CanBack());
+  EXPECT_FALSE(tab.CanForward());
+  tab.Open(10);
+  EXPECT_TRUE(tab.CanBack());
+  EXPECT_FALSE(tab.CanForward());
+  ASSERT_TRUE(tab.Back());
+  EXPECT_FALSE(tab.CanBack());
+  EXPECT_TRUE(tab.CanForward());
+}
+
+TEST(HandedHistory, WhileTheUserHoldsTheTabBackAndForwardAreLitAsTheirs) {
+  Tab tab = Handed();
+  tab.TakeOver();
+  EXPECT_TRUE(tab.CanBack());
+  EXPECT_TRUE(tab.CanForward());
+  tab.HandBack();
+  EXPECT_FALSE(tab.CanBack());
+  EXPECT_FALSE(tab.CanForward());
 }
 
 TEST(HandedHistory, AtHandBackTheBoundMovesToTheEntryTheTabIsOn) {
