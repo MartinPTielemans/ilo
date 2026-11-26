@@ -12,9 +12,11 @@ use crate::agents::task::{Card, Dot, TaskAction, Word};
 use crate::agents::tier::Tier;
 use crate::command_bar::{self, CommandBar};
 use crate::palette::{Palette, Tone};
+use crate::product;
 use crate::shell::ShowStarted;
 use crate::tokens::command_bar::{HEIGHT as BAR_HEIGHT, WIDTH as BAR_WIDTH};
 use crate::tokens::shell::composer::*;
+use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::text;
 
 use super::super::{
@@ -63,10 +65,16 @@ enum Owed {
 }
 
 impl Shell {
+    /// Whether the card rests on the bar: the Space shows no page, the welcome hasn't the card,
+    /// and the window isn't a Little ilo window's, which keeps its own bar inside it.
+    pub(in crate::shell) fn rests_on_bar(&self) -> bool {
+        self.selected == 0 && !self.welcome && self.little.is_none()
+    }
+
     /// Makes the bar the page rests on as the Space comes to show no page, and drops it as a page
     /// shows, or the welcome takes the card.
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             if let Some(resting) = self.resting.take() {
                 // GPUI's focus would go with the field, and the shortcuts with it, as the shell's
                 // context holds them, until a click lands on the shell, which a header button's
@@ -87,6 +95,8 @@ impl Shell {
             if resting.space != space {
                 resting.space = space;
                 resting.wants_keys = Owed::Shown;
+                let bar = resting.bar.clone();
+                bar.update(cx, |bar, cx| bar.space_changed(window, cx));
             }
             return self.give_resting_keys(window, cx);
         }
@@ -111,7 +121,7 @@ impl Shell {
     /// over it (#4140). Whether it did.
     pub(in crate::shell) fn keys_to_resting(&mut self, cx: &mut Context<Self>) -> bool {
         // The field stays until the next frame drops it, so a page shown since isn't one.
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             return false;
         }
         let Some(resting) = &mut self.resting else {
@@ -260,8 +270,9 @@ impl Shell {
         self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 
-    /// The page in the card at `frame`: the bar at the height ⌘T's opens at, and under it the
-    /// recent tasks, which its rows and its composer go over as they open, as ⌘T's over a page.
+    /// The page in the card at `frame`: the bar at the height ⌘T's opens at, the product's mark
+    /// over it, and under it the recent tasks, which its rows and its composer go over as they
+    /// open, as ⌘T's over a page.
     pub(in crate::shell) fn resting_page(
         &mut self,
         frame: Bounds<Pixels>,
@@ -282,18 +293,30 @@ impl Shell {
         // A narrow window keeps the bar inside the card's gutters.
         let bar_width = BAR_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
         let bar = div()
+            .debug_selector(|| "resting-bar".into())
             .absolute()
             .top(px(top))
             .left(px((width - bar_width) / 2.))
             .w(px(bar_width))
             .child(bar);
+        // The product's mark over the bar, in its column, where the card has the room over it. A
+        // Little Window is a look at one page: its card with no page has no mark.
+        let mark = mark_top(top, self.little.is_some()).map(|mark_top| {
+            div()
+                .debug_selector(|| "resting-mark".into())
+                .absolute()
+                .top(px(mark_top))
+                .left(px((width - MARK_SIZE) / 2.))
+                .child(product::mark(MARK_SIZE, &palette))
+        });
         let page = div()
             .size_full()
             .relative()
             .flex()
             .flex_col()
             .items_center()
-            .pt(px(top + BAR_HEIGHT));
+            .pt(px(top + BAR_HEIGHT))
+            .children(mark);
         if cards.is_empty() {
             return Some(page.child(bar));
         }
@@ -452,6 +475,13 @@ impl Shell {
             )
             .children(plate)
     }
+}
+
+/// Where the mark's top is over a bar whose top is `top`, where it's drawn: not in a Little
+/// Window, and not where the card hasn't the room over the bar.
+pub(in crate::shell) fn mark_top(top: f32, little: bool) -> Option<f32> {
+    let at = top - MARK_GAP - MARK_SIZE;
+    (!little && at >= TOP).then_some(at)
 }
 
 /// How far under a card `height` tall the page's group starts, with its bar's input row's middle

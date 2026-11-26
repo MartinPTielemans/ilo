@@ -828,6 +828,11 @@ ink = 1.0
 small-below = 24.0
 # From this size it is the large drawing, its gaps cut by a mask; between the two, the middle one.
 large-from = 40.0
+# Drawn part of the way along its cord, as first run's progress and entry draw it (first-run-v9
+# §1): the whole cord at this alpha of the ink under the part drawn, and how much wider than the
+# cord the part drawn is cut, so its edge never shows on the cord.
+ghost = 0.22
+reveal = 1.5
 
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of the palette's
@@ -900,17 +905,19 @@ dark-line = 0xf3f0_e81a
 dark-disabled = 0xf3f0_e861
 # A destructive item's label: Delete Space, a folder or a profile, Delete from Archive.
 dark-destructive = 0xf07a_63ff
-light-rim = 0x1614_0f24
-light-label = 0x1614_0fe6
-light-secondary = 0x1614_0f9e
-light-line = 0x1614_0f1a
-light-disabled = 0x1614_0f61
-light-destructive = 0xb326_1eff
+light-rim = 0x1616_1824
+light-label = 0x1616_18e6
+light-secondary = 0x1616_189e
+light-line = 0x1616_181a
+light-disabled = 0x1616_1861
+# The dark look's red darkened so its words read on a light ground (#4276): 4.5:1 at least on the
+# floating fill over the material at its worst and on an own page with a white window behind.
+light-destructive = 0xc236_2bff
 # A destructive item's highlight, with a Paper label on it.
 destructive-fill = 0xb326_1eff
 destructive-label = 0xf3f0_e8ff
 # Ink over the destructive highlight while the button is down on it.
-pressed = 0x1614_0f2e
+pressed = 0x1616_182e
 # The others' highlight is a neutral plate, never the Space's accent (#4090): the look's label ink
 # at `plate`, and at `plate-pressed` while the button is down on it, under the label in its ink.
 plate = 0.11
@@ -967,8 +974,9 @@ panel = 16.0
 sheet = 20.0
 
 [palette]
-# The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320).
-ink = 0x16140f
+# The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320). Ink is the
+# dark look's ground, the one near-black of the light look (#4276): no place spells it but here.
+ink = 0x161618
 paper = 0xf3f0e8
 # The window is the HUD window's material, behind the window, under black at `tint` on a dark
 # window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
@@ -993,8 +1001,15 @@ gray-text-more = 3.0
 # window behind (#6d6d6b at Standard, from the real app's own pixels at 469483355): 4.55, where
 # 0.97 reads 4.40 and the state line's 0.75 read 3.39. Over the check VM's desktop alone (#6b6a65
 # at Standard, #696762 at More, at f98ded880) it reads 4.76 and 4.96, where the state line read
-# 3.51 and 4.28. A light window's gray reads 7.7 or more on its white plate and stays as it is.
+# 3.51 and 4.28.
 plate-gray = 1.0
+# The same on a light window (#4276), whose plates are the ink's or a Space's colour and darker
+# than the window beside them: the ink at this, the least hundredth at which gray on the shown
+# plate holds 4.5:1 with a white window behind, all along the Transparency bar, with no theme and
+# on each of the picker's swatches. It reads 4.54 there on a Space's colour and 5.76 on the ink's
+# plate, where the look's quiet ink, 0.65, read 4.23 and 5.26. Over a black window it reads 3.71
+# and 4.31: the level's gray floor, 3:1, is what holds there.
+light-plate-gray = 0.71
 # The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind
@@ -1062,10 +1077,12 @@ light-material-solid = 0xffffff
 overlay-fill-less = 0.88
 overlay-fill = 0.78
 overlay-fill-more = 0.56
-# The light fill's and a light dialog's (#4090): at Less, the least at which text at 0.6 of Ink
-# holds 4.5:1 over a white, grey and black page through the material, as run 6 measured it; at
-# Standard and More, as far down as the dark fill steps. Where the host has no material, what
-# floats is opaque.
+# The light fill's and a light dialog's (#4090): at Less, where the light look's quiet ink
+# (`light-text-secondary`) holds 4.5:1 over a white, grey and black page through the material, as
+# run 6 measured it; at Standard and More, as far down as the dark fill steps. They were solved for
+# text at 0.6 of the warmer ink before #4276, which read 4.5 at these and the ink now reads 4.42
+# at: a word a float draws under its floor is drawn at the floor (`FloatInk::word`). Where the host
+# has no material, what floats is opaque.
 light-overlay-fill-less = 0.94
 light-overlay-fill = 0.84
 light-overlay-fill-more = 0.62
@@ -1113,14 +1130,10 @@ state-pressed = 0.065
 state-hovered = 0.12
 state-selected = 0.2
 state-selected-hovered = 0.36
-# On a light window the tab shown lies on white 0.85 over a black 0.20 shadow rather than on a plate
-# of Ink (Arc's light `TabCellBackgroundCurrent`). Ours, as Arc's light rows aren't recorded: the
-# shadow 1 down and blurred 2, and the plate white 1 under the pointer.
-light-selected = 0.85
-light-selected-hovered = 1.0
-light-selected-shadow = 0.2
-light-selected-shadow-y = 1.0
-light-selected-shadow-blur = 2.0
+# On a light window the selected plate is the ink too, a step weaker (#4276): dark ink over a light
+# glass weighs more than light ink over a dark one. No white plate lies on a light window, and
+# nothing lifts this one but its own strength, which it keeps under the pointer.
+light-state-selected = 0.16
 # The tab shown keeps the Space's colour on its row, the only colour in the chrome (#4089): its
 # main colour at `shown` on a dark window and `light-shown` on a light one, and a step firmer under
 # the pointer (ours: the mock has no hovered shown row). Where the ink wouldn't read on it at 4.5:1
@@ -1561,6 +1574,36 @@ light-page-line = 0x0000000d
 shown = 0xf3f0e833
 light-shown = 0.16
 
+[settings.overview]
+# Overview (spec-settings.md › S1, values-settings.md › S1): the default browser's notice, a row of
+# its own 60 tall; Loose ends' rows 52 tall, 14 in at the left and 10 at the right, their empty
+# ring 16 and 12 before the text, their ✕ 12 in a 26 box.
+notice = 60.0
+loose = 52.0
+loose-left = 14.0
+loose-right = 10.0
+loose-ring = 16.0
+loose-gap = 12.0
+close = 12.0
+close-box = 26.0
+# How it's set up: two rows of three tiles, 10 apart, each 112 tall at radius 12, 12 in above and
+# under and 14 at the sides, its head's glyph 16 and 8 before the page's name at 13 on 16, the
+# drawing's 590 read as semibold, its two lines at 12 on 17, 10 under the head.
+tile = 112.0
+tile-radius = 12.0
+tile-y = 12.0
+tile-x = 14.0
+tile-gap = 10.0
+tile-glyph = 16.0
+tile-head-gap = 8.0
+tile-title = 13.0
+tile-title-line = 16.0
+tile-body = 12.0
+tile-body-line = 17.0
+# The line under the tiles, 10 under them and 4 in, at 12 on 17.
+note-top = 10.0
+note-x = 4.0
+
 [shell]
 # The docked sidebar's width at first, where the card starts.
 sidebar-width = 228.0
@@ -1832,7 +1875,8 @@ space-icon-pitch = 34.0
 space-height = 34.0
 # A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
 # pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window, as the redesign's foot has it.
+# on a dark window, as the redesign's foot has it, where that reads at 3:1 on the footer; otherwise
+# only as much nearer the ink as 3:1 needs, and never weaker than the other dots (the lead, 25 Nov).
 space-swatch-shown = 7.0
 space-swatch = 7.0
 space-swatch-hovered = 9.0
@@ -1891,10 +1935,10 @@ selected-hovered = 0.36
 # A row chosen with ⌘- or ⇧-click besides the tab shown: Arc's secondary selection, P3 #FAFBFF
 # 0.10 over dark and black 0.10 over light (docs/ux-spec.md › Tokens).
 chosen = 0.1
-# A row under the pointer is the only plate a row has but the tab shown's (#4091): 0.12 on a dark
-# window, 0.07 on a light one.
+# A row under the pointer is the only plate a row has but the tab shown's (#4091): the ink at 0.12
+# in both looks (#4276), where 0.07 on a light window told from it at 1.16 at most, under the 1.2
+# a plate under the pointer has to.
 hovered = 0.12
-light-hovered = 0.07
 pressed = 0.065
 secondary = 0.62
 # The close button's square under the pointer: Dia's subtle fill, 0.12, at the header buttons'
@@ -1923,14 +1967,13 @@ scroll-edge = 0.09
 clear-hovered = 0.81
 # A tab whose page isn't loaded fades its favicon (ours: Arc's alpha isn't measured).
 sleeping-favicon = 0.5
-# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 on a dark window and
-# white at 0.55 on a light one, with the resting level's rim, and under the pointer the ladder's
+# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 in both looks (#4276),
+# with the resting level's rim, and under the pointer the ladder's
 # hover over that (palette's `state-hovered`). The one shown is
 # themed by its icon (tile_theme.rs), and black with Dia's default selection ring, white 0.45,
-# where the icon gives no theme. A light window's is white (Dia), unthemed whatever its icon until
+# where the icon gives no theme. A light window's is unthemed whatever its icon until
 # the light theme is built (ours).
 tile = 0.07
-light-tile = 0.55
 tile-ring = 0.45
 keyed = 0.45
 tile-unthemed = 0x0000_00ff
@@ -2086,9 +2129,9 @@ keys-radius = 6.0
 keys-fill = 0xffff_ff14
 # From the words to their keys, as the toast sets its chip.
 keys-gap = 8.0
-# The product's mark (app/src/product.rs) over the line, this far across: the smallest size that
-# takes the large drawing, a point more than the mark it replaces stood tall.
-mark-size = 40.0
+# The product's mark (app/src/product.rs), its box this far across, as the asset has it; its ink
+# falls where the drawing puts it. Over the bar at rest (`shell.composer`), and over the welcome.
+mark-size = 48.0
 # From the mark's foot to the line, so they read as a sign and its caption, not one block.
 mark-gap = 24.0
 # The Space's name between the mark and the line, in the display face: its caps start the mark's
@@ -2097,26 +2140,13 @@ name-size = 28.0
 name-line = 34.0
 name-gap = 12.0
 name = 0xffff_ffd9
-# The first run's welcome, in place of the name and the line: "Welcome to ilo" in the display
-# face, "a good tool." under it, dimmer, and one button that opens a new tab, under a mark this
-# much bigger.
+# The first run's welcome, in place of the name and the line: "Welcome to" the product in the
+# display face under a mark this much bigger, and this far under it one button that opens a new
+# tab, first run's main button (`shell.onboarding.window`).
 welcome-mark = 1.5
 welcome-size = 44.0
 welcome-line = 52.0
-tagline-size = 20.0
-tagline-line = 26.0
-tagline = 0xffff_ff99
 button-gap = 28.0
-button-height = 30.0
-button-inset = 12.0
-button-radius = 6.0
-# Signal, the mark's green, with white words and a key chip of white 0.2.
-button-fill = 0x0e9f_55ff
-button-text = 0xffff_ffff
-button-keys = 0xffff_ff33
-button-keys-height = 20.0
-button-keys-inset = 5.0
-button-keys-radius = 6.0
 # The onboarding's last line, at the card's foot under the command bar it leaves up, as the line
 # under the mark is set.
 hint-bottom = 40.0
@@ -2124,11 +2154,12 @@ hint-bottom = 40.0
 
 [shell.composer]
 # The page an empty Space rests on (#4140), as its drawing measures it on the window's ink. Its
-# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark this far
-# over the field. The group moves up only as far as it needs to fit the card, never nearer its top
-# than `top`, which it keeps under the cards too.
+# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark
+# (`shell.empty`'s) this far over the field, in its column, where the card has that much room over
+# it. The group moves up only as far as it needs to fit the card, never nearer its top than `top`,
+# which it keeps under the cards too.
 top = 40.0
-mark-gap = 26.0
+mark-gap = 28.0
 # The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
 # words at 15 start 18 in, and the ⇥ chip and the switch end 9 in.
 field-width = 540.0
@@ -2356,9 +2387,10 @@ search-top = 10.0
 search-width = 289.0
 search-height = 36.0
 search-radius = 12.0
-search-glyph = 15.0
-search-glyph-x = 14.5
-search-text-x = 44.0
+# Inside it, as drawn: the magnifier 14 square, 12 in, and the text 8 after it.
+search-glyph = 14.0
+search-glyph-x = 12.0
+search-text-x = 34.0
 search-placeholder = 0.56
 filter-x = 220.0
 filter-width = 73.0
@@ -2369,12 +2401,12 @@ filter-pad = 12.0
 # The archive's list, beside the column.
 archive-top = 56.0
 archive-width = 304.0
+# A day's heading is a row of 36, as drawn, after rows as at the list's top: its small semibold
+# line, 14, at the row's foot, 8 over the rows under it.
 heading-x = 12.0
-heading-top = 8.0
-heading-height = 15.0
-heading-bottom = 4.0
-# Over a heading after rows. Ours: Arc's capture had one heading.
-heading-gap = 12.0
+heading-top = 14.0
+heading-height = 14.0
+heading-bottom = 8.0
 archived-pitch = 56.0
 archived-plate = 50.0
 archived-left = 8.0
@@ -2448,417 +2480,146 @@ shadow-y = 1.0
 shadow-blur = 4.0
 
 [shell.onboarding]
-# A new profile's first launch (docs/ux-spec.md › Onboarding): the brand's ground over the whole
-# window, Paper in a light appearance and Ink in a dark one, with the other drawing on it, and the
-# Signal green only on the wordmark's dot and the one button.
+# A new profile's first launch (spec-first-run.md): the Signal green on the import's and the
+# account's own views where the card holds them.
 signal = 0x0e9f55
-# The wordmark, a dot, two stems and a ring, drawn from the brand's 214 × 154 units at a half, so
-# 107 × 77 pt in the window's middle.
-wordmark-scale = 0.5
-# "a good tool." under it in the display face, its caps this far under the wordmark's foot.
-tagline-size = 22.0
-tagline-line = 28.0
-tagline-gap = 28.0
-# Secondary words, the tagline's and a step's line, as an alpha of the ink.
-quiet = 0.6
-# A step's one message: a title in the display face, one line under it, and one button.
-title-size = 32.0
-title-line = 38.0
-line-size = 15.0
-line-line = 21.0
-line-gap = 10.0
-button-gap = 32.0
-button-height = 34.0
-button-inset = 16.0
-button-radius = 6.0
-button-size = 14.0
-# The button's key chip, Paper over the Signal green.
-chip = 0.2
-chip-height = 20.0
-chip-inset = 5.0
-chip-radius = 6.0
-chip-gap = 8.0
-# Skip, at the window's bottom right corner, quiet, with its key's chip.
-skip-margin = 24.0
-skip-size = 13.0
-skip-chip = 0.08
-# A step comes in from this far right as the one before leaves this far left, so the steps read as
-# a row.
-shift = 32.0
-# The colour step's swatches, the theme picker's, in a row under its line, a step larger than the
-# picker's 24 as the only thing on the screen to pick. The one picked is ringed in the ink, a gap
-# off it, and each has a hairline edge, so the lightest reads on Paper.
+# The Space step's swatches, the theme picker's, a step larger than the picker's 24 as the step's
+# one choice. The one picked is ringed in the ink, a gap off it, and each has a hairline edge, so
+# the lightest reads on a light card.
 swatch = 28.0
 swatch-pitch = 40.0
-swatch-gap = 28.0
 swatch-ring = 2.0
 swatch-edge = 0.12
-# The import and account steps hold Settings' own views as wide as its boxes, on the flow's
-# ground, their boxes this much of the ink over it.
-import-width = 556.0
-import-surface = 0.05
 # Seconds the import step holds on its Spaces once they're in, so the user sees them tick, before
-# it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
-# after it, in the line at the bottom left.
+# it goes on by itself (#1673).
 import-hold = 0.6
-# The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
-# name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
-# and lines between rows.
-opt-in-width = 420.0
-opt-in-line = 18.0
-# The search engine step's list, in the opt-ins' box: a row each, this tall, of a radio's dot and
-# the engine's name after it. The dot is a ring in the ink, and the one picked is filled in the
-# signal green around a paper centre.
-engine-row = 40.0
-engine-dot = 16.0
-engine-dot-center = 6.0
 
-# First run's sheet (#4093): over the window, not the brand's ground, at the modal level, with a
-# left half that asks one thing and a slot on the right where the step's feature plays as a loop.
-# The issue's fill over its blur of 34; GPUI draws no blur under a view, so until the sheet is a
-# window with the Mac's material the fill stands alone. Light's is the mock's glass.
-[shell.onboarding.sheet]
+# First run's card (first-run-v9): one card over the desktop in a window of its own, the size of
+# the window. Dark's values are v9's; Light's are its light column.
+[shell.onboarding.card]
 width = 780.0
-height = 456.0
+height = 486.0
 radius = 20.0
-fill = 0x2a2720
-fill-alpha = 0.78
-light-fill = 0xf8f7f3
-light-fill-alpha = 0.8
-# The left half, and its padding: top, right, bottom, left.
-left = 350.0
-padding = [34.0, 30.0, 20.0, 32.0]
-# Where the step is among them, a dot each and the step's a bar, over the title.
-pager-dot = 6.0
-pager-on = 16.0
-pager-gap = 5.0
-pager-under = 24.0
-pager-off = 0.2
-pager-lit = 0.85
-# The welcome's wordmark, a third of the brand's units: 71 × 51.
-mark-scale = 0.33
-mark-under = 22.0
-title-size = 25.0
-title-line = 29.0
-title-under = 10.0
-line-size = 13.0
-line-line = 19.5
-line-quiet = 0.62
-line-under = 22.0
-# The foot's buttons, at the half's bottom: quiet ones in the ink, the step's own in the green.
-button-height = 30.0
-button-inset = 12.0
-button-size = 12.0
-button-gap = 6.0
-button-quiet = 0.6
-# The colour step's swatches, the theme picker's, at the half's width.
-swatch = 20.0
-swatch-pitch = 31.0
-# The loop's slot, inset from the sheet's edge, a hairline inside it, over a plain ground of the
-# ink, until the art fills it.
-slot-inset = 10.0
-slot-radius = 10.0
-slot-rim = 0.12
-slot-ground = 0.04
-
-# First run's window of its own (spec-first-run.md; values-first-run.md, the drawing's tokens
-# f6af5434): the step in a column on the left under the row the window's buttons sit in, the
-# picture of the browser in a panel on the right. Dark's values are the drawing's; Light's follow
-# light-values.md's rule and are Proposed.
-[shell.onboarding.window]
-width = 880.0
-height = 600.0
-# The window's ground over its glass, opaque where the window has none.
-fill = 0x141416
-fill-alpha = 0.7
-light-fill = 0xe9e7e1
-light-fill-alpha = 0.7
-# The text, its quiet ink (a line, Back, Skip) and its faint one (the count); the main button is
-# the text's ink with its label in `on-primary`.
+fill = 0x222226
+fill-alpha = 0.851
+light-fill = 0xf6f3ec
+light-fill-alpha = 0.878
+# A 1 pt rim inside its edge, white in both.
+rim = 0xffffff
+rim-alpha = 0.122
+light-rim-alpha = 0.6
+# What the platform layer draws behind and round it where the system can: the blur and its
+# saturation, and the shadow's y, blur and alpha, Dark then Light.
+blur = 40.0
+saturate = 1.5
+shadow = [30.0, 80.0, 0.451]
+light-shadow = [24.0, 64.0, 0.149]
+# The text, its second and third inks as alphas of it, and the main button's label, near-black on
+# off-white in Dark and the other way round in Light.
 text = 0xf3f0e8
 light-text = 0x161618
-quiet = 0.6
-light-quiet = 0.65
-faint = 0.42
-light-faint = 0.5
-on-primary = 0x161618
-light-on-primary = 0xf3f0e8
-# The step's column, the row of the window's buttons at its top, and the column's padding under
-# it: top, right, bottom, left. The Mac's buttons sit `buttons-x` in, centred on the row.
-left = 400.0
-buttons-row = 44.0
-buttons-x = 16.0
-buttons-y = 16.0
-padding = [0.0, 20.0, 20.0, 32.0]
-# Where the step is: a track with the steps so far filled, then "n of m", the welcome being 1.
-indicator-height = 22.0
-indicator-gap = 10.0
-track-width = 96.0
-track-height = 3.0
-track-radius = 2.0
-track = 0.18
-count-size = 11.0
-count-line = 14.0
-# The step's heading, in the heading face, and the line under it; the welcome's are larger, under
-# the lockup's place, which P9's mark and the name fill.
-heading-top = 22.0
-heading-right = 24.0
-heading-size = 26.0
-heading-line = 32.0
-lockup = 96.0
-welcome-top = 86.0
-welcome-size = 28.0
-welcome-line = 34.0
-line-top = 8.0
-line-size = 13.0
-line-line = 19.0
-welcome-line-top = 10.0
-welcome-line-size = 14.0
-welcome-line-line = 21.0
-# The step's own choices start this far under its words.
-body-top = 18.0
-# The foot's row: Back at its start, then the quiet Skip and the main button with ↩'s key on it.
-button-height = 32.0
-button-radius = 8.0
-button-gap = 6.0
-button-size = 13.0
-button-line = 16.0
-quiet-inset = 12.0
-main-start = 14.0
-main-end = 8.0
-main-gap = 8.0
-key-height = 18.0
-key-radius = 5.0
-key-inset = 5.0
-key-size = 10.0
-key-line = 12.0
-key = 0.12
-# The picture's panel: inset from the window's right, top and bottom, on the own-page ground with
-# a hairline inside it.
-panel-inset = 10.0
-panel-radius = 10.0
-own-page = 0x1d1d21
-own-page-alpha = 0.66
-light-own-page = 0xfbfaf7
-light-own-page-alpha = 0.66
-panel-line = 0xffffff
-panel-line-alpha = 0.07
-light-panel-line = 0x000000
-light-panel-line-alpha = 0.07
-# The keys step's rows: height, padding before and after, gap and the gap between rows; a row's
-# card and its line, at the text's ink; a key's cap: its least width, as wide as longer keys need
-# with its padding, its height, and its plate. Its foot line: height, size and line.
-keys-row = [46.0, 9.0, 12.0, 12.0, 6.0]
-keys-row-radius = 12.0
-card = 0.066
-card-line = 0.06
-key-cap = [56.0, 28.0, 8.0]
-key-cap-radius = 8.0
-key-cap-fill = 0.1
-foot = [30.0, 12.0, 16.0]
-# The tidy step's times (values-first-run.md, 27): the block's top, right and gap; the row over the
-# bar; the bar's width, height, its track's top and height; the thumb, a tick's dot and the labels'
-# width, height, size and line; the track, the part filled, the dots and the track's line at the
-# text's ink; the thumb's fill and its shadow's y, blur and alpha; the switch's card's top.
-tidy-block = [20.0, 12.0, 10.0]
-tidy-row = 28.0
-tidy-bar = [336.0, 20.0, 4.0, 12.0]
-tidy-track-radius = 6.0
-tidy-thumb = 20.0
-tidy-tick = 3.0
-tidy-labels = [60.0, 12.0, 10.0, 12.0]
+text-2 = 0.6
+text-3 = 0.42
+on-main = 0x161618
+light-on-main = 0xf3f0e8
+# Fills at the text's ink: a group of rows, a field, a quiet button; and the hairline between rows.
+group = 0.067
+light-group = 0.051
+field = 0.086
+light-field = 0.071
+button = 0.1
+light-button = 0.078
+row-line = 0.071
+# The keyboard's ring on a control: its width and its alpha of the text.
+ring = 2.5
+ring-alpha = 0.25
+# The step's heading in the display face: x, y, size and line; the one line under it: gap, size and
+# line. A centred step centres both across the card.
+heading = [30.0, 28.0, 26.0, 32.0]
+line = [4.0, 13.0, 18.0]
+# Where a step's controls start, and the column a split step keeps them in: x and width. A centred
+# step's column is `centred-column` wide in the card's middle.
+body-top = 106.0
+column = [30.0, 320.0]
+centred-column = 556.0
+# A split step's picture plane: x, y, width and height, its corners and its ground, Dark then Light.
+plane = [390.0, 20.0, 370.0, 446.0]
+plane-radius = 16.0
+plane-fill = 0x1d1d21
+plane-alpha = 0.66
+light-plane-fill = 0xfbf8f1
+light-plane-alpha = 0.72
+# The foot: its top and height, its span's side inset on a centred step, the Space step's span,
+# and the gap between its right-hand buttons.
+foot = [432.0, 32.0]
+foot-side = 30.0
+space-foot = 300.0
+foot-gap = 12.0
+# A button: height, corners, padding and gap; its words' size; a bare one's padding; the main
+# button's padding after its ↩ cap, and the cap: size, corners, words' size and its alpha of the
+# label's ink.
+button-size = [32.0, 8.0, 12.0, 7.0]
+button-text = 12.5
+bare-inset = 2.0
+main-end = 7.0
+cap = [18.0, 5.0, 11.0, 0.125]
+# The Welcome's larger buttons and its field: height, corners and words' size.
+welcome-button = [36.0, 10.0, 13.5]
+# The progress knot in the foot's middle, its ghost at this alpha of the text, and the seconds it
+# redraws in, ease-in-out.
+progress = 26.0
+progress-motion = 0.5
+# A step comes as a cut, its content fading in over these seconds, linear, and a picture over the
+# next; with Reduce Motion every travel is a fade of `still-fade`.
+step-fade = 0.2
+picture-fade = 0.24
+still-fade = 0.15
+# The card's fade from its window as its last step is left, on the scroll edge's curve.
+end-fade = 0.2
+# A button's opacity under the pointer.
+button-hover = 0.9
+# The entry (§2): a plate of this size and corners in the display's middle, holding the knot,
+# which draws itself over `entry-draw`; at `entry-grow`'s start the plate grows to the card over
+# its seconds, on ARRIVE, the knot settling to the Welcome's; the rest fades in over
+# `entry-rest`'s seconds from its start, after the growth starts.
+entry-plate = [132.0, 30.0]
+entry-knot = 84.0
+entry-draw = 0.9
+entry-grow = [1.0, 0.55]
+entry-rest = [0.4, 0.22]
+# ARRIVE, the curve a thing arriving takes.
+arrive = [0.3, 1.0, 0.3, 1.0]
+# The Welcome (§3): its knot's size and top, the name's top, size and line, the line's top, its
+# column's width and top, and Not Now's top.
+welcome-knot = [72.0, 40.0]
+welcome-name = [122.0, 30.0, 36.0]
+welcome-line = 164.0
+welcome-column = [290.0, 198.0]
+welcome-not-now = 446.0
+# The last step (§9): its knot's size and top, its heading's top, and its group's top and width.
+done-knot = [60.0, 64.0]
+done-heading = 140.0
+done-group = [194.0, 420.0]
+# A row in a group: least height, padding before and after, and the gap in it; the name's and the
+# line's size and line.
+row = [56.0, 14.0, 11.0]
+row-name = [13.0, 16.0]
+row-words = [12.0, 15.0]
+# Tidy tabs (v9 §7): the card's top, height and side inset; the bar's width, height and thumb;
+# the track, the part filled, a stop's tick and its alpha; the thumb, white over any glass, and its
+# shadow's y, blur and alpha.
+tidy = [118.0, 76.0, 16.0]
+tidy-bar = [288.0, 12.0, 20.0]
 tidy-track = 0.086
 tidy-filled = 0.35
-tidy-dot = 0.45
-tidy-track-line = 0.08
-tidy-thumb-fill = 0xffffff
+tidy-tick = [3.0, 0.45]
+tidy-thumb = 0xffffff
 tidy-thumb-shadow = [2.0, 6.0, 0.5]
-tidy-card-top = 16.0
-# With an assistant, the broom's card under the tidy step's switch (values-first-run.md, 27b): its
-# top, height, corners, padding before and after, and gap; its tile's size, corners and glyph, the
-# tile's fill and the glyph's ink, the same in both appearances; its title's and its line's size
-# and line.
-broom-card = [16.0, 58.0, 12.0, 9.0, 12.0, 10.0]
-broom-tile = [28.0, 8.0, 16.0]
-broom-tile-fill = 0x3a3a40
-broom-glyph = 0xf3f0e8
-broom-title = [13.0, 16.0]
-broom-line = [11.0, 14.0]
-
-# First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
-# browser drawn from these, with made-up fixed content the same for everyone, and per step what
-# over it shows what the step changes. Dark is the drawing's; Light is light-values.md's rule.
-[shell.onboarding.picture]
-# The small window in the panel, cut off by the panel's edge: left, top, width, height.
-window = [44.0, 66.0, 620.0, 560.0]
-window-radius = 10.0
-window-fill = 0x1a1a1e
-window-fill-alpha = 0.85
-light-window-fill = 0xe9e7e1
-light-window-fill-alpha = 0.85
-# Its rim inside, its edge outside and its shadow: y, blur and alpha.
-rim = 0xffffff
-rim-alpha = 0.12
-light-rim = 0x000000
-light-rim-alpha = 0.12
-edge-alpha = 0.5
-light-edge-alpha = 0.16
-shadow = [18.0, 44.0]
-# A rim's or an edge's width.
-line = 1.0
-shadow-alpha = 0.45
-light-shadow-alpha = 0.16
-# The Space's colour in the window: a glow from its middle at `glow-alpha`, as wide as
-# `glow-size` and blurred by `glow-blur`; where the step is the Space's own, the window is swept
-# from it to `space-end` at `swept-alpha`.
-space = 0x7a70f4
-space-end = 0xe86ba8
-glow-alpha = 0.4
-glow-size = 300.0
-glow-blur = 160.0
-swept-alpha = 0.55
-# The inks: text, quiet and faint, and the plates: a card, a field, a button, the shown row and a
-# hairline, at the ink's strength the drawing gives them.
-text = 0xf3f0e8
-light-text = 0x161618
-quiet = 0.6
-light-quiet = 0.65
-faint = 0.42
-light-faint = 0.5
-card = 0.066
-field = 0.086
-button = 0.1
-shown = 0.2
-light-shown = 0.16
-hairline = 0.1
-# The tiles' and cards' line inside them.
-tile-line = 0xffffff
-tile-line-alpha = 0.06
-light-tile-line = 0x000000
-light-tile-line-alpha = 0.06
-
-# The small sidebar: its width, padding and gap; the window buttons' row: height, padding, gap and
-# dot; the address field: height and padding; the favorites' row: height and gap, and their marks.
-sidebar = [172.0, 7.0, 6.0]
-buttons = [30.0, 5.0, 5.0, 8.0]
-button-radius = 4.0
-lights = [0xff5f57, 0xfebc2e, 0x28c840]
-address = [26.0, 9.0]
-address-radius = 7.0
-address-text = [10.0, 13.0]
-favorites = [30.0, 5.0]
-favorite-radius = 8.0
-favorite-mark = 12.0
-favorite-mark-radius = 3.5
-favorite-round-radius = 6.0
-favorite-marks = [0x3b6fe0, 0xe5484d, 0xe93d82, 0x0f172a]
-# A row: height, padding, gap and its mark; a mark's corners, square or round.
-row = [26.0, 8.0, 7.0, 11.0]
-row-text = [10.5, 13.0]
-mark-radius = 3.0
-mark-round-radius = 6.0
-# The rows' marks: Roadmap, Budget 2027, the open tab, the parks, the Kestrel.
-marks = [0x5b6b8c, 0x1fa85b, 0xf59e2e, 0x2f9e62, 0x222222]
-# New Tab's row: height, its label's size and line, and its plus.
-new-tab = [22.0, 9.5, 12.0, 9.0]
-# The open tab: its width and its corners on the left.
-open-tab = 165.0
-open-tab-radius = 7.0
-
-# The small page: its inset, its card's corners, its head (height, padding, gap, mark), its
-# picture's height and the article's padding and gap.
-page-inset = 6.0
-page-radius = 8.0
-page-head = [36.0, 16.0, 6.0, 12.0]
-page-head-text = [11.0, 14.0]
-scene-height = 170.0
-article = [22.0, 30.0, 8.0]
-kicker-text = [8.0, 10.0]
-title-text = [22.0, 25.0]
-body-text = [10.5, 16.0]
-# The page's own colours, the same in both appearances: its ground, its ink, its quiet ink, its
-# kicker; the sky's top and foot, the sun, and the hills from the far one.
-page = 0xfaf7f0
-page-ink = 0x16140f
-page-quiet = 0x4a463d
-kicker = 0xa0703a
-sky = [0xf3a98a, 0xf2d7ae]
-sun = 0xfbecd2
-# The sun's left, top and size, and each hill's left, top and size, far to near.
-sun-at = [260.0, 36.0, 56.0]
-hills = [0x8fb47a, 0x6c9d5f, 0x4f8148]
-hills-at = [-80.0, 110.0, 300.0, 160.0, 120.0, 340.0, 20.0, 140.0, 260.0]
-
-# A caption chip over the picture: left, top, height, gap, padding before and after, its icon.
-chip = [44.0, 22.0, 28.0, 8.0, 10.0, 12.0, 13.0]
-chip-radius = 14.0
-chip-text = [12.0, 16.0]
-# Today's tabs sorted into folders, at the tidy step with an assistant (values-first-run.md, 27b):
-# New Tab's row then (height, padding after), Clear's text, the broom's button (width, height,
-# corners, glyph); a folder's text and its tabs' indent; Ferry times' and the Brightcart's marks.
-sorted-new-tab = [24.0, 4.0]
-clear-text = [9.0, 11.0]
-broom-button = [22.0, 18.0, 5.0, 13.0]
-folder-text = [11.0, 13.0]
-folder-indent = 20.0
-sorted-marks = [0x3f7fd9, 0xe0a23a]
-# The thread card in the small sidebar (with an assistant): its corners, padding, gap and its
-# ring; the line inside it; its marks and how far its lines are indented.
-thread-radius = 9.0
-thread = [7.0, 8.0, 5.0, 11.0, 18.0]
-thread-line-alpha = 0.18
-thread-marks = [0xf2b632, 0x2fa08a, 0x6b4df0]
-thread-mark = 10.0
-# The site it hasn't reached yet.
-thread-later = 0.4
-thread-sub-text = [9.5, 12.0]
-thread-count-text = [9.0, 11.0]
-# The favorites' ring: left, top, width, height, its width and its halo's.
-ring = [46.0, 129.0, 168.0, 40.0, 1.5, 6.0]
-ring-radius = 12.0
-ring-alpha = 0.8
-halo-alpha = 0.12
-# A message with a link, as another app shows one: left, top, height, padding, gap, its app's tile.
-notice = [44.0, 10.0, 46.0, 9.0, 14.0, 10.0, 28.0]
-notice-radius = 14.0
-notice-tile-radius = 8.0
-notice-fill = 0x303036
-light-notice-fill = 0xf6f5f1
-notice-alpha = 0.92
-notice-tile = 0x3fa873
-link = 0x7fc4f0
-light-link = 0x2b6fa8
-# The arrow from the message to the window: left, top and size.
-arrow = [372.0, 38.0, 40.0]
-# The small command bar: left, top, width, padding; its row's height and padding; a result's
-# height and its mark.
-bar = [96.0, 150.0, 340.0, 6.0, 36.0, 10.0, 32.0, 16.0]
-bar-at-rest = [96.0, 170.0, 48.0, 14.0]
-bar-radius = 14.0
-bar-gap = 2.0
-bar-row-radius = 9.0
-bar-mark-radius = 5.0
-bar-fill = 0x2e2e34
-light-bar-fill = 0xf6f5f1
-bar-text = [14.0, 18.0]
-bar-marks = [0xedc95a, 0xf29a38]
-bar-key-radius = 6.0
-# The bar at rest, on the keys step: its gap, its key's chip (height, padding) and the chip's text.
-bar-at-rest-gap = 10.0
-bar-key = [20.0, 6.0]
-bar-key-text = [11.0, 14.0]
-# A phone over the window: left, top, width, height, padding, gap; its island and its Spaces.
-phone = [262.0, 226.0, 184.0, 380.0, 16.0, 14.0, 10.0]
-phone-radius = 34.0
-phone-fill = 0x0e0e10
-phone-text = 0xf3f0e8
-phone-title-text = [17.0, 22.0]
-island = [54.0, 16.0]
-island-fill = 0x000000
-island-radius = 8.0
-phone-space = [74.0, 88.0, 8.0]
-phone-space-radius = 14.0
-phone-spaces = [0x7a70f4, 0xe86ba8, 0x3b82f6, 0x2fbfa5, 0xf0803c, 0xd9479b, 0x2a2a2e, 0x2a2a2e]
+# Where the window has a broom, the row that is its control: its top, height and glyph.
+broom = [210.0, 52.0, 14.0]
+# Your first Space, until the theme editor's parts (#4274): the theme picker's swatches in the
+# column, and the transparency picker under them.
+space-gap = 24.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
@@ -3204,13 +2965,14 @@ page-word = 0.4
 page-word-working = 0.8
 page-dot = 5.0
 page-dot-gap = 5.0
-# The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
-# the task works, at this alpha, and goes to the middle, grown, while it asks, both in the title's
-# ink then; done, the ring shrinks away for a tick, in the state line's ink; stopped, the dot goes
-# and the ring shrinks, in the ink at `stopped`. Signal is the working mark only.
+# The glyph: a box at the favicon's column, a ring round a dot at the ring's top, at this alpha,
+# that goes to the middle, grown, while the task asks, both in the title's ink; done, the ring
+# shrinks away for a tick, in the state line's ink; stopped, the dot goes and the ring shrinks, in
+# the ink at `stopped`. A task at work draws the card's ring ([shell.task-card]) instead, held at
+# the top where it rests; no mark is green.
 # The rings are drawn at these values, under the floor text keeps (palette), as they're marks
-# beside a status that says the same in words. On the selected plate's fill, which Signal stands
-# out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
+# beside a status that says the same in words. On the selected plate's fill the ring is as much
+# brighter as `ring-working-selected` is than `ring-working`:
 # a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from the
 # sidebar's own ground, over a black backdrop and a white one.
 glyph = 18.0

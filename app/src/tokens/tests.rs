@@ -109,13 +109,6 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
-    // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
-    // foot's buttons and their key, the keys step's caps, and the picture's panel.
-    "shell.onboarding.window.track-radius",
-    "shell.onboarding.window.button-radius",
-    "shell.onboarding.window.key-radius",
-    "shell.onboarding.window.key-cap-radius",
-    "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
@@ -155,27 +148,6 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset.
-    "shell.onboarding.sheet.slot-radius",
-    // First run's picture, a small browser at the drawing's scale (values-first-run.md).
-    "shell.onboarding.picture.window-radius",
-    "shell.onboarding.picture.button-radius",
-    "shell.onboarding.picture.address-radius",
-    "shell.onboarding.picture.favorite-radius",
-    "shell.onboarding.picture.favorite-mark-radius",
-    "shell.onboarding.picture.mark-radius",
-    "shell.onboarding.picture.open-tab-radius",
-    "shell.onboarding.picture.page-radius",
-    "shell.onboarding.picture.chip-radius",
-    "shell.onboarding.picture.thread-radius",
-    "shell.onboarding.picture.notice-radius",
-    "shell.onboarding.picture.notice-tile-radius",
-    "shell.onboarding.picture.bar-radius",
-    "shell.onboarding.picture.bar-row-radius",
-    "shell.onboarding.picture.bar-mark-radius",
-    "shell.onboarding.picture.phone-radius",
-    "shell.onboarding.picture.island-radius",
-    "shell.onboarding.picture.phone-space-radius",
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",

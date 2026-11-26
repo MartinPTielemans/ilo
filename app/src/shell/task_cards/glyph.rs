@@ -1,6 +1,7 @@
 //! A finished task's mark at rest, as the Library and an ended card show it, and a card's mark.
 //! The task glyph: asking, a grown dot in the middle of a full ring, both in the title's ink;
-//! done, a tick in the state line's ink; stopped, a grey ring. Signal is the working mark only.
+//! done, a tick in the state line's ink; stopped, a grey ring. At work it's the card's ring, held
+//! at the top. No mark is green.
 
 use gpui::{
     BorderStyle, Bounds, Hsla, PathBuilder, Pixels, Point, Window, fill, point, px, quad,
@@ -39,9 +40,7 @@ pub(super) struct Look {
     /// The ring's alpha and its size.
     ring: f32,
     scale: f32,
-    /// How far the ring's and the dot's colour is from Signal to an ink, and how far that ink is
-    /// from the title's to the stopped ring's.
-    inked: f32,
+    /// How far the ring's and the dot's ink is from the title's to the stopped ring's.
     grey: f32,
     /// How far the dot is from the ring to the middle, its size, and its alpha.
     inward: f32,
@@ -56,7 +55,6 @@ impl Look {
         let rest = Look {
             ring: RING_WORKING,
             scale: 1.,
-            inked: 0.,
             grey: 0.,
             inward: 0.,
             dot_scale: 1.,
@@ -67,7 +65,6 @@ impl Look {
             State::Working => rest,
             State::Asks => Look {
                 ring: 1.,
-                inked: 1.,
                 inward: 1.,
                 dot_scale: DOT_ASKS,
                 ..rest
@@ -76,7 +73,6 @@ impl Look {
                 ring: 0.,
                 scale: RING_DONE,
                 // The ring greys as it goes, and comes back from grey.
-                inked: 1.,
                 grey: 1.,
                 inward: 1.,
                 dot_scale: DOT_DONE,
@@ -87,7 +83,6 @@ impl Look {
             State::Stopped => Look {
                 ring: 1.,
                 scale: RING_STOPPED,
-                inked: 1.,
                 grey: 1.,
                 dot: 0.,
                 ..rest
@@ -99,11 +94,10 @@ impl Look {
 /// The tick's three points in the glyph's box.
 const TICK_POINTS: [(f32, f32); 3] = [(5.2, 9.3), (7.8, 11.8), (12.8, 6.4)];
 
-/// The glyph's colours. Signal is the working mark only: asking, the ring and the dot are in the
-/// title's ink, Done's tick is in the state line's, and the stopped ring has its own.
+/// The glyph's colours: asking, the ring and the dot are in the title's ink, Done's tick is in the
+/// state line's, and the stopped ring has its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Inks {
-    pub(super) signal: Hsla,
     pub(super) title: Hsla,
     pub(super) status: Hsla,
     pub(super) stopped: Hsla,
@@ -112,14 +106,18 @@ pub(super) struct Inks {
 impl Inks {
     /// The ring's and the dot's colour in `look`.
     fn of(&self, look: Look) -> Hsla {
-        let ink = mix(self.title, self.stopped, look.grey);
-        mix(self.signal, ink, look.inked)
+        mix(self.title, self.stopped, look.grey)
     }
 }
 
-/// Paints `look` in `bounds`, the glyph's box, in `inks`. On the selected plate's fill, which
-/// Signal stands out from less, the ring is as much brighter as the working ring's
-/// `ring-working-selected` is.
+/// The mark a task at rest in `state` draws in place of today's glyph, as the Library shows it: at
+/// work the card's ring, held at the top; none in any other state.
+pub(super) fn at_rest(state: State) -> Option<Mark> {
+    (state == State::Working).then_some(Mark::Ring { turns: 0. })
+}
+
+/// Paints `look` in `bounds`, the glyph's box, in `inks`. On the selected plate's fill the ring is as
+/// much brighter as the working ring's `ring-working-selected` is.
 pub(super) fn paint(
     look: Look,
     bounds: Bounds<Pixels>,
@@ -353,26 +351,27 @@ fn mix(from: Hsla, to: Hsla, way: f32) -> Hsla {
 mod tests {
     use gpui::{Hsla, hsla};
 
-    use super::{Inks, Look, State};
+    use super::{Inks, Look, Mark, State, at_rest};
 
-    /// Signal is the working mark only: the ring and the dot are in it while the task works, in
-    /// the title's ink while it asks, and the stopped ring is in its own. Nothing of a look at
-    /// rest but the working one has any Signal in it.
+    /// No mark is green (spec-bar-composer, "The greens still worn"): at work a task at rest draws
+    /// the card's ring, held at the top, in the window's ink; asking, the ring and the dot are in
+    /// the title's ink, and the stopped ring is in its own.
     #[test]
-    fn only_the_working_glyph_is_in_signal() {
+    fn no_glyph_is_green_and_work_is_the_cards_ring() {
         let ink = |h: f32| -> Hsla { hsla(h, 0.5, 0.5, 1.) };
         let inks = Inks {
-            signal: ink(0.4),
             title: ink(0.),
             status: ink(0.6),
             stopped: ink(0.8),
         };
-        assert_eq!(inks.of(Look::of(State::Working)), inks.signal);
+        assert_eq!(at_rest(State::Working), Some(Mark::Ring { turns: 0. }));
+        for state in [State::Asks, State::Done, State::Stopped] {
+            assert_eq!(at_rest(state), None, "{state:?} keeps today's glyph");
+        }
         assert_eq!(inks.of(Look::of(State::Asks)), inks.title);
         assert_eq!(inks.of(Look::of(State::Stopped)), inks.stopped);
         // Done has neither ring nor dot, so its tick, in the state line's ink, is all of it.
         let done = Look::of(State::Done);
         assert_eq!((done.ring, done.dot, done.tick), (0., 0., 1.));
-        assert_eq!(done.inked, 1., "Done's ring would come back in Signal");
     }
 }

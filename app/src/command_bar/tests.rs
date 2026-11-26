@@ -3960,6 +3960,40 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
 }
 
+/// Going back from ⌘T's composer keeps the words and asks nothing for them until the user's
+/// next edit: words written for an assistant don't go to the search provider for ⇥, ⇧⇥ or Esc.
+#[gpui::test]
+fn leaving_the_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    let asked = |bar: &mut Bar| -> Vec<String> {
+        (bar.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect()
+    };
+    for back in ["tab", "shift-tab", "escape"] {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("book");
+        bar.keys("tab");
+        bar.type_text(" a table for two");
+        asked(&mut bar);
+        bar.keys(back);
+        assert_eq!(
+            asked(&mut bar),
+            Vec::<String>::new(),
+            "{back} sent the words"
+        );
+        if back == "escape" {
+            continue;
+        }
+        assert_eq!(
+            bar.input().0,
+            "book a table for two",
+            "{back} lost the words"
+        );
+        bar.type_text("!");
+        assert_eq!(asked(&mut bar), ["book a table for two!"]);
+    }
+}
+
 /// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
 /// over a private window or with no assistant set up it says E1, as before. The words follow the
 /// assistants the browser learns while the bar shows.
@@ -4900,6 +4934,45 @@ impl Resting {
             .collect()
     }
 
+    /// Picks row `at` of the composer's model menu, as `pick_level` does its level.
+    fn pick_model(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.model_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no model menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// The composer's level, and whether a model is picked on its menu, while it shows.
+    fn picks(&mut self) -> Option<(Tier, bool)> {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                (rest.bar.read(cx).ask.as_ref()).map(|ask| (ask.tier, ask.model.is_some()))
+            })
+            .unwrap()
+    }
+
+    /// The page the bar rests in is another empty Space's now.
+    fn change_space(&mut self) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.space_changed(window, cx))
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
     /// Picks row `at` of the composer's effort menu, as `pick_level` does its level.
     fn pick_effort(&mut self, at: usize) {
         let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
@@ -4919,6 +4992,55 @@ impl Resting {
             .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
         self.cx.run_until_parked();
     }
+}
+
+/// Going back from the composer at rest keeps the words and asks nothing for them until the
+/// user's next edit: ⇥, ⇧⇥, Esc and a change of Space send nothing to the search provider.
+#[gpui::test]
+fn leaving_a_resting_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    for back in ["tab", "shift-tab", "escape", "another Space"] {
+        let mut rest = Resting::with_claude(cx);
+        rest.type_text("book");
+        rest.keys("tab");
+        rest.type_text(" a table");
+        rest.asked();
+        match back {
+            "another Space" => rest.change_space(),
+            keys => rest.keys(keys),
+        }
+        assert_eq!(rest.composer(), (false, "book a table".into()), "{back}");
+        assert_eq!(rest.asked(), Vec::<String>::new(), "{back} sent the words");
+        rest.type_text("!");
+        assert_eq!(rest.asked(), ["book a table!"], "{back}");
+    }
+}
+
+/// A composer open at rest doesn't carry into another Space: the bar is search again there with
+/// the words kept, and the level and model picked are gone, so ⇥ there opens the composer as the
+/// host last started a thread, and ↩ starts nothing of the Space before's.
+#[gpui::test]
+fn a_composer_at_rest_doesnt_carry_into_another_space(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_level(2);
+    rest.pick_model(4);
+    assert_eq!(
+        rest.picks(),
+        Some((Tier::Full, true)),
+        "the picks didn't take"
+    );
+
+    rest.change_space();
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    rest.keys("tab");
+    assert_eq!(rest.picks(), Some((Tier::Work, false)), "a pick came along");
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table", "at rest"]
+    );
 }
 
 /// A thread started from the composer at rest goes with the effort picked on its menu, as ⌘T's

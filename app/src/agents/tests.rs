@@ -601,8 +601,18 @@ pub(crate) fn stand_in(
     looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    stand_in_with(looked, Vec::new(), cx)
+}
+
+/// As `stand_in`, with `found` the clients whose files the stat finds on the made-up computer.
+pub(crate) fn stand_in_with(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    found: Vec<Client>,
+    cx: &mut App,
+) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
     let configs = Arc::new(Configs::default());
     *configs.looked.lock().unwrap() = looked;
+    *configs.found.lock().unwrap() = found;
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let number = NEXT.fetch_add(1, Ordering::SeqCst);
     let folder = std::env::temp_dir().join(format!("agents-in-{}-{number}", std::process::id()));
@@ -873,6 +883,59 @@ fn providers_found(
             .map(|(cli, row, model)| (cli, row.offer, model))
             .collect()
     })
+}
+
+/// Overview's loose ends read what the app already found and ask nothing: a sign-in is one only
+/// for an assistant known signed out or missing while another is signed in, none while its state
+/// is unknown or threads are off, none once put away, and no assistant is looked for to list them.
+#[gpui::test]
+fn overview_lists_only_what_the_app_already_knows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::settings_overview::{LooseEnd, PutAway, loose_ends};
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let found = |cli, ready, cx: &mut TestAppContext| {
+        agents.update(cx, |agents, _| {
+            let found = Found {
+                ready,
+                ..Default::default()
+            };
+            agents.tasks.found.insert(cli, found);
+        })
+    };
+    let listed = |away: &PutAway, cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| loose_ends(agents, away))
+    };
+    let away = PutAway::default();
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(true, Ordering::SeqCst)
+    });
+    let looks = configs.looks.load(Ordering::SeqCst);
+    assert_eq!(listed(&away, cx), [], "nothing known, nothing listed");
+    found(Cli::Claude, Ready::SignedIn, cx);
+    assert_eq!(listed(&away, cx), [], "ChatGPT's state isn't known");
+    found(Cli::Codex, Ready::SignedOut, cx);
+    assert_eq!(listed(&away, cx), [LooseEnd::SignIn(Cli::Codex)]);
+    found(Cli::Claude, Ready::SignedOut, cx);
+    assert_eq!(
+        listed(&away, cx),
+        [],
+        "with none signed in, threads don't run without it"
+    );
+    found(Cli::Claude, Ready::SignedIn, cx);
+    let mut away = PutAway::default();
+    away.put_away(&LooseEnd::SignIn(Cli::Codex).key());
+    assert_eq!(listed(&away, cx), [], "a put-away loose end came back");
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(false, Ordering::SeqCst)
+    });
+    assert_eq!(listed(&PutAway::default(), cx), [], "threads are off");
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        looks,
+        "Overview looked for an assistant"
+    );
 }
 
 /// Models is never only its title: an assistant not on this computer is listed with what Settings
@@ -9754,7 +9817,9 @@ mod tasks {
                 tabs: Vec::new(),
             };
         });
-        assert_eq!(card_of(&agents, cx).line, None, "Finished says Done twice");
+        let card = card_of(&agents, cx);
+        assert_eq!(card.line, None, "a line would say Done twice");
+        assert_eq!(card.status.as_ref(), card.word.after_name());
     }
 
     /// A done card's line is cleaned as a title is: a link shows its label alone, what wouldn't
@@ -12261,15 +12326,34 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.take_over("mcp-client", 30, cx));
         assert_eq!(
             named(&agents, cx),
-            ("MCP client".into(), Some("MCP client".into())),
+            ("Another app".into(), Some("Another app".into())),
             "a client that gave no name has its kind's"
         );
+        let nameless = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.nameless("mcp-client"))
+        };
+        assert!(nameless(&agents, cx), "no name of its own");
+        // One naming itself the kind's word lands on that same word, with no name of its own.
+        hello(&agents, "mcp-client", "Another app", cx);
+        assert_eq!(
+            named(&agents, cx),
+            ("Another app".into(), Some("Another app".into()))
+        );
+        assert!(nameless(&agents, cx), "Another app passed as a name");
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's.
+        // its kind's: the app's name, and the product's as the user reads it, in any case.
         let app = env!("APP_NAME");
+        let product = crate::product::PRODUCT;
+        let mut capital = product.chars();
+        let capital = capital.next().map_or(String::new(), |first| {
+            first.to_uppercase().chain(capital).collect()
+        });
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
+            product.to_string(),
+            format!("{} agent", product.to_uppercase()),
+            format!("My {capital} helper"),
             "The browser".into(),
             "Checked by your browser".into(),
             // Another client's name is that client's, however it's spaced, joined or stopped, and
@@ -12305,11 +12389,14 @@ mod sessions {
             "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
-            assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
+            assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
+            assert!(nameless(&agents, cx), "{posing} passed as a name");
         }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
         for taken in [
+            // The kind's old word is a name like any other.
+            "MCP client",
             "Browser Use",
             "Checker",
             "Ren\u{00E9}e",
@@ -12325,6 +12412,7 @@ mod sessions {
         assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+        assert!(!nameless(&agents, cx), "a name of its own");
 
         // Its session's card has that name, and keeps it while it works.
         let (reply, _answer) = mpsc::channel();
@@ -12603,6 +12691,7 @@ mod sessions {
             (card.dot, card.status.as_ref()),
             (Dot::Done, "Done · 1 order placed")
         );
+        assert!(card.fuller, "a session's receipt isn't its word's form");
         assert_eq!(card.open, vec![(20, "example.com".into())]);
         assert!(
             (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
@@ -12649,6 +12738,44 @@ mod sessions {
         let card = cards(&agents, cx).remove(0);
         assert_eq!(card.dot, Dot::Waiting);
         assert!(card.question.is_some());
+    }
+
+    /// What a `done` came to is a fact, which its caller logs by whatever its answer says: one
+    /// refused for a call still under way is in the activity log with why, the one that ends the
+    /// task is there too, and one with nothing under way is no error and isn't logged.
+    #[gpui::test]
+    fn done_is_logged_by_what_it_came_to(cx: &mut TestAppContext) {
+        use crate::agents::task::SaidDone;
+        let (agents, _browser) = at_work(cx);
+        let dones = |cx: &mut TestAppContext| -> Vec<String> {
+            (log(&agents, "claude-code", cx).into_iter())
+                .filter(|entry| entry.0 == "done")
+                .map(|entry| entry.2)
+                .collect()
+        };
+        // Its read_page, call 2, is still under way.
+        let refused = call_as(&agents, 3, "done", json!({}), cx).recv().unwrap();
+        answered(&agents, 3, cx);
+        assert!(refused.error, "{}", refused.text);
+        assert_eq!(dones(cx), [refused.text.clone()]);
+        answered(&agents, 2, cx);
+        let said = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        answered(&agents, 4, cx);
+        assert_eq!(said, SaidDone::Ended.answer());
+        let mut logged = dones(cx);
+        logged.sort();
+        assert_eq!(logged, [String::new(), refused.text]);
+        // Nothing under way: answered as such, with nothing more in the log.
+        let nothing = agents.update(cx, |agents, cx| agents.said_done("claude-code", 5, cx));
+        assert_eq!(nothing, SaidDone::NoTask);
+        let again = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(again, SaidDone::NoTask.answer());
+        assert!(!again.error, "{}", again.text);
+        assert_eq!(
+            dones(cx).len(),
+            2,
+            "a done with nothing under way was logged"
+        );
     }
 
     /// Either card's Stop stops the client on every connection, and each connection's card, which
@@ -12843,7 +12970,7 @@ mod sessions {
             " CODEX",
             "Claude-Code.",
             "My Codex",
-            "MCP  client",
+            "Another  app",
             "C\u{043E}dex",
         ] {
             hello(&agents, agent, posing, cx);

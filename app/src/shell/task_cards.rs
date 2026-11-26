@@ -25,14 +25,14 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, Hsla, Pixels, Role, SharedString, Window, accesskit::Live, canvas,
-    div, point, prelude::*, px, rgb,
+    div, point, prelude::*, px,
 };
 
 use super::agent_bar;
 use super::page_ends::StripStop;
 use super::{
     Curve as RowCurve, Edit, FAVICON_X, HOVERED, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    ROW_HEIGHT, STATUS_AGENT, Shell, Slot, TITLE, TITLE_END_INSET, TITLE_GAP, What, title,
+    ROW_HEIGHT, Shell, Slot, TITLE, TITLE_END_INSET, TITLE_GAP, What, title,
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
@@ -121,13 +121,7 @@ fn chip(card: &Card) -> Option<Chip> {
 /// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
 /// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
 fn state_line(card: &Card) -> SharedString {
-    let fuller = match card.word {
-        Word::Stopped => card.status.starts_with("Stopped"),
-        Word::Done => !card.replies && card.status.starts_with("Done"),
-        Word::Working => card.status.starts_with("Working · "),
-        _ => false,
-    };
-    let state = match fuller {
+    let state = match card.fuller {
         true => card.status.as_ref(),
         false => card.word.after_name(),
     };
@@ -548,8 +542,8 @@ impl Shell {
                 }
             }
         }
-        self.task_cards = cards;
-        self.keep_plates();
+        let before = std::mem::replace(&mut self.task_cards, cards);
+        self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {
             let telling = self
@@ -748,21 +742,30 @@ impl Shell {
         }
     }
 
-    /// The glyph's colours: Signal, a title's ink and a state line's, and the stopped ring's, the
-    /// ink at `stopped`, under the floor text keeps, as it's a mark beside words that say the task
+    /// The glyph's colours: a title's ink and a state line's, and the stopped ring's, the ink at
+    /// `stopped`, under the floor text keeps, as it's a mark beside words that say the task
     /// stopped.
     fn glyph_inks(&self) -> glyph::Inks {
         glyph::Inks {
-            signal: rgb(STATUS_AGENT).into(),
             title: self.palette.text(TITLE),
             status: self.palette.gray(STATUS),
             stopped: Hsla::from(self.palette.ink).opacity(STOPPED),
         }
     }
 
-    /// A finished task's mark at rest, as the Library shows it: Done's tick, or the grey ring of
-    /// one stopped or failed, in the glyph's box.
-    pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
+    /// A task's mark at rest, as the Library shows it: Done's tick, or the grey ring of one stopped
+    /// or failed, in the glyph's box; at work the card's ring, held at the top.
+    pub(super) fn status_mark(&self, dot: Dot) -> AnyElement {
+        if let Some(mark) = glyph::at_rest(State::from(dot)) {
+            return div()
+                .flex_none()
+                .size(px(GLYPH))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(self.mark_canvas(mark))
+                .into_any_element();
+        }
         let look = Look::of(State::from(dot));
         let inks = self.glyph_inks();
         canvas(
@@ -770,6 +773,7 @@ impl Shell {
             move |bounds, _, window, _| glyph::paint(look, bounds, inks, false, window),
         )
         .size(px(GLYPH))
+        .into_any_element()
     }
 
     /// The mark of `agent`'s card as the list draws it now, for the strip under its page watched to

@@ -213,6 +213,7 @@ pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
 pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
+pub use onboarding::first_run_waiting;
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
 pub use pair::{Pair, PairKind};
@@ -6293,7 +6294,7 @@ fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32)
     let fill = palette.shown(hover).opacity(opacity);
     #[cfg(test)]
     SHOWN_FILL.set(Some(fill));
-    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+    plate.bg(fill)
 }
 
 #[cfg(test)]

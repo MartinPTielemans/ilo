@@ -1043,8 +1043,11 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        // Its colours are the bar's to give each time it draws.
-        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
+        // Its colours are the bar's to give each time it draws. At rest the field takes the
+        // keyboard by itself as the last page leaves, so ⌘Z there is for what the user did.
+        TextInput::new(PLACEHOLDER_TEXT, cx)
+            .paste_and_go()
+            .passes_undo(surface == Surface::InPlace)
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
@@ -2084,6 +2087,17 @@ impl CommandBar {
     /// Lists the rows for `text` in the input from the start: the Space's tabs for none, else the
     /// core's suggestions once they come, and none until then.
     fn ask_for(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.keep_asked(text, window, cx);
+        if !self.asked.is_empty() {
+            self.answers_here(window, cx);
+            let site = self.site.as_ref().map(|site| site.keyword.as_str());
+            self.host.suggest(site, &self.asked, false);
+        }
+    }
+
+    /// Takes `text` as what's typed, the rows the tabs with nothing typed and none otherwise,
+    /// asking the core nothing for it.
+    fn keep_asked(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         self.asked = text;
         self.asked_at = Instant::now();
         self.complete = false;
@@ -2094,11 +2108,6 @@ impl CommandBar {
             Vec::new()
         };
         self.set_rows(String::new(), rows, window, cx);
-        if !self.asked.is_empty() {
-            self.answers_here(window, cx);
-            let site = self.site.as_ref().map(|site| site.keyword.as_str());
-            self.host.suggest(site, &self.asked, false);
-        }
     }
 
     /// What the core was last asked for, as its suggestions name it: what was typed, after the
@@ -2377,15 +2386,16 @@ impl CommandBar {
         Some(next_model(picked, agent))
     }
 
-    /// Leaves the ask, if the bar is in one: what was typed stays, and its suggestions come again.
-    /// Returns whether it was in one.
+    /// Leaves the ask, if the bar is in one: what was typed stays, and nothing is asked for it
+    /// until the user's next edit, so words written for an assistant don't go to the search
+    /// provider for going back. Returns whether it was in one.
     fn leave_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.end_ask(cx) {
             return false;
         }
         log!("browser: command bar leaves the ask");
         let text = self.input.read(cx).text().to_string();
-        self.ask_for(text, window, cx);
+        self.keep_asked(text, window, cx);
         true
     }
 
@@ -4296,10 +4306,30 @@ impl CommandBar {
         self.ask.is_some()
     }
 
+    /// The assistant the composer would start its thread on, by id.
+    #[cfg(test)]
+    pub fn composer_agent(&self) -> Option<SharedString> {
+        self.composer_assistant().map(|agent| agent.id.clone())
+    }
+
+    /// Its field.
+    #[cfg(test)]
+    pub fn field(&self) -> Entity<TextInput> {
+        self.input.clone()
+    }
+
     /// What its field says with nothing typed.
     #[cfg(test)]
     pub fn placeholder(&self, cx: &App) -> SharedString {
         self.input.read(cx).placeholder().clone()
+    }
+
+    /// The resting bar's page is another empty Space's now. A composer open in the Space before
+    /// doesn't carry over, since that Space may be another profile's, whose remembered level is
+    /// its own: the bar is search again with the words kept, as ⌘T's keeps them on a change of
+    /// Space, and the level and model picked go with the composer.
+    pub fn space_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_ask(window, cx);
     }
 
     /// What the browser knows of the agents changed, as after it learned which are ready: a

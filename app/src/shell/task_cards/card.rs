@@ -174,6 +174,11 @@ impl Shell {
                     .into_any_element();
             }
         };
+        self.mark_canvas(mark)
+    }
+
+    /// `mark` in the card's glyph box, in the window's ink.
+    pub(super) fn mark_canvas(&self, mark: Mark) -> AnyElement {
         let inks = self.mark_inks();
         canvas(
             |_, _, _| {},

@@ -1189,7 +1189,6 @@ impl Agents {
         }))
         .collect();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -2223,17 +2222,12 @@ impl Agents {
             "done" if !is_task(&agent) => {
                 let said = self.said_done(&agent, id, cx);
                 match &said {
-                    Ok(text) if text.starts_with("Your task") => {
-                        self.note(&agent, connection, "done", "", "")
-                    }
-                    Err(why) => self.note(&agent, connection, "done", "", why),
-                    Ok(_) => {}
+                    task::SaidDone::Ended => self.note(&agent, connection, "done", "", ""),
+                    task::SaidDone::UnderWay(why) => self.note(&agent, connection, "done", "", why),
+                    task::SaidDone::NoTask => {}
                 }
                 cx.notify();
-                _ = reply.send(match said {
-                    Ok(text) => ToolResult::text(text),
-                    Err(why) => ToolResult::error(why),
-                });
+                _ = reply.send(said.answer());
             }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
@@ -2518,6 +2512,26 @@ impl Agents {
             Some(task) => task.name.clone(),
             None => (self.given_name(agent)).unwrap_or_else(|| name(agent).to_string().into()),
         }
+    }
+
+    /// Whether `agent_name` is the kind's name because the app gave none of its own, or gave one
+    /// treated as none: a fact `hello` keeps, never read from the name's words.
+    pub fn nameless(&self, agent: &str) -> bool {
+        if self.task(agent).is_some() {
+            return false;
+        }
+        let session = (self.tasks.tasks.iter()).find(|task| {
+            task.state == task::State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        let connection = match session {
+            Some(task) => task.session.as_ref().map(|session| session.connection),
+            None => (self.tasks.names.keys())
+                .filter(|(each, _)| each == agent)
+                .map(|(_, on)| *on)
+                .max(),
+        };
+        self.nameless_on(agent, connection)
     }
 
     /// Starts the run's next step, which answers it through `advance`.
@@ -5459,7 +5473,6 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
-            "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({

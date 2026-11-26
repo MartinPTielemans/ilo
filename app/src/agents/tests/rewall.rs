@@ -165,11 +165,10 @@ fn walled(args: &[String]) -> bool {
 }
 
 /// A task with files starts inside a wall of its level, and its assistant keeps no conversation
-/// of it, whatever the switch says.
+/// of it, which its conversation says once it's stopped.
 #[gpui::test]
 fn a_task_with_files_starts_inside_its_wall_and_keeps_nothing(cx: &mut TestAppContext) {
     let (run, walls, agent) = started("starts", folder(), cx);
-    assert!(run.agents.read_with(cx, |agents, _| agents.keeps_tasks()));
     let (args, first) = run.ran(1);
     assert_eq!(walls.asked(), [(Tier::Work, true, false)]);
     assert!(walled(&args), "{args:?}");
@@ -184,6 +183,9 @@ fn a_task_with_files_starts_inside_its_wall_and_keeps_nothing(cx: &mut TestAppCo
         run.agents.read_with(cx, |agents, _| agents.kept_tasks().0),
         0
     );
+    // Stopped, it says so where its reply field was, as nothing of it was kept to go on with.
+    (run.agents).update(cx, |agents, cx| agents.stop_task(&agent, cx));
+    assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::NotKept));
 }
 
 /// A task with no files is never asked a wall for, at its start or as its level changes, and a

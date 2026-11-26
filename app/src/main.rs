@@ -397,8 +397,8 @@ fn leave_agent_space(window: bc::bc_id) {
 /// that launched the browser, open on top either way, in this window, the one in front, the links
 /// where Settings › Links sends them. With nothing to bring back and nothing to open, it's a new
 /// profile's first run: `shell` plays the onboarding, then shows the welcome on the empty card. This
-/// is its only way in at launch, so a launch that brings Spaces back never reads more than
-/// `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
+/// is its only way in at launch, so a launch that brings Spaces back reads only `restored` and
+/// whether a first run left under way by ⌘Q waits to resume (onboarding/resume.rs). check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
 /// run's, which sets "light" or "dark".
 fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -> bool {
     let start = Instant::now();
@@ -420,7 +420,12 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     let notes = browser::updates::notes_to_open(notes, std::path::Path::new(&profile_dir()));
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
-        Err(_) if !restored && links.is_empty() && notes.is_none() => {
+        // A first run left under way by ⌘Q plays again at its step, though its Space came back.
+        Err(_)
+            if links.is_empty()
+                && notes.is_none()
+                && (!restored || browser::shell::first_run_waiting(&profile_dir())) =>
+        {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell
                 .update(cx, |shell, _, cx| {

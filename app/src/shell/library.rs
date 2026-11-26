@@ -154,7 +154,6 @@ use crate::tokens::shell::library::ARCHIVED_RADIUS;
 use crate::tokens::shell::library::ARCHIVED_RIGHT;
 use crate::tokens::shell::library::ARCHIVED_TEXT_X;
 use crate::tokens::shell::library::HEADING_BOTTOM;
-use crate::tokens::shell::library::HEADING_GAP;
 use crate::tokens::shell::library::HEADING_HEIGHT;
 use crate::tokens::shell::library::HEADING_TOP;
 use crate::tokens::shell::library::HEADING_X;
@@ -1806,11 +1805,7 @@ impl Shell {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
             (Section::Spaces, _) => "",
-            (Section::Archive, true) if tasks => concat!(
-                "Finished threads stay here until ",
-                env!("PRODUCT_NAME"),
-                " quits."
-            ),
+            (Section::Archive, true) if tasks => "Archived threads show here.",
             (Section::Archive, false) if tasks => "No threads match.",
             (Section::Archive, unsearched) => match (self.archive_only(), unsearched) {
                 (Only::Visited, true) => "Pages you visit show here.",
@@ -1820,7 +1815,7 @@ impl Shell {
                 (_, true) => "Pages you visit and tabs you close show here.",
                 (_, false) => "No pages match.",
             },
-            (Section::Agents, true) => "Your agents' finished threads stay here for 30 days.",
+            (Section::Agents, true) => "Archived threads stay here for 30 days.",
             (Section::Agents, false) => "No threads match.",
             (Section::Boosts, true) => {
                 "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
@@ -2680,11 +2675,7 @@ impl Shell {
         let tab = match *item {
             Item::Heading(heading) => {
                 return div()
-                    .pt(px(if index == 0 {
-                        HEADING_TOP
-                    } else {
-                        HEADING_TOP + HEADING_GAP
-                    }))
+                    .pt(px(HEADING_TOP))
                     .pb(px(HEADING_BOTTOM))
                     .pl(px(HEADING_X))
                     .child(
@@ -2693,6 +2684,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .text_size(px(text::SMALL))
+                            .line_height(px(HEADING_HEIGHT))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(self.palette.gray(SECONDARY))
                             .child(heading),
@@ -4320,7 +4312,7 @@ impl Shell {
             .justify_center()
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
-            .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
+            .map(|button| self.with_tip_frame(button, command, cx))
             .when(!plated, |button| {
                 button
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))

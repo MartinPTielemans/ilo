@@ -1249,6 +1249,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1611,6 +1612,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1655,7 +1657,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![done.clone()], cx));
     assert_eq!(
         says(&shell, cx),
-        ("Claude finished".into(), "gulbenkian.pt".into(), false)
+        ("Claude, done".into(), "gulbenkian.pt".into(), false)
     );
     // Of the pages it left, the strip opens the page shown alone, and has nothing once it moved.
     let open = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
@@ -1981,9 +1983,9 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
         )
     );
     shell.update(cx, |shell, cx| {
-        shell.set_agent_status(held("MCP client"), cx)
+        shell.set_agent_status(held("Another app"), cx)
     });
-    assert_eq!(says(&shell, cx).0, "MCP client needs you");
+    assert_eq!(says(&shell, cx).0, "Another app needs you");
 }
 
 /// While a task works on several pages, the strip under each says that page's own step, never
@@ -2021,6 +2023,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2085,6 +2088,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2292,6 +2296,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
