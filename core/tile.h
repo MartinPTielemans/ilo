@@ -35,6 +35,13 @@ void PageViewChanged(bc_id tab);
 // Whether |tab|'s page is in a tile, live or parked, whose own asks to be activated are refused.
 bool Holds(bc_id tab);
 
+// Whether the user sees |tab|'s page, in a window's pane or a live tile (TileRule::InSight).
+bool InSight(bc_id tab);
+
+// |tab|'s page died, or isn't dead any more: its tile leaves its place to the app's card under
+// it, as a window's pane does, until then. Nothing if it's in no tile.
+void Died(bc_id tab, bool died);
+
 }  // namespace browser_core::tiles
 
 #endif  // BROWSER_CORE_TILE_H_

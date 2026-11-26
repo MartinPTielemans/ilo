@@ -279,6 +279,8 @@ class Tab : public content::WebContentsObserver,
   // For a window that stopped showing the tab: a page whose renderer died is unloaded rather than
   // kept with nothing to show, so it loads again once it's shown.
   void LeftWindow();
+  // The same for a tile that ended, unless a window or another tile has the page by then.
+  void LeftTile();
   // Whether the page's renderer died while a window showed it, so its pane shows the app's card in
   // place of the page until it's loaded again.
   bool crashed() const { return crashed_; }
@@ -443,6 +445,8 @@ class Tab : public content::WebContentsObserver,
   // Lays out each window showing the tab, from a task of its own, so a crashed page's pane shows
   // the app's card, or the page again.
   void LayOutSoon();
+  // Unloads a page that died, now out of sight.
+  void UnloadDead();
   // Puts the core's error page on the pane's colour, and every other page back on Chrome's white.
   void ShowOnPageColor();
   // Drops the system page, and has the window show Chromium's view in its place.

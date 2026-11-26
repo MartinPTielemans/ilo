@@ -76,6 +76,10 @@ bool TileRule::InTile(uint64_t tab) const {
   return Holds(tab) || Parked(tab);
 }
 
+bool TileRule::InSight(uint64_t tab, bool window_shows) const {
+  return window_shows || Holds(tab);
+}
+
 // static
 const char* TileRule::Name(Shown shown) {
   switch (shown) {

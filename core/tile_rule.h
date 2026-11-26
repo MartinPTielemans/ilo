@@ -52,6 +52,11 @@ class TileRule {
   // Whether |tab|'s page is in a tile's view, live or parked: a page committing there keeps the
   // page's size, and the page's focus() and its menu are refused, as a live tile's are.
   bool InTile(uint64_t tab) const;
+  // Whether the user sees |tab|'s page, which a window shows if |window_shows|: in a window's pane
+  // or in a live tile. One that dies there is called crashed and gets the app's card, and nothing
+  // loads it again by itself (#3433). Any other that dies is unloaded: a parked one, which draws
+  // nothing, and one a card has, as before tiles.
+  bool InSight(uint64_t tab, bool window_shows) const;
 
   // The word the core's log line uses for |shown|.
   static const char* Name(Shown shown);

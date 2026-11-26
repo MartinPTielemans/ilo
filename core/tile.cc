@@ -87,11 +87,17 @@ void EndTile(bc_id tab) {
   if (content::WebContents* contents = Tab::FromId(tab)) {
     platform::ParkTile(contents);
   }
+  if (Tab* left = Tab::Get(tab)) {
+    left->LeftTile();
+  }
 }
 
 void ShowInCard(bc_id tab) {
   const bool parked = Rule().Parked(tab);
   Out(tab, Rule().ShowInCard(tab), parked, /*leaves_window=*/true);
+  if (Tab* left = Tab::Get(tab)) {
+    left->LeftTile();
+  }
 }
 
 void PageViewChanged(bc_id tab) {
@@ -105,6 +111,19 @@ void PageViewChanged(bc_id tab) {
 
 bool Holds(bc_id tab) {
   return Rule().InTile(tab);
+}
+
+bool InSight(bc_id tab) {
+  return Rule().InSight(tab, Window::Showing(tab) != nullptr);
+}
+
+void Died(bc_id tab, bool died) {
+  if (!Rule().InTile(tab)) {
+    return;
+  }
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::HideTile(contents, died);
+  }
 }
 
 }  // namespace browser_core::tiles

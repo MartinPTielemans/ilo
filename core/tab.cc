@@ -1513,6 +1513,7 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
     link_preview_ask_.Forget();
     TellBackground(background_.LeftPage(Window::Showing(id_) != nullptr));
     if (std::exchange(crashed_, false)) {
+      tiles::Died(id_, false);
       LayOutSoon();
       CoverChangedSoon();
     }
@@ -1771,8 +1772,9 @@ void Tab::RenderViewReady() {
   if (page_color_) {
     SetPageColor(*page_color_);
   }
-  // A page that died has a renderer again, loading it: its pane shows it again.
+  // A page that died has a renderer again, loading it: its pane or its tile shows it again.
   if (std::exchange(crashed_, false)) {
+    tiles::Died(id_, false);
     LayOutSoon();
     CoverChangedSoon();
     StateChanged();
@@ -1956,8 +1958,9 @@ void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
         FROM_HERE, base::BindOnce(&Tab::Reload, weak_factory_.GetWeakPtr(),
                                   *std::exchange(reload_after_kill_, std::nullopt)));
   } else if (Died(status) && !browser_shutdown::HasShutdownStarted()) {
-    if (Window::Showing(id_)) {
+    if (tiles::InSight(id_)) {
       crashed_ = true;
+      tiles::Died(id_, true);
       LayOutSoon();
       CoverChangedSoon();
     } else {
@@ -2051,15 +2054,39 @@ void Tab::LeftWindow() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Tab> tab) {
-                       if (tab && tab->crashed_ && tab->web_contents() &&
-                           !Window::Showing(tab->id_)) {
-                         tab->crashed_ = false;
-                         tab->CoverChanged();
-                         tab->web_contents()->GetController().SetNeedsReload();
-                         tab->StateChanged();
+                       if (tab && !Window::Showing(tab->id_)) {
+                         tab->UnloadDead();
                        }
                      },
                      weak_factory_.GetWeakPtr()));
+}
+
+void Tab::LeftTile() {
+  if (!crashed_) {
+    return;
+  }
+  // Posted: the app is in the call that ended the tile, and a window or another of its views may
+  // be taking the page.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<Tab> tab) {
+                       if (tab && !tiles::InSight(tab->id_)) {
+                         tab->UnloadDead();
+                       }
+                     },
+                     weak_factory_.GetWeakPtr()));
+}
+
+void Tab::UnloadDead() {
+  if (!crashed_ || !web_contents()) {
+    return;
+  }
+  crashed_ = false;
+  // A tile it's parked in draws its next page.
+  tiles::Died(id_, false);
+  CoverChanged();
+  web_contents()->GetController().SetNeedsReload();
+  StateChanged();
 }
 
 void Tab::LayOutSoon() {

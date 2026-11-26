@@ -1581,6 +1581,8 @@ void EndTile(content::WebContents*, bool) {}
 
 void ParkTile(content::WebContents*) {}
 
+void HideTile(content::WebContents*, bool) {}
+
 void TilePageChanged(content::WebContents*) {}
 
 void StretchOnResize(content::RenderWidgetHostView*, bool) {
