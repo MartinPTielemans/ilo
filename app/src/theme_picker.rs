@@ -2170,15 +2170,25 @@ impl Render for ThemePicker {
                 .child("Reset")
         });
 
+        // The appearance radios and the palette radios each a group a reader hears by its name
+        // (ZT7, ZT8), laid over the whole panel so their places stay the panel's.
+        let group = |id: &'static str, name: &'static str| {
+            div()
+                .id(id)
+                .absolute()
+                .inset_0()
+                .when(a11y, |group| group.role(Role::RadioGroup).aria_label(name))
+        };
+
         root.child(
             picker
                 .children(card)
                 .children(tint)
                 .children(head)
                 .child(segments)
-                .children(segment_words)
+                .child(group("appearances", "Appearance").children(segment_words))
                 .child(palettes_label)
-                .children(discs)
+                .child(group("palettes", "Palettes").children(discs))
                 .child(pad)
                 .children(bars)
                 .children(note)
