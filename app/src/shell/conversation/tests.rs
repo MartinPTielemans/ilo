@@ -5565,3 +5565,74 @@ fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
         "the waiting sign moves in a window not shown"
     );
 }
+
+/// The sign asks for frames only while it moves where it can be seen: a thread waiting on the user
+/// with nothing else under way, its card still, has the shimmer's clock kept for the sign alone;
+/// with motion reduced, in a window the system doesn't show, or once the thread has ended, the
+/// clock isn't kept for it. It never asks for the display's frames, which only what opens, folds
+/// or lands does.
+#[gpui::test]
+fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut TestAppContext) {
+    let waits = Card {
+        dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(waits, cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        trace.items = vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))];
+    }
+    talk.lines.push(handed(1));
+    talk.live = Live::Handed;
+    let show = |talk: &Conversation, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+    };
+    // Whether the clock's next frame is out once its last has drawn.
+    let asked = |cx: &mut VisualTestContext| {
+        for _ in 0..3 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            redraw(&shell, &view, cx);
+        }
+        shell.read_with(cx, |shell, _| shell.breath.pending())
+    };
+    show(&talk, cx);
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "a line moves at the wait"
+    );
+    assert!(!asked(cx), "with motion reduced the clock is kept");
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "with motion reduced the sign moves"
+    );
+
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    assert!(asked(cx), "the waiting sign doesn't keep the clock");
+    assert!(
+        sign_gap(&view, cx).is_some(),
+        "the waiting sign doesn't move"
+    );
+
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    assert!(!asked(cx), "in a hidden window the clock is kept");
+    cx.simulate_visibility_change(gpui::WindowVisibility::Visible);
+    assert!(
+        asked(cx),
+        "shown again, the waiting sign doesn't keep the clock"
+    );
+
+    talk.stoppable = false;
+    show(&talk, cx);
+    assert!(!asked(cx), "once the thread has ended the clock is kept");
+    assert_eq!(
+        sign_drawn(&view, cx),
+        None,
+        "an ended thread draws the sign"
+    );
+}
