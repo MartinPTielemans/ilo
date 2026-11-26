@@ -2929,8 +2929,17 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let answer = call(&agents, "claude-code", "select", paying, cx);
     let what = "choose “Pay now” in “Payment” on example.com";
-    let at = "choose “Pay now” in “Payment”";
-    refused(&agents, &browser, answer, what, Why::Order, at, cx);
+    // A list the core says nothing of keeps the option out of the refusal's line, which names
+    // the site (page::typed_shown); the agent's answer still says it.
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert_eq!(browser.pages.borrow().len(), pages, "it chose");
 }
 
@@ -3027,7 +3036,24 @@ fn a_key_press_that_activates_a_control_is_refused_as_a_click_on_it(cx: &mut Tes
     snapshot(None, cx);
     let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
     let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
-    asks("type", card, what, cx);
+    // A field the core says nothing of keeps what was typed out of the refusal's line, which
+    // names the site (page::typed_shown); the agent's answer still says it.
+    let pages = browser.pages.borrow().len();
+    let answer = call(&agents, "claude-code", "type", card, cx);
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "{what} reached the page"
+    );
     goes(
         "type",
         json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
@@ -3465,8 +3491,15 @@ fn a_names_direction_marks_dont_reach_the_refusals(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "type", typed, cx);
     let what = "press Enter, which may click \u{201C}Pay now 'moc.buhtig\u{201D} on example.com, \
                 after typing \u{201C}4242\u{201D} into \u{201C}Card 'number\u{201D}";
-    let at = what.replace(" on example.com", "");
-    let told = refused(&agents, &browser, answer, what, Why::Order, &at, cx);
+    let told = refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert!(
         !told.text.contains(['\u{202E}', '\u{2066}', '"']),
         "{:?}",
@@ -9051,6 +9084,85 @@ mod tasks {
             "the step's page is headed by its kind, not the words: {sites:?}"
         );
         assert!(!sites.iter().any(|site| site.contains("Buy")), "{sites:?}");
+    }
+
+    /// What each page's line of the trace says: the title its steps kept, else its site.
+    fn page_lines(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        use crate::agents::task::Line;
+        use crate::shell::conversation::pages::{Paged, paged};
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(agent, cx).unwrap());
+        let traces = talk.lines.iter().filter_map(|line| match line {
+            Line::Trace(trace) => Some(trace),
+            _ => None,
+        });
+        traces
+            .flat_map(|trace| {
+                (paged(&trace.items).into_iter()).filter_map(|each| match each {
+                    Paged::Page(page) if page.title.is_empty() => Some(page.site.to_string()),
+                    Paged::Page(page) => Some(page.title.to_string()),
+                    Paged::Item(..) => None,
+                })
+            })
+            .collect()
+    }
+
+    /// Moves `tab` of the made-up browser on to the page at `url` titled `title`.
+    fn tab_goes(browser: &Made, tab: u64, title: &'static str, url: &'static str) {
+        for each in browser
+            .tabs
+            .borrow_mut()
+            .iter_mut()
+            .filter(|each| each.0 == tab)
+        {
+            (each.2, each.3) = (title, url);
+        }
+    }
+
+    /// A step keeps the title its page had as it ran: once its tab goes on to another page, the
+    /// steps before still read the first, not what the tab says now.
+    #[gpui::test]
+    fn a_step_keeps_the_title_its_page_had_as_it_ran(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        let went = json!({ "tab": 30, "url": "https://slow.example/" });
+        // The core answers once it has read the page it went to; never waited on past that.
+        traced_by(&agents, &agent, "navigate", went, cx, |answer, cx| {
+            let request = browser.pages.borrow().last().unwrap().1;
+            agents.update(cx, |agents, cx| {
+                agents.page_done(request, shop_tree(), None, cx)
+            });
+            (answer.try_recv()).expect("navigate didn't answer once its page was read")
+        });
+        tab_goes(&browser, 30, "Slow page", "https://slow.example/");
+        let scroll = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "Slow page"]);
+    }
+
+    /// A step on a page with no title yet keeps its site, though the page has one later.
+    #[gpui::test]
+    fn a_step_on_a_page_with_no_title_keeps_its_site(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        tab_goes(&browser, 31, "", "https://example.com/login");
+        let scroll = json!({ "tab": 31 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        tab_goes(&browser, 31, "Welcome", "https://example.com/login");
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "example.com"]);
     }
 
     /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
