@@ -796,6 +796,9 @@ pub enum TaskAction {
     /// Return to Your Tabs on a tab the user handed to the thread: it's theirs again, for good.
     /// Only the user's press does it.
     ReturnTab(u64),
+    /// The ✕ on a reply of theirs that waits for the turn under way to end: it waits no longer,
+    /// and its words and picks are theirs again. Only the user's press does it.
+    Unhold(handed::Waiting),
 }
 
 /// What the composer starts a task with beside what was asked: the user's picks on its line, which
@@ -1158,6 +1161,7 @@ impl Agents {
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
             TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
             TaskAction::ReturnTab(tab) => _ = self.return_tab(agent, tab, handed::By::User, cx),
+            TaskAction::Unhold(which) => self.unhold(agent, which, cx),
         }
         (None, None)
     }

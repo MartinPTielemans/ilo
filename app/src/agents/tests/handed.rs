@@ -5,7 +5,7 @@
 use super::kept::Run;
 use super::*;
 use crate::agents::runner::{Cli, Out};
-use crate::agents::task::handed::{self, Picked};
+use crate::agents::task::handed::{self, Picked, Waiting};
 use crate::agents::task::{Start, State, TaskAction};
 use crate::agents::tier::Sites;
 
@@ -1504,8 +1504,16 @@ fn a_reply_is_recorded_as_its_words_and_how_many_tabs() {
 fn held(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<(String, Vec<u64>)> {
     run.agents.read_with(cx, |agents, _| {
         (agents.held_replies(agent).into_iter())
-            .map(|reply| (reply.text.to_string(), reply.tabs.tabs().to_vec()))
+            .map(|(_, reply)| (reply.text.to_string(), reply.tabs.tabs().to_vec()))
             .collect()
+    })
+}
+
+/// Which each of them is, in their order: what its ✕ names.
+fn waiting(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<Waiting> {
+    (run.agents).read_with(cx, |agents, _| {
+        let held = agents.held_replies(agent).into_iter();
+        held.map(|(which, _)| which).collect()
     })
 }
 
@@ -1858,6 +1866,236 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     (run.agents).update(cx, |agents, cx| agents.set_tasks_on(false, cx));
     assert!(!fits(None, USERS, TRAINS.0, cx));
     assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
+}
+
+/// The composer's menu of the user's tabs asks once for them all: its answer is the tabs
+/// `still_fits` would keep, in their order, for a thread to start and for a reply, and what is the
+/// Space's is asked once however many tabs there are.
+#[gpui::test]
+fn the_menu_of_tabs_is_answered_once_for_them_all(cx: &mut TestAppContext) {
+    let run = run("handed-fits-among", cx);
+    const PRIVATE: u64 = 5;
+    const OTHER_PROFILE: u64 = 7;
+    run.browser.tabs.borrow_mut().extend([
+        (13, 3, "Notes", "https://notes.example/"),
+        (15, PRIVATE, "Bank", "https://bank.example/"),
+        (16, USERS, "Settings", "chrome://settings/"),
+        (17, OTHER_PROFILE, "Work mail", "https://mail.example/"),
+        (18, USERS, "Upload", "https://files.example/"),
+    ]);
+    run.browser.private.borrow_mut().push(PRIVATE);
+    (run.browser.profiles.borrow_mut()).push((OTHER_PROFILE, "Profile 2"));
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    let all = [18, 13, 99, TRAINS.0, 16, 15, SEATS.0, 17, 20];
+    let among = |agent: Option<&str>, space: u64, cx: &mut TestAppContext| {
+        run.agents
+            .read_with(cx, |agents, cx| agents.fits_among(agent, space, &all, cx))
+    };
+    let each = |agent: Option<&str>, space: u64, cx: &mut TestAppContext| {
+        run.agents.read_with(cx, |agents, cx| {
+            let fits = |tab: &u64| agents.still_fits(agent, *tab, space, cx);
+            all.iter().copied().filter(fits).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(among(None, USERS, cx), [18, TRAINS.0, SEATS.0]);
+    assert_eq!(among(Some(&agent), USERS, cx), [18, TRAINS.0, SEATS.0]);
+    assert_eq!(among(None, OTHER_PROFILE, cx), [17]);
+    for space in [USERS, 3, PRIVATE, OTHER_PROFILE, 2] {
+        for agent in [None, Some(agent.as_str()), Some("claude-code")] {
+            assert_eq!(
+                among(agent, space, cx),
+                each(agent, space, cx),
+                "{agent:?} from {space}"
+            );
+        }
+    }
+    // The Space's part once for the nine, where each tab alone asks it again.
+    let asked = |cx: &mut TestAppContext, read: &dyn Fn(&mut TestAppContext)| {
+        run.browser.space_asks.set(0);
+        read(cx);
+        run.browser.space_asks.get()
+    };
+    let once = asked(cx, &|cx| _ = among(Some(&agent), USERS, cx));
+    assert_eq!(once, asked(cx, &|cx| _ = among(Some(&agent), USERS, cx)));
+    assert_eq!(asked(cx, &|cx| _ = each(Some(&agent), USERS, cx)), 9 * once);
+    assert!(once > 0);
+    assert!(given(&run).is_empty());
+    assert!(run.browser.reads.borrow().is_empty());
+    (run.agents).update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+    assert!(among(None, USERS, cx).is_empty());
+    assert!(among(Some(&agent), USERS, cx).is_empty());
+}
+
+fn unhold(run: &Run, agent: &str, which: Waiting, cx: &mut TestAppContext) {
+    run.agents.update(cx, |agents, cx| {
+        agents.task_action(agent, TaskAction::Unhold(which), cx);
+    });
+    cx.run_until_parked();
+}
+
+fn unsent(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<(String, Vec<u64>)> {
+    run.agents.update(cx, |agents, _| {
+        (agents.take_unsent(agent).into_iter())
+            .map(|reply| (reply.text.to_string(), reply.tabs.tabs().to_vec()))
+            .collect()
+    })
+}
+
+/// How many entries the log has of `agent`.
+fn logged(run: &Run, agent: &str, cx: &mut TestAppContext) -> usize {
+    (run.agents).read_with(cx, |agents, _| agents.activity(agent).count())
+}
+
+/// The ✕ on a reply that waits takes that one out of its wait: its words and picks are the
+/// user's again, handed back once, and it's never given, handed or entered in the log. Those
+/// behind it wait on and are given at the turn's end in their order. Each has its own name for
+/// as long as the thread lasts: a press on one that waits no longer does nothing, whatever waits
+/// in its place by then, and its name is never shown.
+#[gpui::test]
+fn a_reply_that_waits_is_taken_back_by_its_own_press(cx: &mut TestAppContext) {
+    let run = run("handed-unhold", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    reply(&run, &agent, "And this", &[TRAINS.0], cx);
+    reply(&run, &agent, "And then?", &[], cx);
+    reply(&run, &agent, "Seats too", &[SEATS.0], cx);
+    let logged = logged(&run, &agent, cx);
+    let names = waiting(&run, &agent, cx);
+    assert!(names[0] != names[1] && names[1] != names[2] && names[0] != names[2]);
+    assert_eq!(
+        format!("{:?}", TaskAction::Unhold(names[0])),
+        format!("{:?}", TaskAction::Unhold(names[2])),
+        "which one shows"
+    );
+
+    unhold(&run, &agent, names[0], cx);
+    let waits = [
+        ("And then?".to_string(), vec![]),
+        ("Seats too".to_string(), vec![SEATS.0]),
+    ];
+    assert_eq!(held(&run, &agent, cx), waits);
+    assert_eq!(
+        unsent(&run, &agent, cx),
+        [("And this".to_string(), vec![TRAINS.0])]
+    );
+    assert!(unsent(&run, &agent, cx).is_empty(), "handed back once");
+    // The same press again, with another reply first in the wait by now: nothing.
+    unhold(&run, &agent, names[0], cx);
+    assert_eq!(held(&run, &agent, cx), waits);
+    assert!(unsent(&run, &agent, cx).is_empty());
+    assert_eq!(waiting(&run, &agent, cx), names[1..]);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert!(given(&run).is_empty());
+    assert!(replies(&run, &agent, cx).is_empty());
+    assert_eq!(
+        self::logged(&run, &agent, cx),
+        logged,
+        "the press entered the log"
+    );
+
+    run.said(&agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
+    run.said(&agent, Out::Ended(None), cx);
+    cx.run_until_parked();
+    assert_eq!(given(&run), [SEATS.0]);
+    assert_eq!(heard(&run, 1, 2), "And then?");
+    assert_eq!(replies(&run, &agent, cx), ["And then?", "Seats too"]);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    // With nothing waiting, a press left from before does nothing, and none does to a reply that
+    // waits after it: that one's name is new.
+    reply(&run, &agent, "Car 5 then", &[TRAINS.0], cx);
+    let later = waiting(&run, &agent, cx);
+    assert_eq!(later.len(), 1);
+    assert!(!names.contains(&later[0]));
+    for name in names {
+        unhold(&run, &agent, name, cx);
+    }
+    assert_eq!(waiting(&run, &agent, cx), later);
+    assert!(unsent(&run, &agent, cx).is_empty());
+    unhold(&run, &agent, later[0], cx);
+    assert_eq!(unsent(&run, &agent, cx).len(), 1);
+    assert_eq!(replies(&run, &agent, cx), ["And then?", "Seats too"]);
+    run.finish(&agent, cx);
+}
+
+/// After Stop nothing waits, so the ✕ of a bubble still drawn does nothing: what waited is the
+/// user's already, each reply once, in the order sent.
+#[gpui::test]
+fn after_a_stop_no_reply_is_taken_back_twice(cx: &mut TestAppContext) {
+    let run = run("handed-unhold-stopped", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    reply(&run, &agent, "And this", &[TRAINS.0], cx);
+    reply(&run, &agent, "And then?", &[], cx);
+    let names = waiting(&run, &agent, cx);
+    assert_eq!(names.len(), 2);
+    run.agents.update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::Stop, cx);
+    });
+    cx.run_until_parked();
+    for name in names {
+        unhold(&run, &agent, name, cx);
+    }
+    assert!(held(&run, &agent, cx).is_empty());
+    assert_eq!(
+        unsent(&run, &agent, cx),
+        [
+            ("And this".to_string(), vec![TRAINS.0]),
+            ("And then?".to_string(), vec![]),
+        ]
+    );
+    assert!(given(&run).is_empty());
+    assert!(replies(&run, &agent, cx).is_empty());
+}
+
+/// Only the user's press takes a waiting reply back: every tool a thread and an outside agent
+/// has is called while two wait, naming one of them every way a call can, and both wait on; and
+/// words typed as a reply are a reply, which waits behind them.
+#[gpui::test]
+fn no_tool_or_typed_text_takes_a_waiting_reply_back(cx: &mut TestAppContext) {
+    let run = run("handed-unhold-walk", cx);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    reply(&run, &agent, "And this", &[TRAINS.0], cx);
+    reply(&run, &agent, "Unhold(0)", &[], cx);
+    let waits = [
+        ("And this".to_string(), vec![TRAINS.0]),
+        ("Unhold(0)".to_string(), vec![]),
+    ];
+    assert_eq!(held(&run, &agent, cx), waits);
+    let arguments = json!({
+        "tab": TRAINS.0,
+        "tabs": [TRAINS.0],
+        "at": 0,
+        "index": 0,
+        "id": 0,
+        "which": 0,
+        "waiting": 0,
+        "reply": 0,
+        "unhold": 0,
+        "url": "https://own.example/page",
+        "ref": "e1",
+        "text": "Unhold(0)",
+        "key": "Enter",
+        "option": "x",
+        "title": "Named",
+        "reason": "To carry on.",
+        "question": "Which?",
+        "method": "GET",
+        "steps": [{ "tool": "click", "tab": TRAINS.0, "ref": "e1" }],
+    });
+    for who in [agent.as_str(), "claude-code"] {
+        // What ends the thread ends the wait too, as a stop does: every other tool.
+        let names = tools::names(who).into_iter();
+        for tool in names.filter(|name| !matches!(name.as_str(), "finish" | "done")) {
+            _ = call(&run.agents, who, &tool, arguments.clone(), cx);
+            cx.run_until_parked();
+            assert_eq!(held(&run, &agent, cx), waits, "{who}'s {tool}");
+        }
+    }
+    assert!(unsent(&run, &agent, cx).is_empty());
+    assert!(given(&run).is_empty());
 }
 
 /// No tool gives a thread a tab of the user's, takes one back to them, or says anything of one

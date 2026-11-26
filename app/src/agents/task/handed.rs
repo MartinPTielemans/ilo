@@ -139,6 +139,19 @@ impl std::fmt::Debug for Chip {
     }
 }
 
+/// Which of a thread's replies that wait for its turn to end one is: its own for as long as the
+/// thread lasts, and never another's after it. Made only as a reply starts to wait and read only
+/// from `held_replies`, so nothing typed, called or on a page names one. In memory alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Waiting(u64);
+
+/// That it is one, never which: no log line or failed test carries it.
+impl std::fmt::Debug for Waiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Waiting")
+    }
+}
+
 /// The title of a thread that has none yet and no tab's to take (table Z2b's word).
 pub const NEW_THREAD: &str = "New Thread";
 
@@ -168,7 +181,9 @@ pub(in crate::agents) struct Sends {
     /// The replies held until the turn under way ends, in the order sent, each with its tabs'
     /// titles as they were at the user's send: one with a tab of theirs, sent while the thread
     /// was at work, and every reply sent after it.
-    held: Vec<(Reply, Vec<SharedString>)>,
+    held: Vec<(Waiting, Reply, Vec<SharedString>)>,
+    /// How many replies have waited in this thread: the next one's `Waiting`.
+    waited: u64,
     /// Those never given, as the thread was no longer under way before the turn ended: the
     /// user's to have back, words and picks.
     unsent: Vec<Reply>,
@@ -187,12 +202,14 @@ impl Sends {
 
     /// `reply` waits for the turn under way to end, after those that wait already.
     pub(super) fn hold(&mut self, reply: Reply, titles: Vec<SharedString>) {
-        self.held.push((reply, titles));
+        self.held.push((Waiting(self.waited), reply, titles));
+        self.waited += 1;
     }
 
     /// The turn under way ended: the replies held for it, to give in their order.
     pub(super) fn take_held(&mut self) -> Vec<(Reply, Vec<SharedString>)> {
-        std::mem::take(&mut self.held)
+        let held = std::mem::take(&mut self.held).into_iter();
+        held.map(|(_, reply, titles)| (reply, titles)).collect()
     }
 
     /// The user's reply was given: it carried what they left picked, and nothing is picked for
@@ -201,10 +218,21 @@ impl Sends {
         self.came_back.clear();
     }
 
+    /// The user took back the reply `which` of those held: it is never given, and theirs to have
+    /// back as one never given is. Whether it was still held.
+    fn unhold(&mut self, which: Waiting) -> bool {
+        let Some(at) = self.held.iter().position(|(held, ..)| *held == which) else {
+            return false;
+        };
+        let (_, reply, _) = self.held.remove(at);
+        self.unsent.push(reply);
+        true
+    }
+
     /// The thread is no longer under way: what was held is never given.
     fn not_given(&mut self) {
         let held = self.held.drain(..);
-        self.unsent.extend(held.map(|(reply, _)| reply));
+        self.unsent.extend(held.map(|(_, reply, _)| reply));
     }
 
     /// What a thread with no title yet is titled by (`titled`): the first tab its first message
@@ -348,16 +376,18 @@ impl Agents {
     /// Whether the app would hand `tab` to `agent`'s thread from the user's Space `from`. The
     /// core refuses the rest at the give, whatever asks.
     fn may_hand(&self, agent: &str, from: u64, tab: u64, cx: &App) -> bool {
+        (self.thread_space(agent)).is_some_and(|own| self.fits(own, from, tab, cx))
+    }
+
+    /// The Space of `agent`'s thread, where it's one the app hands a tab to at all.
+    fn thread_space(&self, agent: &str) -> Option<u64> {
         // A ⌘T thread alone is handed a tab, and none while tasks are off.
         let thread = (self.task(agent)).filter(|task| task.cli.is_some() && task.session.is_none());
-        let Some(task) = thread.filter(|_| self.tasks_on()) else {
-            return false;
-        };
-        let own = match task.space {
+        let task = thread.filter(|_| self.tasks_on())?;
+        Some(match task.space {
             0 => task.home,
             space => space,
-        };
-        self.fits(own, from, tab, cx)
+        })
     }
 
     /// Whether `tab` is one the app would hand from the user's Space `from` to a thread of the
@@ -365,10 +395,18 @@ impl Agents {
     /// and never one of another profile than the thread's, on a page on the web, as every page a
     /// thread has.
     fn fits(&self, own: u64, from: u64, tab: u64, cx: &App) -> bool {
+        self.space_fits(own, from) && self.tab_fits(from, tab, cx)
+    }
+
+    /// What `fits` asks that is the same for every tab of the Space `from`.
+    fn space_fits(&self, own: u64, from: u64) -> bool {
         !self.browser.private_space(from)
-            && self.browser.shows(tab, from, cx)
             && self.browser.space_profile(from) == self.browser.space_profile(own)
-            && self.browser.off_limits(tab, cx).is_none()
+    }
+
+    /// What `fits` asks of `tab` itself.
+    fn tab_fits(&self, from: u64, tab: u64, cx: &App) -> bool {
+        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none()
     }
 
     /// Whether the composer may offer `tab`, and keep its chip, seen from the user's Space
@@ -378,10 +416,29 @@ impl Agents {
     /// composer alone, when its menu of the user's tabs opens and for a chip before the send,
     /// and in no tool's answer or log line.
     pub fn still_fits(&self, agent: Option<&str>, tab: u64, space_in_view: u64, cx: &App) -> bool {
-        match agent {
-            Some(agent) => self.may_hand(agent, space_in_view, tab, cx),
-            None => self.tasks_on() && self.fits(space_in_view, space_in_view, tab, cx),
+        !(self.fits_among(agent, space_in_view, &[tab], cx)).is_empty()
+    }
+
+    /// Those of `tabs` the composer may offer, in their order: what `still_fits` answers for
+    /// each, for its menu of the user's tabs as it opens, with what is the thread's and the
+    /// Space's asked once for them all. The same read, under the same rule: it asks nothing of
+    /// a tab, and no tool's answer or log line carries it.
+    pub fn fits_among(
+        &self,
+        agent: Option<&str>,
+        space_in_view: u64,
+        tabs: &[u64],
+        cx: &App,
+    ) -> Vec<u64> {
+        let own = match agent {
+            Some(agent) => self.thread_space(agent),
+            None => self.tasks_on().then_some(space_in_view),
+        };
+        if !own.is_some_and(|own| self.space_fits(own, space_in_view)) {
+            return Vec::new();
         }
+        let fits = |tab: &u64| self.tab_fits(space_in_view, *tab, cx);
+        tabs.iter().copied().filter(fits).collect()
     }
 
     /// Whether any of `picked` would be handed to a thread started from the user's Space `home`,
@@ -423,19 +480,31 @@ impl Agents {
         (self.task(agent)).map_or_else(Vec::new, |task| task.sends.chips.clone())
     }
 
-    /// The replies to `agent`'s thread that wait for its turn under way to end, in the order sent:
-    /// for the composer to show as not yet given.
-    pub fn held_replies(&self, agent: &str) -> Vec<Reply> {
+    /// The replies to `agent`'s thread that wait for its turn under way to end, in the order sent,
+    /// each with which it is for its ✕: for the composer to show as not yet given.
+    pub fn held_replies(&self, agent: &str) -> Vec<(Waiting, Reply)> {
         let Some(task) = self.task(agent) else {
             return Vec::new();
         };
         let held = task.sends.held.iter();
-        held.map(|(reply, _)| reply.clone()).collect()
+        held.map(|(which, reply, _)| (*which, reply.clone()))
+            .collect()
+    }
+
+    /// The user's press on the ✕ of the reply `which` of those that wait for `agent`'s thread's
+    /// turn to end, as `held_replies` named it: it waits no longer, and `take_unsent` hands it
+    /// back. Those behind it wait on. One that no longer waits does nothing, as none does once
+    /// the thread is no longer under way. Nothing of it is given, handed or entered in the log.
+    pub(super) fn unhold(&mut self, agent: &str, which: Waiting, cx: &mut Context<Self>) {
+        if (self.task_mut(agent)).is_some_and(|task| task.sends.unhold(which)) {
+            cx.notify();
+        }
     }
 
     /// The replies to `agent`'s thread that were never given, as it was stopped or ended before
-    /// its turn under way did: the user's words and picks, in the order sent, handed back as data
-    /// and no longer anywhere else. Nothing of them was given, handed or entered in the log.
+    /// its turn under way did or the user took them back from their wait: their words and picks,
+    /// in the order they left it, handed back as data and no longer anywhere else. Nothing of
+    /// them was given, handed or entered in the log.
     pub fn take_unsent(&mut self, agent: &str) -> Vec<Reply> {
         (self.task_mut(agent)).map_or_else(Vec::new, |task| std::mem::take(&mut task.sends.unsent))
     }

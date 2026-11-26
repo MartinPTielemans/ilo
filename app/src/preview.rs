@@ -1102,6 +1102,11 @@ impl Browser for Fake {
         }
     }
 
+    // Every made-up tab is a page on the web, and the user's.
+    fn tabs_to_hand(&self, _: Option<&str>, _: u64, tabs: &[u64], _: &App) -> Vec<u64> {
+        tabs.to_vec()
+    }
+
     fn day_starts(&self) -> [f64; 4] {
         let today = now() - now() % DAY;
         // 1 January 1970 was a Thursday.
