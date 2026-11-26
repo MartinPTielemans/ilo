@@ -428,8 +428,9 @@ base::TimeTicks g_handover_click;
 // pane it had in the window it left, for the handover lines.
 bc_id g_adopted = 0;
 gfx::Size g_left_size;
-// The page area of the last window that closed, which an agent's page takes with none open.
-gfx::Size g_last_page_area;
+// The size the last window that closed gave a watched thread's page, which an agent's page takes
+// with none open.
+gfx::Size g_last_agent_page_size;
 
 std::string Handing(bc_id window, bc_id tab) {
   return base::StrCat(
@@ -704,12 +705,12 @@ void Window::GiveAgentPageItsSize(content::WebContents* contents) {
   }
   std::vector<gfx::Size> front_to_back;
   for (bc_id id : Order()) {
-    // A Little ilo or Blank Window's page area is no place a thread's page is watched.
+    // A Little ilo or Blank Window is no place a thread's page is watched.
     if (Window* window = FromId(id); window && !window->own_space_) {
-      front_to_back.push_back(window->page_frame_.size());
+      front_to_back.push_back(window->AgentPageSize());
     }
   }
-  const gfx::Size area = AgentPageArea(front_to_back, g_last_page_area);
+  const gfx::Size area = AgentPageArea(front_to_back, g_last_agent_page_size);
   if (!area.IsEmpty()) {
     contents->Resize(gfx::Rect(area));
   }
@@ -3438,9 +3439,9 @@ void Window::Destroy() {
       }
     }
   }
-  // An agent's page made with no window open takes the last one's page area.
-  if (!own_space_ && !page_frame_.IsEmpty()) {
-    g_last_page_area = page_frame_.size();
+  // An agent's page made with no window open takes the last one's size.
+  if (!own_space_ && !AgentPageSize().IsEmpty()) {
+    g_last_agent_page_size = AgentPageSize();
   }
   // Out of the list first, so the app can't reach the window from its callback.
   std::erase(Order(), id_);

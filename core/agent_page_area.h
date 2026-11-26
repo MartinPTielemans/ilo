@@ -9,8 +9,8 @@
 namespace browser_core {
 
 // An agent's page is the user's size from the start (#4355), so a watch never lays it out again
-// mid-task: the page area of the frontmost window that has one, given front to back, else
-// |last|, the one a window had last, as with every window closed. Empty while no window has
+// mid-task: the size a watch gives it in the frontmost window that has one, given front to back,
+// else |last|, the one a window had last, as with every window closed. Empty while no window has
 // laid out a page, which leaves a page the size it was made at.
 gfx::Size AgentPageArea(const std::vector<gfx::Size>& front_to_back, const gfx::Size& last);
 

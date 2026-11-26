@@ -130,6 +130,8 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/size_f.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
@@ -859,8 +861,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));
   browser_core::CloseTabDialogs(browser_core::Tab::FromId(tab));
-  // No window shows it any more, and it had the size of the pane it was in: the user's page area
-  // from here, as each of the agent's has. Back with the user, it takes the frame of the window
+  // No window shows it any more, and it had the size of the pane it was in: the size a watch gives
+  // it from here, as each of the agent's has. Back with the user, it takes the frame of the window
   // that shows it.
   browser_core::Window::GiveAgentPageItsSize(browser_core::Tab::FromId(tab));
   // One the user took back from an agent before is the agent's now.
@@ -1720,6 +1722,12 @@ bc_id bc_window_space_tab(bc_id window_id, bc_id space) {
 void bc_window_set_page_frame(bc_id window_id, bc_rect frame, double corner_radius) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->SetPageFrame(ToRect(frame), corner_radius);
+  }
+}
+
+void bc_window_set_agent_page_size(bc_id window_id, double width, double height) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetAgentPageSize(gfx::ToRoundedSize(gfx::SizeF(width, height)));
   }
 }
 
