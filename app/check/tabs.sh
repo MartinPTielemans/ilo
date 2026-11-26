@@ -1500,7 +1500,8 @@ send key d cmd
 expect_lists "$shown_pinned $c $b $a" "$rest" "⌘D with rows chosen"
 send key z cmd
 expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after ⌘D on the chosen rows"
-expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+expect_after '^browser: rows settled$' "the rows didn't settle after ⌘Z" \
+  "^browser: today $c $b $a $rest\$"
 # A plain click lets them go, and ⌘-clicks choose them again.
 send click $(today_row 0)
 expect '^browser: chosen $' "a plain click on a row didn't let the chosen rows go"
@@ -1517,7 +1518,8 @@ expect "^browser: today $rest\$" "New Folder left a chosen row in Today: $(today
 send key escape
 send key z cmd
 expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after New Folder on the chosen rows"
-expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+expect_after '^browser: rows settled$' "the rows didn't settle after ⌘Z" \
+  "^browser: today $c $b $a $rest\$"
 send click $(today_row 1) cmd
 send click $(today_row 2) cmd
 expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once more"

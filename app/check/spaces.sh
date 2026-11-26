@@ -358,21 +358,10 @@ send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the Space's move"
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back in their order"
 # Until the dots have glided back, the second's is still drawn under the first's place (#2026). The
-# drop's own glide can settle after ⌘Z is sent and before the undo runs, so the settle waited for is
-# one after the order ⌘Z put back, which the app logs as it starts the dots' glide (#4059).
-wait_begins
-for _ in $(seq 100); do
-  since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' && break
-  kill -0 "$pid" 2>/dev/null || {
-    ran_out '^browser: spaces settled$' "$step" exited
-    fail "the app exited: the dots didn't settle after ⌘Z put the Spaces back"
-  }
-  sleep 0.1
-done
-since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' || {
-  ran_out '^browser: spaces settled$' "$step"
-  fail "the dots didn't settle after ⌘Z put the Spaces back: no \"spaces settled\" after \"spaces $first $second\""
-}
+# drop's own glide can settle after ⌘Z is sent, so the settle is the one after the order ⌘Z put back,
+# which the app logs as it starts the dots' glide (#4059).
+expect_after '^browser: spaces settled$' "the dots didn't settle after ⌘Z put the Spaces back" \
+  "^browser: spaces $first $second\$"
 send drag "$first_x" "$dot_y" $((second_x + 29)) "$dot_y"
 expect "^browser: dropped space $first after $second\$" "the first Space's dot flicked past the second's didn't move it"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"

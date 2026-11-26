@@ -33,7 +33,9 @@ serve
 # Outer, a tenth of the page in, around Inner, so a resize moves them, and a text field under Outer.
 # The page is twice its view tall, to scroll, with no scroll bar to take the page's width.
 # The title says the look it's shown in, the page's size, whether Inner shows, the last key the page
-# saw, the field's text, the engine it's in, and where a press landed.
+# saw, the field's text, the engine it's in, and where a press landed. The system's correction is
+# off in the field, as its panel over a typed letter would hold the driver's keys in Safari's
+# engine (#4114).
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 html { scrollbar-width: none }
@@ -50,7 +52,7 @@ section { position: absolute; background: rgb(217, 226, 230) }
 <section id="bottom" aria-label="Bottom"></section>
 <section id="right" aria-label="Right"></section>
 <section id="outer" aria-label="Outer"><section id="inner" aria-label="Inner"></section></section>
-<input id="field" aria-label="Field">
+<input id="field" aria-label="Field" spellcheck="false" autocorrect="off">
 <script>
 let at = "-";
 let key = "-";
