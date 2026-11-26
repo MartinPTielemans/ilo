@@ -1342,11 +1342,10 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   # A private window's tab at the site opens in Safari's engine too, in a session of its own that
   # starts from the private window's and ends with it: the regular window doesn't see what its page
   # stored, and nor does the next private window. The page names what it finds, never a value.
-  # Opens the session page at query $1 from ⌘T's bar in the key window, the private window $2, and
-  # sets $private_tab to its tab.
+  # Opens the session page at query $1 from the bar the empty Space of the key window, the private
+  # window $2, rests on, and sets $private_tab to its tab.
   private_session_page() {
-    send key t cmd
-    expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+    resting_key t "private window"
     send insert "127.0.0.1:$port/session$1"
     send key return
     expect "^browser: loaded [0-9]* http://127.0.0.1:$port/session$1\$" \

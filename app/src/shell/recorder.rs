@@ -52,6 +52,9 @@ impl Core {
     }
 }
 
+/// What a test does as first run ends (`Recorder::first_run_end`).
+pub(super) type FirstRunEnd = Box<dyn Fn(&mut App)>;
+
 #[derive(Default)]
 pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
@@ -90,6 +93,9 @@ pub(crate) struct Recorder {
     pub(super) grows_first_run: Cell<bool>,
     /// How many times it was asked whether it grows first run's window.
     pub(super) asked_to_grow: Cell<u32>,
+    /// What first run's end does where the Mac's host draws the browser window before showing it,
+    /// for a test to draw the shell's window as the host would.
+    pub(super) first_run_end: RefCell<Option<FirstRunEnd>>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
     /// The search engines and the default's keyword, as `search_engines` answers.
@@ -2195,7 +2201,10 @@ impl Browser for Recorder {
         self.record("first run shown".into())
     }
 
-    fn end_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+    fn end_first_run(&self, _: gpui::AnyWindowHandle, cx: &mut App) {
+        if let Some(end) = self.first_run_end.borrow().as_ref() {
+            end(cx);
+        }
         self.record("first run ended".into())
     }
 

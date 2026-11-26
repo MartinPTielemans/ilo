@@ -14,6 +14,7 @@ use super::{
     SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
 };
 use crate::agents::task::{ArchivedTask, Card, Dot, Word};
+use crate::product::PRODUCT;
 use crate::shell::recorder::Recorder;
 use crate::shell::{Folders, Section, Shell};
 
@@ -33,7 +34,7 @@ fn task(n: u64, ended: f64) -> ArchivedTask {
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: Dot::Done,
-        about: "Claude · Done".into(),
+        about: format!("{PRODUCT} · Done").into(),
         ended,
         pages: "1 page".into(),
     }

@@ -8546,9 +8546,8 @@ mod tasks {
             agents
                 .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
                 .expect("its conversation")
-                .about
-                .as_ref(),
-            "Claude · Needs you",
+                .about,
+            format!("{PRODUCT} · Needs you"),
             "the header and the card say different things at a refusal"
         );
         assert_eq!(shown(&agents, cx), None);
@@ -9698,8 +9697,8 @@ mod tasks {
             "the card says how far it has got and the step it's on"
         );
         assert_eq!(
-            conversation.about.as_ref(),
-            "Claude · Working",
+            conversation.about,
+            format!("{PRODUCT} · Working"),
             "the conversation's header says where the task is, its pages in the rail beside it"
         );
         assert!(
@@ -11465,7 +11464,7 @@ mod tasks {
             let about = agents.read_with(cx, |agents, cx| {
                 agents.conversation(&agent, cx).unwrap().about.to_string()
             });
-            assert_eq!(about, format!("Claude · {after_name}"), "{state:?}");
+            assert_eq!(about, format!("{PRODUCT} · {after_name}"), "{state:?}");
             // Dismissing stops a task under way, so its row is read with the state put back.
             agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
             set(&agents, cx);
@@ -11474,7 +11473,7 @@ mod tasks {
                 rows.find(|row| row.agent.as_ref() == agent).unwrap()
             });
             // The row has when it left the foot to go on with.
-            assert_eq!(row.about, format!("Claude · {after_name}"), "{state:?}");
+            assert_eq!(row.about, format!("{PRODUCT} · {after_name}"), "{state:?}");
             assert!(row.ended > 0., "{state:?}");
         }
         assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
@@ -11491,7 +11490,7 @@ mod tasks {
         let about = agents.read_with(cx, |agents, cx| {
             agents.conversation(&agent, cx).unwrap().about.to_string()
         });
-        assert_eq!(about, "Claude · Limit resets at 18:00");
+        assert_eq!(about, format!("{PRODUCT} · Limit resets at 18:00"));
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Limit { resets: None };
         });
@@ -11568,10 +11567,10 @@ mod tasks {
         );
         assert_eq!(
             now[1],
-            (first.clone(), "Claude · Done then".to_string(), Dot::Done)
+            (first.clone(), format!("{PRODUCT} · Done then"), Dot::Done)
         );
         // Dismissed while it worked, it stopped then.
-        assert_eq!(now[0].1, "Claude · Stopped then");
+        assert_eq!(now[0].1, format!("{PRODUCT} · Stopped then"));
         assert_eq!(now[0].2, Dot::Ended);
         // The row has its end for History to list it by and say, however long after it left the
         // foot; one that had none has when it left.
@@ -12383,6 +12382,35 @@ mod sessions {
         assert_eq!(shown.len(), 3);
         assert_eq!(shown[0].dot, Dot::Working);
         assert!(![first, second].contains(&shown[0].agent.to_string()));
+    }
+
+    /// A thread's head and its rows name the product for a task of its own, but an outside app's
+    /// session keeps that app's own name in both: its head at work and done, and its row in
+    /// Settings' kept list and History once it leaves the foot.
+    #[gpui::test]
+    fn an_outside_apps_session_keeps_its_own_name_in_its_head_and_rows(cx: &mut TestAppContext) {
+        let (agents, _browser) = at_work(cx);
+        let session = cards(&agents, cx)[0].agent.to_string();
+        let about = conversation(&agents, &session, cx).about;
+        assert_eq!(about, "Claude Code · working");
+        answered(&agents, 2, cx);
+        closed(&agents, 1, cx);
+        let about = conversation(&agents, &session, cx).about;
+        assert!(about.starts_with("Claude Code · done"), "{about}");
+        assert!(!about.contains(PRODUCT), "{about}");
+
+        agents.update(cx, |agents, cx| agents.dismiss_task(&session, cx));
+        let (row, kept) = agents.read_with(cx, |agents, cx| {
+            let rows = agents.archived_tasks(cx).into_iter();
+            let row = rows.into_iter().find(|row| row.agent == session.as_str());
+            let task = agents.task(&session).expect("the session's task");
+            (row.expect("the session's row"), agents.about(task, cx))
+        });
+        assert_eq!(row.about, "Claude Code · Done");
+        assert!(
+            kept.starts_with("Claude Code · Done "),
+            "Settings' kept row named another: {kept}"
+        );
     }
 
     /// One connection's calls are one card's steps, those its subagents make beside each other on

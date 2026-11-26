@@ -149,7 +149,8 @@ pub struct Conversation {
     /// The agent's name, in text: Claude, Codex, or an outside agent's.
     pub name: SharedString,
     pub title: SharedString,
-    /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
+    /// Who works on it (`head_name`), its model and where the task is, under the title:
+    /// "{PRODUCT} · Haiku · Working".
     pub about: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
@@ -795,7 +796,8 @@ impl Word {
         }
     }
 
-    /// After the assistant's name and a middle dot: "Claude · At limit".
+    /// After the name a thread's head or row says (`head_name`) and a middle dot: "{PRODUCT} · At
+    /// limit".
     pub fn after_name(self) -> &'static str {
         match self {
             Self::Working => "Working",
@@ -977,7 +979,7 @@ pub struct ArchivedTask {
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
     pub dot: Dot,
-    /// Who worked on it and how it ended, "Claude · Done".
+    /// Who worked on it (`head_name`) and how it ended, "{PRODUCT} · Done".
     pub about: SharedString,
     /// When it ended, or left the foot with no end, in milliseconds since the Unix epoch as the
     /// archive dates its tabs, or 0 if nothing says. History lists it by then, under that day,
@@ -989,9 +991,19 @@ pub struct ArchivedTask {
 
 impl ArchivedTask {
     /// What its row says under its title, with `when` it ended as the list it's in says a time:
-    /// "Claude · Done 13:31 · 1 page".
+    /// "{PRODUCT} · Done 13:31 · 1 page".
     pub fn about_at(&self, when: &str) -> String {
         about_at(&self.about, when, &self.pages)
+    }
+}
+
+/// Who a thread's head and its rows name: the product for a task of its own, whichever assistant
+/// runs it, as the owner asked ("just say" the product), and for an outside app's session that app,
+/// by the name it gives. The assistant's maker is named only where a model is picked or signed in.
+pub fn head_name(name: &str, session: bool) -> &str {
+    match session {
+        true => name,
+        false => crate::product::PRODUCT,
     }
 }
 
@@ -1228,17 +1240,17 @@ impl Agents {
     }
 
     /// What a finished task's row says under its title in Settings › Agents' list of the kept:
-    /// who worked on it, how it ended and when, and the pages it still holds, "Claude · Done 13:31
-    /// · 1 page". One that ended on an earlier day says the day instead, "Claude · Done 21 Nov",
-    /// as a time alone reads as today's in a list with no days over its rows. History's has them,
-    /// and says when as its pages' rows do (`ArchivedTask::about_at`).
+    /// who worked on it, how it ended and when, and the pages it still holds, "{PRODUCT} · Done
+    /// 13:31 · 1 page". One that ended on an earlier day says the day instead, "{PRODUCT} · Done 21
+    /// Nov", as a time alone reads as today's in a list with no days over its rows. History's has
+    /// them, and says when as its pages' rows do (`ArchivedTask::about_at`).
     pub(super) fn about(&self, task: &Task, cx: &App) -> String {
         let (about, pages) = self.about_parts(task, cx);
         let when = (task.ended.or(task.left)).map(|at| super::time_or_day(seconds(at)));
         about_at(&about, &when.unwrap_or_default(), &pages)
     }
 
-    /// A finished task's row around when it ended: who worked on it and how it ended, "Claude ·
+    /// A finished task's row around when it ended: who worked on it and how it ended, "{PRODUCT} ·
     /// Done", and the pages it still holds, "1 page" or nothing.
     fn about_parts(&self, task: &Task, cx: &App) -> (String, String) {
         let words = Word::of(&task.state, false).after_name();
@@ -1247,7 +1259,8 @@ impl Agents {
             1 => "1 page".to_string(),
             pages => format!("{pages} pages"),
         };
-        (format!("{} · {words}", task.name), pages)
+        let name = head_name(&task.name, task.session.is_some());
+        (format!("{name} · {words}"), pages)
     }
 
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
@@ -1435,10 +1448,11 @@ impl Agents {
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
+        let name = head_name(&task.name, task.session.is_some());
         let about = match (&task.session, task.model.is_empty()) {
-            (Some(_), _) => format!("{} · {}", task.name, lower_first(&about)),
-            (None, true) => format!("{} · {about}", task.name),
-            (None, false) => format!("{} · {} · {about}", task.name, task.model),
+            (Some(_), _) => format!("{name} · {}", lower_first(&about)),
+            (None, true) => format!("{name} · {about}"),
+            (None, false) => format!("{name} · {} · {about}", task.model),
         };
         let mut finished = finished(&task.messages, &lines);
         finished.splice(0..0, kept_finished);

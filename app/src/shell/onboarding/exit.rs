@@ -52,6 +52,18 @@ impl Onboarding {
         }
     }
 
+    /// Whether the exit has ended `at` seconds in, in a window `size` across: at its length, or
+    /// where it grows, once the card is within `rest` of the window on every side, as the curve's
+    /// tail moves it less than the eye sees and the browser window can come.
+    pub(super) fn exit_ended(&self, at: f32, still: bool, size: (f32, f32)) -> bool {
+        if at >= self.exit_length(still) {
+            return true;
+        }
+        let grown = self.grown(still);
+        let (_, _, w, h, _) = frame(at, grown, size).plate;
+        grown && at > x::CONTENT && (size.0 - w).max(size.1 - h) / 2. <= x::REST
+    }
+
     /// Whether the exit grows the card to its window: the host said it grows the window, and
     /// Reduce Motion is off.
     pub(super) fn grown(&self, still: bool) -> bool {

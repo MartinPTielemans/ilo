@@ -1196,6 +1196,29 @@ mod tests {
         );
     }
 
+    /// Settings clears its log in the frame that says it drew, after the frame has started: frames
+    /// drawn before the window was on screen logged the places first, and that frame logs each again
+    /// after its line, once, for check.sh's places from after it (#3841).
+    #[test]
+    fn the_log_after_a_drew_frame_holds_that_frames_places() {
+        let mut log = DrawnLog::default();
+        log.frame();
+        assert!(
+            log.draw("profile 2", NAME.into()),
+            "a frame before the window was on screen"
+        );
+        log.frame();
+        log.clear();
+        assert!(
+            log.draw("profile 2", NAME.into()),
+            "logged again after the drew line"
+        );
+        assert_eq!(log.lines(), [NAME]);
+        log.frame();
+        assert!(!log.draw("profile 2", NAME.into()), "once a place");
+        assert_eq!(log.lines(), [NAME]);
+    }
+
     /// A view that never starts a frame logs a control again only where it moves.
     #[test]
     fn without_frames_a_control_logs_only_where_it_moves() {
