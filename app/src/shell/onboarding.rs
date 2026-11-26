@@ -55,8 +55,7 @@ pub(super) enum Step {
     /// The import's second state: the sites visited most, ticked, to make favorites; there only
     /// once an import has read them. It shares the import's place in the progress.
     Favorites,
-    /// Your first Space: its colour, from the theme picker's swatches, and where the window has
-    /// glass, how much shows through it.
+    /// Your first Space: its name and its look, on the theme panel's own parts.
     Space,
     /// Tidy tabs: how long tabs wait before they're put away; left out until the core has the
     /// profile's time.
