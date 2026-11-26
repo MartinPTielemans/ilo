@@ -5411,11 +5411,25 @@ fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut Te
     );
     assert!(!pending(cx), "with motion reduced the sign asks for frames");
 
+    crate::heard::listen();
     cx.update(|_, cx| cx.set_reduce_motion(false));
     redraw(&shell, &view, cx);
     let (_, length) = sign_gap(&view, cx).expect("the working sign doesn't move");
     assert_eq!(length, WORKING_GAP);
     assert!(pending(cx), "the working sign isn't on the shimmer's clock");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(100));
+    redraw(&shell, &view, cx);
+    // perf-threads.sh matches this line, once a start and never once a frame.
+    let moving: Vec<String> = (crate::heard::take().into_iter())
+        .filter(|line| line.contains("knot moving"))
+        .collect();
+    assert_eq!(moving.len(), 1, "the knot's start is logged as {moving:?}");
+    assert!(
+        moving[0].starts_with("browser: task card ") && moving[0].ends_with(" knot moving"),
+        "the line perf-threads.sh matches is {:?}",
+        moving[0]
+    );
 
     cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
     for _ in 0..3 {

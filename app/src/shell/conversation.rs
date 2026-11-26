@@ -273,6 +273,8 @@ pub struct TalkView {
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The sign over the composer, and since when it has said what it says.
     sign: knot::Timed,
+    /// Whether the sign moved at its last draw, so the line check.sh reads comes once a start.
+    sign_moving: bool,
     /// The sign and the gap in its cord as it was drawn last, and where, and where the composer
     /// was, for a test.
     sign_drawn: Rc<Cell<Option<(Knot, Option<(f32, f32)>, Bounds<Pixels>)>>>,
@@ -511,6 +513,7 @@ impl Shell {
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
                     sign: Default::default(),
+                    sign_moving: false,
                     sign_drawn: Rc::default(),
                     composer_drawn: Rc::default(),
                     from_drawn: Rc::default(),
@@ -4699,6 +4702,10 @@ impl Render for TalkView {
         let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
         let composed = self.replies || !look.standing;
         let gap = (self.sign).gap(sign, now, composed && knot::moves(window, cx));
+        if !std::mem::replace(&mut self.sign_moving, gap.is_some()) && gap.is_some() {
+            // perf-threads.sh reads this line.
+            log!("browser: task card {} knot moving", self.agent);
+        }
         if !self.folding.is_empty() || busy {
             window.request_animation_frame();
         } else if (shimmers || gap.is_some())
