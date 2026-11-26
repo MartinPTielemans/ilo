@@ -771,8 +771,22 @@ void host_add_first_run(void* first_run_view);
 // Shapes first run's window as its card is now: |width| by |height| points centred in it, with
 // corners of |radius|. The system's blur, where the window has it, and its shadow are behind that
 // shape alone. The UI calls it on the entry's frames as the card grows and once as the entry ends,
-// never after, so nothing keeps it alive. A host that can't shape a window does nothing.
+// and again only on the exit's frames after host_grow_first_run said yes, so nothing keeps it
+// alive. A host that can't shape a window does nothing.
 void host_set_first_run_frame(double width, double height, double radius);
+
+// Mac only: grows first run's window to the frame of the browser window held behind it, for the
+// card to grow in to that window's size (first-run v9 §10), and says whether it will. Asked once,
+// at the press that ends first run. It answers no and changes nothing unless the held window's
+// frame is whole on first run's own display, holds first run's window with the same centre to a
+// point, and is neither full screen nor in the Dock, and never with Stage Manager on, which
+// places windows itself. A yes says it has tested that it can, and it sets the frame on the main
+// queue's next turn, as the ask comes while the UI handles the press: in one step, with the glass
+// and the shadow kept where the card is and the UI's picture at the new size drawn before any is
+// shown, or not at all where either window is no longer the one it answered for, the card then
+// growing to the window as it is. It starts no timer and orders nothing in: the browser window
+// stays held until first run ends.
+bool host_grow_first_run(void);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
 // screen the browser window opens on, and takes the launch window down: until first run ends it's
