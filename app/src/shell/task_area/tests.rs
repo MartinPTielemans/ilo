@@ -2744,6 +2744,60 @@ fn a_press_on_the_tile_takes_over_and_reaches_nothing(cx: &mut TestAppContext) {
     );
 }
 
+/// The watched page in its tile whose renderer died leaves the tile's place to its card, as the
+/// window's page does its own (#3433). A press on the card's Reload is a press on the tile, which
+/// takes the page over, and loads the page again. The tile stays the area's meanwhile, so once the
+/// page is fine the watch is as it was, with no card.
+#[gpui::test]
+fn a_watched_tiles_page_that_died_shows_its_card_where_the_tile_is(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    let page = |trouble| Page {
+        url: "https://flights.example/".into(),
+        trouble,
+        ..Page::default()
+    };
+    let reload_drawn = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, _| shell.crash_reload_drawn.set(None));
+        draw(&shell, cx);
+        shell.read_with(cx, |shell, _| shell.crash_reload_drawn.get())
+    };
+    assert_eq!(reload_drawn(cx), None, "no card while the page is fine");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, page(crate::shell::Trouble::Crashed), cx)
+    });
+    cx.run_until_parked();
+    let reload =
+        reload_drawn(cx).expect("the watched tile's page that died shows the card's Reload");
+    let place = tile_place(&shell, cx);
+    assert!(
+        place.contains(&reload.center()),
+        "{reload:?} is where the tile is, {place:?}"
+    );
+    let asked = host.take();
+    page_untouched(&asked);
+    assert!(!asked.contains(&"end tile 30".to_string()), "{asked:?}");
+
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30", "reload 30"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        Some(30),
+        "a tile still, as its page loads again"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, page(crate::shell::Trouble::Fine), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(reload_drawn(cx), None, "no card once the page is fine");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        Some(30)
+    );
+}
+
 /// A click where the watched tile is while it goes back into its picture reaches the conversation
 /// under it, as one does under a page going back (#3496), and takes nothing over (#4267).
 #[gpui::test]

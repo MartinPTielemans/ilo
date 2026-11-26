@@ -141,6 +141,11 @@ void EndTile(content::WebContents* contents, bool leaves_window);
 // ShowTile or EndTile has it.
 void ParkTile(content::WebContents* contents);
 
+// Has the tile of |contents|' page, which died, draw nothing, so the app's card under it shows, or
+// draw again: in its window and at its frame all along, so Chromium never hears the page hidden.
+// Nothing if the page is in no tile.
+void HideTile(content::WebContents* contents, bool hidden);
+
 // |contents|' page came in a view of its own, a page from another site committing, while it's a
 // tile: the view takes the page's own size again, which Chromium sized from the tile's.
 void TilePageChanged(content::WebContents* contents);

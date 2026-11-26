@@ -63,6 +63,12 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
     case TileRule::Shown::kFramed:
     case TileRule::Shown::kMoved:
       platform::ShowTile(contents, view, frame, corner_radius);
+      // A tile made for a page that died draws nothing, as one whose page dies in it: one a window
+      // let go of, handed back with no reload. Not for each frame the app moves it by.
+      if (shown != TileRule::Shown::kFramed) {
+        const Tab* shows = Tab::Get(tab);
+        platform::HideTile(contents, shows && shows->crashed());
+      }
       return true;
     default:
       return false;
@@ -87,11 +93,17 @@ void EndTile(bc_id tab) {
   if (content::WebContents* contents = Tab::FromId(tab)) {
     platform::ParkTile(contents);
   }
+  if (Tab* left = Tab::Get(tab)) {
+    left->LeftSight();
+  }
 }
 
 void ShowInCard(bc_id tab) {
   const bool parked = Rule().Parked(tab);
   Out(tab, Rule().ShowInCard(tab), parked, /*leaves_window=*/true);
+  if (Tab* left = Tab::Get(tab)) {
+    left->LeftSight();
+  }
 }
 
 void PageViewChanged(bc_id tab) {
@@ -105,6 +117,19 @@ void PageViewChanged(bc_id tab) {
 
 bool Holds(bc_id tab) {
   return Rule().InTile(tab);
+}
+
+bool InSight(bc_id tab) {
+  return Rule().InSight(tab, Window::Showing(tab) != nullptr);
+}
+
+void Died(bc_id tab, bool died) {
+  if (!Rule().InTile(tab)) {
+    return;
+  }
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::HideTile(contents, died);
+  }
 }
 
 }  // namespace browser_core::tiles

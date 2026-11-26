@@ -715,6 +715,11 @@ void ParkTile(content::WebContents* contents) {
   tile.frame = frame;
 }
 
+void HideTile(content::WebContents* contents, bool hidden) {
+  // Not -hidden, which Chromium takes for its page hidden: a tile's page is visible while it's one.
+  TileOf(contents->GetNativeView().GetNativeNSView()).alphaValue = hidden ? 0 : 1;
+}
+
 void TilePageChanged(content::WebContents* contents) {
   NSView* page_view = contents->GetNativeView().GetNativeNSView();
   content::RenderWidgetHostView* widget = contents->GetRenderWidgetHostView();
