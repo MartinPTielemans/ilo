@@ -1501,17 +1501,17 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "the agent's tab $warned, watched in its split view $1, showed a warning before http, which is the user's alone to answer: $(since | grep '^browser: layout child ')"
   }
   # The user takes $warned over from its page watched, with ⌘↩, the UI given the keyboard by a
-  # click on the sidebar, and the strip under it says so; $1 says when. The agent is at work in
-  # its Space, in $beside, which the bar's Take Over wants.
+  # click on the sidebar, and the panel's page row says so; $1 says when. The agent is at work
+  # in its Space, in $beside, which the bar's Take Over wants.
   take_warned() {
     took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-    driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
+    driving=$(grep -c "^browser: page row $warned yours\$" "$log" || true)
     send click $sidebar_point
     send key return cmd
     await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
       fail "⌘↩ on the agent's tab $warned, watched $1, didn't take it over: $(since | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-    await_more "^browser: task strip $warned says You're driving" "$driving" ||
-      fail "the strip under tab $warned didn't say the user has it once they took it over $1: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
+    await_more "^browser: page row $warned yours\$" "$driving" ||
+      fail "the panel's page row for tab $warned didn't say the user has it once they took it over $1: $(grep "^browser: page row $warned " "$log" | tail -1)"
   }
   # In $warned, which the user holds and watches, the user goes to $plain from the bar, as typed:
   # https first, then Chrome's warning before http over the tab's pane, at $warning, as in a tab of
@@ -1657,10 +1657,10 @@ PICTURE
   hand_back_warned warned
   to_pages "tab $warned"
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
-  # keeps the keys that answer it (dialog_keys.cc). The tab is the user's, and the strip said so
-  # before they went anywhere, so the Escape is the user's act on their own tab. The warning goes,
-  # and the tab leaves the page that never opened for the one it had. ⌘↩ hands it back after, with
-  # no warning up.
+  # keeps the keys that answer it (dialog_keys.cc). The tab is the user's, and the panel's page
+  # row said so before they went anywhere, so the Escape is the user's act on their own tab. The
+  # warning goes, and the tab leaves the page that never opened for the one it had. ⌘↩ hands it
+  # back after, with no warning up.
   warn_held "before Escape"
   send key escape
   escaped=$step
@@ -1716,7 +1716,7 @@ PICTURE
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   warned_presses=$(grep -c "^browser: agent page pressed in $warned\$" "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
+  driving=$(grep -c "^browser: page row $warned yours\$" "$log" || true)
   watch "$warned"
   no_warning "after the press beside"
   send click $((warning_x + warning_width / 2)) $((warning_y + warning_height / 2))
@@ -1725,8 +1725,8 @@ PICTURE
     fail "a press in tab $warned's page, watched after the press beside, didn't reach the app as a press on it: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
   await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
     fail "a press in tab $warned's page, after the agent's session ended in $beside, didn't take tab $warned over: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-  await_more "^browser: task strip $warned says You're driving" "$driving" ||
-    fail "the strip under tab $warned didn't say the user has it once the press in its page took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
+  await_more "^browser: page row $warned yours\$" "$driving" ||
+    fail "the panel's page row for tab $warned didn't say the user has it once the press in its page took it: $(grep "^browser: page row $warned " "$log" | tail -1)"
   send click $sidebar_point
   hand_back_pressed "$presses"
   to_pages "tab $warned"
