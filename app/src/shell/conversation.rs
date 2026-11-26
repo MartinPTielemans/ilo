@@ -237,8 +237,9 @@ pub struct TalkView {
     tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
-    /// What each tile's word said when that was logged last.
-    said_logged: RefCell<HashMap<u64, &'static str>>,
+    /// What each tile's word said when that was logged last, then its page's state's word, which a
+    /// dead page's tile leaves out.
+    said_logged: RefCell<HashMap<u64, (&'static str, &'static str)>>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
@@ -1488,15 +1489,20 @@ impl TalkView {
                     })
                     .when(look.behind, |sound| sound.relative().child(unpressed()))
             });
-            let says = said.map_or("", PageWord::label);
-            if self.said_logged.borrow_mut().insert(tab, says) != Some(says) {
+            // A dead page's tile says its name alone: the word comes back once the page loads.
+            let word = said.map_or("", PageWord::label);
+            let says = if crashed { "" } else { word };
+            let was = (self.said_logged.borrow_mut()).insert(tab, (says, word));
+            if was != Some((says, word)) {
                 // check.sh reads this line.
                 log!("browser: task picture {tab} says {says}");
                 // Once, as it turns: a tile the user scrolls away again stays away, and its page
                 // opens as itself unless the user has put another of the task's pages there.
                 // Nor while the user types in the reply field the page would cover: the tile in
                 // sight is enough, and the field keeps the keyboard and what's in it.
-                if said == Some(PageWord::NeedsYou) {
+                // By the page's state, which a death and the load after it leave as it was.
+                let turned = was.is_none_or(|(_, before)| before != word);
+                if said == Some(PageWord::NeedsYou) && turned {
                     self.rail_scroll.scroll_to_item(index);
                     let (shell, typing) = (self.shell.clone(), self.typing);
                     cx.defer(move |cx| {
@@ -1511,7 +1517,7 @@ impl TalkView {
                     });
                 }
             }
-            let word = said.map(|said| {
+            let word = said.filter(|_| !crashed).map(|said| {
                 div()
                     .flex_none()
                     .flex()

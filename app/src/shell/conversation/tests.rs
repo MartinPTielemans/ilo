@@ -533,7 +533,7 @@ fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppCont
         cx.run_until_parked();
     }
     let tiles = view.read_with(cx, |view, _| {
-        [30, 31].map(|tab| view.said_logged.borrow().get(&tab).copied())
+        [30, 31].map(|tab| view.said_logged.borrow().get(&tab).map(|(says, _)| *says))
     });
     assert_eq!(tiles, [Some("Working"); 2], "the rail's tiles");
     let helpers = shell.read_with(cx, |shell, _| {
@@ -3569,6 +3569,47 @@ fn a_rail_tile_whose_page_died_has_the_cards_glyph_until_it_loads_again(cx: &mut
     assert!(
         !asked(&did, "end tile 30"),
         "loaded again, its tile ended: {did:?}"
+    );
+}
+
+/// A dead page's tile says its name alone: its state's word goes with the death and comes back
+/// with the load, and the other tiles keep theirs.
+#[gpui::test]
+fn a_dead_pages_tile_leaves_its_word_out_until_it_loads_again(cx: &mut TestAppContext) {
+    let mut working = card();
+    working.pages = vec![30, 31];
+    let (shell, _, cx) = shown_with(working, cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![(30, "tickets.example".into()), (31, "seats.example".into())];
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(3, Vec::new(), vec![30, 31], Vec::new(), folders, cx);
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let mut says = |trouble: Option<Trouble>, cx: &mut VisualTestContext| {
+        if let Some(trouble) = trouble {
+            shell.update(cx, |shell, cx| shell.set_page(30, page_in(trouble), cx));
+        }
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| {
+            [30, 31].map(|tab| view.said_logged.borrow().get(&tab).map(|(says, _)| *says))
+        })
+    };
+    assert_eq!(says(None, cx), [Some("Working"); 2]);
+    assert_eq!(
+        says(Some(Trouble::Crashed), cx),
+        [Some(""), Some("Working")],
+        "a dead page's tile kept its word"
+    );
+    assert_eq!(
+        says(Some(Trouble::Fine), cx),
+        [Some("Working"); 2],
+        "loaded again, its word didn't come back"
     );
 }
 
