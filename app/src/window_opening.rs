@@ -198,6 +198,14 @@ pub(crate) fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
+    // The Mac's host hears a window is Little ilo's before the core makes it, which orders it in
+    // as it does: over a full-screen window it's that desktop's auxiliary by then, or AppKit takes
+    // it full screen on a desktop of its own (#4179). The other hosts know a window once it's made.
+    let little = matches!(own, Some(Own::Little { .. }));
+    #[cfg(target_os = "macos")]
+    if little {
+        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
+    }
     let id = open_browser_window(ui_view, after, own, saved, at)?;
     // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
     // Before its UI opens, so that starts at the maximized size.
@@ -406,7 +414,8 @@ pub(crate) fn open_window_as(
         unsafe { bc::bc_window_toggle_full_screen(id) };
         log!("browser: window back windowed until its UI shows");
     }
-    if let Some(Own::Little { .. }) = own {
+    #[cfg(not(target_os = "macos"))]
+    if little {
         unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
     // A later window comes on screen drawn, as the overlays do: AppKit reports a new window
