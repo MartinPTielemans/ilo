@@ -3689,11 +3689,12 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 11] = [
+    const READS: [&str; 12] = [
         "list_tabs",
         "list_split",
         "open_tab",
         "search",
+        "strand",
         "navigate",
         "snapshot",
         "read_page",
@@ -14850,6 +14851,8 @@ mod rewall;
 #[cfg(unix)]
 mod searches;
 mod sign_ins;
+#[cfg(unix)]
+mod strands;
 mod switches;
 mod uploads;
 mod went_to;

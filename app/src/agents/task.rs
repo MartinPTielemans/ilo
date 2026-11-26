@@ -583,6 +583,8 @@ impl Task {
     fn end(&mut self, at: SystemTime) {
         self.ended = Some(at);
         self.end_entry = super::next_entry_id();
+        // Its strands end with it, each call of theirs answered as stopped.
+        self.helpers.end_strands(self.trace.len());
         // A refusal is passed once its task ends: there's nothing left to raise or take over.
         for stop in &mut self.stops {
             stop.settled = true;
@@ -2254,6 +2256,24 @@ impl Agents {
         }));
     }
 
+    /// A strand has NO_ANSWER from its start to call or say something, as its thread has while
+    /// it thinks, on its thread's own timer (`no_answer`), or it ends, its call answered with why.
+    pub(super) fn watch_strands(&mut self, thread: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(thread).filter(|task| task.waiting.is_none()) else {
+            return;
+        };
+        let Some(since) = task.helpers.unheard_since() else {
+            return;
+        };
+        let now = cx.background_executor().now();
+        let wait = NO_ANSWER.saturating_sub(now.duration_since(since));
+        let agent = thread.to_string();
+        task.waiting = Some(cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(wait).await;
+            _ = agents.update(cx, |agents, cx| agents.no_answer(&agent, cx));
+        }));
+    }
+
     fn no_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
             return;
@@ -2262,8 +2282,20 @@ impl Agents {
         if let Some(timer) = task.waiting.take() {
             timer.detach();
         }
-        if !task.thinking() {
+        // A strand that hasn't answered in its time ends as its thread would, which goes on.
+        let (why, trace) = (format!("{} didn't answer.", task.name), task.trace.len());
+        let now = cx.background_executor().now();
+        if task.helpers.end_unheard((now, NO_ANSWER), &why, trace) {
+            self.tokens_changed();
+            cx.notify();
+        }
+        let Some(task) = self.task_mut(agent) else {
             return;
+        };
+        // A thread whose strands are under way waits on their calls, as on any tool's: it isn't
+        // thinking, though it has said nothing.
+        if !task.thinking() || task.helpers.has_strands() {
+            return self.watch_strands(agent, cx);
         }
         // check.sh reads this line.
         log!(
@@ -2301,6 +2333,68 @@ impl Agents {
         // A task with files starts inside its wall, or without them (rewall.rs).
         let wall = self.wall_to_start(agent);
         self.launch_in(agent, first, wall, cx);
+    }
+
+    /// Starts the run of the strand `strand` of the thread `thread`, which reads `first`: the
+    /// thread's assistant, model and effort, with the strand's token and tools, inside the wall
+    /// the thread's files need and reading what the thread reads. It keeps nothing. Why not, in
+    /// the words its call is answered with, if it couldn't start.
+    pub(super) fn launch_strand(
+        &mut self,
+        thread: &str,
+        strand: &str,
+        first: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Process, String> {
+        let Some(cli) = self.task(thread).and_then(|task| task.cli) else {
+            return Err(String::new());
+        };
+        let couldnt = format!("{} couldn't start.", cli.name());
+        let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
+        let Some(program) = found.program.clone() else {
+            return Err(format!("{} isn't installed.", cli.name()));
+        };
+        // A strand of a thread with files is held to them as the thread is, or doesn't start.
+        let wall = self.wall_or_without(thread).map_err(|()| couldnt.clone())?;
+        let Some(task) = self.task(thread) else {
+            return Err(couldnt);
+        };
+        let Some(token) = task.helpers.token_of(strand) else {
+            return Err(couldnt);
+        };
+        let dir = self.tasks_dir();
+        let mut args = self.bridge.clone();
+        args.push(self.socket.to_string_lossy().into_owned());
+        let command = args.remove(0);
+        let launch = Launch {
+            cli,
+            program,
+            path: found.path.clone(),
+            dir: dir.join(strand),
+            config: dir.join(format!("{strand}.json")),
+            server: runner::Server {
+                command,
+                args,
+                token,
+            },
+            model: self.launch_model(thread, cli),
+            effort: task.effort.clone(),
+            instructions: tools::STRAND_INSTRUCTIONS.into(),
+            tools: tools::names(strand),
+            wall,
+            reads: (task.files.folder.iter())
+                .map(|folder| folder.root().to_path_buf())
+                .chain(task.files.attached.clone())
+                .collect(),
+        };
+        let events = self.task_events(cx);
+        Process::start(&launch, strand, first, events).map_err(|error| {
+            log!(
+                "browser: strand {strand} couldn't start {}: {error}",
+                cli.id()
+            );
+            couldnt
+        })
     }
 
     /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
@@ -2413,6 +2507,10 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, run, out } = event;
+        // A strand's run answers its thread's call, and is no line of the thread's (helpers.rs).
+        if let Some(thread) = super::strand_parent(&agent).map(str::to_string) {
+            return self.strand_said(&thread, &agent, run, out, cx);
+        }
         // The sweep after a run's end answers for that run, whichever run is under way now.
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
@@ -2432,10 +2530,11 @@ impl Agents {
         if out == Out::Walled(Ok(())) {
             return self.walled_in(&agent);
         }
-        // Whatever it said, it answered.
+        // Whatever it said, it answered; a strand of it still unheard keeps its watch.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
         }
+        self.watch_strands(&agent, cx);
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else {
@@ -3058,7 +3157,8 @@ impl Agents {
                 None => return,
             },
         };
-        if matches!(tool, "title" | "finish" | "run_steps") {
+        // A strand's start is its own line, under the name its thread gave it (helpers.rs).
+        if matches!(tool, "title" | "finish" | "run_steps" | tools::STRAND) {
             return;
         }
         let did = tools::Did {

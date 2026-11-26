@@ -341,7 +341,7 @@ impl Agents {
     /// The wall a start of `agent`'s task goes inside: none for a task with no files, which
     /// starts as it always has. Err for one whose wall isn't put up, which from then goes on
     /// without its files.
-    fn wall_or_without(&mut self, agent: &str) -> Result<Option<Arc<Wall>>, ()> {
+    pub(super) fn wall_or_without(&mut self, agent: &str) -> Result<Option<Arc<Wall>>, ()> {
         let Some(task) = self.task(agent).filter(|task| task.files.any()) else {
             return Ok(None);
         };

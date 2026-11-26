@@ -69,6 +69,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      all in one turn, then do each step on all of them in one turn, one call per tab with its \
      tab. Calls on different tabs run at the same time, so that's faster than one tab after \
      another.\n\n\
+     A helper works in the tab you give it or one it opens, at this task's access level, and what \
+     it finds comes back to you as its result.\n\n\
      The tools that act on a page (open_tab, navigate, search, click, type, select, press_key, \
      scroll, request, and each step in run_steps) take an optional `note`: a short reason for that step, \
      at most 80 characters, which ",
@@ -88,6 +90,23 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
+/// What a strand's CLI is told, after its own system prompt: a helper's part of its thread's task,
+/// in the thread's tabs and at its access, which answers the thread with its last message.
+pub const STRAND_INSTRUCTIONS: &str = concat!(
+    "You do one page's part of a task in the user's web browser, ",
+    env!("PRODUCT_NAME"),
+    ", through its tools only. Give every call its tab. A sign-in, a 2FA prompt or a CAPTCHA is \
+     the user's: stop there and say so in your result, with the tab, so the task hands it over. \
+     Never pay, order, book or send a message unless your instructions say the user asked for \
+     it. End with what you found, short and plain."
+);
+/// The tool a thread starts a strand with: a helper, in what the assistant is told.
+pub const STRAND: &str = "strand";
+/// A thread's own tools, which no strand of it has: its name, its questions, its end, a tab handed
+/// to the user or asked back, and a strand of its own. Each speaks to the user as the thread.
+pub const THE_THREADS_OWN: [&str; 6] =
+    ["title", "ask", "finish", "hand_off", "ask_for_tab", STRAND];
+
 /// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
 /// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
 /// the rest.
@@ -126,7 +145,11 @@ pub fn list(agent: &str) -> Value {
         match super::is_task(agent) {
             true => {
                 tools.extend(task_tools());
-                // Only the product's own threads, a helper's calls among them, say why a step.
+                // A strand has the thread's tools but those that are the thread's own.
+                if super::strand_parent(agent).is_some() {
+                    tools.retain(|tool| !THE_THREADS_OWN.iter().any(|own| tool["name"] == *own));
+                }
+                // Only the product's own threads, their strands among them, say why a step.
                 noted(tools);
             }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
@@ -148,12 +171,20 @@ pub fn names(agent: &str) -> Vec<String> {
 
 /// Whether `agent` has a tool of this name: one of those tools/list gives it. Each list is made
 /// once and kept for the process's life, which is right only while a list depends on the kind of
-/// agent alone, a task's or an outside agent's. The day one varies by a setting, the kept list
-/// goes, or a tool switched on is refused here and one switched off is run.
+/// agent alone, a thread's, a strand's or an outside agent's. The day one varies by a setting,
+/// the kept list goes, or a tool switched on is refused here and one switched off is run.
 pub fn has(agent: &str, tool: &str) -> bool {
-    static NAMES: [std::sync::OnceLock<Vec<String>>; 2] =
-        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
-    let names = NAMES[usize::from(super::is_task(agent))].get_or_init(|| names(agent));
+    static NAMES: [std::sync::OnceLock<Vec<String>>; 3] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let kind = match (super::is_task(agent), super::strand_parent(agent)) {
+        (false, _) => 0,
+        (true, None) => 1,
+        (true, Some(_)) => 2,
+    };
+    let names = NAMES[kind].get_or_init(|| names(agent));
     names.iter().any(|name| name == tool)
 }
 
@@ -233,6 +264,7 @@ fn task_tools() -> Vec<Value> {
     vec![
         title_tool(),
         search_tool(),
+        strand_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -310,6 +342,26 @@ fn search_tool() -> Value {
             "required": ["words"],
         },
         "annotations": open["annotations"],
+    })
+}
+
+/// A helper for one page's part of the thread's task: a strand, in what the user reads, which the
+/// browser starts, counts and ends itself, and whose last message answers the call.
+fn strand_tool() -> Value {
+    let most = crate::tokens::agents::helpers::MOST;
+    json!({
+        "name": STRAND,
+        "title": "Start a helper",
+        "description": format!("Start a helper when the same work repeats across pages: one page each, with goal as what it's to do there. Start at most {most} for each message of the user's, and a helper may start none of its own: {} stops the turn if either limit is passed. If there are more pages, do the rest yourself in your own tabs. A helper works in the tab you give it or one it opens, and what it finds comes back to you as this call's answer.", env!("PRODUCT_NAME")),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "goal": { "type": "string", "description": "What the helper is to do, in a sentence or two." },
+                "tab": tab_schema(),
+            },
+            "required": ["goal"],
+        },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true },
     })
 }
 
@@ -1177,6 +1229,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
         }
+        // A strand's start, with its goal's first line.
+        STRAND if !did.target.is_empty() => {
+            return format!("{} · {}", describe(STRAND), did.target);
+        }
         action => return describe(action).to_string(),
     };
     let verb = match tense {
@@ -1365,6 +1421,7 @@ pub fn describe(action: &str) -> &'static str {
         "done" => "Marked the thread done",
         super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
         super::fence::CAME_ACTION => super::fence::CAME_DONE,
+        STRAND => "Started a strand",
         _ => "Acted",
     }
 }
