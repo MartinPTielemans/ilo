@@ -385,7 +385,7 @@ fn codex_turns_off_the_users_servers_by_name() {
 
 #[test]
 fn codexs_thread_has_the_browser_alone() {
-    let params = codex::thread_params(&launch(Cli::Codex));
+    let params = codex::thread_params(&launch(Cli::Codex), NAME);
     let config = &params["config"];
     for feature in [
         "shell_tool",
@@ -433,7 +433,7 @@ fn codexs_thread_has_the_browser_alone() {
     assert_eq!(config["agents.max_depth"], json!(0));
     assert_eq!(config["skills.include_instructions"], json!(false));
     assert_eq!(params["approvalPolicy"], json!("never"));
-    assert_eq!(params["permissions"], json!(codex::PROFILE));
+    assert_eq!(params["permissions"], json!(NAME));
     assert!(params.get("sandbox").is_none(), "{params}");
     assert_eq!(params["ephemeral"], json!(true));
     assert_eq!(params["cwd"], json!("/tmp/Tasks/task-1"));
@@ -444,9 +444,9 @@ fn codexs_thread_has_the_browser_alone() {
 /// for a thread with pages alone no read root at all, so a command reads nothing on this computer.
 #[test]
 fn a_thread_with_pages_alone_has_no_read_root() {
-    let params = codex::thread_params(&launch(Cli::Codex));
+    let params = codex::thread_params(&launch(Cli::Codex), NAME);
     assert_eq!(
-        params["config"][format!("permissions.{}", codex::PROFILE).as_str()],
+        params["config"][format!("permissions.{NAME}").as_str()],
         json!({ "filesystem": { ":root": "deny" }, "network": { "enabled": false } })
     );
 }
@@ -458,12 +458,15 @@ fn a_thread_with_files_reads_its_own_alone() {
         PathBuf::from("/Users/a/Granted"),
         PathBuf::from("/tmp/Tasks/task-1-attached"),
     ];
-    let params = codex::thread_params(&Launch {
-        reads,
-        ..launch(Cli::Codex)
-    });
+    let params = codex::thread_params(
+        &Launch {
+            reads,
+            ..launch(Cli::Codex)
+        },
+        NAME,
+    );
     assert_eq!(
-        params["config"][format!("permissions.{}", codex::PROFILE).as_str()],
+        params["config"][format!("permissions.{NAME}").as_str()],
         json!({
             "filesystem": {
                 ":root": "deny",
@@ -495,29 +498,91 @@ fn no_thread_starts_without_its_profile() {
     ] {
         assert_eq!(codex::fits(agent), fits, "{agent:?}");
     }
-    let state = codex::State::default();
     let stdin = std::sync::Mutex::new(None);
     let launch = launch(Cli::Codex);
-    let read = |line: Value| codex::read(&line, &state, &stdin, &launch);
     let old = json!({ "id": 1, "result": { "userAgent": "ilo/0.160.0 (Mac OS 26.1.0; arm64)" } });
-    assert!(matches!(read(old)[..], [Out::Gone(_)]));
+    assert!(matches!(
+        codex::read(&old, &codex::State::default(), &stdin, &launch)[..],
+        [Out::Gone(_)]
+    ));
+    // A thread answered before it was asked for names no profile it was asked to start under.
+    let unasked = json!({ "id": 2, "result": { "thread": { "id": "t1" },
+        "activePermissionProfile": { "id": NAME } } });
+    assert!(matches!(
+        codex::read(&unasked, &codex::State::default(), &stdin, &launch)[..],
+        [Out::Gone(_)]
+    ));
+
+    let (one, other) = (codex::State::default(), codex::State::default());
+    for state in [&one, &other] {
+        assert_eq!(codex::read(&INITIALIZED, state, &stdin, &launch), vec![]);
+    }
+    let (asked, elsewhere) = (one.profile().unwrap(), other.profile().unwrap());
+    for name in [&asked, &elsewhere] {
+        let random = name.strip_prefix(codex::PROFILE).expect("ilo's profile");
+        assert!(
+            random.len() == 16 && random.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{name}"
+        );
+    }
+    assert_ne!(asked, elsewhere, "two starts share a profile's name");
+    let answered = |id: Value| json!({ "id": 2, "result": { "thread": { "id": "t1" }, "activePermissionProfile": id } });
     for answer in [
         json!({ "id": 2, "result": { "thread": { "id": "t1" } } }),
-        json!({ "id": 2, "result": { "thread": { "id": "t1" }, "activePermissionProfile": null } }),
-        json!({ "id": 2, "result": { "thread": { "id": "t1" },
-            "activePermissionProfile": { "id": ":read-only" } } }),
-        json!({ "id": 2, "result": { "thread": { "id": "t1" },
-            "activePermissionProfile": { "id": ":workspace", "extends": codex::PROFILE } } }),
+        answered(Value::Null),
+        answered(json!({ "id": ":read-only" })),
+        answered(json!({ "id": ":workspace", "extends": asked })),
+        // Another start's, a stale one's, and one a user's config could have named beforehand.
+        answered(json!({ "id": elsewhere })),
+        answered(json!({ "id": NAME })),
+        answered(json!({ "id": codex::PROFILE })),
+        answered(json!({ "id": "ilo-thread" })),
     ] {
         assert!(
-            matches!(read(answer.clone())[..], [Out::Gone(_)]),
+            matches!(
+                codex::read(&answer, &one, &stdin, &launch)[..],
+                [Out::Gone(_)]
+            ),
             "{answer}"
         );
     }
-    let held = json!({ "id": 2, "result": { "thread": { "id": "t1" },
-        "activePermissionProfile": { "id": codex::PROFILE } } });
-    assert_eq!(read(held), vec![]);
+    assert_eq!(
+        codex::read(&answered(json!({ "id": asked })), &one, &stdin, &launch),
+        vec![]
+    );
 }
+
+/// Each start names a profile of its own, so neither the user's config nor another start can have
+/// written its table, and one start's answer naming another's profile starts no turn.
+#[test]
+fn each_start_names_its_own_profile() {
+    let names: Vec<String> = (0..2).map(|_| codex::profile_name()).collect();
+    assert_ne!(names[0], names[1]);
+    let stdin = std::sync::Mutex::new(None);
+    let launch = launch(Cli::Codex);
+    let (one, other) = (codex::State::default(), codex::State::default());
+    for state in [&one, &other] {
+        assert_eq!(codex::read(&INITIALIZED, state, &stdin, &launch), vec![]);
+    }
+    let answer = |state: &codex::State| {
+        json!({ "id": 2, "result": { "thread": { "id": "t1" },
+            "activePermissionProfile": { "id": state.profile() } } })
+    };
+    assert_ne!(one.profile(), other.profile());
+    assert!(matches!(
+        codex::read(&answer(&other), &one, &stdin, &launch)[..],
+        [Out::Gone(_)]
+    ));
+    assert_eq!(codex::read(&answer(&one), &one, &stdin, &launch), vec![]);
+}
+
+/// A profile's name for the params' tests, as `codex::profile_name` makes one.
+const NAME: &str = "ilo-thread-0123456789abcdef";
+
+/// Codex's answer to initialize, from a version that takes the profile.
+static INITIALIZED: std::sync::LazyLock<Value> = std::sync::LazyLock::new(
+    || json!({ "id": 1, "result": { "userAgent": "ilo/0.172.0 (Mac OS 26.1.0; arm64)" } }),
+);
 
 /// The stand-in row: a stand-in for Codex's app-server, never the real one, keeps what ilo sends
 /// it and asks to run a command that reads a file outside the thread's folders. ilo started the
@@ -533,19 +598,20 @@ fn a_command_reading_outside_the_threads_folders_is_refused() {
     std::fs::write(&outside, "not the thread's").unwrap();
     let run = |name: &str, profile: &str| {
         let stand_in = dir.join(name);
-        let script = format!(
-            "#!/bin/sh\n\
-             dir=$(dirname \"$0\")\n\
-             while IFS= read -r line; do\n\
-             printf '%s\\n' \"$line\" >> \"$0.heard\"\n\
-             case \"$line\" in\n\
-             *'\"method\":\"initialize\"'*) echo '{{\"id\":1,\"result\":{{\"userAgent\":\"ilo/0.172.0 (Mac OS 26.1.0; arm64)\",\"codexHome\":\"/nonexistent\",\"platformFamily\":\"unix\",\"platformOs\":\"macos\"}}}}' ;;\n\
-             *'\"method\":\"thread/start\"'*) echo '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"t1\"}},\"activePermissionProfile\":{profile}}}}}' ;;\n\
-             *'\"method\":\"turn/start\"'*) echo '{{\"id\":7,\"method\":\"item/commandExecution/requestApproval\",\"params\":{{\"threadId\":\"t1\",\"turnId\":\"u1\",\"itemId\":\"c1\",\"command\":\"cat '\"$dir\"'/outside\"}}}}' ;;\n\
-             *'\"id\":7'*) echo '{{\"method\":\"turn/completed\",\"params\":{{\"turn\":{{\"id\":\"u1\",\"status\":\"completed\"}}}}}}' ;;\n\
-             esac\n\
-             done\n"
-        );
+        // It answers thread/start with `profile`, where `$name` is the one it was asked for.
+        let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+while IFS= read -r line; do
+printf '%s\n' "$line" >> "$0.heard"
+case "$line" in
+*'"method":"initialize"'*) echo '{"id":1,"result":{"userAgent":"ilo/0.172.0 (Mac OS 26.1.0; arm64)","codexHome":"/nonexistent","platformFamily":"unix","platformOs":"macos"}}' ;;
+*'"method":"thread/start"'*) name=$(printf '%s' "$line" | sed -n 's/.*"permissions":"\([^"]*\)".*/\1/p'); echo '{"id":2,"result":{"thread":{"id":"t1"},"activePermissionProfile":PROFILE}}' ;;
+*'"method":"turn/start"'*) echo '{"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"t1","turnId":"u1","itemId":"c1","command":"cat '"$dir"'/outside"}}' ;;
+*'"id":7'*) echo '{"method":"turn/completed","params":{"turn":{"id":"u1","status":"completed"}}}' ;;
+esac
+done
+"#
+        .replace("PROFILE", profile);
         std::fs::write(&stand_in, script).unwrap();
         std::fs::set_permissions(
             &stand_in,
@@ -579,12 +645,13 @@ fn a_command_reading_outside_the_threads_folders_is_refused() {
             .cloned()
     };
 
-    let (outs, heard) = run("held", &format!("{{\"id\":\"{}\"}}", codex::PROFILE));
+    let (outs, heard) = run("held", r#"{"id":"'"$name"'"}"#);
     let start = method(&heard, "thread/start").expect("a thread was asked for");
-    assert_eq!(start["params"]["permissions"], json!(codex::PROFILE));
+    let name = start["params"]["permissions"].as_str().unwrap_or_default();
+    assert!(name.starts_with(codex::PROFILE), "{start}");
     assert!(start["params"].get("sandbox").is_none(), "{start}");
     assert_eq!(
-        start["params"]["config"][format!("permissions.{}", codex::PROFILE).as_str()],
+        start["params"]["config"][format!("permissions.{name}").as_str()],
         json!({ "filesystem": { ":root": "deny" }, "network": { "enabled": false } })
     );
     let answer = (heard.iter())
@@ -593,11 +660,20 @@ fn a_command_reading_outside_the_threads_folders_is_refused() {
     assert_eq!(answer["result"], json!({ "decision": "decline" }));
     assert_eq!(outs.last(), Some(&Out::Ended(None)));
 
-    // One that doesn't say it took the profile gets no turn, so nothing it could run is asked.
-    let (outs, heard) = run("unheld", "null");
-    assert!(method(&heard, "thread/start").is_some());
-    assert!(method(&heard, "turn/start").is_none(), "{heard:?}");
-    assert!(matches!(outs.last(), Some(Out::Gone(_))), "{outs:?}");
+    // One that doesn't say it took the profile it was asked for gets no turn, so nothing it
+    // could run is asked: none, or a stale start's.
+    for (name, profile) in [
+        ("unheld", "null"),
+        ("stale", r#"{"id":"ilo-thread-0000000000000000"}"#),
+    ] {
+        let (outs, heard) = run(name, profile);
+        assert!(method(&heard, "thread/start").is_some(), "{name}");
+        assert!(method(&heard, "turn/start").is_none(), "{name}: {heard:?}");
+        assert!(
+            matches!(outs.last(), Some(Out::Gone(_))),
+            "{name}: {outs:?}"
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -607,9 +683,10 @@ fn codexs_messages_limits_and_failures() {
     let stdin = std::sync::Mutex::new(None);
     let launch = launch(Cli::Codex);
     let read = |line: Value| codex::read(&line, &state, &stdin, &launch);
+    assert_eq!(read(INITIALIZED.clone()), vec![]);
     assert_eq!(
         read(json!({ "id": 2, "result": { "thread": { "id": "t1" },
-            "activePermissionProfile": { "id": codex::PROFILE } } })),
+            "activePermissionProfile": { "id": state.profile() } } })),
         vec![]
     );
     assert_eq!(
