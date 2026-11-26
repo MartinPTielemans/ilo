@@ -27,11 +27,14 @@ serve
 fixture="$PWD/src/import/fixture"
 import_home=$fixture
 found=Arc
+# A kind the fixture's browser has something of, as the import draws only those: Arc's Spaces.
+chip=Spaces
 if [ "$(uname)" != Darwin ]; then
   # From the root, as chrome.exe moves into its own folder as it starts.
   fixture="$PWD/$out/onboarding-home"
   import_home=$fixture
   found=Chrome
+  chip=Bookmarks
   chrome="$fixture/.config/google-chrome"
   if windows; then
     chrome="$fixture/AppData/Local/Google/Chrome/User Data"
@@ -41,25 +44,26 @@ if [ "$(uname)" != Darwin ]; then
   mkdir -p "$chrome/Default"
   printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$chrome/Local State"
   printf '%s' '{}' > "$chrome/Default/Preferences"
-  # The import lists a browser only once it has bookmarks or history to bring in.
-  printf '%s' '{"roots":{}}' > "$chrome/Default/Bookmarks"
+  # The import lists a browser only once it has bookmarks or history to bring in, and draws a chip
+  # only for a kind with something in it: one bookmark.
+  printf '%s' '{"roots":{"bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[{"type":"url","name":"Example","url":"https://example.org/"}]}}}' > "$chrome/Default/Bookmarks"
 fi
 # Captures the window as onboarding-$1.png.
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# The import's list says what comes from the browser used last as chips: a click on History leaves
-# it out and another brings it back, keeping the step. Captured as onboarding-$1-import-chips.png
-# with History left out.
+# The import's list says what comes from the browser used last as chips: a click on the fixture's
+# $chip leaves it out and another brings it back, keeping the step. Captured as
+# onboarding-$1-import-chips.png with it left out.
 import_choices() {
   local at
-  at=$(drawn "import-chip History") || fail "$1: the import's list drew no History chip"
+  at=$(drawn "import-chip $chip") || fail "$1: the import's list drew no $chip chip"
   send click $at
-  expect '^browser: import chip History false$' "$1: a click on History didn't leave it out"
+  expect "^browser: import chip $chip false\$" "$1: a click on $chip didn't leave it out"
   send state
   capture_step "$1-import-chips"
   send click $at
-  expect '^browser: import chip History true$' "$1: a second click on History didn't bring it back"
+  expect "^browser: import chip $chip true\$" "$1: a second click on $chip didn't bring it back"
   none_since '^browser: onboarding left 3 ' || fail "$1: a click on a chip left the import step"
 }
 # The last line saying where the card is, of its steps coming and settling, a step left and its
