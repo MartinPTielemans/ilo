@@ -2251,6 +2251,7 @@ impl command_bar::Host for PreviewBar {
         _: Option<String>,
         _: Option<&'static str>,
         _: browser::agents::files::Picked,
+        _: browser::agents::task::handed::Picked,
         _: &mut App,
     ) {
     }
@@ -2263,6 +2264,7 @@ impl command_bar::Host for PreviewBar {
         _: Option<String>,
         _: Option<&'static str>,
         _: browser::agents::files::Picked,
+        _: browser::agents::task::handed::Picked,
         _: &mut App,
     ) {
     }

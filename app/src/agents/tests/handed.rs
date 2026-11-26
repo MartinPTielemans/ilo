@@ -1305,7 +1305,10 @@ fn chips(
     agent: &str,
     cx: &mut TestAppContext,
 ) -> Vec<(usize, Vec<(u64, String, bool)>)> {
-    run.agents.read_with(cx, |agents, _| {
+    run.agents.read_with(cx, |agents, cx| {
+        // The conversation carries the same, for its log to draw.
+        let shown = agents.conversation(agent, cx).map(|talk| talk.chips);
+        assert!(shown.is_none_or(|shown| shown == agents.message_chips(agent)));
         (agents.message_chips(agent).into_iter())
             .map(|(said, chips)| {
                 let chips = chips.into_iter();

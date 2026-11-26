@@ -866,6 +866,26 @@ contact = 0x0000_0040
 contact-y = 4.0
 contact-blur = 12.0
 
+[tab-picks]
+# A tab of the user's picked for a message, as a chip over the composer's field: 26 high at the
+# control radius, as the triggers beside it, 7 in at its left and 6 at its right, its icon 14, its
+# title 12 on a line of 16, and its ✕ 12, 6 apart, the chip at most 190 wide. The chips are 6
+# apart, wrapping, and 10 from the composer's top and sides. In a sent message a chip whose tab
+# did not go is drawn at 40 %.
+chip-height = 26.0
+chip-radius = 6.0
+chip-left = 7.0
+chip-right = 6.0
+chip-gap = 6.0
+chip-max = 190.0
+icon = 14.0
+title = 12.0
+title-line = 16.0
+close = 12.0
+between = 6.0
+inset = 10.0
+not-handed = 0.4
+
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of [floating]'s fill,
 # frosted where the host blurs under it, in glass (#4090): a light from the top, the floating rim

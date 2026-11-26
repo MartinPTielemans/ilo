@@ -97,6 +97,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         about: "Claude · Haiku · Working".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
+        chips: Vec::new(),
         lines: vec![Line::Trace(Trace {
             key: 0,
             running: true,
@@ -6050,3 +6051,5 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
         }
     }
 }
+
+mod picks;

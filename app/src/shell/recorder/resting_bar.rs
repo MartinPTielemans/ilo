@@ -150,6 +150,7 @@ impl command_bar::Host for RestingBar {
         _: Option<String>,
         _: Option<&'static str>,
         _: crate::agents::files::Picked,
+        _: crate::agents::task::handed::Picked,
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));
@@ -162,6 +163,7 @@ impl command_bar::Host for RestingBar {
         model: Option<String>,
         effort: Option<&'static str>,
         files: crate::agents::files::Picked,
+        tabs: crate::agents::task::handed::Picked,
         _: &mut App,
     ) {
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
@@ -171,8 +173,12 @@ impl command_bar::Host for RestingBar {
             (0, false) => String::new(),
             (count, folder) => format!(" files {count} folder {folder}"),
         };
+        let tabs = match tabs.is_empty() {
+            true => String::new(),
+            false => format!(" tabs {}", tabs.tabs().len()),
+        };
         self.ask(format!(
-            "run task at rest {agent} {text} at {}{model}{effort}{files}",
+            "run task at rest {agent} {text} at {}{model}{effort}{files}{tabs}",
             tier.id()
         ));
     }

@@ -129,6 +129,7 @@ mod side_tests;
 mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
+mod tab_picks;
 mod task_cards;
 #[cfg(test)]
 #[cfg(test)]

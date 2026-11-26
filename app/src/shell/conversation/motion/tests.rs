@@ -49,6 +49,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         about: "Claude · Haiku · Working".into(),
         asked: "what's on at maat".into(),
         page: None,
+        chips: Vec::new(),
         lines,
         tabs: Vec::new(),
         on: None,

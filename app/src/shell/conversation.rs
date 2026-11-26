@@ -96,6 +96,7 @@ mod ilo_keys;
 mod markdown;
 mod motion;
 pub(crate) mod pages;
+mod picks;
 pub(crate) mod words;
 
 /// The assistant's said words, in the answer and between a stretch's steps alike: the text's ink.
@@ -335,6 +336,10 @@ pub struct TalkView {
     folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The plus before the level's chip, the add menu's (`crate::plus`).
     plus: crate::plus::Plus,
+    /// The user's tabs picked for the reply being written, by their clicks in the add menu
+    /// alone, and the watch on the window's tabs kept while there is one (picks.rs).
+    picks: crate::tab_picks::Picks,
+    picks_watch: Option<gpui::Subscription>,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// The page row's case as last logged, with the page it was for.
@@ -556,6 +561,8 @@ impl Shell {
                     menu_open: None,
                     folder_drawn: Rc::default(),
                     plus: crate::plus::Plus::default(),
+                    picks: Default::default(),
+                    picks_watch: None,
                     take_over_drawn: Rc::default(),
                     row_logged: Cell::default(),
                     hand_back_drawn: Rc::default(),
@@ -1049,11 +1056,14 @@ impl TalkView {
             return;
         }
         let text = input.text().trim().to_string();
-        if text.is_empty() {
+        // A chip alone is a reply.
+        if text.is_empty() && !self.picked() {
             return;
         }
+        let tabs = self.take_picks(cx);
         // It goes from where it was typed to its plate, the field's box around its words.
-        if let Some(field) = self.reply_drawn.get().filter(|_| !crate::motion::still(cx)) {
+        let moves = !text.is_empty() && !crate::motion::still(cx);
+        if let Some(field) = self.reply_drawn.get().filter(|_| moves) {
             let style = window.text_style();
             let words = (window.text_system())
                 .shape_line(
@@ -1099,7 +1109,9 @@ impl TalkView {
             }
             _ => self.scroll.scroll_to_bottom(),
         }
-        self.act(TaskAction::Reply(text.into()), cx);
+        let text = text.into();
+        let reply = crate::agents::task::handed::Reply { text, tabs };
+        self.act(TaskAction::Reply(reply), cx);
     }
 
     /// A question's answer, picked: it goes on from its chip as the user's reply, and the others
@@ -2436,11 +2448,15 @@ impl TalkView {
         id: ElementId,
         text: SharedString,
         page: Option<(SharedString, Option<Arc<Image>>)>,
+        said: usize,
         landing: bool,
         look: &Look,
     ) -> gpui::AnyElement {
         let palette = look.palette;
         let bubble = Bubble::of(look.standing);
+        // Its tabs' chips, after the page asked on and over its words; all of it with no words.
+        let tabs = (self.sent_chips(said, look))
+            .map(|chips| chips.when(!text.is_empty(), |chips| chips.mb(px(PAGE_CHIP_BELOW))));
         let chip = page.map(|(title, favicon)| {
             let icon = match favicon {
                 Some(favicon) => img(favicon).size(px(PAGE_CHIP_FAVICON)).into_any_element(),
@@ -2487,7 +2503,8 @@ impl TalkView {
                     .text_size(px(bubble.text))
                     .line_height(px(bubble.line))
                     .children(chip)
-                    .child(text)
+                    .children(tabs)
+                    .children((!text.is_empty()).then_some(text))
                     .when(landing, |plate| {
                         let landed = self.landed.clone();
                         plate.relative().opacity(0.).child(
@@ -2860,13 +2877,15 @@ impl TalkView {
             };
             (title, look.asked_favicon.clone())
         });
-        // A session was asked in its agent's terminal, so it has no ask.
+        // A session was asked in its agent's terminal, so it has no ask. A thread started with
+        // tabs of the user's and no words has those as its first message.
         let mut lines = Vec::new();
-        if !shown.asked.is_empty() {
+        if !shown.asked.is_empty() || shown.chips.iter().any(|(which, _)| *which == 0) {
             lines.push(self.you(
                 "conversation-asked".into(),
                 shown.asked.clone(),
                 page,
+                0,
                 false,
                 look,
             ));
@@ -2902,6 +2921,8 @@ impl TalkView {
         if !buttons.iter().any(|(_, button)| button.widens()) {
             self.ilo_hovered.set(false);
         }
+        // Which of the user's messages a line is, after the one that started the thread.
+        let mut said = 0;
         for (index, line) in shown.lines.iter().enumerate() {
             // The line in the reply field's place is drawn there.
             if matches!(line, Line::Ilo(line) if ilo::in_field(&line.kind)) {
@@ -2913,7 +2934,8 @@ impl TalkView {
             let line = match line {
                 Line::You(text) => {
                     let id = ("conversation-you", index).into();
-                    self.you(id, text.clone(), None, landing == Some(index), look)
+                    said += 1;
+                    self.you(id, text.clone(), None, said, landing == Some(index), look)
                 }
                 Line::Said(text) => div()
                     .id(("conversation-said", index))
@@ -3176,6 +3198,7 @@ impl TalkView {
             .bg(palette.plate(REPLY_FILL))
             .border_1()
             .border_color(palette.plate(COMPOSER_RIM))
+            .children(self.picked_chips(look, cx))
             .child(field)
             .child(self.choices(&form, look, cx))
     }
@@ -3188,7 +3211,8 @@ impl TalkView {
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
         let tier = shown.map(|shown| shown.tier).unwrap_or_default();
-        let typed = !self.reply.read(cx).text().trim().is_empty();
+        // A chip alone sends, as words do.
+        let typed = !self.reply.read(cx).text().trim().is_empty() || self.picked();
         let stoppable = shown.is_some_and(|shown| shown.stoppable);
         let round = match (stoppable, typed) {
             (true, false) => choices::Round::Stop,
@@ -3266,7 +3290,7 @@ impl TalkView {
         );
         let plus = (self.plus).draw(
             "conversation-plus",
-            self.reply_rows(),
+            self.reply_rows(cx),
             &plus,
             cx.entity_id(),
         );
@@ -3291,10 +3315,11 @@ impl TalkView {
         })
     }
 
-    /// The plus's rows under the reply field: none, as a reply never carries files or a folder,
-    /// which a task is given at its start only, so the plus is disabled.
-    fn reply_rows(&self) -> Vec<crate::plus::Row> {
-        Vec::new()
+    /// The plus's rows under the reply field: the user's tabs, where the window lists any. A
+    /// reply never carries files or a folder, which a task is given at its start only, so with
+    /// no tab to list the plus is disabled.
+    fn reply_rows(&self, cx: &mut Context<Self>) -> Vec<crate::plus::Row> {
+        self.tabs_row(cx).into_iter().collect()
     }
 
     /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
@@ -5009,6 +5034,13 @@ impl Render for TalkView {
             .id("conversation")
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &SendReply, window, cx| view.send_reply(window, cx)))
+            .capture_action(
+                cx.listener(|view, _: &crate::text_input::Backspace, _, cx| {
+                    if view.unpick_last(cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_action(cx.listener(Self::ilo_press))
             .on_action(cx.listener(Self::ilo_next))
             .on_action(cx.listener(Self::ilo_back))

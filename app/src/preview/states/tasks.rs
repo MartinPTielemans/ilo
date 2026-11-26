@@ -442,6 +442,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         about: "Claude · Working".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
+        chips: Vec::new(),
         lines: vec![Line::Trace(Trace {
             key: 0,
             running: true,

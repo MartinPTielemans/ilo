@@ -57,11 +57,30 @@ struct Recorder {
     last: RefCell<Opens>,
     /// This system can wall a thread in with the user's files.
     files: std::cell::Cell<bool>,
+    /// The user's tabs the window lists for the composer, each by its title; those of them the
+    /// app would not hand; how many times the bar asked which it may offer; and what it asked
+    /// to be told by as the window's tabs change, while it keeps that watch.
+    listed: RefCell<Vec<(u64, &'static str)>>,
+    unfit: RefCell<Vec<u64>>,
+    hand_asks: std::cell::Cell<usize>,
+    watch: Rc<RefCell<Option<Rc<dyn Fn(crate::tab_picks::Offer, &mut App)>>>>,
 }
 
 impl Recorder {
     fn record(&self, call: String) {
         self.calls.borrow_mut().push(call);
+    }
+
+    /// The tabs the window lists for the composer, as they are, in Space 1.
+    fn tabs_now(&self) -> crate::tab_picks::Offer {
+        let tabs = (self.listed.borrow().iter())
+            .map(|&(tab, title)| crate::tab_picks::Offered {
+                tab,
+                title: title.into(),
+                favicon: None,
+            })
+            .collect();
+        crate::tab_picks::Offer { space: 1, tabs }
     }
 }
 
@@ -255,9 +274,14 @@ impl Host for Recorder {
         model: Option<String>,
         effort: Option<&'static str>,
         files: Picked,
+        tabs: crate::agents::task::handed::Picked,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
+        let tabs = match tabs.is_empty() {
+            true => String::new(),
+            false => format!(" tabs {:?}", tabs.tabs()),
+        };
         let tier = match tier {
             Tier::Work => String::new(),
             tier => format!(" at {}", tier.id()),
@@ -283,7 +307,7 @@ impl Host for Recorder {
             None => String::new(),
         };
         self.record(format!(
-            "task {agent} {asked}{page}{tier}{model}{effort}{files}"
+            "task {agent} {asked}{page}{tier}{model}{effort}{files}{tabs}"
         ));
     }
 
@@ -295,10 +319,35 @@ impl Host for Recorder {
         model: Option<String>,
         effort: Option<&'static str>,
         files: Picked,
+        tabs: crate::agents::task::handed::Picked,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, effort, files, cx);
+        self.run_task(agent, asked, None, tier, model, effort, files, tabs, cx);
         self.record("at rest".into());
+    }
+
+    fn lists_tabs_to_hand(&self, _: &App) -> bool {
+        !self.listed.borrow().is_empty()
+    }
+
+    fn tabs_to_hand(&self, _: &App) -> crate::tab_picks::Offer {
+        self.hand_asks.set(self.hand_asks.get() + 1);
+        let unfit = self.unfit.borrow();
+        let mut offer = self.tabs_now();
+        offer.tabs.retain(|tab| !unfit.contains(&tab.tab));
+        offer
+    }
+
+    fn tabs_listed(
+        &self,
+        then: Box<dyn Fn(crate::tab_picks::Offer, &mut App)>,
+        _: &mut App,
+    ) -> Option<gpui::Subscription> {
+        *self.watch.borrow_mut() = Some(Rc::from(then));
+        let watch = self.watch.clone();
+        Some(gpui::Subscription::new(move || {
+            watch.borrow_mut().take();
+        }))
     }
 
     fn files_available(&self, _: &App) -> bool {
@@ -5738,3 +5787,5 @@ fn the_bars_model_trigger_says_its_assistant_and_its_model(cx: &mut TestAppConte
         width.1
     );
 }
+
+mod picks;

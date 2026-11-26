@@ -265,6 +265,7 @@ impl command_bar::Host for Bar {
         model: Option<String>,
         effort: Option<&'static str>,
         files: browser::agents::files::Picked,
+        tabs: browser::agents::task::handed::Picked,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -307,7 +308,14 @@ impl command_bar::Host for Bar {
             shell.fold_started(folded, cx);
             shell.bar_starting();
         });
-        start_thread(cli, asked, page, (tier, model, effort, files), window, cx);
+        start_thread(
+            cli,
+            asked,
+            page,
+            (tier, model, effort, files, tabs),
+            window,
+            cx,
+        );
     }
 
     fn run_task_at_rest(
@@ -318,6 +326,7 @@ impl command_bar::Host for Bar {
         model: Option<String>,
         effort: Option<&'static str>,
         files: browser::agents::files::Picked,
+        tabs: browser::agents::task::handed::Picked,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -325,7 +334,40 @@ impl command_bar::Host for Bar {
         };
         let window = front().0;
         update_window_in(window, cx, |shell, _| shell.bar_starting());
-        start_thread(cli, asked, None, (tier, model, effort, files), window, cx);
+        start_thread(
+            cli,
+            asked,
+            None,
+            (tier, model, effort, files, tabs),
+            window,
+            cx,
+        );
+    }
+
+    fn lists_tabs_to_hand(&self, cx: &App) -> bool {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        (shell.and_then(|shell| shell.upgrade()))
+            .is_some_and(|shell| shell.read(cx).lists_tabs_to_offer())
+    }
+
+    fn tabs_to_hand(&self, cx: &App) -> browser::tab_picks::Offer {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        (shell.and_then(|shell| shell.upgrade())).map_or_else(Default::default, |shell| {
+            shell.read(cx).tabs_to_offer(None, cx)
+        })
+    }
+
+    fn tabs_listed(
+        &self,
+        then: Box<dyn Fn(browser::tab_picks::Offer, &mut App)>,
+        cx: &mut App,
+    ) -> Option<gpui::Subscription> {
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let shell = shell?.upgrade()?;
+        Some(cx.observe(&shell, move |shell, cx| {
+            let listed = shell.read(cx).tabs_listed();
+            then(listed, cx);
+        }))
     }
 
     fn files_available(&self, _: &App) -> bool {
@@ -398,18 +440,20 @@ pub(crate) fn front_space(cx: &App) -> u64 {
 }
 
 /// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
-/// window, at the level on the model with the files its choices hold, the first two of which the
+/// window, at the level on the model with the files its choices hold and the tabs of the user's
+/// its chips stood for, the first two of which the
 /// profile remembers as the composer's last once it starts. Its conversation then takes the place
 /// of what `window` shows: ⌘T's slot, or a resting bar's empty page.
 fn start_thread(
     cli: browser::agents::runner::Cli,
     asked: &str,
     page: Option<browser::agents::task::AskedOn>,
-    (tier, model, effort, files): (
+    (tier, model, effort, files, tabs): (
         browser::agents::tier::Tier,
         Option<String>,
         Option<&'static str>,
         browser::agents::files::Picked,
+        browser::agents::task::handed::Picked,
     ),
     window: bc::bc_id,
     cx: &mut App,
@@ -425,7 +469,8 @@ fn start_thread(
             // From the system's panel off the composer's plus alone, which the start gives the
             // thread only inside its wall.
             files: files.clone(),
-            tabs: Default::default(),
+            // The composer's chips at the user's send, and nothing else.
+            tabs: tabs.clone(),
         };
         let started = agents.start_task(cli, &asked, page, home, start, cx);
         if started.is_some() {

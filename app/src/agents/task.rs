@@ -155,6 +155,9 @@ pub struct Conversation {
     pub asked: SharedString,
     pub page: Option<AskedOn>,
     pub lines: Vec<Line>,
+    /// The chips of the user's messages sent with tabs of theirs, each with which message it is
+    /// (`Agents::message_chips`). For the conversation to draw, and nothing else.
+    pub chips: Vec<(usize, Vec<handed::Chip>)>,
     /// Its pages, for their pictures, each by its tab and site.
     pub tabs: Vec<(u64, SharedString)>,
     /// The tab the agent is on while it works, whose picture has the Signal ring.
@@ -1451,6 +1454,7 @@ impl Agents {
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
+            chips: self.message_chips(&task.agent),
             tabs,
             on,
             handed: self.handed_order(agent),

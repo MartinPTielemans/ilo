@@ -21,17 +21,37 @@ pub const NAME: &str = "Add";
 pub const FILE_OR_FOLDER: &str = "File or Folder";
 const FILE_OR_FOLDER_ICON: &str = "icons/file.svg";
 
-/// A row of the add menu: its entry, and what a pick of it does.
+/// The rows of a row's second menu, listed as the add menu opens.
+type Under = Box<dyn FnOnce(&mut App) -> Vec<MenuEntry>>;
+
+/// A row of the add menu: its entry, and what a pick of it does; or the rows of the second menu
+/// it opens, each of which does its own (`MenuEntry::stays`).
 pub struct Row {
     entry: MenuEntry,
-    picked: Box<dyn FnOnce(&mut Window, &mut App)>,
+    picked: Option<Box<dyn FnOnce(&mut Window, &mut App)>>,
+    under: Option<Under>,
 }
 
 impl Row {
     pub fn new(entry: MenuEntry, picked: impl FnOnce(&mut Window, &mut App) + 'static) -> Self {
         Row {
             entry,
-            picked: Box::new(picked),
+            picked: Some(Box::new(picked)),
+            under: None,
+        }
+    }
+
+    /// A row that opens a second menu, as the user's tabs' does (`crate::tab_picks`): `under`
+    /// lists its rows once, as the add menu opens and not before, and with none the row is left
+    /// out of the menu.
+    pub fn over(
+        entry: MenuEntry,
+        under: impl FnOnce(&mut App) -> Vec<MenuEntry> + 'static,
+    ) -> Self {
+        Row {
+            entry,
+            picked: None,
+            under: Some(Box::new(under)),
         }
     }
 }
@@ -146,14 +166,28 @@ impl Plus {
         let (Some(drawn), Some(menu)) = (self.drawn.get(), cx.try_global::<EntriesMenu>()) else {
             return;
         };
-        if rows.is_empty() {
+        let menu = menu.0.clone();
+        // Each row, then those of its second menu under it by its place.
+        let (mut entries, mut picks) = (Vec::new(), Vec::new());
+        for row in rows {
+            let under = row.under.map(|list| list(cx));
+            if under.as_ref().is_some_and(Vec::is_empty) {
+                continue;
+            }
+            let parent = entries.len();
+            entries.push(row.entry);
+            picks.push(row.picked);
+            for under in under.into_iter().flatten() {
+                entries.push(MenuEntry {
+                    parent: Some(parent),
+                    ..under
+                });
+                picks.push(None);
+            }
+        }
+        if entries.is_empty() {
             return;
         }
-        let menu = menu.0.clone();
-        let (entries, mut picks): (Vec<MenuEntry>, Vec<_>) = rows
-            .into_iter()
-            .map(|row| (row.entry, Some(row.picked)))
-            .unzip();
         self.open.set(true);
         cx.notify(view);
         let open = self.open.clone();

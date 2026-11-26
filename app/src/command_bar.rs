@@ -28,6 +28,7 @@ use crate::{
 
 mod calculator;
 pub mod choices;
+mod picks;
 
 actions!(
     command_bar,
@@ -511,6 +512,10 @@ struct Ask {
     /// The files and the folder the user added on the plus, from the system's panel alone, for
     /// this thread's start alone: they go as the level does.
     picked: Picked,
+    /// The user's tabs picked for this thread's start, by their clicks in the add menu alone,
+    /// and the watch on the window's tabs kept while there is one (picks.rs).
+    picks: crate::tab_picks::Picks,
+    picks_watch: Option<gpui::Subscription>,
 }
 
 /// What the composer opens with: the level and model it last started a thread with, by the
@@ -822,8 +827,8 @@ pub trait Host {
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page` and the files and folder the
-    /// user added on the plus, from the Space the bar shows over, and hides the bar by folding it
+    /// Starts `asked` as a task on the agent `agent`, with `page`, the files and folder the user
+    /// added on the plus and the tabs of theirs they picked there, from the Space the bar shows over, and hides the bar by folding it
     /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
     /// does.
     fn run_task(
@@ -835,6 +840,7 @@ pub trait Host {
         model: Option<String>,
         effort: Option<&'static str>,
         files: Picked,
+        tabs: crate::agents::task::handed::Picked,
         cx: &mut App,
     );
     /// As `run_task`, from a resting bar's composer, in the Space it rests in, which shows no
@@ -847,8 +853,32 @@ pub trait Host {
         model: Option<String>,
         effort: Option<&'static str>,
         files: Picked,
+        tabs: crate::agents::task::handed::Picked,
         cx: &mut App,
     );
+    /// Whether the window lists any tab of the user's for the composer to offer
+    /// (`Shell::lists_tabs_to_offer`), by which its add menu has their row: of the window's own
+    /// lists alone, so a frame may ask it.
+    fn lists_tabs_to_hand(&self, _: &App) -> bool {
+        false
+    }
+    /// The tabs of the user's the composer may offer to hand to the thread it starts, of the
+    /// Space the bar shows over (`Shell::tabs_to_offer`). Asked as the add menu opens, and then
+    /// alone: it reads the agents, so never from inside an update of theirs.
+    fn tabs_to_hand(&self, _: &App) -> crate::tab_picks::Offer {
+        Default::default()
+    }
+    /// Calls `then` with the tabs the window lists for the composer, each as it is
+    /// (`Shell::tabs_listed`), whenever the window may have changed them, for as long as what
+    /// it returns is kept. The composer keeps it only while it holds a chip, which follows its
+    /// tab by it.
+    fn tabs_listed(
+        &self,
+        _then: Box<dyn Fn(crate::tab_picks::Offer, &mut App)>,
+        _: &mut App,
+    ) -> Option<gpui::Subscription> {
+        None
+    }
     /// Whether this system can wall a thread in with the user's files, which the composer's plus
     /// offers File or Folder by: with nothing to add, the plus is disabled (#4101).
     fn files_available(&self, _: &App) -> bool {
@@ -1011,6 +1041,8 @@ pub struct CommandBar {
     ask: Option<Ask>,
     /// The composer's plus, the add menu's (`crate::plus`).
     plus: crate::plus::Plus,
+    /// How tall the picked tabs' chips drew over the field, wrapping; none with no chip.
+    picks_height: Rc<Cell<f32>>,
     /// Where the composer's triggers were last drawn, which their menus hang from.
     files_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     folder_at: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1268,6 +1300,7 @@ fn new_bar(
             task_agents: None,
             ask: None,
             plus: crate::plus::Plus::default(),
+            picks_height: Rc::default(),
             files_at: Rc::default(),
             folder_at: Rc::default(),
             level_at: Rc::default(),
@@ -2432,6 +2465,10 @@ impl CommandBar {
         if self.input.read(cx).selection() != (0..0) {
             return;
         }
+        // In the empty field the last picked tab's chip goes first.
+        if self.unpick_last(cx) {
+            return cx.stop_propagation();
+        }
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
             log!("browser: command bar ask without its page");
             ask.page = None;
@@ -2506,12 +2543,15 @@ impl CommandBar {
         }
         let last = self.host.composer_last(cx);
         let picked = Picked::default();
+        self.picks_height.set(0.);
         self.ask = Some(Ask {
             page,
             tier: last.tier,
             model: last.model,
             effort: last.effort,
             picked,
+            picks: Default::default(),
+            picks_watch: None,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2586,7 +2626,8 @@ impl CommandBar {
     }
 
     /// ↩ or Start in the composer: closes the bar, then starts the thread on its assistant, at
-    /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
+    /// the level and on the model its menus hold, with the tabs its chips stand for. Nothing with
+    /// neither words nor a chip, or with no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
         let (page, tier, effort, files) =
@@ -2595,7 +2636,7 @@ impl CommandBar {
         let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
             return;
         };
-        if asked.is_empty() {
+        if asked.is_empty() && !self.picked() {
             return;
         }
         let id = agent.id.clone();
@@ -2608,12 +2649,15 @@ impl CommandBar {
         log!("browser: command bar runs a task on {id}");
         // The host folds the bar into the slot its card fills, so the slot doesn't close first,
         // and the bar doesn't hide on its own.
+        // The send alone turns the picks into what the thread is handed.
+        let tabs = (self.ask.as_mut()).map(|ask| ask.picks.take());
+        let tabs = tabs.unwrap_or_default();
         self.ask = None;
         self.closed(Close::new(Why::Chosen, by));
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, files, cx);
+                .run_task(&id, &asked, page, tier, model, effort, files, tabs, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -2621,7 +2665,7 @@ impl CommandBar {
             .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
-            .run_task_at_rest(&id, &asked, tier, model, effort, files, cx);
+            .run_task_at_rest(&id, &asked, tier, model, effort, files, tabs, cx);
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -2683,6 +2727,7 @@ impl CommandBar {
                 bar.update(cx, |bar, cx| bar.added(paths, cx)).ok();
             }));
         }
+        rows.extend(self.tabs_row(cx));
         rows
     }
 
@@ -3260,11 +3305,11 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// How tall the bar draws: its input, its rows, and the composer's choices and foot.
+    /// How tall the bar draws: its input, its rows, and the composer's chips, choices and foot.
     fn drawn_height(&self) -> f32 {
         let rows = self.rows.len();
         let foot = match self.ask.is_some() {
-            true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
+            true => self.picks_height.get() + CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
             false => 0.,
         };
         foot + match (self.surface, self.over_field) {
@@ -4061,7 +4106,8 @@ impl CommandBar {
             }
             None => (None, SIGN_IN.to_string()),
         };
-        let ready = !self.input.read(cx).text().trim().is_empty();
+        // A chip alone starts a thread, as words do.
+        let ready = !self.input.read(cx).text().trim().is_empty() || self.picked();
         let level = choices::Trigger {
             id: LEVEL,
             at: self.level_at.clone(),
@@ -4649,6 +4695,7 @@ impl Render for CommandBar {
                 // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
                 .font_weight(FontWeight::MEDIUM)
                 .text_size(px(text::BODY))
+                .children(self.picked_chips(&palette, cx))
                 .child(
                     div()
                         .h(px(input_height))
