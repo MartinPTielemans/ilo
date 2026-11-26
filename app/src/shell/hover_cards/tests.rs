@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
+    Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext, TouchPhase,
     VisualTestContext, point, px,
 };
 
@@ -306,6 +306,47 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
     assert!(!rests(cx, 4), "the icon picker shows");
     cx.update(|_, cx| icon_picker::dismissed(cx));
     assert!(rests(cx, 4), "the icon picker closed");
+}
+
+/// A colour typed in the theme picker's value field and left there is kept as a swipe across the
+/// sidebar takes the picker away, as a press outside would keep it.
+#[gpui::test]
+fn a_swipe_keeps_the_colour_typed_in_the_theme_picker(cx: &mut TestAppContext) {
+    cx.update(|cx| theme_picker::open(Rc::new(NoWhere), cx));
+    let (shell, cx, host) = with_tabs(cx);
+    shell.update(cx, |shell, cx| {
+        let space = (
+            1,
+            "Work".into(),
+            Some(0x5fa9e8),
+            1,
+            "".into(),
+            "".into(),
+            "".into(),
+        );
+        shell.set_spaces(vec![space], cx);
+        let at = theme_picker::At::Row(point(200., 100.));
+        shell.show_theme_picker(1, at, false, cx);
+    });
+    cx.run_until_parked();
+    theme_picker::type_value_for_test("e5605f", &mut cx.cx);
+    host.take_edits();
+    let across = |touch_phase, x: f32| ScrollEvent {
+        position: point(px(60.), px(300.)),
+        delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+        touch_phase,
+        ..Default::default()
+    };
+    cx.simulate_event(across(TouchPhase::Started, 0.));
+    cx.simulate_event(across(TouchPhase::Moved, 40.));
+    cx.run_until_parked();
+    let open = cx.update(|_, cx| theme_picker::open_for(cx));
+    assert_eq!(open, None, "the swipe left the picker open");
+    let edits = host.take_edits();
+    let kept = format!("color 1 Some({})", 0xe5605f);
+    assert!(edits.contains(&kept), "{edits:?}");
+    cx.simulate_event(across(TouchPhase::Ended, 0.));
+    cx.run_until_parked();
 }
 
 /// Each button makes the call the row's menu makes, or for Split, the one its drag onto the page
