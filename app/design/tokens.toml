@@ -2756,6 +2756,37 @@ way-plate-fill = 0x17171b
 way-small = [7.0, 11.0, 14.0]
 way-off = 0.45
 way-copied = 1.2
+# Under the cards, one door: a cord from each card's bottom centre meets the knot, `door-knot`
+# (its centre's y and size, on the card's centre line), each bending `door-bend` [below its card,
+# above the knot] and ending [inside the knot's edge], and one cord drops from the knot to the
+# sidebar card. A cord's base
+# is `door-cord` [width, alpha], a drawn one is [width] at the text's ink, and its bead is [size]
+# across. The card is the sidebar's, at [top, width, height, corners, side padding, gap], its
+# outline at [off, on] of the text's ink, its content at `door-ghost` while nothing is on. The
+# name and its line, [size, line] each; the ring [size, stroke]; the one line under it, [top].
+# Both off, the knot is at `door-off`.
+door-knot = [292.0, 40.0]
+door-bend = [38.0, 34.0, 2.0]
+door-cord = [2.0, 0.12, 2.5, 6.0]
+door-card = [328.0, 212.0, 59.0, 12.0, 13.0, 11.0]
+door-outline = [0.12, 0.8]
+door-ghost = 0.12
+door-name = [13.0, 16.0, 12.0, 15.0]
+door-ring = [14.0, 1.6]
+door-line = 394.0
+door-off = 0.45
+# A switch on: its cord draws to the knot in `door-draw` on DRAW, the bead runs on through it and
+# down over [start, length] of `door-bead`, linear, the down cord draws over `door-drop`'s, and the
+# card arrives at `door-arrive` [start, fade, rise, rise points] on ARRIVE; `door-read` after it
+# comes, the ring becomes a check. A cord off falls back in `door-fall`; the knot comes and goes in
+# `door-knot-fade`.
+door-draw = 0.35
+door-bead = [0.3, 0.6]
+door-drop = [0.6, 0.2]
+door-arrive = [1.0, 0.18, 0.28, 5.0]
+door-read = 1.4
+door-fall = 0.2
+door-knot-fade = 0.3
 
 [shell.onboarding.exit]
 # First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing

@@ -1580,6 +1580,9 @@ pub struct Shell {
     resting: Option<empty::composer::Resting>,
     /// A new profile's first launch, or Help › Welcome, in its own window while it shows.
     onboarding: Option<onboarding::Onboarding>,
+    /// Which of Other apps' ways the preview shows on, command and MCP, as it has no Agents to
+    /// read; the step shows with it.
+    preview_ways: Option<[bool; 2]>,
     /// First run's window, once it has opened: the host closes it as the flow ends.
     first_run: Option<gpui::WindowHandle<onboarding::FirstRun>>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
@@ -2235,6 +2238,7 @@ impl Shell {
             welcome: false,
             resting: None,
             onboarding: None,
+            preview_ways: None,
             first_run: None,
             importing: None,
             in_hint: false,

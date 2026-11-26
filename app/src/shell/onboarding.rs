@@ -32,6 +32,7 @@ use card::Inks;
 
 mod bring;
 mod card;
+mod door;
 mod exit;
 mod other_apps;
 mod resume;
@@ -383,6 +384,8 @@ pub(super) struct Onboarding {
     default_row: bool,
     /// Bring your stuff's motion: the flight, the strands as each kind is written, All here.
     bring: bring::BringMotion,
+    /// Other apps' door: when each of its cords and its card turned.
+    door: door::Door,
 }
 
 /// Tidy tabs' bar: the build's times, each with the card's word for it, the profile's own as the
@@ -547,12 +550,13 @@ impl Shell {
         // stat once as the card starts, which runs nothing (floor 1). Only with the command
         // connected does that look also ask the login shell, so then the card keeps to what's held.
         self.browser.start_agents(cx);
-        let found_apps = crate::agents::global(cx).is_some_and(|agents| {
-            if !agents.read(cx).is_connected(crate::agents::Client::Command) {
-                agents.update(cx, |agents, cx| agents.look_for_clients(cx));
-            }
-            !agents.read(cx).skill_programs().is_empty()
-        });
+        let found_apps = self.preview_ways.is_some()
+            || crate::agents::global(cx).is_some_and(|agents| {
+                if !agents.read(cx).is_connected(crate::agents::Client::Command) {
+                    agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+                }
+                !agents.read(cx).skill_programs().is_empty()
+            });
         let steps: Vec<Step> = STEPS
             .into_iter()
             .filter(|&step| match step {
@@ -641,6 +645,7 @@ impl Shell {
             tidy,
             default_row: !self.browser.is_default_browser(),
             bring: Default::default(),
+            door: Default::default(),
         };
         let fraction = onboarding.fraction(first);
         onboarding.progress = (fraction, fraction, now);
@@ -936,6 +941,12 @@ impl Shell {
             onboarding.shown_assistants = Some(rows.collect());
             cx.notify();
         }
+    }
+
+    /// Shows Other apps with its ways `on`, command and MCP, for the preview's captures: the preview
+    /// has no Agents for them to come from. Before the card starts, which then has the step.
+    pub fn onboarding_show_ways(&mut self, on: [bool; 2]) {
+        self.preview_ways = Some(on);
     }
 
     /// Turns Help improve on at the last step, for the preview's captures.
@@ -1775,7 +1786,7 @@ impl Shell {
                 .children(self.tidy_card(inks, cx))
                 .children(self.broom_row(inks, cx))
                 .into_any_element(),
-            Step::OtherApps => self.other_apps_ways(inks, cx),
+            Step::OtherApps => self.other_apps_ways(inks, window, cx),
             _ => div().into_any_element(),
         };
         let signed_in = self.assistants_signed_in(cx);

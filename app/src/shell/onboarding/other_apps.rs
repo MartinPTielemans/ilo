@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, ClickEvent, ClipboardItem, Context, FontWeight, KeyboardButton, KeyboardClickEvent,
-    MouseButton, SharedString, div, prelude::*, px, rgb, svg,
+    MouseButton, SharedString, Window, div, prelude::*, px, rgb, svg,
 };
 
 use super::card::{self, Inks};
@@ -35,7 +35,6 @@ pub(super) struct Way {
 
 /// The command's card: added in a folder the shell looks in, or not, or its Add failed.
 pub(super) fn command(agents: &Agents) -> Way {
-    let command = cli::LINK;
     let on = agents.is_connected(Client::Command) || agents.is_pending(Client::Command);
     let found = named(&agents.skill_programs());
     let flatpak = agents.command_flatpak_line();
@@ -44,11 +43,6 @@ pub(super) fn command(agents: &Agents) -> Way {
         agents.command_state(),
         flatpak.as_deref(),
         windows.as_deref(),
-    );
-    let line = Switch::Command.words().1;
-    let plate: (SharedString, SharedString) = (
-        format!("using the {command} skill").into(),
-        format!("$ {command} open islandferries.example").into(),
     );
     match (on, detail.export) {
         // Added where the shell doesn't look: the build's own sentence and line (cli::detail).
@@ -66,25 +60,49 @@ pub(super) fn command(agents: &Agents) -> Way {
             }
         }
         (false, _) if agents.failure(Client::Command).is_some() => Way {
-            on,
-            line,
-            plate,
             small: "Couldn't add the command.".into(),
-            copies: None,
+            ..command_way(on, &found, false)
         },
         // No skill is written on Windows or in a Flatpak, so there the line names no program.
-        _ => Way {
-            on,
-            line,
-            plate,
-            small: match cfg!(unix) && flatpak.is_none() {
-                true => format!("A skill tells {found} when to use it.").into(),
-                false => SharedString::default(),
-            },
-            copies: None,
-        },
+        _ => command_way(on, &found, cfg!(unix) && flatpak.is_none()),
     }
 }
+
+/// The command's card with nothing more to say: its skill's line names `found` where a skill is
+/// `written`.
+fn command_way(on: bool, found: &str, written: bool) -> Way {
+    let command = cli::LINK;
+    Way {
+        on,
+        line: Switch::Command.words().1,
+        plate: (
+            format!("using the {command} skill").into(),
+            format!("$ {command} open islandferries.example").into(),
+        ),
+        small: match written {
+            true => format!("A skill tells {found} when to use it.").into(),
+            false => SharedString::default(),
+        },
+        copies: None,
+    }
+}
+
+/// MCP's card, its small line `small`.
+fn mcp_way(on: bool, small: String) -> Way {
+    Way {
+        on,
+        line: Switch::Mcp.words().1,
+        plate: (
+            format!("tools  {} · open_tab · read_page …", cli::LINK).into(),
+            "read_page { tab: 2 }".into(),
+        ),
+        small: small.into(),
+        copies: None,
+    }
+}
+
+/// The programs the preview's step finds, as it has no Agents to look.
+const PREVIEW_FOUND: [Client; 2] = [Client::ClaudeCode, Client::Codex];
 
 /// MCP's card: each program found connected through its own setup, those whose Connect failed
 /// named as they fell. It's off only when none is connected or on its way.
@@ -110,16 +128,7 @@ pub(super) fn mcp(agents: &Agents) -> Way {
         ),
         _ => format!("Connects {}.", named(&apps)),
     };
-    Way {
-        on,
-        line: Switch::Mcp.words().1,
-        plate: (
-            format!("tools  {} · open_tab · read_page …", cli::LINK).into(),
-            "read_page { tab: 2 }".into(),
-        ),
-        small: small.into(),
-        copies: None,
-    }
+    mcp_way(on, small)
 }
 
 impl Shell {
@@ -161,31 +170,50 @@ impl Shell {
     }
 
     /// The two cards, centred under the step's heading, both taller while the command's line is
-    /// on two lines.
-    pub(super) fn other_apps_ways(&self, inks: Inks, cx: &mut Context<Self>) -> AnyElement {
-        let Some(agents) = crate::agents::global(cx) else {
-            return div().into_any_element();
+    /// on two lines, and the door under them.
+    pub(super) fn other_apps_ways(
+        &mut self,
+        inks: Inks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (command, mcp, first) = match (crate::agents::global(cx), self.preview_ways) {
+            (Some(agents), _) => {
+                let agents = agents.read(cx);
+                let first = agents.skill_programs().first().copied();
+                (command(agents), mcp(agents), first)
+            }
+            (None, Some([command, mcp])) => {
+                let found = named(&PREVIEW_FOUND);
+                (
+                    command_way(command, &found, cfg!(unix)),
+                    mcp_way(mcp, format!("Connects {found}.")),
+                    PREVIEW_FOUND.first().copied(),
+                )
+            }
+            (None, None) => return div().into_any_element(),
         };
-        let (command, mcp) = {
-            let agents = agents.read(cx);
-            (command(agents), mcp(agents))
-        };
+        let on = [command.on, mcp.on];
         let [top, width, height, gap, _] = t::WAYS;
-        let height = height
-            + if command.copies.is_some() {
-                t::WAY_GROW
-            } else {
-                0.
-            };
+        let grown = match command.copies.is_some() {
+            true => t::WAY_GROW,
+            false => 0.,
+        };
         let left = (t::WIDTH - 2. * width - gap) / 2.;
         // The controls' column starts at the body's top in the centred column.
         let column = (t::WIDTH - t::CENTRED_COLUMN) / 2.;
         let mono = crate::face::mono(&cx.text_system().all_font_names());
-        card::at(left - column, top - t::BODY_TOP)
+        let ways = card::at(left - column, top - t::BODY_TOP)
             .flex()
             .gap(px(gap))
-            .child(self.way_card(Switch::Command, command, height, inks, mono, cx))
-            .child(self.way_card(Switch::Mcp, mcp, height, inks, mono, cx))
+            .child(self.way_card(Switch::Command, command, height + grown, inks, mono, cx))
+            .child(self.way_card(Switch::Mcp, mcp, height + grown, inks, mono, cx));
+        let first = first.unwrap_or(Client::ClaudeCode).name();
+        let door = self.other_apps_door(on, first, grown, inks, window, cx);
+        card::at(0., 0.)
+            .size_full()
+            .child(ways)
+            .child(door)
             .into_any_element()
     }
 

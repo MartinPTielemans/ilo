@@ -3292,6 +3292,19 @@ fn main() {
                     // =dark:7 opens it at that step, and =dark:7:on turns Help improve on
                     // there.
                     if let Some(given) = &onboarding {
+                        // PREVIEW_ONBOARDING_WAYS=off, =command, =mcp or =both shows Other apps
+                        // with those of its ways on.
+                        let ways = states::var("PREVIEW_ONBOARDING_WAYS").ok();
+                        let ways = ways.as_deref().and_then(|ways| match ways {
+                            "off" => Some([false, false]),
+                            "command" => Some([true, false]),
+                            "mcp" => Some([false, true]),
+                            "both" => Some([true, true]),
+                            _ => None,
+                        });
+                        if let Some(on) = ways {
+                            shell.onboarding_show_ways(on);
+                        }
                         let mut parts = given.split(':');
                         let appearance = parts.next();
                         match parts.next().or(onboarding_step.as_deref()) {

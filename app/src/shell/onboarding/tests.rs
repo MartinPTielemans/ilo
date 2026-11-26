@@ -2378,6 +2378,52 @@ fn a_found_agent_program_brings_other_apps_before_the_launch_makes_the_agents(
     assert!(steps(&shell, cx).contains(&Step::OtherApps));
 }
 
+/// Other apps leaves no empty band between its ways and its foot (v9 §8): the door's knot, the
+/// sidebar card and its line fill it, no gap wider than the cords from the ways to the knot span.
+#[gpui::test]
+fn other_apps_door_fills_the_step_from_its_ways_to_its_foot(cx: &mut TestAppContext) {
+    use crate::agents::Client;
+    let (shell, cx, _) = first_window(cx);
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    cx.update(|_, cx| crate::agents::tests::stand_in_failing(found, None, cx));
+    started(&shell, cx);
+    on_to(&shell, cx, Step::OtherApps);
+    let way = |switch| {
+        shell.read_with(cx, |shell, _| {
+            let onboarding = shell.onboarding.as_ref().expect("the card shows");
+            (onboarding.frames.borrow()).get(&(switch, "row")).copied()
+        })
+    };
+    let ways = [way(Switch::Command), way(Switch::Mcp)].map(|way| way.expect("its card is drawn"));
+    let mut drawn: Vec<(&str, gpui::Bounds<gpui::Pixels>)> =
+        ["door knot", "door", "door line", "main"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name,
+                    placed(name, cx).unwrap_or_else(|| panic!("{name} is drawn")),
+                )
+            })
+            .collect();
+    drawn.push(("ways", ways[0].union(&ways[1])));
+    drawn.sort_by(|a, b| a.1.top().partial_cmp(&b.1.top()).unwrap());
+    let names: Vec<&str> = drawn.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names, ["ways", "door knot", "door", "door line", "main"]);
+    let [top, _, height, _, _] = t::WAYS;
+    let [knot, size] = t::DOOR_KNOT;
+    let spanned = knot - size / 2. - (top + height);
+    for pair in drawn.windows(2) {
+        let gap = f32::from(pair[1].1.top() - pair[0].1.bottom());
+        assert!(
+            gap <= spanned + 0.5,
+            "{} px empty between {} and {}",
+            gap,
+            pair[0].0,
+            pair[1].0
+        );
+    }
+}
+
 /// Other apps' two switches are on their own step, off as it shows, each Settings' own and set at
 /// once, a click on it or its card turning it either way. Either on turns the outside switch on as
 /// it lands; it goes off only as the second is turned off. No other step has them, and nothing
