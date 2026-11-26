@@ -190,7 +190,7 @@ pub use commands::{
     pane_added, pressed_label, run_from_bar, shown_tab, task_page_shown, window_became_key,
     with_named_rows,
 };
-pub use display_face::display_text;
+pub use display_face::{display_text, display_text_weighted};
 pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::{Elsewhere, PlayReady};
 pub use extensions::{

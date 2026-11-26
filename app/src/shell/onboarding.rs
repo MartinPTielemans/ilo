@@ -1698,7 +1698,7 @@ impl Shell {
             .children(drawn.map(|(at, settled)| button_frame(at, settled)))
             .children(self.place(step, "main"));
         let key = super::key_name("enter", super::OFF_THE_MAC);
-        card::main_button(control, key.into(), inks)
+        card::main_button(control, Some(key.into()), inks)
     }
 
     /// The Welcome (v9 §3): the knot, the name and its line, then Continue to sign in, the
@@ -2262,6 +2262,16 @@ fn swatch_row(
                         .border_color(inks.text(SWATCH_EDGE)),
                 )
         }))
+}
+
+/// First run's main button for the welcome card, outside the card: `button` with its label in it
+/// and `key` at its end, if it has one, in a light window's inks or a dark one's.
+pub(super) fn main_button(
+    button: gpui::Stateful<gpui::Div>,
+    key: Option<SharedString>,
+    light: bool,
+) -> gpui::Stateful<gpui::Div> {
+    card::main_button(button, key, card::Inks::of(light))
 }
 
 fn with_alpha(color: u32, alpha: f32) -> Rgba {

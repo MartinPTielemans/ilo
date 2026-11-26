@@ -27,7 +27,7 @@ pub const CONTROL: &CStr = c"ilo.mark.control";
 /// The places' folder, in `Tasks/`.
 pub const ROOT: &str = ".tmp";
 
-const PREFIX: &str = "ilo.mark.";
+pub(super) const PREFIX: &str = "ilo.mark.";
 pub(super) const OUTSIDE: &str = "the program isn't inside its wall";
 
 /// A wall's mark: `ilo.mark.` and 32 hex characters from the system's random numbers, new for each
@@ -231,9 +231,25 @@ impl Place {
         &self.tmp
     }
 
+    /// Removes a place nothing started in: its folder, then its mark.
+    pub fn discard(self) {
+        remove(&self.tmp);
+        remove(&self.tmp.with_extension("mark"));
+    }
+
     pub fn mark(&self) -> &Mark {
         &self.mark
     }
+
+    /// Its name, which its folder and mark file are named by: never its mark or a path.
+    pub fn name(&self) -> Option<&str> {
+        self.tmp.file_name()?.to_str().filter(|name| is_name(name))
+    }
+}
+
+/// Whether `name` is one a place is made with: 16 small hex digits.
+pub fn is_name(name: &str) -> bool {
+    name.len() == 16 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// A folder only its user reads, 0700.
@@ -260,10 +276,11 @@ impl Wall {
     }
 
     /// After a walled program and its group have ended and it's reaped: ends what it left
-    /// running out of its group, and logs how many.
-    pub fn sweep_after(&self) {
-        let Some(place) = &self.place else { return };
-        match sweep(place.mark()) {
+    /// running out of its group, logs how many, and answers what it found, for the task. None for
+    /// a wall with no place, which nothing can be inside.
+    pub fn sweep_after(&self) -> Option<Result<Swept, SweepFailed>> {
+        let answer = sweep(self.place.as_ref()?.mark());
+        match answer {
             Ok(Swept { ended: 0, .. }) => {}
             Ok(Swept { ended, walks }) => {
                 log!("browser: a walled task left {ended} running, ended over {walks} walks");
@@ -272,6 +289,12 @@ impl Wall {
                 log!("browser: what a walled task left running wasn't ended: {failed:?}")
             }
         }
+        Some(answer)
+    }
+
+    /// Its place's name, for a wall with a place.
+    pub fn place_name(&self) -> Option<String> {
+        Some(self.place.as_ref()?.name()?.to_string())
     }
 }
 
@@ -306,7 +329,7 @@ pub fn left_in(root: &Path) -> Vec<Left> {
             Some(stem) => (stem, true),
             None => (name, false),
         };
-        if stem.len() != 16 || !stem.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        if !is_name(stem) {
             continue;
         }
         let at = match left.iter().position(|each| each.name == stem) {
@@ -329,8 +352,8 @@ pub fn left_in(root: &Path) -> Vec<Left> {
     left
 }
 
-/// What the launch's cleanup did, in counts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What the launch's cleanup did, in counts, and which places' sweeps came clean.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cleaned {
     /// Processes ended.
     pub ended: usize,
@@ -338,6 +361,9 @@ pub struct Cleaned {
     pub removed: usize,
     /// Places kept, as a sweep wasn't clean: the next launch tries again.
     pub kept: usize,
+    /// Each place whose mark was swept clean, by its name, with how many that sweep ended: what
+    /// a kept task whose run left that place says it ended (rewall.rs).
+    pub clean: Vec<(String, usize)>,
 }
 
 /// The launch's cleanup of `left`, off the UI thread: a place with a mark is swept and then both
@@ -355,7 +381,10 @@ fn clean_up_by(system: &impl System, root: &Path, left: &[Left]) -> Cleaned {
         let mark = place.mark.then(|| read_mark(&mark_file)).flatten();
         if let Some(mark) = mark {
             match sweep_by(system, &mark) {
-                Ok(swept) => cleaned.ended += swept.ended,
+                Ok(swept) => {
+                    cleaned.ended += swept.ended;
+                    cleaned.clean.push((place.name.clone(), swept.ended));
+                }
                 Err(_) => {
                     cleaned.kept += 1;
                     continue;

@@ -12,13 +12,13 @@ use super::*;
 use crate::agents::kept::cards::{self, CardId};
 
 /// A made-up picture, 2 by 2 pixels.
-fn picture() -> Arc<RenderImage> {
+pub(super) fn picture() -> Arc<RenderImage> {
     let pixels = RgbaImage::from_pixel(2, 2, image::Rgba([40, 80, 120, 255]));
     Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
 }
 
 /// The task's agent opens a page: the tab.
-fn last_page(run: &Run, agent: &str, cx: &mut TestAppContext) -> u64 {
+pub(super) fn last_page(run: &Run, agent: &str, cx: &mut TestAppContext) -> u64 {
     let space = opens_a_page(&run.agents, agent, cx);
     let tabs = run.browser.tabs.borrow();
     tabs.iter()
@@ -29,7 +29,7 @@ fn last_page(run: &Run, agent: &str, cx: &mut TestAppContext) -> u64 {
 }
 
 /// The task's conversation took a picture of `tab`: `picture`, or none if it couldn't be given.
-fn pictured(
+pub(super) fn pictured(
     run: &Run,
     agent: &str,
     tab: u64,

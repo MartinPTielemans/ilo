@@ -1882,8 +1882,8 @@ impl Agents {
         (self.came_before_stop(&call.agent, call.at)).then(|| named.into_iter().find(own))
     }
 
-    /// A call on a tab that came to a site the user put off limits (#3724), or one outside its
-    /// task's Sites, is refused, as an open there is. Every other call goes on, as it is.
+    /// A call on a tab that came to a site the user put off limits (#3724) is refused, as an open
+    /// there is. Every other call goes on, as it is.
     fn fence_call(&mut self, call: Call, cx: &mut Context<Self>) -> Option<Call> {
         if !FENCE_ASKS.contains(&call.tool.as_str()) {
             return Some(call);
@@ -1908,7 +1908,7 @@ impl Agents {
         let Some((site, entry)) =
             (self.came_to(tab, cx)).and_then(|site| Some((site.clone(), self.fence_of(&site)?)))
         else {
-            return self.sites_call(call, tab, cx);
+            return Some(call);
         };
         let reply = call.reply.clone();
         let mut act = act_of(&call.agent, call.connection, call.id, tab, reply);
@@ -2488,13 +2488,16 @@ impl Agents {
     }
 
     /// Whether the agent may call tools: a client the user connected, while other apps' agents are
-    /// on, or a thread not dropped, while threads are.
+    /// on, or a thread not dropped, while threads are. A thread whose start waits on the sweep of
+    /// its run before has no run, so nothing calls for it.
     fn may_call(&self, agent: &str) -> bool {
         match (server::side(agent), Client::from_id(agent)) {
             (Some(server::Side::Outside), Some(client)) => {
                 self.is_connected(client) && self.other_apps()
             }
-            (Some(server::Side::Inside), _) => self.threads() && self.task(agent).is_some(),
+            (Some(server::Side::Inside), _) => {
+                self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
+            }
             _ => false,
         }
     }
@@ -3629,16 +3632,11 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         act.did = why.and_then(Did::of);
-        // The task's Sites come first: no tier lifts them, as none lifts a fence.
-        let why = match why != Some(FENCED) && self.off_sites(&act, cx) {
-            true => Some(OTHER_SITE),
-            false => why,
-        };
         let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
         let why = Self::why_of(&act, &site, why).map(|why| match why {
-            tier::Why::Fenced | tier::Why::OtherSite => why,
+            tier::Why::Fenced => why,
             _ if self.said_never(&act.agent, &site) => tier::Why::Never,
             _ => why,
         });
@@ -5859,8 +5857,6 @@ impl Waits {
 const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
 /// Why an action asks on a site the user fenced, which fence.rs words for the card.
 const FENCED: &str = "fenced";
-/// Why an act is refused on a site outside its task's Sites, as FENCED is a stand-in.
-const OTHER_SITE: &str = "other site";
 /// The tools whose call on a tab that came to a fenced site asks first: each reads or acts on its
 /// page. Leaving it, closing it, handing it to the user and arranging tabs don't.
 const FENCE_ASKS: [&str; 10] = [

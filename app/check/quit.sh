@@ -149,8 +149,7 @@ if [ "$(uname)" = Linux ]; then
   send type two
   send key return
   expect "^browser: create space $second two\$" "$way: return didn't name the Space"
-  send key t cmd
-  expect '^browser: command bar shown$' "$way: ⌘T in the new Space didn't open the command bar"
+  resting_key t "$way: new Space"
   send type "${site}quit-two.html"
   send key return
   expect '^browser: today [0-9][0-9]*$' "$way: the page didn't open in the new Space"

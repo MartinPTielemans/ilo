@@ -281,42 +281,20 @@ fn the_bar_duplicates_the_board_shown(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(&profile).unwrap();
 }
 
-/// Seven sections keep Arc's gap and place in a tall window. At 800 tall, Arc's place would put
-/// Media's button under the heading, so they start under its caps and close up only as far as
-/// the back button needs.
+/// Boards takes its place in the column's drawn order, after Spaces, once the profile has
+/// boards to keep.
 #[gpui::test]
-fn the_sections_stay_under_the_library_heading(cx: &mut TestAppContext) {
-    use crate::tokens::shell::library::{
-        SECTION_GAP, SECTION_HEIGHT, SECTIONS_BOTTOM, SECTIONS_TOP,
-    };
-    let profile = std::env::temp_dir().join(format!("ilo-board-fit-{}", boards::new_id()));
+fn boards_follow_spaces_in_the_column(cx: &mut TestAppContext) {
+    let profile = std::env::temp_dir().join(format!("ilo-board-order-{}", boards::new_id()));
     let (shell, _) = window(cx, &profile);
-    let fit = |height: f32, cx: &mut TestAppContext| {
-        shell.update(cx, |shell, _| {
-            shell.viewport = gpui::size(px(1280.), px(height));
-            (shell.sections_fit(), shell.has_section(Section::Boards))
-        })
-    };
-    let ((gap, lower), boards) = fit(1000., cx);
-    assert!(boards);
-    assert_eq!(
-        (gap, lower),
-        (SECTION_GAP, 0.),
-        "a tall window moved Arc's place"
-    );
-    let ((gap, lower), _) = fit(800., cx);
-    let stack = 7. * SECTION_HEIGHT + 6. * gap;
-    let top = (800. - stack) / 2. - 5. + lower;
-    assert!(
-        top >= SECTIONS_TOP - 0.01,
-        "Media's button starts at {top}, under the heading"
-    );
-    assert!(
-        top + stack <= 800. - SECTIONS_BOTTOM + 0.01,
-        "Boosts' reaches the back button"
-    );
-    assert!(
-        gap > SECTION_GAP - 1.,
-        "the gaps closed more than they need: {gap}"
-    );
+    let shown = shell.read_with(cx, |shell, _| shell.shown_sections());
+    let order: Vec<_> = (Section::ORDER.into_iter())
+        .filter(|section| shown.contains(section))
+        .collect();
+    assert_eq!(shown, order);
+    assert!(shown.contains(&Section::Boards), "{shown:?}");
+    if let Some(spaces) = shown.iter().position(|&each| each == Section::Spaces) {
+        let boards = shown.iter().position(|&each| each == Section::Boards);
+        assert_eq!(boards, Some(spaces + 1), "{shown:?}");
+    }
 }

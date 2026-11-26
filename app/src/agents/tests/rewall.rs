@@ -13,10 +13,12 @@ use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::rewall::{
-    Change, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+    Change, LEFT_RUNNING_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+    ended_left_logged,
 };
 use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
+use crate::agents::wall::leftovers::{SweepFailed, Swept};
 use crate::agents::wall::{Granted, Wall, WallFor, WallRefused};
 
 /// What the task was asked, as `Run::start` asks it.
@@ -642,8 +644,8 @@ fn files_taken_back_start_it_again_without_them(cx: &mut TestAppContext) {
     assert_eq!(rows.last().map(String::as_str), Some(STOPPED_FILES_LOGGED));
 }
 
-/// What the wait on a raise's restart and the sweep at a run's end will hand a task, which
-/// nothing makes yet: each is a line of ilo's in the task's conversation, in the order it came,
+/// What the wait on a raise's restart, which nothing makes yet, and the sweep at a run's end hand
+/// a task: each is a line of ilo's in the task's conversation, in the order it came,
 /// and what's left running is said by what the task had, the folder by its name and the files
 /// the user attached as the task's.
 #[gpui::test]
@@ -798,8 +800,8 @@ fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppCon
     let start = Start {
         tier: Tier::default(),
         model: None,
+        effort: None,
         pages: Vec::new(),
-        only_added: false,
         files: Picked {
             files: vec![missing],
             folder: None,
@@ -1101,8 +1103,8 @@ mod copying {
         let start = Start {
             tier: Tier::default(),
             model: None,
+            effort: None,
             pages: Vec::new(),
-            only_added: false,
             files: Picked {
                 files: vec![file],
                 folder: Some(folder),
@@ -1260,4 +1262,270 @@ mod copying {
             _ = std::fs::remove_dir_all(folder);
         }
     }
+}
+
+/// What the sweep after a walled run's end found, which comes once that run has ended, so most
+/// often with the next under way: a sweep that couldn't end everything is a line naming what
+/// that run was given, not what the task has now, and an entry in the log. One that could, a
+/// second answer for the same run, and one for a run never walled say nothing.
+#[gpui::test]
+fn a_sweep_that_couldnt_end_everything_is_a_line_of_what_that_run_had(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("swept", folder(), cx);
+    run.ran(1);
+    let first = run_of(&run, &agent, cx);
+    // Taken back, so the run under way has nothing, while the one that ended had the folder.
+    (run.agents).update(cx, |agents, cx| {
+        let files = std::mem::take(&mut agents.task_mut(&agent).unwrap().files);
+        agents.rewall(&agent, Change::TookBack(files), "Taken back.".into(), cx);
+    });
+    run.ran(2);
+    let now = run_of(&run, &agent, cx);
+    assert_ne!(now, first);
+    let before = logged(&run, &agent, cx);
+    // As a walled start keeps them, which the stand-in's start isn't.
+    (run.agents).update(cx, |agents, _| {
+        let task = agents.task_mut(&agent).unwrap();
+        task.ran_walled = vec![(first, folder(), None), (now, Given::default(), None)];
+    });
+    let swept = |at: u32, answer: Result<Swept, SweepFailed>, cx: &mut TestAppContext| {
+        let event = runner::Event {
+            agent: agent.clone(),
+            run: at,
+            out: Out::Swept(answer),
+        };
+        (run.agents).update(cx, |agents, cx| agents.task_said(event, cx));
+    };
+    swept(first, Err(SweepFailed::Cap), cx);
+    swept(first, Err(SweepFailed::Cap), cx);
+    swept(now, Ok(Swept::default()), cx);
+    swept(now + 1, Err(SweepFailed::Unlisted), cx);
+    let left: Vec<IloKind> = (lines(&run, &agent, cx).into_iter())
+        .filter(|line| matches!(line, IloKind::LeftRunning { .. }))
+        .collect();
+    assert_eq!(
+        left,
+        [IloKind::LeftRunning {
+            reach: Reach::Folder(FOLDER.into())
+        }]
+    );
+    let mut after = before;
+    after.push(LEFT_RUNNING_LOGGED.into());
+    assert_eq!(logged(&run, &agent, cx), after);
+    // Each run's answer is taken once, and the task's run goes on.
+    let kept = (run.agents).read_with(cx, |agents, _| {
+        agents.task(&agent).unwrap().ran_walled.len()
+    });
+    assert_eq!(kept, 0);
+    assert_eq!(run_of(&run, &agent, cx), now);
+    assert_eq!(run.state(&agent, cx), State::Working);
+}
+
+/// The run under way as a walled start keeps it, which the stand-in's start isn't, with what it
+/// was given.
+fn walled_run(run: &Run, agent: &str, had: Given, cx: &mut TestAppContext) -> u32 {
+    let at = run_of(run, agent, cx);
+    (run.agents).update(cx, |agents, _| {
+        agents.task_mut(agent).unwrap().ran_walled = vec![(at, had, None)];
+    });
+    at
+}
+
+/// The sweep after `at`, a run of `agent`'s, answers.
+fn swept(
+    run: &Run,
+    agent: &str,
+    at: u32,
+    answer: Result<Swept, SweepFailed>,
+    cx: &mut TestAppContext,
+) {
+    let event = runner::Event {
+        agent: agent.to_string(),
+        run: at,
+        out: Out::Swept(answer),
+    };
+    (run.agents).update(cx, |agents, cx| agents.task_said(event, cx));
+}
+
+/// A change that ends a walled run starts the next only once the sweep after it answers clean,
+/// so nothing that run left is at work beside the new one. Meanwhile the task is at work with no
+/// run: no call of its is taken, nothing its last run still says is its, and the user's message
+/// goes with the start.
+#[gpui::test]
+fn a_raise_after_a_walled_run_starts_once_its_sweep_is_clean(cx: &mut TestAppContext) {
+    let (run, walls, agent) = started("waits", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    assert_eq!(walls.asked().len(), 2);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And on Sunday?", cx));
+    let gone = runner::Event {
+        agent: agent.clone(),
+        run: first,
+        out: Out::Gone(String::new()),
+    };
+    (run.agents).update(cx, |agents, cx| agents.task_said(gone, cx));
+    let may = (run.agents).read_with(cx, |agents, _| agents.may_call(&agent));
+    assert!(!may);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    swept(&run, &agent, first, Ok(Swept::default()), cx);
+    let (args, given) = run.ran(2);
+    assert!(walled(&args), "{args:?}");
+    assert!(given.contains(ASKED), "{given}");
+    assert!(given.contains("And on Sunday?"), "{given}");
+    assert!(
+        given.ends_with(&tier::changed_turn(Tier::Work, Tier::Full)),
+        "{given}"
+    );
+    assert_ne!(run_of(&run, &agent, cx), 0);
+    let may = (run.agents).read_with(cx, |agents, _| agents.may_call(&agent));
+    assert!(may);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Full, true, Vec::new()));
+}
+
+/// A kept task whose run left something running carries that run's place's name in its row,
+/// nothing more of it. A later launch whose cleanup sweeps the place clean says on the task, in
+/// the Archive, that ilo ended what its assistant had left, with an entry of how many, and the row
+/// no longer carries the name; the cleanup may answer before the kept tasks are read. A sweep
+/// that ended nothing, or a place no row carries, says nothing.
+#[gpui::test]
+fn a_later_launch_that_ends_what_a_kept_task_left_says_so_on_it(cx: &mut TestAppContext) {
+    const PLACE: &str = "0123456789abcdef";
+    let run = Run::new("ended-left", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let at = run_of(&run, &agent, cx);
+    (run.agents).update(cx, |agents, _| {
+        let task = agents.task_mut(&agent).unwrap();
+        task.ran_walled = vec![(at, Given::default(), Some(PLACE.into()))];
+    });
+    swept(&run, &agent, at, Err(SweepFailed::Cap), cx);
+    let left = (run.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&agent).unwrap().left.clone()
+    });
+    assert_eq!(left, [PLACE]);
+    run.finish(&agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(false, cx));
+
+    let next = Run::again(run.profile.clone(), run.program.clone(), cx);
+    let past = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.listed().next().unwrap().to_string()
+    });
+    assert!(!next.ilo_lines(&past, cx).contains(&IloKind::EndedLeft));
+    // The cleanup answers before the kept tasks are read.
+    (next.agents).update(cx, |agents, cx| {
+        agents.tasks.kept_taken = false;
+        let clean = vec![(PLACE.to_string(), 2), ("fedcba9876543210".to_string(), 3)];
+        agents.came_clean(clean, cx);
+    });
+    assert!(!next.ilo_lines(&past, cx).contains(&IloKind::EndedLeft));
+    (next.agents).update(cx, |agents, cx| agents.take_old_kept(cx));
+    let ended: Vec<_> = (next.ilo_lines(&past, cx).into_iter())
+        .filter(|line| *line == IloKind::EndedLeft)
+        .collect();
+    assert_eq!(ended, [IloKind::EndedLeft]);
+    assert_eq!(logged(&next, &past, cx), [ended_left_logged(2)]);
+    let left = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&past).unwrap().left.clone()
+    });
+    assert!(left.is_empty(), "{left:?}");
+
+    // Once more, and with a sweep that ended nothing: nothing more is said.
+    (next.agents).update(cx, |agents, cx| {
+        agents
+            .tasks
+            .kept
+            .of_mut(&past)
+            .unwrap()
+            .left
+            .push(PLACE.into());
+        agents.came_clean(vec![(PLACE.to_string(), 0), (PLACE.to_string(), 4)], cx);
+    });
+    assert_eq!(logged(&next, &past, cx), [ended_left_logged(2)]);
+    let left = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&past).unwrap().left.clone()
+    });
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// ilo's lines in a task ilo stopped, but for the one any stopped task's conversation that
+/// isn't kept has, which this test's task has too.
+fn stopped_lines(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
+    let all = run.ilo_lines(agent, cx);
+    assert!(all.contains(&IloKind::NotKept), "{all:?}");
+    (all.into_iter())
+        .filter(|kind| *kind != IloKind::NotKept)
+        .collect()
+}
+
+/// A sweep that couldn't end everything starts nothing: ilo stops the task, with the line of what
+/// didn't start, the level of a raise (under the raise's own) or what a take-back would have gone
+/// without, and under it what was left running.
+#[gpui::test]
+fn a_restart_whose_sweep_isnt_clean_starts_nothing(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("raised", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    swept(&run, &agent, first, Err(SweepFailed::Cap), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    let left = IloKind::LeftRunning {
+        reach: Reach::Folder(FOLDER.into()),
+    };
+    assert_eq!(
+        stopped_lines(&run, &agent, cx),
+        [
+            IloKind::TierChanged {
+                from: Tier::Work,
+                to: Tier::Full
+            },
+            IloKind::NotRaised {
+                refused: Tier::Full
+            },
+            left.clone()
+        ]
+    );
+    assert_eq!(
+        logged(&run, &agent, cx).last().unwrap(),
+        LEFT_RUNNING_LOGGED
+    );
+
+    let (run, _, agent) = started("taken", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    (run.agents).update(cx, |agents, cx| {
+        let files = std::mem::take(&mut agents.task_mut(&agent).unwrap().files);
+        agents.rewall(&agent, Change::TookBack(files), "Taken back.".into(), cx);
+    });
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    swept(&run, &agent, first, Err(SweepFailed::Missing), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    let stopped = IloKind::NotRestarted {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(stopped_lines(&run, &agent, cx), [stopped, left]);
+    let logged = logged(&run, &agent, cx);
+    assert_eq!(
+        logged[logged.len() - 2..],
+        [STOPPED_FOLDER_LOGGED, LEFT_RUNNING_LOGGED]
+    );
+}
+
+/// Stop while a start waits on a sweep ends the task there: the start never happens, whatever
+/// the sweep then says.
+#[gpui::test]
+fn stop_while_a_restart_waits_drops_it(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("stop", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    (run.agents).update(cx, |agents, cx| agents.stop_task(&agent, cx));
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    swept(&run, &agent, first, Ok(Swept::default()), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
 }

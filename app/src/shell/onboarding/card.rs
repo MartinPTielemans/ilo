@@ -207,34 +207,37 @@ pub(super) fn quiet(id: &'static str, label: SharedString, inks: Inks) -> Statef
 }
 
 /// The step's main button, `button` with its words in it: the text's ink as its fill and the key
-/// that presses it, `key`, in a cap at its end.
+/// that presses it, `key`, in a cap at its end, if it has one.
 pub(super) fn main_button(
     button: Stateful<gpui::Div>,
-    key: SharedString,
+    key: Option<SharedString>,
     inks: Inks,
 ) -> Stateful<gpui::Div> {
     let [height, radius, inset, gap] = t::BUTTON_SIZE;
     let [cap, cap_radius, cap_text, cap_alpha] = t::CAP;
-    let chip = div()
-        .h(px(cap))
-        .min_w(px(cap))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(cap_radius))
-        .bg(Rgba {
-            a: cap_alpha,
-            ..inks.on_main()
-        })
-        .text_size(px(cap_text))
-        .font_weight(FontWeight::NORMAL)
-        .child(key);
+    let end = if key.is_some() { t::MAIN_END } else { inset };
+    let chip = key.map(|key| {
+        div()
+            .h(px(cap))
+            .min_w(px(cap))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(cap_radius))
+            .bg(Rgba {
+                a: cap_alpha,
+                ..inks.on_main()
+            })
+            .text_size(px(cap_text))
+            .font_weight(FontWeight::NORMAL)
+            .child(key)
+    });
     button
         .flex_none()
         .relative()
         .h(px(height))
         .pl(px(inset))
-        .pr(px(t::MAIN_END))
+        .pr(px(end))
         .flex()
         .items_center()
         .justify_center()
@@ -247,7 +250,7 @@ pub(super) fn main_button(
         .hover(|style| style.opacity(t::BUTTON_HOVER))
         .focus_visible(card_ring(inks))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(chip)
+        .children(chip)
 }
 
 /// The Welcome's taller button, a column wide.

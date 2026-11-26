@@ -12,6 +12,16 @@ engine/patches/ours/chromium-core-embedded-view.patch and the patches in engine/
   Ardia
   Copyright 2026 Mantra Patel
 
+OpenAI Codex (https://github.com/openai/codex), Apache License 2.0
+Used in the rules a task's assistant runs inside when it has files: app/src/agents/wall/base.sb,
+codex-rs/sandboxing/src/seatbelt_base_policy.sbpl as it is, and app/src/agents/wall/rules.rs and
+rules/system.rs, adapted from seatbelt_read_only_platform_defaults.sbpl,
+seatbelt_network_policy.sbpl and seatbelt.rs beside it; at commit
+3d86e43b075adeba2193ec5c22ac92f55afd82e6.
+
+  OpenAI Codex
+  Copyright 2025 OpenAI
+
 Zed (https://github.com/zed-industries/zed), GNU General Public License, version 3 or later
 Used in app/src/menu.rs, adapted from crates/ui/src/components/context_menu.rs at commit
 b36b283021c48f1712714b8a0e2ad6ffb578920b.
@@ -213,7 +223,7 @@ names and groups, which are Unicode's and CLDR's, and their shortcodes, which ar
   authorization of the copyright holder.
 
 Outfit (https://github.com/Outfitio/Outfit-Fonts), SIL Open Font License 1.1
-Used in app/assets/fonts/Outfit-Medium.ttf, unmodified, at commit
+Used in app/assets/fonts/Outfit-Medium.ttf and Outfit-SemiBold.ttf, unmodified, at commit
 902773808eb372f70fb34e8946dd1ffe604efc79, and built into the app. The license's full text is next
 to it, in app/assets/fonts/OFL.txt, and at the end of this file.
 

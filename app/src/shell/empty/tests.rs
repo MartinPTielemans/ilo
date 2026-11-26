@@ -13,7 +13,10 @@ use crate::agents::task::{Card, Dot};
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
-    empty::{FADE, composer::group_top},
+    empty::{
+        FADE,
+        composer::{group_top, mark_top},
+    },
     recorder::Recorder,
     task_cards::tests::card,
 };
@@ -237,6 +240,28 @@ fn the_welcome_opens_a_new_tab(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
     assert_eq!(host.command_bars.take(), [None]);
+}
+
+/// The welcome is the mark, its one line and the button: nothing stands between the line and the
+/// button, and the bar's mark isn't there with it.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_welcome_has_no_line_under_its_title(cx: &mut TestAppContext) {
+    use crate::tokens::shell::empty::BUTTON_GAP;
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| shell.set_welcome(cx));
+    cx.run_until_parked();
+    let title = cx.debug_bounds("welcome-title").expect("no welcome");
+    let button = cx.debug_bounds("welcome-button").expect("no button");
+    let gap = f32::from(button.top() - title.bottom());
+    assert!(
+        (gap - BUTTON_GAP).abs() < 0.5,
+        "the button is {gap} under the title: something stands between them"
+    );
+    assert_eq!(cx.debug_bounds("resting-mark"), None);
 }
 
 /// Whether the empty page's bar is the composer, and what its field says with nothing typed.
@@ -547,8 +572,8 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     );
 }
 
-/// The bar rests with its input row level with ⌘T's bar's, nothing above it, and the group moves
-/// up only as far as it needs to fit the card, never nearer its top than `TOP`.
+/// The bar rests with its input row level with ⌘T's bar's, and the group moves up only as far as
+/// it needs to fit the card, never nearer its top than `TOP`.
 #[test]
 fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
     use crate::tokens::command_bar::HEIGHT;
@@ -569,6 +594,73 @@ fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
         top,
         "a tall card moved it"
     );
+}
+
+/// The mark stands its gap over the bar where the card has that room over it. A Little Window
+/// has none, and neither has a card so short that the group was lifted to its top.
+#[test]
+fn the_mark_stands_its_gap_over_the_bar_and_gives_way() {
+    use crate::tokens::shell::composer::{MARK_GAP, TOP};
+    use crate::tokens::shell::empty::MARK_SIZE;
+    let row = crate::command_bar::centered_row_middle(800.) - 40.;
+    let top = group_top(row, 720., false, false);
+    assert_eq!(mark_top(top, false), Some(top - MARK_GAP - MARK_SIZE));
+    assert_eq!(mark_top(top, true), None, "a Little Window drew the mark");
+    assert_eq!(mark_top(TOP, false), None, "it stands over the card's top");
+}
+
+/// The product's mark stands over the bar at rest: in the bar's column, its gap over the bar, at
+/// the size the tokens give it. GPUI records where an element was drawn only in a debug build.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_mark_stands_over_the_resting_bar_in_its_column(cx: &mut TestAppContext) {
+    use crate::tokens::shell::composer::MARK_GAP;
+    use crate::tokens::shell::empty::MARK_SIZE;
+    let (_, cx, _) = window_with_no_tab(cx);
+    let mark = cx
+        .debug_bounds("resting-mark")
+        .expect("the bar at rest has no mark over it");
+    let bar = cx.debug_bounds("resting-bar").expect("no bar at rest");
+    let off = f32::from(mark.center().x - bar.center().x);
+    assert!(off.abs() < 0.5, "the mark is {off} off the bar's column");
+    let gap = f32::from(bar.top() - mark.bottom());
+    assert!(
+        (gap - MARK_GAP).abs() < 0.5,
+        "the mark is {gap} over the bar"
+    );
+    assert_eq!(mark.size, gpui::size(px(MARK_SIZE), px(MARK_SIZE)));
+}
+
+/// A Little Window is a look at one page, so its card with no page has no mark, whatever else
+/// it rests on.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn a_little_window_with_no_page_draws_no_mark(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            9,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.little.is_some() && shell.selected == 0),
+        "it isn't a Little Window with no page"
+    );
+    assert_eq!(cx.debug_bounds("resting-mark"), None);
 }
 
 /// Makes the test's window the key one, as the user's window is when they're in it.
