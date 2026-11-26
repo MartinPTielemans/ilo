@@ -4116,6 +4116,50 @@ fn row_cases() -> Vec<RowCaseShown> {
     ]
 }
 
+/// An outside app's panel has its card's line under the title, from the kind of its connection
+/// alone, and no reply field; a task's panel never has it, whatever either is named. However long
+/// the name, or made of the product's own state words, the line is one line where it was and the
+/// page row and Stop are as they were.
+#[gpui::test]
+fn an_outside_apps_panel_has_its_line_under_the_title(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::FROM_LINE;
+    let named = |name: &str| {
+        let (session, talk) = session_panel();
+        let session = Card {
+            name: name.into(),
+            ..session
+        };
+        let talk = Conversation {
+            name: name.into(),
+            ..talk
+        };
+        (session, talk)
+    };
+    let (session, talk) = named("Claude Code");
+    let (_, _, view, cx) = standing_with(session, talk, cx);
+    let line = view.read_with(cx, |view, _| view.from_drawn.get());
+    let line = line.expect("an outside app's line");
+    assert_eq!(line.size.height, px(FROM_LINE));
+    assert_eq!(view.read_with(cx, |view, _| view.reply_drawn.get()), None);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    let long = "Claude Code ".repeat(17);
+    for name in [long.as_str(), "Needs you", "Done · 13:31", "Working", ""] {
+        let (session, talk) = named(name);
+        let (_, _, view, cx) = standing_with(session, talk, cx);
+        let drawn = view.read_with(cx, |view, _| view.from_drawn.get());
+        assert_eq!(drawn, Some(line), "{name:?}");
+        let theirs = view.read_with(cx, |view, _| view.page_row_for(30, None));
+        assert_eq!(theirs, row, "{name:?}");
+    }
+    // A task's panel has none, even named as an app.
+    let task = Card {
+        name: "Claude Code".into(),
+        ..card()
+    };
+    let (_, _, view, cx) = standing_with(task, conversation(3), cx);
+    assert_eq!(view.read_with(cx, |view, _| view.from_drawn.get()), None);
+}
+
 /// An outside app's session, standing on tab 30: its card, with no composer, and its step lines.
 fn session_panel() -> (Card, Conversation) {
     let session = Card {

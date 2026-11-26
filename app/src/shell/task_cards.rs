@@ -16,6 +16,7 @@ mod motion;
 #[cfg(test)]
 pub(super) mod tests;
 
+pub(in crate::shell) use card::from_mark;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};

@@ -83,6 +83,7 @@ use crate::tokens::shell::task::{
     RAIL_WORD, RAIL_WORD_LINE, RING_TRACK, STATUS, TILE_FILL, TILE_LINE, TILE_LINE_ON,
     TILE_PICTURE, TILE_RADIUS, TILE_RING, TILE_RING_STROKE,
 };
+use crate::tokens::shell::task_card::FROM_LINE;
 use crate::tokens::shell::{HAIRLINE, ICON_INK};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_GAP};
@@ -262,6 +263,8 @@ pub struct TalkView {
     /// as it lands, and the view.
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where an outside app's line was drawn last in the panel's head, for a test.
+    from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Each ilo line's button, by its line's key, where it was drawn last and since when it has
     /// stood there: one that widens what the agent may do takes no press until it has stood a
@@ -490,6 +493,7 @@ impl Shell {
                     made: Instant::now(),
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
+                    from_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
@@ -1480,6 +1484,34 @@ impl TalkView {
                 .child(icon)
                 .on_click(cx.listener(move |view, _, _, cx| view.stand(tab, cx)))
         });
+        // An outside app's session, from the kind of its connection alone, has the card's line
+        // under its title: the product's mark and the name it gave.
+        let name = shown.map(|shown| shown.name.clone()).unwrap_or_default();
+        let drawn = self.from_drawn.clone();
+        let from = (!self.replies).then(|| {
+            div()
+                .relative()
+                .mt(px(panel::FROM_GAP))
+                .h(px(FROM_LINE))
+                .flex()
+                .items_center()
+                .gap(px(panel::FROM_NAME_GAP))
+                .child(
+                    canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+                .child(super::task_cards::from_mark(&palette))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(text::SMALL))
+                        .line_height(px(FROM_LINE))
+                        .text_color(answer_text_3(&palette))
+                        .child(name),
+                )
+        });
         div()
             .flex_none()
             .w_full()
@@ -1493,12 +1525,19 @@ impl TalkView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(px(text::BODY))
-                    .line_height(px(panel::TITLE_LINE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text(TITLE))
-                    .child(title),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(text::BODY))
+                            .line_height(px(panel::TITLE_LINE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text(TITLE))
+                            .child(title),
+                    )
+                    .children(from),
             )
             .children(speaker)
             .child(
