@@ -113,7 +113,7 @@ fn claude_gets_the_browser_alone() {
     assert_eq!(after("--mcp-config"), "/tmp/Tasks/task-1.json");
     assert_eq!(
         after("--allowedTools"),
-        "mcp__ilo__open_tab,mcp__ilo__finish,WebSearch"
+        format!("mcp__{SERVER}__open_tab,mcp__{SERVER}__finish,WebSearch")
     );
     assert_eq!(after("--model"), "haiku");
     assert_eq!(after("--append-system-prompt-file"), "/tmp/Tasks/task-1.md");
@@ -217,7 +217,7 @@ fn claudes_config_names_the_browsers_server_alone() {
     let config: Value = serde_json::from_str(&claude_config(&launch(Cli::Claude).server)).unwrap();
     assert_eq!(
         config,
-        json!({ "mcpServers": { "ilo": {
+        json!({ "mcpServers": { SERVER: {
             "type": "stdio",
             "command": "/app/mcp-bridge",
             "args": ["/profile/agents.sock"],
@@ -231,11 +231,11 @@ fn claudes_config_names_the_browsers_server_alone() {
 #[test]
 fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither() {
     let outs = read(&[
-        json!({ "type": "system", "subtype": "init", "tools": ["mcp__ilo__open_tab"] }),
+        json!({ "type": "system", "subtype": "init", "tools": [format!("mcp__{SERVER}__open_tab")] }),
         json!({ "type": "assistant", "message": { "content": [
             { "type": "thinking", "thinking": "Hmm." },
             { "type": "text", "text": "  Looking for flights.  " },
-            { "type": "tool_use", "name": "mcp__ilo__open_tab", "input": {} },
+            { "type": "tool_use", "name": format!("mcp__{SERVER}__open_tab"), "input": {} },
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
@@ -276,7 +276,7 @@ fn claudes_text_comes_as_it_writes_it_until_it_calls_a_tool() {
         ),
         delta("Both"),
         piece(
-            json!({ "type": "content_block_start", "content_block": { "type": "tool_use", "name": "mcp__ilo__open_tab" } }),
+            json!({ "type": "content_block_start", "content_block": { "type": "tool_use", "name": format!("mcp__{SERVER}__open_tab") } }),
         ),
         piece(
             json!({ "type": "content_block_delta", "delta": { "type": "input_json_delta", "partial_json": "{" } }),
@@ -372,8 +372,10 @@ fn a_failure_says_why_in_words_never_a_code() {
 
 #[test]
 fn codex_turns_off_the_users_servers_by_name() {
-    let config = "model = \"x\"\n[mcp_servers.linear]\ncommand = \"a\"\n[mcp_servers.linear.env]\n\
-                  [mcp_servers.\"my.server\"]\n[mcp_servers.ilo]\n[profiles.fast]\n";
+    let config = &format!(
+        "model = \"x\"\n[mcp_servers.linear]\ncommand = \"a\"\n[mcp_servers.linear.env]\n\
+         [mcp_servers.\"my.server\"]\n[mcp_servers.{SERVER}]\n[profiles.fast]\n"
+    );
     assert_eq!(
         codex::servers_in(config),
         vec!["linear".to_string(), "my.server".to_string()]
@@ -404,27 +406,27 @@ fn codexs_thread_has_the_browser_alone() {
     assert!(config.get("tools.web_search").is_none(), "{config}");
     assert_eq!(config["project_doc_max_bytes"], json!(0));
     assert_eq!(
-        config["mcp_servers.ilo"]["command"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["command"],
         json!("/app/mcp-bridge")
     );
     assert_eq!(
-        config["mcp_servers.ilo"]["env"]["BROWSER_AGENT_TOKEN"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["env"]["BROWSER_AGENT_TOKEN"],
         json!("secret")
     );
     assert_eq!(
-        config["mcp_servers.ilo"]["enabled_tools"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["enabled_tools"],
         json!(["open_tab", "finish"])
     );
     assert_eq!(
-        config["mcp_servers.ilo"]["tools"]["finish"]["approval_mode"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["tools"]["finish"]["approval_mode"],
         json!("approve")
     );
     assert_eq!(
-        config["mcp_servers.ilo"]["omit_tools_from"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["omit_tools_from"],
         json!(["code_mode"])
     );
     assert_eq!(
-        config["mcp_servers.ilo"]["supports_parallel_tool_calls"],
+        config[format!("mcp_servers.{SERVER}").as_str()]["supports_parallel_tool_calls"],
         json!(true)
     );
     assert_eq!(config["agents.max_depth"], json!(0));
@@ -1035,7 +1037,7 @@ fn claudes_search_is_its_words_alone_and_its_result_says_nothing() {
     assert_eq!(claude_read(&piece, &mut turn), [Out::Calling]);
     // Another tool's query is no search.
     let other = json!({ "type": "assistant", "message": { "content": [
-        { "type": "tool_use", "id": "s3", "name": "mcp__ilo__open_tab", "input": { "query": "x" } },
+        { "type": "tool_use", "id": "s3", "name": format!("mcp__{SERVER}__open_tab"), "input": { "query": "x" } },
     ] } });
     assert_eq!(claude_read(&other, &mut turn), [Out::Calling]);
 }

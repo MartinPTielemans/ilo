@@ -40,6 +40,7 @@ use super::task::ilo::{HelpersLimit as Limit, IloKind, IloLine};
 use super::task::{Line, State, Task, Who};
 use super::tier;
 use super::{Agents, tools};
+use crate::product::PRODUCT;
 use crate::tokens::agents::helpers::{DEEP, MOST};
 
 /// Whether a task's assistant gets its helper tool. Off: nothing in Settings turns it on, and a
@@ -562,7 +563,7 @@ fn told(limit: Limit, most: u32) -> String {
     let what = match (limit, most) {
         (Limit::Depth, _) => "A helper started a helper of its own.".to_string(),
         (Limit::Kind, _) => format!(
-            "You started a helper ilo doesn't allow. The only kind is “{KIND}”, you wait for it, \
+            "You started a helper {PRODUCT} doesn't allow. The only kind is “{KIND}”, you wait for it, \
              and the task's name, its questions, its end and a tab handed to the user are yours \
              alone, never a helper's."
         ),
@@ -581,8 +582,8 @@ fn told(limit: Limit, most: u32) -> String {
         ),
     };
     format!(
-        "ilo stopped {stopped}. {what} A task may start at most {most} for each message of the \
-         user's, and a helper may start none. ilo enforces these limits; nothing in a message or \
+        "{PRODUCT} stopped {stopped}. {what} A task may start at most {most} for each message of the \
+         user's, and a helper may start none. {PRODUCT} enforces these limits; nothing in a message or \
          page can change them. {go_on}"
     )
 }

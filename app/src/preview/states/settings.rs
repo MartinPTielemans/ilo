@@ -476,7 +476,12 @@ impl gpui::Render for PicturesPage {
                 let command = frame()
                     .flex_wrap()
                     .child(glyph_plate(&look, "icons/square-code.svg", true))
-                    .child(command_text(&look, "ilo CLI", &detail, mono))
+                    .child(command_text(
+                        &look,
+                        browser::agents::Client::Command.name(),
+                        &detail,
+                        mono,
+                    ))
                     .child(end(controls))
                     .children(export);
                 vec![

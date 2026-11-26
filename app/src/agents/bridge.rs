@@ -80,7 +80,7 @@ pub fn off() -> String {
     format!(
         "{0} isn't running, or access for other apps is off. Open {0} and turn it on in Settings › \
          Other apps.",
-        env!("APP_NAME")
+        crate::product::PRODUCT
     )
 }
 

@@ -98,7 +98,7 @@ pub struct Server {
 }
 
 /// The name the CLI knows the server by, which its tools' names carry.
-pub const SERVER: &str = "ilo";
+pub const SERVER: &str = env!("PRODUCT_NAME");
 
 /// What a task's CLI starts with.
 #[derive(Clone, Debug)]

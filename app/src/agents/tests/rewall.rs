@@ -845,7 +845,10 @@ fn a_revoked_folders_assistant_is_told_the_leads_words_alone() {
                         Only the user can give a task a folder.";
     const STILL: &str = " The files attached to this task are still there.";
     let user = format!("The user revoked this task's folder. {REST}");
-    let ilo = format!("ilo revoked this task's folder. {REST}");
+    let ilo = format!(
+        "{} revoked this task's folder. {REST}",
+        env!("PRODUCT_NAME")
+    );
     let forms = [
         (revoked_told(true, false), user.clone()),
         (revoked_told(true, true), format!("{user}{STILL}")),

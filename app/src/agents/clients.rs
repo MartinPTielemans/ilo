@@ -63,7 +63,7 @@ impl Client {
             Client::ClaudeCode => "Claude Code",
             Client::Codex => "Codex",
             Client::Other => "MCP client",
-            Client::Command => "ilo CLI",
+            Client::Command => concat!("The ", env!("PRODUCT_NAME"), " command"),
         }
     }
 
