@@ -290,6 +290,43 @@ impl Trace {
     pub fn summary(&self) -> (SharedString, SharedString) {
         summary(self.took, self.counted())
     }
+
+    /// What its line says folded, by kinds and counts alone, never a title or the assistant's
+    /// words: each kind once, in the order it first came, with how many steps of it; a row
+    /// that's the same step on several tabs counts each. A step that failed, and a look with its
+    /// picture, is never counted in: each stands apart, by its key, as its own line.
+    pub fn folded(&self) -> Folded {
+        let mut folded = Folded::default();
+        let mut count = |step: &TraceStep| {
+            if step.failed || matches!(step.opens, Opens::Picture(_)) {
+                return folded.apart.push(step.key);
+            }
+            match (folded.kinds.iter_mut()).find(|(kind, _)| *kind == step.kind) {
+                Some((_, count)) => *count += 1,
+                None => folded.kinds.push((step.kind, 1)),
+            }
+        };
+        for item in &self.items {
+            match item {
+                TraceItem::Step(step) => match &step.opens {
+                    Opens::Steps(tabs) if !tabs.is_empty() => tabs.iter().for_each(&mut count),
+                    _ => count(step),
+                },
+                TraceItem::Said(_) | TraceItem::Helper { .. } => {}
+            }
+        }
+        folded
+    }
+}
+
+/// A stretch as its folded line counts it (`Trace::folded`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Folded {
+    /// Each kind of step it took, in the order it first came, with how many.
+    pub kinds: Vec<(tools::StepKind, usize)>,
+    /// The keys of its steps that stand as lines of their own: one that failed, a look with its
+    /// picture.
+    pub apart: Vec<usize>,
 }
 
 /// A stretch's summary line, its title and description: one that `took` its time, or one under
@@ -339,6 +376,8 @@ pub struct TraceStep {
     /// Its place in the task's trace, which keeps the user's opening of it.
     pub key: usize,
     pub glyph: &'static str,
+    /// What it did, by its tool and what ilo judged it: what its stretch's fold counts.
+    pub kind: tools::StepKind,
     pub title: SharedString,
     /// After the title: how long it took, from 1 s, or why it failed.
     pub description: SharedString,
@@ -5416,6 +5455,7 @@ fn helper_began(key: usize, running: bool) -> TraceStep {
     TraceStep {
         key,
         glyph: tools::step_glyph(""),
+        kind: tools::StepKind::Other,
         title: SharedString::default(),
         description: SharedString::default(),
         running,
@@ -5441,6 +5481,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         return TraceStep {
             key,
             glyph: tools::step_glyph(&step.did.tool),
+            kind: tools::StepKind::of(&step.did),
             title: tools::close_title(&step.did, close).into(),
             description: "".into(),
             running: false,
@@ -5482,6 +5523,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
     TraceStep {
         key,
         glyph: tools::step_glyph(&step.did.tool),
+        kind: tools::StepKind::of(&step.did),
         title: title.into(),
         description: description.into(),
         running: step.ended.is_none(),
@@ -5547,6 +5589,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         return TraceStep {
             key,
             glyph: tools::step_glyph(&did.tool),
+            kind: tools::StepKind::of(&did),
             title: tools::close_title(&did, close).into(),
             description: "".into(),
             running: false,
@@ -5600,6 +5643,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
     TraceStep {
         key,
         glyph: tools::step_glyph(&did.tool),
+        kind: tools::StepKind::of(&did),
         title: tools::group_title(&did, count, tense).into(),
         description: description.into(),
         running: running > 0,
@@ -5779,11 +5823,61 @@ fn end_old_task_files(
 mod finished_tests {
     use super::*;
 
+    /// A folded stretch counts each kind once, in the order it first came, a row on several tabs
+    /// by each tab, and holds out a failed step and a look with its picture by their keys, so
+    /// neither is ever folded into a count (Q12).
+    #[test]
+    fn a_fold_counts_kinds_and_holds_out_failures_and_looks() {
+        let step = |key, kind, failed, opens| TraceStep {
+            key,
+            glyph: "icons/globe.svg",
+            kind,
+            title: "".into(),
+            description: "".into(),
+            running: false,
+            failed,
+            opens,
+            under: "".into(),
+            page: None,
+            says: tools::Note::default(),
+        };
+        use tools::StepKind::*;
+        let tabs = vec![
+            step(4, Opened, false, Opens::Nothing),
+            step(5, Opened, true, Opens::Nothing),
+            step(6, Opened, false, Opens::Nothing),
+        ];
+        let picture = gpui::Image::from_bytes(gpui::ImageFormat::Png, Vec::new());
+        let picture = Opens::Picture(Arc::new(picture));
+        let trace = Trace {
+            key: 1,
+            running: false,
+            took: Some(9),
+            started: None,
+            items: vec![
+                TraceItem::Step(step(1, Searched, false, Opens::Nothing)),
+                TraceItem::Said("Found three".into()),
+                TraceItem::Step(step(3, Opened, false, Opens::Steps(tabs))),
+                TraceItem::Step(step(7, Clicked, true, Opens::Nothing)),
+                TraceItem::Step(step(8, Looked, false, picture)),
+                TraceItem::Step(step(9, Searched, false, Opens::Nothing)),
+            ],
+        };
+        assert_eq!(
+            trace.folded(),
+            Folded {
+                kinds: vec![(Searched, 2), (Opened, 2)],
+                apart: vec![5, 7, 8],
+            }
+        );
+    }
+
     /// An outside app's session shows the product's own step lines alone: never its client's note
     /// on a step, nor a thought's text, though its title and what the step opened stay.
     #[test]
     fn a_sessions_lines_say_nothing_its_client_says() {
         let step = |key, opens| TraceStep {
+            kind: Default::default(),
             key,
             glyph: "icons/globe.svg",
             title: "Opened tickets.example".into(),

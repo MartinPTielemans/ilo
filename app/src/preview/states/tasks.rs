@@ -150,6 +150,7 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     let sites = helper_tabs();
     let helper = |at: usize, tool: &str, did: &str, running| TraceItem::Helper {
         step: TraceStep {
+            kind: Default::default(),
             key: 10 + at,
             glyph: browser::agents::tools::step_glyph(tool),
             title: format!("{did} {}", sites[at].1).into(),
@@ -393,6 +394,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     let (title, _, _) = TASKS[0];
     // Every step is on the tickets page: the first went to it, so it heads the page's line.
     let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
+        kind: Default::default(),
         key,
         glyph,
         title: title.into(),
@@ -510,6 +512,7 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
     // The first task's steps are the working conversation's; the others read their first page.
     let read = |key, glyph, did: &str| {
         TraceItem::Step(TraceStep {
+            kind: Default::default(),
             key,
             glyph,
             title: format!("{did} {}", site(pages[0].2)).into(),
@@ -588,6 +591,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             took: None,
             started: None,
             items: vec![TraceItem::Step(TraceStep {
+                kind: Default::default(),
                 key,
                 glyph: "icons/mouse-pointer-2.svg",
                 title: title.to_string().into(),
@@ -852,6 +856,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         "notes" => {
             let github = &browser::agents::notes::NOTES[0];
             let opened = TraceStep {
+                kind: Default::default(),
                 key: 10,
                 glyph: "icons/globe.svg",
                 title: "Opened github.com".into(),
@@ -864,6 +869,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 says: "".into(),
             };
             let reading = TraceStep {
+                kind: Default::default(),
                 key: 11,
                 glyph: "icons/text-align-start.svg",
                 title: "Reading github.com".into(),

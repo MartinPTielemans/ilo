@@ -8961,6 +8961,68 @@ mod tasks {
         );
     }
 
+    /// A stretch's fold counts its steps by kind alone (slice 3): the same steps sent with other
+    /// notes fold the same, and an order counts as the click it is.
+    #[gpui::test]
+    fn a_stretchs_fold_counts_its_kinds_whatever_its_notes_say(cx: &mut TestAppContext) {
+        use crate::agents::task::{Folded, Line};
+        use crate::agents::tools::StepKind;
+        let mut folded = |notes: [&str; 2]| -> Folded {
+            let (agents, browser) = ready(None, cx);
+            let agent = start(&agents, "Buy the basket", cx);
+            agents.update(cx, |agents, cx| {
+                agents.task_mut(&agent).unwrap().state = State::Working;
+                agents.set_tier(&agent, crate::agents::tier::Tier::Full, cx);
+            });
+            browser
+                .tabs
+                .borrow_mut()
+                .push((30, 100, "Shop", "https://shop.example/basket"));
+            let steps = [
+                ("snapshot", json!({ "tab": 30 })),
+                (
+                    "type",
+                    json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": notes[0] }),
+                ),
+                ("click", json!({ "tab": 30, "ref": "e3", "note": notes[1] })),
+            ];
+            for (tool, arguments) in steps {
+                traced(
+                    &agents,
+                    &browser,
+                    &agent,
+                    tool,
+                    arguments,
+                    Some(shop_tree()),
+                    cx,
+                );
+            }
+            let conversation =
+                agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+            // Full access has its own line before the stretch.
+            let trace = (conversation.lines.iter())
+                .find_map(|line| match line {
+                    Line::Trace(trace) => Some(trace),
+                    _ => None,
+                })
+                .expect("a stretch of work");
+            trace.folded()
+        };
+        let first = folded(["Coupon first", "Placing it"]);
+        assert_eq!(
+            first,
+            Folded {
+                kinds: vec![
+                    (StepKind::Read, 1),
+                    (StepKind::Typed, 1),
+                    (StepKind::Clicked, 1)
+                ],
+                apart: vec![],
+            }
+        );
+        assert_eq!(folded(["", "Just checking the basket"]), first);
+    }
+
     /// The assistant's note on a step (spec-held-abilities.md part 5) is drawn as its own words
     /// under that step alone: plain, one line, at most 80 characters, on no failed or refused step,
     /// and it changes nothing the step may do nor reaches the activity log.
@@ -9875,6 +9937,7 @@ mod tasks {
     fn a_stretch_counts_steps_not_rows() {
         use crate::agents::task::{Opens, Trace, TraceItem, TraceStep};
         let step = |key, opens| TraceStep {
+            kind: Default::default(),
             key,
             glyph: "",
             title: "Read 2 pages".into(),

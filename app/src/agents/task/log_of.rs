@@ -156,6 +156,7 @@ pub(crate) fn drawn(records: &[Record]) -> Drawn {
     for record in records {
         let step =
             |key: usize, glyph, words: &str, came: &str, failed, on: Option<OnPage>| TraceStep {
+                kind: Default::default(),
                 key,
                 glyph,
                 title: words.to_string().into(),

@@ -1292,6 +1292,65 @@ pub fn product_words(did: &Did, running: bool, failed: bool, stopped: bool, wait
         || permission_stopped(&did.tool, &did.site).is_some()
 }
 
+/// What a step did, by its tool and what ilo judged it, never by any words: what a folded
+/// stretch counts (`Trace::folded`). The same fact `step_glyph` reads, so a step's glyph and its
+/// count agree (limit c). Waiting on the user is a fact of its own (`WAIT_ON_USER`), not a kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StepKind {
+    Searched,
+    Opened,
+    Read,
+    Looked,
+    Clicked,
+    Typed,
+    Chose,
+    Pressed,
+    Scrolled,
+    Requested,
+    Waited,
+    /// Looked for text on the page (`check`).
+    Checked,
+    Thought,
+    /// Looked over, closed, pinned, split or sorted tabs.
+    Tabs,
+    /// Handed a step, a file, a tab or a question to the user.
+    Handed,
+    /// An act ilo judged a download, whatever its tool.
+    Downloaded,
+    /// A tool no kind names, and a helper's line before its first step.
+    #[default]
+    Other,
+}
+
+impl StepKind {
+    pub fn of(did: &Did) -> StepKind {
+        if did.judged == Judged::Refusable(Why::Download) {
+            return StepKind::Downloaded;
+        }
+        match did.tool.as_str() {
+            SEARCHED => StepKind::Searched,
+            "open_tab" | "navigate" | "back" | "forward" => StepKind::Opened,
+            "read_page" | "snapshot" => StepKind::Read,
+            "screenshot" => StepKind::Looked,
+            "click" => StepKind::Clicked,
+            "type" => StepKind::Typed,
+            "select" => StepKind::Chose,
+            "press_key" => StepKind::Pressed,
+            "scroll" => StepKind::Scrolled,
+            "request" => StepKind::Requested,
+            "wait" => StepKind::Waited,
+            "check" => StepKind::Checked,
+            "thought" => StepKind::Thought,
+            "list_tabs" | "close_tab" | "remove_tab" | "pin_tab" | "unpin_tab" | "split_tabs"
+            | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
+                StepKind::Tabs
+            }
+            "hand_off" | "ask_for_tab" | "ask" | "upload" => StepKind::Handed,
+            _ => StepKind::Other,
+        }
+    }
+}
+
 /// Why a step failed, of the kinds a task's card says in a few words (#3702). Each is set where
 /// its failure is known, from the core's code or the app's own reason, so no wording decides it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1537,6 +1596,52 @@ mod note_tests {
         assert!(
             product_words(&plain, true, false, false, true),
             "waiting on the user"
+        );
+    }
+
+    /// A step's kind comes from its tool and what ilo judged it, whatever words came with it:
+    /// a search is a search, a click judged a download is a download, and the same tool with
+    /// another note or target is the same kind.
+    #[test]
+    fn a_steps_kind_is_its_tool_and_judgement_alone() {
+        let did = |tool: &str, judged: Judged, says: &str| Did {
+            tool: tool.into(),
+            target: says.into(),
+            says: says.into(),
+            judged,
+            ..Did::default()
+        };
+        assert_eq!(
+            StepKind::of(&did(SEARCHED, Judged::Not, "")),
+            StepKind::Searched
+        );
+        assert_eq!(
+            StepKind::of(&did("navigate", Judged::Page, "")),
+            StepKind::Opened
+        );
+        assert_eq!(
+            StepKind::of(&did("open_tab", Judged::Page, "")),
+            StepKind::Opened
+        );
+        assert_eq!(
+            StepKind::of(&did("pin_tab", Judged::Page, "")),
+            StepKind::Tabs
+        );
+        assert_eq!(
+            StepKind::of(&did("hand_off", Judged::Page, "")),
+            StepKind::Handed
+        );
+        let download = did("click", Judged::Refusable(Why::Download), "");
+        assert_eq!(StepKind::of(&download), StepKind::Downloaded);
+        let order = did("click", Judged::Refusable(Why::Order), "");
+        assert_eq!(StepKind::of(&order), StepKind::Clicked);
+        assert_eq!(
+            StepKind::of(&did("click", Judged::Page, "Checking the price")),
+            StepKind::of(&did("click", Judged::Page, "Opening the menu")),
+        );
+        assert_eq!(
+            StepKind::of(&did("made_up", Judged::Page, "")),
+            StepKind::Other
         );
     }
 

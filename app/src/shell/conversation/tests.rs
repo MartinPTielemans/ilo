@@ -71,6 +71,7 @@ pub(super) fn card() -> Card {
 /// A step of a trace, under way or done.
 fn step(key: usize, title: &str, running: bool) -> TraceStep {
     TraceStep {
+        kind: Default::default(),
         key,
         glyph: "icons/globe.svg",
         title: title.to_string().into(),

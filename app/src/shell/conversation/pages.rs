@@ -107,6 +107,7 @@ mod tests {
 
     fn step(key: usize, page: Option<(Option<u64>, &str, bool)>) -> TraceItem {
         TraceItem::Step(TraceStep {
+            kind: Default::default(),
             key,
             glyph: "icons/globe.svg",
             title: format!("step {key}").into(),
