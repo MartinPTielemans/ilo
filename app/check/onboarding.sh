@@ -442,13 +442,13 @@ pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding started$' || fail "favorites: the first launch didn't start the onboarding"
 walk_steps 3 "favorites: "
-# ↩ is the import's own button, which brings in the browser it picked.
+# The step reads the browser used last as it comes, and ↩ imports what its chips have on.
+await '^browser: import pick Chrome$' || fail "favorites: the import step didn't pick the made-up Chrome"
+await '^browser: import read Chrome: ' || fail "favorites: picking Chrome didn't read it"
 send key return
 expect '^browser: onboarding import button via return$' "favorites: ↩ at the import didn't press its button"
-expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
-expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
-expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
-  "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+await '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' ||
+  fail "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
 expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
   "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
 expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"

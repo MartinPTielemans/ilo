@@ -1094,12 +1094,38 @@ fn import_view(shell: &Entity<Shell>, cx: &VisualTestContext) -> Entity<crate::i
         .expect("the import view")
 }
 
-/// The import step is the import view Settings shows: an import begun stays on its step, one whose
-/// Spaces are in holds a moment on them and goes on while the rest runs, and its Done goes on. The
-/// view outlives the card, so an import under way goes on, and Help › Welcome shows the same one.
+/// What the card draws of the import view.
+fn brought(
+    view: &Entity<crate::import::ImportView>,
+    cx: &mut VisualTestContext,
+) -> crate::import::Bring {
+    view.update(cx, |view, _| view.card_state(0))
+}
+
+/// The chips the card draws, as picked or as an import brings them.
+fn chips(
+    view: &Entity<crate::import::ImportView>,
+    cx: &mut VisualTestContext,
+) -> Vec<crate::import::Chip> {
+    use crate::import::Bringing;
+    match brought(view, cx).state {
+        Bringing::Kinds(chips) | Bringing::Running { chips, .. } => chips,
+        state => panic!("no chips: {state:?}"),
+    }
+}
+
+/// An import from the card gets all the way: its Spaces in, then its history and addresses.
+fn brought_in(browser: &crate::import::tests::Browser, cx: &mut VisualTestContext) {
+    cx.update(|_, cx| browser.load(cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    cx.run_until_parked();
+}
+
+/// The import step's view outlives the card, so an import under way goes on, and Help › Welcome
+/// shows the same one.
 #[gpui::test]
-fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
+fn the_import_step_keeps_its_view(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import));
@@ -1108,26 +1134,6 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
         !shown.read_with(cx, |view, _| view.is_empty()),
         "it found the made-up Arc"
     );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "not before its Spaces are in"
-    );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Placed));
-    waited(cx, IMPORT_HOLD * 0.9);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it holds on the Spaces"
-    );
-    waited(cx, IMPORT_HOLD * 0.2);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Space),
-        "then goes on, offering no favorites"
-    );
-
     shell.update(cx, |shell, _| shell.onboarding = None);
     started(&shell, cx);
     assert_eq!(
@@ -1135,52 +1141,54 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
         shown.entity_id(),
         "played again, the same view"
     );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Done));
-    assert_eq!(step(&shell, cx), Some(Step::Space), "its Done goes on");
 }
 
 /// An import that has read brings in the favorites, the sites its history visited most, each
 /// ticked: the button adds those still ticked, Skip none, and there's no going back over the import.
+/// With none ticked, Next alone goes on.
 #[gpui::test]
 fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext) {
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
+    use crate::import::tests::Browser;
     let tab = |url: &str| crate::import::found::Tab {
         url: url.into(),
         name: String::new(),
     };
-    for leave in ["enter", "skip"] {
-        let (shell, cx, _) = first_window(cx);
-        started(&shell, cx);
-        let shown = import_view(&shell, cx);
+    for leave in ["enter", "skip", "none"] {
+        let browser = Rc::new(Browser::new(None));
+        let (shell, cx, view) = importing_from(browser.clone(), cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        brought_in(&browser, cx);
         let offered = vec![
             tab("https://example.com/"),
             tab("https://news.example.org/"),
         ];
-        shown.update(cx, |view, _| view.offer(offered));
-        shown.update(cx, |_, cx| {
-            cx.emit(ImportEvent::Started);
-            cx.emit(ImportEvent::Placed);
-        });
-        waited(cx, IMPORT_HOLD);
+        view.update(cx, |view, _| view.offer(offered));
+        waited(cx, 10.);
         settle(&shell, cx);
-        assert_eq!(step(&shell, cx), Some(Step::Favorites));
+        assert_eq!(step(&shell, cx), Some(Step::Favorites), "{leave}");
         assert!(
             placed("back", cx).is_none(),
             "no going back over the import"
         );
         assert!(placed("skip", cx).is_some(), "Skip, as some are ticked");
-        shown.update(cx, |view, cx| {
-            view.toggle_favorite("https://example.com/", cx)
-        });
+        assert!(placed("tile 1", cx).is_some() && placed("tile 2", cx).is_none());
+        click("tile 0", cx);
         let ticked = shell.read_with(cx, |shell, cx| shell.favorites_ticked(cx).len());
-        assert_eq!(ticked, 1);
+        assert_eq!(ticked, 1, "the click left one out");
         match leave {
             "skip" => click("skip", cx),
+            "none" => {
+                click("tile 1", cx);
+                assert!(placed("skip", cx).is_none(), "none ticked, no Skip");
+                assert!(read(cx).contains(&(Role::Button, "Next".into(), None)));
+                cx.simulate_keystrokes("enter");
+            }
             key => cx.simulate_keystrokes(key),
         }
         assert_eq!(step(&shell, cx), Some(Step::Space), "{leave}");
         if leave == "enter" {
-            let left = shown.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
+            let left = view.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
             assert_eq!(left, Some(0), "the button took the offer");
         }
     }
@@ -1568,13 +1576,13 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
 
     click("not-now", cx);
     settle(&shell, cx);
-    let import = import_view(&shell, cx).read_with(cx, |view, _| view.guide());
+    let (title, line) = Step::Import.message(card(&shell, cx, |o| o.os));
     assert_eq!(
         dialogs(&read(cx)),
-        [import.title.clone()],
+        [title.to_string()],
         "the step it went on to only"
     );
-    assert_eq!(dialog_line(cx), Some(Some(import.line)));
+    assert_eq!(dialog_line(cx), Some(Some(line.to_string())));
 
     on_to(&shell, cx, Step::Space);
     let said = read(cx);
@@ -1642,10 +1650,9 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     host.crash_reports.set(Some(false));
     cx.simulate_a11y_activation();
     started(&shell, cx);
-    let guide = import_view(&shell, cx).read_with(cx, |view, _| view.guide());
     assert_eq!(
         keyed(cx),
-        Some((Role::Button, guide.button.expect("the import's button"))),
+        Some((Role::Button, "Import".into())),
         "the import rests on its button"
     );
 
@@ -1950,50 +1957,46 @@ fn other_apps_agents_have_their_row_on_their_step(cx: &mut TestAppContext) {
     assert!(host.take().is_empty(), "Next sets nothing more");
 }
 
-/// Safari's files kept from the app need Full Disk Access as Safari is picked: the import step
-/// stays, showing the view's way to System Settings. Once it's given and the user is back, the
-/// view reads Safari and shows its choices, and Import there goes on (#1378, #1673).
+/// Safari's files kept from the app need Full Disk Access as Safari is read: the step stays,
+/// showing the way to System Settings, and Esc leaves it as it is. Once access is given and the
+/// user is back, the card reads Safari and shows its kinds, and Import brings them (#1378, #1673).
 #[cfg(unix)]
 #[gpui::test]
 fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, let_read, safari};
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
     let Some(home) = safari("onboarding-access") else {
         return;
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| view.pick(0, cx));
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess);
+    assert!(
+        read(cx).contains(&(Role::Button, "Open System Settings".into(), None)),
+        "the way to System Settings"
+    );
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it waits for the user"
-    );
-    assert_eq!(
-        view.read_with(cx, |view, _| view.primary()),
-        Some("Open System Settings")
-    );
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess, "and the wait");
 
-    // With access given, coming back reads Safari and shows its choices; Import goes on.
     let_read(&home);
     cx.update(|_, cx| browser.activate(cx));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
+    assert!(matches!(brought(&view, cx).state, Bringing::Kinds(_)));
     assert_eq!(step(&shell, cx), Some(Step::Import), "it waits for Import");
-    view.update(cx, |view, cx| view.import(cx));
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "imported, it went on");
+    assert!(view.read_with(cx, |view, _| view.running()).is_some());
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// The wait for Full Disk Access says Back in its corner, which goes back to the list, and Esc
-/// does nothing there; Skip, beside it, goes on without importing.
+/// Skip, beside the wait for Full Disk Access, goes on without importing.
 #[cfg(unix)]
 #[gpui::test]
 fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, safari};
     let Some(home) = safari("onboarding-access-skip") else {
@@ -2001,112 +2004,156 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser, cx);
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
-    let guide = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(
-        guide.title,
-        format!("Let {} read Safari.", env!("PRODUCT_NAME"))
-    );
-    assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
-    assert_eq!(guide.corner, crate::import::Corner::Back);
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        guide.title,
-        "Esc left the wait as it was"
-    );
-    click("back", cx);
-    cx.run_until_parked();
-    let list = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(list.corner, crate::import::Corner::Skip, "back at the list");
-    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
-
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess);
     click("skip", cx);
     assert_eq!(step(&shell, cx), Some(Step::Space), "Skip went on");
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A passwords file chosen at the import step keeps the step until its end, which offers to delete
-/// the file; Delete File deletes it, and Done goes on (#1379).
+/// The step reads the browser used last as it comes, and shows a chip a kind it has, each on, for
+/// a screen reader too, with Import, Skip and Back. Esc leaves it as it is (v9 §5).
 #[gpui::test]
-fn a_passwords_file_from_onboarding_is_offered_for_deletion(cx: &mut TestAppContext) {
-    use crate::import::Passwords;
-    use crate::import::tests::{Browser, PASSWORDS, home, write};
-    let browser = Rc::new(Browser::new(None));
-    let file = write(
-        home("onboarding-passwords").join("Chrome Passwords.csv"),
-        PASSWORDS,
-    );
-    *browser.passwords_file.borrow_mut() = Some(file.clone());
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| view.choose_passwords(cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "the step stays while it imports"
-    );
-    let passwords = Passwords::Imported {
-        imported: 1,
-        conflicted: 0,
-        skipped: 0,
-    };
-    cx.update(|_, cx| browser.imported(passwords, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "its end shows on the step"
-    );
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Done"));
-    assert!(file.exists(), "nothing is deleted unasked");
-    view.update(cx, |view, cx| view.delete_passwords_file(cx));
-    cx.run_until_parked();
-    assert!(!file.exists(), "Delete File deleted it");
-    view.update(cx, |view, cx| view.done(cx));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Space), "Done goes on");
-    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
-}
-
-/// A profile that hasn't opened keeps the step, named in its title, with Try Again as its button,
-/// which ↩ presses; Skip, beside it, skips the step.
-#[gpui::test]
-fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
-    use crate::import::Corner;
+fn the_import_step_reads_the_browser_used_last_and_shows_its_kinds(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    waited(cx, crate::import::STALL.as_secs_f32());
-    let guide = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(guide.title, "Work hasn't opened.");
-    assert_eq!(guide.button.as_deref(), Some("Try Again"));
-    assert_eq!(guide.corner, Corner::Skip);
+    let bring = brought(&view, cx);
+    assert_eq!(bring.picked, Some(0), "the browser used last");
+    let Bringing::Kinds(kinds) = bring.state else {
+        panic!("its kinds: {:?}", bring.state);
+    };
     assert!(
-        read(cx).contains(&(Role::Button, "Try Again".into(), None)),
-        "it's the step's button"
+        !kinds.is_empty() && kinds.iter().all(|chip| chip.on && chip.count > 0),
+        "{kinds:?}"
     );
-    cx.simulate_keystrokes("enter");
+    let os = card(&shell, cx, |o| o.os);
+    let (title, line) = Step::Import.message(os);
+    let said = read(cx);
+    assert_eq!(dialogs(&said), [title.to_string()], "read by its title");
+    assert_eq!(dialog_line(cx), Some(Some(line.to_string())));
+    for name in ["Import", "Skip", "Back"] {
+        assert!(
+            said.contains(&(Role::Button, name.into(), None)),
+            "{name}: {said:?}"
+        );
+    }
+    for chip in &kinds {
+        let named = (
+            Role::CheckBox,
+            chip.kind.label().to_string(),
+            Some(Toggled::True),
+        );
+        assert!(said.contains(&named), "{named:?}: {said:?}");
+    }
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "Here it comes.",
-        "↩ tried again"
-    );
-    waited(cx, crate::import::STALL.as_secs_f32());
-    click("skip", cx);
-    assert_eq!(step(&shell, cx), Some(Step::Space));
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
+    assert_eq!(chips(&view, cx), kinds, "and its kinds");
 }
 
-/// ↓ and ↑ move the list's pick, stopping at its ends, and the button names the browser picked.
+/// A chip clicked leaves its kind out; with none on, Import is dimmed and neither ↩ nor a click
+/// does anything.
 #[gpui::test]
-fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
+fn a_chip_leaves_its_kind_out_and_with_none_on_import_does_nothing(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let kinds = chips(&view, cx);
+    click("chip 0", cx);
+    assert!(!chips(&view, cx)[0].on, "the click left it out");
+    for chip in &kinds[1..] {
+        view.update(cx, |view, cx| view.toggle_kind(chip.kind, cx));
+    }
+    assert!(chips(&view, cx).iter().all(|chip| !chip.on));
+    cx.simulate_keystrokes("enter");
+    click("main", cx);
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.running()).is_none(),
+        "nothing to import"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    click("chip 0", cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.running()).is_some());
+}
+
+/// While an import runs neither Back nor Skip shows, and Cancel does until its Spaces are in. The
+/// card names each kind as it's written, says All here. once all are, and goes on after it.
+#[gpui::test]
+fn an_import_draws_each_kind_in_and_goes_on_once_all_are_here(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(matches!(brought(&view, cx).state, Bringing::Running { .. }));
+    assert!(placed("back", cx).is_none() && placed("skip", cx).is_none());
+    assert!(placed("cancel", cx).is_some(), "Cancel, while it can stop");
+    cx.update(|_, cx| browser.load(cx));
+    cx.run_until_parked();
+    assert!(placed("cancel", cx).is_none(), "Spaces in, it can't");
+    cx.update(|_, cx| browser.added(cx));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Import), "the kinds draw in");
+    let all_here = card(&shell, cx, |o| o.bring.all_here).expect("All here. is timed");
+    let now = cx.executor().now();
+    waited(
+        cx,
+        all_here.saturating_duration_since(now).as_secs_f32() + 0.01,
+    );
+    assert_eq!(dialog_line(cx), Some(Some("All here.".into())));
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it holds on All here."
+    );
+    waited(cx, t::BRING_ON);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Space),
+        "then goes on, no favorites"
+    );
+}
+
+/// Esc or Cancel stops an import before its Spaces are in, back at the browser's kinds as they
+/// were picked, keeping the step; a stalled one too, so a profile that never opens can't trap it.
+#[gpui::test]
+fn esc_or_cancel_stops_an_import_back_at_its_kinds(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    for how in ["escape", "cancel", "stalled"] {
+        let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+        click("chip 0", cx);
+        let picked = chips(&view, cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.running()).is_some());
+        match how {
+            "cancel" => click("cancel", cx),
+            "stalled" => {
+                waited(cx, crate::import::STALL.as_secs_f32());
+                assert!(placed("cancel", cx).is_some(), "stalled, it can stop");
+                cx.simulate_keystrokes("escape");
+            }
+            key => cx.simulate_keystrokes(key),
+        }
+        cx.run_until_parked();
+        assert_eq!(step(&shell, cx), Some(Step::Import), "{how}: kept the step");
+        assert_eq!(
+            brought(&view, cx).state,
+            Bringing::Kinds(picked),
+            "{how}: back at the kinds as picked"
+        );
+    }
+}
+
+/// The browsers found are a row, the one used last first; a click on another reads it, and it
+/// flies to the slot as the one before goes back.
+#[gpui::test]
+fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, chrome, firefox_dir};
     let home = chrome(
@@ -2116,63 +2163,41 @@ fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
     );
     firefox_dir(home.join(".mozilla/firefox"), 60 * 60);
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
-    let (_, cx, view) = importing_from(browser, cx);
-    let button = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide().button);
-    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
-    cx.simulate_keystrokes("down down");
-    assert_eq!(button(cx).as_deref(), Some("Import from Firefox"));
-    cx.simulate_keystrokes("up");
-    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
+    let (shell, cx, view) = importing_from(browser, cx);
+    let bring = brought(&view, cx);
+    let names: Vec<&str> = (bring.browsers.iter())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(names, ["Chrome", "Firefox"]);
+    assert_eq!(bring.picked, Some(0));
+    click("browser 1", cx);
+    let bring = brought(&view, cx);
+    assert_eq!(bring.picked, Some(1), "the click picked Firefox");
+    assert!(matches!(bring.state, Bringing::Kinds(_)), "and read it");
+    let flight = card(&shell, cx, |o| {
+        o.bring.flight.map(|(from, to, _)| (from, to))
+    });
+    assert_eq!(
+        flight,
+        Some((Some(0), 1)),
+        "Chrome goes back as Firefox flies"
+    );
     std::fs::remove_dir_all(home).unwrap();
 }
 
-/// ↩ at the list imports the browser picked at once, as its Import from … does: once read, the
-/// card goes on by itself while the rest comes in.
-#[gpui::test]
-fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
-    use crate::import::tests::Browser;
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
-    let browser = Rc::new(Browser::new(None));
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    // The step shows the Spaces arriving while Work's profile loads, and holds on them once in.
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it went on before its Spaces were in"
-    );
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "Here it comes."
-    );
-    cx.update(|_, cx| browser.load(cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it didn't hold on the Spaces"
-    );
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
-}
-
-/// At the import the keyboard rests on its view's button, and ↩ presses it once: the list's press
-/// imports the browser at once and leaves no button for a second ↩.
+/// At the import the keyboard rests on Import, and ↩ presses it once: the import runs, and leaves
+/// no button for a second ↩.
 #[gpui::test]
 fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
-    let words = guide(cx).button.expect("the list's button");
-    assert_eq!(keyed(cx), Some((Role::Button, words)));
+    assert_eq!(keyed(cx), Some((Role::Button, "Import".into())));
     press("enter", cx);
-    assert_eq!(guide(cx).title, "Here it comes.", "↩ imports it");
-    assert_eq!(
-        guide(cx).button,
-        None,
-        "with nothing left for ↩ to press again"
+    assert!(
+        view.read_with(cx, |view, _| view.running()).is_some(),
+        "↩ imports"
     );
+    assert!(placed("main", cx).is_none(), "nothing left for ↩ to press");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
@@ -2190,7 +2215,6 @@ enum Press {
 fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, chrome};
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
     let name = match press {
         Press::Return => "onboarding-tabs-return",
         Press::Click => "onboarding-tabs-click",
@@ -2215,8 +2239,9 @@ fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
         ["https://open.example.com/"],
         "the open tab wasn't placed"
     );
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
+    brought_in(&browser, cx);
+    waited(cx, 10.);
+    assert_ne!(step(&shell, cx), Some(Step::Import), "all here, it went on");
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -2230,72 +2255,20 @@ fn the_button_imports_open_tabs(cx: &mut TestAppContext) {
     imports_open_tabs_on(Press::Click, cx);
 }
 
-/// The import step says what the state its view shows is for, as its title and line and its
-/// button: the list "Bring your stuff" with Import from the browser used last and Skip, a browser's
-/// choices, "What comes from Arc.", with Import and Back. Esc leaves either as it is.
+/// Back leaves the import for the step before, and coming back the kinds are as they were picked.
 #[gpui::test]
-fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
-    use crate::import::Corner;
+fn back_leaves_the_import_keeping_its_picks(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
-    let list = guide(cx);
-    assert_eq!(list.title, "Bring your stuff");
-    assert_eq!(list.button.as_deref(), Some("Import from Arc"));
-    assert_eq!(list.corner, Corner::Skip);
-    let said = read(cx);
-    assert_eq!(dialogs(&said), [list.title.clone()], "read by its title");
-    assert_eq!(dialog_line(cx), Some(Some(list.line.clone())));
-    assert!(said.contains(&(Role::Button, "Import from Arc".into(), None)));
-    assert!(said.contains(&(Role::Button, "Skip".into(), None)));
-
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
+    click("chip 0", cx);
+    let picked = chips(&view, cx);
+    click("back", cx);
+    assert_eq!(step(&shell, cx), Some(Step::Account), "the step before");
+    settle(&shell, cx);
+    click("not-now", cx);
+    settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import));
-    let choose = guide(cx);
-    assert_eq!(choose.title, "What comes from Arc.");
-    assert_eq!(choose.line, "All of it, unless you turn something off.");
-    assert_eq!(choose.button.as_deref(), Some("Import"));
-    assert_eq!(choose.corner, Corner::Back);
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
-    let said = read(cx);
-    assert_eq!(dialogs(&said), [choose.title.clone()]);
-    assert_eq!(dialog_line(cx), Some(Some(choose.line.clone())));
-    assert!(said.contains(&(Role::Button, "Import".into(), None)));
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
-    assert_eq!(guide(cx).title, choose.title, "and the choices");
-}
-
-/// At the import, Back goes back in its view where its state has somewhere to go back to: from a
-/// browser's choices to the list, keeping the step; from the list, to the step before.
-#[gpui::test]
-fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
-    use crate::import::tests::Browser;
-    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let title = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide().title);
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        title(cx),
-        "What comes from Arc.",
-        "the browser's choices show"
-    );
-    click("back", cx);
-    cx.run_until_parked();
-    assert_eq!(
-        title(cx),
-        "Bring your stuff",
-        "Back in a browser's choices goes back to the list"
-    );
-    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
-    click("back", cx);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Account),
-        "Back at the list goes to the step before"
-    );
+    assert_eq!(chips(&view, cx), picked, "Back kept the picks");
 }
 
 /// The lines of the assistants' rows as the card draws them.

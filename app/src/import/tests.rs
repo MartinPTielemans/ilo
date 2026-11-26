@@ -888,7 +888,7 @@ impl Browser {
     }
 
     /// The core has added the history and addresses it was given.
-    fn added(&self, cx: &mut App) {
+    pub(crate) fn added(&self, cx: &mut App) {
         for (added, then) in self.adding.take() {
             then(added, cx);
         }

@@ -26,18 +26,17 @@ use gpui::{
 use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
-use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
+use crate::import::{ImportEvent, ImportView, Look};
 use crate::product::PRODUCT;
 use crate::settings_rows::{self, group, named_button, stop_switch};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::card as t;
-use crate::tokens::shell::onboarding::{
-    IMPORT_HOLD, SIGNAL, SWATCH, SWATCH_EDGE, SWATCH_PITCH, SWATCH_RING,
-};
+use crate::tokens::shell::onboarding::{SIGNAL, SWATCH, SWATCH_EDGE, SWATCH_PITCH, SWATCH_RING};
 use crate::transparency::{self, Transparency};
 use card::Inks;
 
+mod bring;
 mod card;
 mod resume;
 mod window;
@@ -221,6 +220,8 @@ pub(super) struct Importing {
     /// What the last import that finished said.
     pub(super) said: Option<gpui::SharedString>,
     _events: Subscription,
+    /// The card draws the view's state itself (bring.rs), so it draws again as the view changes.
+    _drawn: Subscription,
 }
 
 /// The account step's view, and what it tells the flow.
@@ -312,6 +313,8 @@ pub(super) struct Onboarding {
     pub(super) tidy: Option<Tidy>,
     /// The default browser's row: shown when the browser wasn't the default as the card began.
     default_row: bool,
+    /// Bring your stuff's motion: the flight, the strands as each kind is written, All here.
+    bring: bring::BringMotion,
 }
 
 /// Tidy tabs' bar: the build's times, each with the card's word for it, the profile's own as the
@@ -456,10 +459,12 @@ impl Shell {
                 let view = cx.new(|_| ImportView::new(self.browser.import_host(), false).guided());
                 let events =
                     cx.subscribe(&view, |shell, _, event, cx| shell.import_event(event, cx));
+                let drawn = cx.observe(&view, |_, _, cx| cx.notify());
                 self.importing = Some(Importing {
                     view,
                     said: None,
                     _events: events,
+                    _drawn: drawn,
                 });
             }
         }
@@ -563,6 +568,7 @@ impl Shell {
             help: None,
             tidy,
             default_row: !self.browser.is_default_browser(),
+            bring: Default::default(),
         };
         let fraction = onboarding.fraction(first);
         onboarding.progress = (fraction, fraction, now);
@@ -836,10 +842,12 @@ impl Shell {
         match (onboarding.step, onboarding.picked) {
             // The import's button does what its view's state is for; the view says when it has
             // read what it brings, which goes on.
+            // Import brings the kinds on; with none on it's dimmed, and ↩ does nothing (v9 §5).
             (Step::Import, _) => {
                 log!("browser: onboarding import button via {how}");
-                if let Some(importing) = self.importing.as_ref() {
-                    importing.view.update(cx, |view, cx| view.press(cx));
+                let ready = (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
+                if ready {
+                    self.bring_import(cx);
                 }
                 return cx.notify();
             }
@@ -972,19 +980,10 @@ impl Shell {
             (onboarding.steps).insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
         match event {
-            ImportEvent::Placed if on_it => {
-                let hold = Duration::from_secs_f32(IMPORT_HOLD);
-                cx.spawn(async move |shell, cx| {
-                    cx.background_executor().timer(hold).await;
-                    shell
-                        .update(cx, |shell, cx| {
-                            if shell.onboarding_on(Step::Import) {
-                                shell.onboarding_next(cx);
-                            }
-                        })
-                        .ok();
-                })
-                .detach();
+            // Its kinds draw in as each is written, and once all are, the card goes on (bring.rs).
+            ImportEvent::Finished(_) if on_it => {
+                self.bring_heard(cx);
+                cx.notify();
             }
             ImportEvent::Done if on_it => self.onboarding_next(cx),
             ImportEvent::Skipped if on_it => self.onboarding_next(cx),
@@ -1140,12 +1139,6 @@ impl Shell {
             }
             (Step::Tidy, "left" | "down") => self.onboarding_tidy_by(-1, cx),
             (Step::Tidy, "right" | "up") => self.onboarding_tidy_by(1, cx),
-            (Step::Import, "up" | "down") => {
-                let by = if key.key == "up" { -1 } else { 1 };
-                if let Some(importing) = self.importing.as_ref() {
-                    importing.view.update(cx, |view, cx| view.move_pick(by, cx));
-                }
-            }
             (_, "tab") => match modifiers.shift {
                 true => window.focus_prev(cx),
                 false => window.focus_next(cx),
@@ -1204,9 +1197,7 @@ impl Shell {
     /// someone is signed in, the import in a state with one, and every other step.
     fn onboarding_has_button(&self, step: Step, cx: &gpui::App) -> bool {
         match step {
-            Step::Import => (self.import_guide(cx))
-                .and_then(|guide| guide.button)
-                .is_some_and(|words| !words.is_empty()),
+            Step::Import => (self.bring_view()).is_some_and(|view| view.read(cx).bring_offers()),
             Step::Account => self.account_signed_out(cx),
             Step::Assistant => self.assistants_signed_in(cx),
             _ => true,
@@ -1329,7 +1320,9 @@ impl Shell {
         let progressing =
             !still && onboarding.secs_since(onboarding.progress.2) < t::PROGRESS_MOTION;
         let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
-        onboarding.drawing = !came || entry.is_some() || ending.is_some() || sliding || progressing;
+        let bringing = onboarding.bring.moving;
+        onboarding.drawing =
+            !came || entry.is_some() || ending.is_some() || sliding || progressing || bringing;
         if onboarding.drawing {
             window.request_animation_frame();
         }
@@ -1461,6 +1454,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        // Bring your stuff draws what the import view has, over the whole card.
+        let bring = matches!(step, Step::Import | Step::Favorites)
+            .then(|| self.bring_now(window, cx))
+            .flatten();
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div().id("onboarding-step");
         };
@@ -1469,17 +1466,23 @@ impl Shell {
         let progress = onboarding.progress_now(still);
         let first = onboarding.steps.first() == Some(&step);
         let focus = onboarding.focus.clone();
-        let (title, line) = match (step, self.import_guide(cx)) {
-            // The import's words follow the state its view shows.
-            (Step::Import, Some(guide)) => (guide.title.into(), guide.line.into()),
+        let (title, line) = match (step, self.bring_words(bring.as_ref())) {
+            // While an import runs its line names the kind being written, then All here.
+            (Step::Import, Some(words)) => (step.message(os).0, words),
             _ => step.message(os),
         };
+        let whole = matches!(step, Step::Import | Step::Favorites);
         let said = (title.clone(), line.clone());
         let body = match step {
             Step::Account => self.welcome(inks, entering, cx),
             Step::Done => self.done(inks, first, cx),
             _ => {
-                let (controls, trail, skip, back) = self.step_parts(step, inks, window, cx);
+                let (controls, trail, skip, back) =
+                    self.step_parts(step, bring.as_ref(), inks, window, cx);
+                let (controls, over) = match whole {
+                    true => (div().into_any_element(), Some(controls)),
+                    false => (controls, None),
+                };
                 let span = card::foot_span(step);
                 let back = back.filter(|_| !first).map(|back| back.into_any_element());
                 let mut trail_parts = Vec::new();
@@ -1504,6 +1507,7 @@ impl Shell {
                             .text_color(inks.text(1.))
                             .child(controls),
                     )
+                    .children(over)
                     .child(card::foot(span, back, Some(progress), trail_parts, inks))
             }
         };
@@ -1528,6 +1532,7 @@ impl Shell {
     fn step_parts(
         &mut self,
         step: Step,
+        bring: Option<&crate::import::Bring>,
         inks: Inks,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1537,14 +1542,23 @@ impl Shell {
         Option<AnyElement>,
         Option<gpui::Stateful<gpui::Div>>,
     ) {
-        let guide = (step == Step::Import)
-            .then(|| self.import_guide(cx))
-            .flatten();
-        let corner = guide.as_ref().map_or(Corner::Skip, |guide| guide.corner);
+        let _ = window;
+        let running = matches!(
+            bring.map(|bring| &bring.state),
+            Some(crate::import::Bringing::Running { .. })
+        );
+        let stoppable = matches!(
+            bring.map(|bring| &bring.state),
+            Some(crate::import::Bringing::Running {
+                stoppable: true,
+                done: false,
+                ..
+            })
+        );
         let controls = match step {
             Step::Assistant => self.assistant_rows(step, inks, cx).into_any_element(),
-            Step::Import => self.import_choice(inks, cx),
-            Step::Favorites => self.favorite_tiles(inks, window, cx),
+            Step::Import => self.bring_controls(bring, inks, cx),
+            Step::Favorites => self.bring_tiles(bring, inks, cx),
             Step::Space => self.space_controls(inks, cx).into_any_element(),
             Step::Tidy => div()
                 .flex()
@@ -1563,14 +1577,30 @@ impl Shell {
         let ticked = self.favorites_ticked(cx).len();
         let words: Option<SharedString> = match step {
             Step::Assistant if !signed_in => None,
-            Step::Import => (guide.as_ref())
-                .and_then(|guide| guide.button.clone())
-                .filter(|words| !words.is_empty())
-                .map(Into::into),
+            Step::Import if running => None,
+            Step::Import => Some("Import".into()),
             Step::Favorites if ticked > 0 => Some(format!("Add {ticked}").into()),
             _ => Some("Next".into()),
         };
-        let main = words.map(|words| self.main(step, words, inks, cx).into_any_element());
+        let ready = (step != Step::Import)
+            || (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
+        let main = words.map(|words| {
+            (self.main(step, words, inks, cx))
+                .when(!ready, |main| main.opacity(t::BRING_OFF))
+                .into_any_element()
+        });
+        // While an import can still leave everything out, a quiet Cancel stands for the foot; Esc
+        // is the same (v9 §5).
+        let main = main.or_else(|| {
+            (step == Step::Import && stoppable).then(|| {
+                card::quiet("onboarding-cancel", "Cancel".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Cancel"))
+                    .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_escape(cx)))
+                    .relative()
+                    .children(self.place(step, "cancel"))
+                    .into_any_element()
+            })
+        });
         // Neither assistant is the foot's quiet button, not a third row (v9 §4).
         let main = main.or_else(|| {
             (step == Step::Assistant).then(|| {
@@ -1592,7 +1622,7 @@ impl Shell {
             })
         });
         let skip_label = match step {
-            Step::Import if corner != Corner::None => Some("Skip"),
+            Step::Import if !running => Some("Skip"),
             Step::Favorites if ticked > 0 => Some("Skip"),
             _ => None,
         };
@@ -1611,11 +1641,11 @@ impl Shell {
                 .children(frame)
                 .into_any_element()
         });
-        // The import's Back goes back in its view where it has somewhere to go, and none shows
-        // while it runs; the favorites come after the import has written.
-        let back = match (step, corner) {
-            (Step::Favorites, _) | (Step::Import, Corner::None) => None,
-            _ => Some(self.back(step, corner, inks, cx)),
+        // None shows while the import runs; the favorites come after the import has written.
+        let back = match step {
+            Step::Favorites => None,
+            Step::Import if running => None,
+            _ => Some(self.back(step, inks, cx)),
         };
         (controls, main, skip, back)
     }
@@ -1632,30 +1662,13 @@ impl Shell {
     }
 
     /// The foot's Back.
-    fn back(
-        &self,
-        step: Step,
-        corner: Corner,
-        inks: Inks,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    fn back(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         card::bare("onboarding-back", "Back".into(), inks)
             .when(self.a11y, |control| named_button(control, "Back"))
             .when_some(self.step_stop(step, |o| &o.back_stop), |control, stop| {
                 control.track_focus(&stop).focus_from_keys_only()
             })
-            .on_click(cx.listener(move |shell, _, _, cx| match corner {
-                Corner::Back if step == Step::Import => {
-                    let left = (shell.importing.as_ref()).is_some_and(|importing| {
-                        importing.view.update(cx, |view, cx| view.escape(cx))
-                    });
-                    match left {
-                        true => cx.notify(),
-                        false => shell.onboarding_back(cx),
-                    }
-                }
-                _ => shell.onboarding_back(cx),
-            }))
+            .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_back(cx)))
             .relative()
             .children(self.place(step, "back"))
     }
@@ -1793,7 +1806,7 @@ impl Shell {
         let main = self
             .main(Step::Done, "Start Browsing".into(), inks, cx)
             .into_any_element();
-        let back = (!first).then(|| self.back(Step::Done, Corner::Skip, inks, cx));
+        let back = (!first).then(|| self.back(Step::Done, inks, cx));
         div()
             .size_full()
             .child(
@@ -2019,52 +2032,6 @@ impl Shell {
             .children(rows)
     }
 
-    /// The import view in its state, as wide as the column, scrolling there above the foot.
-    fn import_choice(&self, inks: Inks, cx: &mut Context<Self>) -> AnyElement {
-        let Some(view) = self
-            .importing
-            .as_ref()
-            .map(|importing| importing.view.clone())
-        else {
-            return div().into_any_element();
-        };
-        let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
-        view.update(cx, |view, cx| view.set_look(look, cx));
-        choice(gpui::AnyView::from(view)).into_any_element()
-    }
-
-    /// The favorites offered, as the import view's tiles, a click ticking or unticking one.
-    fn favorite_tiles(
-        &self,
-        inks: Inks,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
-        let Some(view) = self
-            .importing
-            .as_ref()
-            .map(|importing| importing.view.clone())
-        else {
-            return div().into_any_element();
-        };
-        let tiles = view.update(cx, |view, cx| {
-            view.set_look(look, cx);
-            view.favorite_tiles(window, cx)
-        });
-        match tiles {
-            Some(tiles) => choice(tiles).into_any_element(),
-            None => div().into_any_element(),
-        }
-    }
-
-    /// What the import view shows the first launch for its state, while the card shows.
-    fn import_guide(&self, cx: &gpui::App) -> Option<Guide> {
-        self.onboarding.as_ref()?;
-        let importing = self.importing.as_ref()?;
-        Some(importing.view.read(cx).guide())
-    }
-
     /// Your first Space until the theme editor's parts come (#4274): the theme picker's swatches,
     /// and where the window has glass, Settings' transparency picker under them.
     fn space_controls(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
@@ -2112,19 +2079,6 @@ impl Shell {
         );
         Some(frame.absolute().inset_0())
     }
-}
-
-/// The step's own choices, such as the import's view in its states or the favorites' tiles: as
-/// wide as the column, scrolling in it above the foot when taller than the room there.
-fn choice(view: impl IntoElement) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id("onboarding-choice")
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .overflow_y_scroll()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(view)
 }
 
 /// Keeps where the step's button is drawn once the step has `settled`, for a test to click it.
