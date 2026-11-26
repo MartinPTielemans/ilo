@@ -494,6 +494,10 @@ struct Slot {
   std::unique_ptr<PaneKeyboard> keyboard;
   raw_ptr<aura::Window> page = nullptr;
   raw_ptr<aura::Window> devtools = nullptr;
+  // The page and DevTools whose windows the edge strips last answered for, so a layout that only
+  // moves them walks none of their windows again.
+  raw_ptr<aura::Window> strips_page = nullptr;
+  raw_ptr<aura::Window> strips_devtools = nullptr;
   // From each edge of the window's content to the slot's, kept as the window resizes.
   gfx::Insets insets;
   // With DevTools docked, where the page goes in the slot, from its top-left.
@@ -737,6 +741,8 @@ class WindowViews : public views::WidgetObserver,
     Detach(holder, slot.devtools, staying);
     slot.page = nullptr;
     slot.devtools = nullptr;
+    slot.strips_page = nullptr;
+    slot.strips_devtools = nullptr;
     if (slot.widget) {
       slot.widget->Hide();
     }
@@ -829,9 +835,14 @@ class WindowViews : public views::WidgetObserver,
     HWND hwnd = views::HWNDForWidget(slot.widget.get());
     SetWindowPos(hwnd, HWND_TOP, pixels.x(), pixels.y(), pixels.width(), pixels.height(),
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    // Here, as the page content made its window for is in the slot by now; its later windows join
-    // as they appear.
-    edge_strips_.Watch(hwnd);
+    // Here, as the page content made its window for is in the slot by now, once for each page the
+    // slot takes: a window content moves in from another slot tells no one, but one it makes joins
+    // as it appears, and one already answered for keeps its answer wherever it goes.
+    if (slot.strips_page != slot.page || slot.strips_devtools != slot.devtools) {
+      edge_strips_.Watch(hwnd);
+      slot.strips_page = slot.page;
+      slot.strips_devtools = slot.devtools;
+    }
     // The pages fill the slot in its own DIPs, which Windows' Text size makes fewer than the app's
     // points: in those the page ran past the window by the text scale (#3621).
     const float to_page = scale / PageScale(slot);
@@ -948,6 +959,12 @@ class WindowViews : public views::WidgetObserver,
       }
       if (slot.devtools == window) {
         slot.devtools = nullptr;
+      }
+      if (slot.strips_page == window) {
+        slot.strips_page = nullptr;
+      }
+      if (slot.strips_devtools == window) {
+        slot.strips_devtools = nullptr;
       }
     };
     std::ranges::for_each(panes_, forget);
