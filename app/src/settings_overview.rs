@@ -30,6 +30,9 @@ pub const MAKE_DEFAULT: &str = "Make Default";
 /// computer alone, never synced.
 pub const PUT_AWAY_FILE: &str = "Loose ends put away";
 
+/// The Sync tile's line while no account is signed in (table OV4).
+pub const NOT_SIGNED_IN: &str = "Not signed in";
+
 /// The notice's name while the product isn't the default (the drawing's).
 pub fn not_default() -> String {
     format!("{PRODUCT} isn't your default browser")
@@ -172,6 +175,8 @@ pub struct Facts {
     /// The logins the passwords' profile holds, once Settings has read them, and its name.
     pub logins: Option<(usize, SharedString)>,
     pub signed_in: bool,
+    /// Whether no account is signed in: signed out, or its sign-in window still open.
+    pub signed_out: bool,
     /// The account's devices, once Settings has read them.
     pub devices: Option<usize>,
 }
@@ -261,7 +266,7 @@ pub fn tiles(facts: &Facts) -> [Tile; 6] {
             "Sync",
             Section::SyncImport.glyph(),
             [
-                line(facts.signed_in, "Signed in"),
+                line(facts.signed_in, "Signed in").or(line(facts.signed_out, NOT_SIGNED_IN)),
                 (facts.devices.filter(|_| facts.signed_in)).map(|devices| {
                     format!(
                         "{}, end-to-end encrypted",

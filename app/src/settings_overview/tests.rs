@@ -77,6 +77,7 @@ fn known() -> Facts {
         saved_and_filled: true,
         logins: Some((1, "Personal".into())),
         signed_in: true,
+        signed_out: false,
         devices: Some(2),
     }
 }
@@ -261,4 +262,31 @@ fn a_tiles_line_is_never_cut(cx: &mut TestAppContext) {
         grew,
         "no row's lines needed more than the drawn height at this width"
     );
+}
+
+/// Signed out, the Sync tile says so in its one line, and signed in it says that instead, with
+/// its devices; an assistive app reads the tile's line either way.
+#[gpui::test]
+fn the_sync_tile_says_whether_an_account_is_signed_in(cx: &mut TestAppContext) {
+    let out = Facts {
+        signed_out: true,
+        ..Facts::default()
+    };
+    let sync = |facts: &Facts| {
+        let tiles = tiles(facts);
+        let tile = tiles
+            .iter()
+            .find(|tile| tile.section == Section::SyncImport);
+        tile.unwrap().lines.clone()
+    };
+    assert_eq!(sync(&out), [NOT_SIGNED_IN]);
+    assert_eq!(sync(&known())[0], "Signed in");
+    for facts in [out, known()] {
+        let lines = sync(&facts);
+        let (_, cx) = cx.add_window_view(|_, _| Grid(facts));
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let said = (told(cx).into_iter()).find(|(name, ..)| name == "Sync");
+        assert_eq!(said.and_then(|(_, said, ..)| said), Some(lines.join(", ")));
+    }
 }
