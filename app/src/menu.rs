@@ -467,6 +467,8 @@ fn panel_width(
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
+    let icons = items.iter().any(|&at| entries[at].icon.is_some());
+    let lead = lead + if icons { ICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
     let out = items.iter().any(|&at| entries[at].out);
     let chevron = chevron + if out { GAP + OUT_ARROW } else { 0. };
@@ -2050,6 +2052,13 @@ impl ContextMenu {
                 .text_color(secondary)
                 .into_any_element(),
         });
+        let icon = entry.icon.map(|icon| {
+            svg()
+                .path(icon)
+                .size(px(ICON))
+                .flex_none()
+                .text_color(secondary)
+        });
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(
                 svg()
@@ -2121,6 +2130,7 @@ impl ContextMenu {
             .children(check)
             .children(swatch)
             .children(favicon)
+            .children(icon)
             .child(
                 div()
                     .flex_1()

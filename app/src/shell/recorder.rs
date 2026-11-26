@@ -70,8 +70,9 @@ pub(crate) struct Recorder {
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// Whether the resting bars are over a private window, as the host reads it of the front one.
     pub(super) private_bar: Rc<std::cell::Cell<bool>>,
-    /// Whether it can wall a task in with its files, as `files_available` answers.
-    pub(super) files: std::cell::Cell<bool>,
+    /// Whether it can wall a task in with its files, as `files_available` answers, here and to
+    /// its resting bars.
+    pub(super) files: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -1909,6 +1910,7 @@ impl Browser for Recorder {
             asked: self.resting.clone(),
             unlearned: self.unlearned.clone(),
             private: self.private_bar.clone(),
+            files: self.files.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }

@@ -62,7 +62,9 @@ use crate::tokens::command_bar::LIST_X;
 use crate::tokens::command_bar::ROW_HEIGHT;
 pub use crate::tokens::command_bar::WIDTH;
 const ROWS_SHOWN: usize = 5;
+use crate::agents::files::{self as task_files, Never, Picked, words as files_words};
 use crate::agents::tier::Tier;
+use crate::agents::wall::Granted;
 use crate::product;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 use crate::tokens::command_bar::FIELD_ABOVE;
@@ -115,7 +117,7 @@ use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
     CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
-    FOOT_TEXT,
+    FOOT_TEXT, PLUS,
 };
 use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
 use crate::tokens::text;
@@ -421,6 +423,16 @@ fn heading(title: SharedString) -> MenuEntry {
     }
 }
 
+/// The folder the system's panel gave, its links resolved, granted for a thread, unless ilo never
+/// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
+/// and the start checks it again.
+fn granted(picked: &std::path::Path) -> Option<Granted> {
+    let never = Never::here(None);
+    let root = task_files::resolved(picked);
+    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
+    Granted::picked(root).ok()
+}
+
 /// A pick on the composer's model menu.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModelPick {
@@ -454,6 +466,10 @@ fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
 const EFFORT: &str = "composer-effort";
+/// The plus's, and the files' and the folder's it added.
+const PLUS_ID: &str = "composer-plus";
+const FILES: &str = "composer-files";
+const FOLDER: &str = "composer-folder";
 /// What the effort trigger reads before a pick, and the menu's row that leaves the level to the
 /// program (words table, D6).
 pub const EFFORT_NAME: &str = "Effort";
@@ -492,6 +508,9 @@ struct Ask {
     /// Settings' until then; None for the program's own, which ilo then passes nothing for. A
     /// pick holds for this thread only.
     effort: Option<&'static str>,
+    /// The files and the folder the user added on the plus, from the system's panel alone, for
+    /// this thread's start alone: they go as the level does.
+    picked: Picked,
 }
 
 /// What the composer opens with: the level and model it last started a thread with, by the
@@ -803,9 +822,10 @@ pub trait Host {
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page`, from the Space the bar shows
-    /// over, and hides the bar by folding it into the ask's slot, which its card takes, or where
-    /// the window shows no slot, as `hide` does.
+    /// Starts `asked` as a task on the agent `agent`, with `page` and the files and folder the
+    /// user added on the plus, from the Space the bar shows over, and hides the bar by folding it
+    /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
+    /// does.
     fn run_task(
         &self,
         agent: &str,
@@ -814,6 +834,7 @@ pub trait Host {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     );
     /// As `run_task`, from a resting bar's composer, in the Space it rests in, which shows no
@@ -825,8 +846,14 @@ pub trait Host {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     );
+    /// Whether this system can wall a thread in with the user's files, which the composer's plus
+    /// offers File or Folder by: with nothing to add, the plus is disabled (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// The level and model the composer last started a thread with in the profile of the Space
     /// the bar shows over, Full access never, and Settings' effort: what its choices open at.
     /// Only the composer's own starts and Settings' `A new thread starts with` set it; no agent
@@ -980,7 +1007,11 @@ pub struct CommandBar {
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
     ask: Option<Ask>,
-    /// Where the composer's level and model triggers were last drawn, which their menus hang from.
+    /// The composer's plus, the add menu's (`crate::plus`).
+    plus: crate::plus::Plus,
+    /// Where the composer's triggers were last drawn, which their menus hang from.
+    files_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    folder_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     level_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where the effort trigger was last drawn, for an assistant whose program takes an effort.
@@ -1233,6 +1264,9 @@ fn new_bar(
             opened_drawn: false,
             task_agents: None,
             ask: None,
+            plus: crate::plus::Plus::default(),
+            files_at: Rc::default(),
+            folder_at: Rc::default(),
             level_at: Rc::default(),
             model_at: Rc::default(),
             effort_at: Rc::default(),
@@ -2466,11 +2500,13 @@ impl CommandBar {
             self.host.page_favicon(url);
         }
         let last = self.host.composer_last(cx);
+        let picked = Picked::default();
         self.ask = Some(Ask {
             page,
             tier: last.tier,
             model: last.model,
             effort: last.effort,
+            picked,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2548,7 +2584,8 @@ impl CommandBar {
     /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier, effort) = (ask.page.clone(), ask.tier, ask.effort);
+        let (page, tier, effort, files) =
+            (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
         let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
             return;
@@ -2571,7 +2608,7 @@ impl CommandBar {
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, cx);
+                .run_task(&id, &asked, page, tier, model, effort, files, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -2579,7 +2616,7 @@ impl CommandBar {
             .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
-            .run_task_at_rest(&id, &asked, tier, model, effort, cx);
+            .run_task_at_rest(&id, &asked, tier, model, effort, files, cx);
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -2628,6 +2665,111 @@ impl CommandBar {
             Some(level) => effort_name(level).into(),
             None => EFFORT_NAME.into(),
         })
+    }
+
+    /// The plus's rows in the composer, each a `crate::plus::Row`: File or Folder where this
+    /// system can wall a thread in with the user's files, whose panel's picks come to `added`.
+    /// With none the plus is disabled.
+    fn add_rows(&self, cx: &mut Context<Self>) -> Vec<crate::plus::Row> {
+        let mut rows = Vec::new();
+        if self.host.files_available(cx) {
+            let bar = cx.entity().downgrade();
+            rows.push(crate::plus::file_or_folder(move |paths, cx| {
+                bar.update(cx, |bar, cx| bar.added(paths, cx)).ok();
+            }));
+        }
+        rows
+    }
+
+    /// Opens the plus's menu, as a click on the plus does: only while the composer is open,
+    /// where the plus is drawn.
+    #[cfg(test)]
+    pub fn open_add_menu_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ask.is_none() {
+            return;
+        }
+        let rows = self.add_rows(cx);
+        let view = cx.entity_id();
+        self.plus.open(rows, view, CHOICES_MENU_DROP, window, cx);
+    }
+
+    /// What the user picked in the system's panel: each file added once, and a folder granted
+    /// for this thread, the latest in place of one before, unless ilo never gives it. The bar
+    /// takes the keyboard back from the panel either way.
+    fn added(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        if self.surface == Surface::Window && self.ask.is_some() {
+            self.host.take_keyboard();
+        }
+        let Some(ask) = &mut self.ask else { return };
+        for path in paths {
+            if path.is_dir() {
+                match granted(&path) {
+                    Some(folder) => {
+                        ask.picked.folder = Some(folder);
+                        log!("browser: composer folder granted");
+                    }
+                    // Nothing granted: the start sees no folder. No name reaches a log (#3656).
+                    None => log!("browser: composer folder refused"),
+                }
+            } else if path.is_file() && !ask.picked.files.contains(&path) {
+                ask.picked.files.push(path);
+            }
+        }
+        // A count, never a name.
+        log!("browser: composer files {}", ask.picked.files.len());
+        cx.notify();
+    }
+
+    /// The added files' trigger's menu: each file by its name, checked, as a pick takes it out.
+    fn files_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ask) = &self.ask else { return };
+        let files = ask.picked.files.clone();
+        let items = (files.iter())
+            .map(|file| MenuEntry {
+                checked: true,
+                ..MenuEntry::named(task_files::shown_name(file), true)
+            })
+            .collect();
+        let bar = cx.entity().downgrade();
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let file = closed.chosen().and_then(|at| files.get(at).cloned());
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    let (Some(file), Some(ask)) = (file, &mut bar.ask) else {
+                        return;
+                    };
+                    ask.picked.files.retain(|each| *each != file);
+                    log!("browser: composer files {}", ask.picked.files.len());
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(FILES, items, chosen, window, cx);
+    }
+
+    /// The granted folder's trigger's menu: its one act, Revoke (X3), after which the thread
+    /// starts with no folder.
+    fn folder_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !(self.ask.as_ref()).is_some_and(|ask| ask.picked.folder.is_some()) {
+            return;
+        }
+        let items = vec![MenuEntry::new(files_words::REVOKE, true)];
+        let bar = cx.entity().downgrade();
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let revoked = closed.chosen() == Some(0);
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    if let (true, Some(ask)) = (revoked, &mut bar.ask) {
+                        ask.picked.folder = None;
+                        log!("browser: composer folder revoked");
+                    }
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(FOLDER, items, chosen, window, cx);
     }
 
     /// The level trigger's menu, under it: `level_choices`, Full access among them. A pick holds
@@ -2707,6 +2849,8 @@ impl CommandBar {
         cx: &mut Context<Self>,
     ) {
         let trigger = match id {
+            FILES => self.files_at.get(),
+            FOLDER => self.folder_at.get(),
             LEVEL => self.level_at.get(),
             EFFORT => self.effort_at.get(),
             _ => self.model_at.get(),
@@ -3860,12 +4004,51 @@ impl CommandBar {
         )
     }
 
-    /// The composer's row of choices (choices.rs): the level, the model and, for an assistant whose
-    /// program takes one, the effort, each opening its menu under it, then Start, which starts the
-    /// thread as ↩ does and does nothing with no words.
+    /// The composer's row of choices (choices.rs): the plus, disabled where it adds nothing, what
+    /// it added, the level, the model and, for an assistant whose program takes one, the effort,
+    /// each opening its menu under it, then Start, which starts the thread as ↩ does and does
+    /// nothing with no words.
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let palette = palette::current(cx);
         let tier = self.ask.as_ref().map(|ask| ask.tier).unwrap_or_default();
+        // The plus, square as a trigger is tall, opens the add menu: no chevron, and disabled in
+        // its place with nothing to add.
+        let (dim, plate) = (palette.on_overlay(DIM), palette.plate(CHIP));
+        let look = choices::plus_look(dim, plate, PLUS, CHOICES_MENU_DROP, self.a11y);
+        let rows = self.add_rows(cx);
+        let plus = self.plus.draw(PLUS_ID, rows, &look, cx.entity_id());
+        let picked = self.ask.as_ref().map(|ask| ask.picked.clone());
+        let picked = picked.unwrap_or_default();
+        let mut added = Vec::new();
+        if !picked.files.is_empty() {
+            added.push(choices::Added {
+                said: files_words::files(picked.files.len()).into(),
+                trigger: choices::Trigger {
+                    id: FILES,
+                    at: self.files_at.clone(),
+                    click: Some(Box::new(
+                        cx.listener(|bar, _, window, cx| bar.files_menu(window, cx)),
+                    )),
+                },
+                gives_way: false,
+            });
+        }
+        if let Some(folder) = &picked.folder {
+            added.push(choices::Added {
+                // Its name shows here alone, never in a log, a notification or an assistant's
+                // answer.
+                said: task_files::shown_name(folder.root()).into(),
+                trigger: choices::Trigger {
+                    id: FOLDER,
+                    at: self.folder_at.clone(),
+                    click: Some(Box::new(
+                        cx.listener(|bar, _, window, cx| bar.folder_menu(window, cx)),
+                    )),
+                },
+                // A long name gives way first, the row's other choices kept whole.
+                gives_way: true,
+            });
+        }
         let (mark, said) = match self.composer_assistant() {
             Some(agent) => {
                 let model = self.composer_model().unwrap_or_default();
@@ -3910,6 +4093,8 @@ impl CommandBar {
                 on_primary: palette.on_fill(palette.ink).ink.into(),
             },
             a11y: self.a11y,
+            plus: Some(plus),
+            added,
             level: (tier, level),
             model: Some((mark, said.into(), model)),
             effort,

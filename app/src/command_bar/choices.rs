@@ -100,6 +100,11 @@ pub struct Row {
     pub form: Form,
     pub inks: Inks,
     pub a11y: bool,
+    /// The plus before the level (`crate::plus`), disabled in its place where it adds nothing;
+    /// none where a composer draws none.
+    pub plus: Option<Stateful<Div>>,
+    /// What the plus added, between it and the level.
+    pub added: Vec<Added>,
     pub level: (Tier, Trigger),
     /// The model's words, with the assistant's mark where the form leads with it; none where the
     /// app doesn't know the model, an outside agent's session.
@@ -116,13 +121,39 @@ pub struct Row {
     pub round_at: Option<Box<dyn Fn(Bounds<Pixels>) + 'static>>,
 }
 
-/// The row: the level, what the thread holds, a spring, the model, the effort, then the round
-/// button.
+/// What the plus added, as a trigger: its words, which open its menu. One that `gives_way`
+/// shrinks first, its words cut short, where the row hasn't room.
+pub struct Added {
+    pub said: SharedString,
+    pub trigger: Trigger,
+    pub gives_way: bool,
+}
+
+/// How a composer's plus is drawn among its row's triggers: square as a trigger is tall, its
+/// glyph `glyph` wide in the row's dim ink, on its `plate` while its menu is open, and its menu
+/// `drop` under it.
+pub fn plus_look(dim: Hsla, plate: Hsla, glyph: f32, drop: f32, a11y: bool) -> crate::plus::Look {
+    crate::plus::Look {
+        side: TRIGGER_HEIGHT,
+        radius: CHIP_RADIUS,
+        glyph,
+        ink: dim,
+        open: plate,
+        off: crate::tokens::command_bar::PLUS_OFF,
+        drop,
+        a11y,
+    }
+}
+
+/// The row: the plus and what it added, the level, what the thread holds, a spring, the model,
+/// the effort, then the round button.
 pub fn row(row: Row) -> gpui::Div {
     let Row {
         form,
         inks,
         a11y,
+        plus,
+        added,
         level: (tier, level),
         model,
         effort,
@@ -156,6 +187,24 @@ pub fn row(row: Row) -> gpui::Div {
             .when_some(click, |trigger, click| trigger.on_click(click))
             .when(!opens, |trigger| trigger.cursor_default())
     };
+    let added = added.into_iter().map(|added| {
+        let Added {
+            said,
+            trigger: at,
+            gives_way,
+        } = added;
+        trigger(at)
+            .when(a11y, |added| {
+                added.role(Role::Button).aria_label(said.clone())
+            })
+            .when(gives_way, |added| added.flex_shrink(1.).min_w_0())
+            .px(px(TRIGGER_X))
+            .gap(px(TRIGGER_GAP))
+            .child(words(said, inks.text).when(gives_way, |words| {
+                words.flex_shrink(1.).min_w_0().truncate()
+            }))
+            .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
+    });
     let level_said: SharedString = tier.label().into();
     let level = trigger(level)
         .when(a11y, |level| {
@@ -216,6 +265,8 @@ pub fn row(row: Row) -> gpui::Div {
         .pl(px(form.left))
         .pr(px(form.right))
         .gap(px(form.gap))
+        .children(plus)
+        .children(added)
         .child(level)
         .children(held)
         .child(div().flex_1())
