@@ -20,6 +20,10 @@ std::optional<base::TimeDelta> FromPref(double seconds, base::TimeDelta fallback
 // When a Today tab last seen at |last_seen| goes in the archive, if it ever does: never with no
 // time, so Never takes no tab however long it waits. Clear and ⌘W archive by other ways.
 std::optional<base::Time> DueAt(base::Time last_seen, std::optional<base::TimeDelta> after);
+// How long a Today tab of a Space waits unseen: |after|, its profile's, or none at all in an
+// agent's Space, whose tabs aren't the user's to tidy and which it may still be working in
+// (#1408). A tab the user handed the agent is there for as long as it's handed (#4278).
+std::optional<base::TimeDelta> InSpace(bool agent, std::optional<base::TimeDelta> after);
 
 }  // namespace browser_core::archive_rule
 
