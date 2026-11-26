@@ -589,29 +589,29 @@ appearance() {
     -e "tell appearance preferences to set dark mode to $1" -e 'end tell' > /dev/null
 }
 # Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
-# Dock and Control Center do, keeping what they were in $bars for show_bars.
+# Dock and Control Center do, keeping what they were in $bars for show_bars. The Dock hides through
+# System Events, as Settings asks it to: the Dock's own autohide default, with the Dock restarted,
+# left a check VM's Dock on screen.
 hide_bars() {
-  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  system_events_answers || fail "System Events didn't answer, so the Dock couldn't hide"
+  bars=$(osascript -e 'tell application "System Events" to get autohide of dock preferences') ||
+    fail "System Events didn't say whether the Dock hides"
   bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
-  defaults write com.apple.dock autohide -bool true
+  osascript -e 'tell application "System Events" to set autohide of dock preferences to true' \
+    > /dev/null || fail "System Events didn't hide the Dock"
   defaults write -g _HIHideMenuBar -bool true
-  killall Dock 2>/dev/null || true
 }
 # Puts the Dock and the menu bar back as hide_bars found them.
 show_bars() {
   set -- $bars
   bars=
-  case $1 in
-    none) defaults delete com.apple.dock autohide ;;
-    1) defaults write com.apple.dock autohide -bool true ;;
-    *) defaults write com.apple.dock autohide -bool false ;;
-  esac
+  osascript -e "tell application \"System Events\" to set autohide of dock preferences to $1" \
+    > /dev/null || echo "show_bars: System Events didn't put the Dock's autohide back to $1" >&2
   case $2 in
     none) defaults delete -g _HIHideMenuBar ;;
     1) defaults write -g _HIHideMenuBar -bool true ;;
     *) defaults write -g _HIHideMenuBar -bool false ;;
   esac
-  killall Dock 2>/dev/null || true
 }
 quit() {
   quit_app
