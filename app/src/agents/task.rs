@@ -3444,7 +3444,7 @@ impl Agents {
     }
 
     /// The card whose trace `agent`'s `call` goes in: its task's, or the session it came in.
-    fn tracer(&self, agent: &str, call: u64) -> Option<String> {
+    pub(super) fn tracer(&self, agent: &str, call: u64) -> Option<String> {
         let task = self.task(agent).or_else(|| self.session_of(agent, call))?;
         Some(task.agent.clone())
     }
@@ -3614,6 +3614,26 @@ impl Agents {
         });
         step.picture = image.and_then(|image| picture(&image));
         cx.notify();
+    }
+
+    /// The page task `key`'s open or navigate `call` stopped waiting for, still loading, loaded
+    /// since, fine and at `site`, the site it was to open: its step says it opened, on its card
+    /// and in the trace. What the agent heard and the log's entry stay as they were.
+    pub(super) fn opened_late(&mut self, key: &str, call: u64, site: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        let step = (task.trace.iter_mut().rev()).find(|step| {
+            step.call == call
+                && step.kind == Some(tools::Kind::StillLoading)
+                && matches!(step.did.tool.as_str(), "open_tab" | "navigate")
+                && step.did.site == site
+        });
+        if let Some(step) = step {
+            step.kind = None;
+            step.error = None;
+            cx.notify();
+        }
     }
 
     /// `agent`'s close `call` ended as its page had a say, which its line says once answered.

@@ -194,5 +194,32 @@ TEST(TileRule, OnlyATilesPageIsParked) {
   EXPECT_FALSE(tiles.Parked(8));
 }
 
+TEST(TileRule, AnAgentsTileHoldsItsTabsDialogLiveAndParked) {
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  EXPECT_TRUE(tiles.HoldsDialog(1, /*agent_tab=*/true, /*held=*/false));
+  tiles.End(1);
+  EXPECT_TRUE(tiles.HoldsDialog(1, true, false));
+}
+
+// The user holds the tab, so the dialog is theirs to answer, as in a tab of their own.
+TEST(TileRule, AHeldTabsTileHoldsNoDialog) {
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  EXPECT_FALSE(tiles.HoldsDialog(1, true, /*held=*/true));
+}
+
+TEST(TileRule, AWindowOrACardThatHasThePageLetsItsDialogGo) {
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  tiles.Left(1);
+  EXPECT_FALSE(tiles.HoldsDialog(1, true, false));
+  tiles.Show(2, &kView, true, false, true);
+  tiles.End(2);
+  tiles.ShowInCard(2);
+  EXPECT_FALSE(tiles.HoldsDialog(2, true, false));
+  EXPECT_FALSE(tiles.HoldsDialog(3, true, false));
+}
+
 }  // namespace
 }  // namespace browser_core

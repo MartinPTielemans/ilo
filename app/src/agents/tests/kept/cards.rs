@@ -308,7 +308,9 @@ fn a_picture_is_kept_only_while_an_agent_could_have_had_it(cx: &mut TestAppConte
         (run.agents).read_with(cx, |agents, cx| agents.keeps_picture(tab, cx))
     };
     let state = |url: &str, loading: bool, cx: &mut TestAppContext| {
-        (run.agents).update(cx, |agents, _| agents.tab_state(tab, url, loading))
+        (run.agents).update(cx, |agents, cx| {
+            agents.tab_state(tab, url, loading, true, cx)
+        })
     };
     let new_document = |url: &str, cx: &mut TestAppContext| {
         state(url, true, cx);

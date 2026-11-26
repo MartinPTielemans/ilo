@@ -52,6 +52,13 @@ class TileRule {
   // Whether |tab|'s page is in a tile's view, live or parked: a page committing there keeps the
   // page's size, and the page's focus() and its menu are refused, as a live tile's are.
   bool InTile(uint64_t tab) const;
+  // Whether |tab|'s page, an agent's tab's if |agent_tab| and one the user holds if |held|, has
+  // its tab's dialog kept off the screen: in a tile, live or parked, of an agent's tab the user
+  // doesn't hold. A tile takes no input, so no one could answer the dialog there, and Chrome
+  // would show it over the user's window as the page becomes visible in the tile. A window or a
+  // card that has the page shows it again.
+  bool HoldsDialog(uint64_t tab, bool agent_tab, bool held) const;
+
   // Whether the user sees |tab|'s page, which a window shows if |window_shows|: in a window's pane
   // or in a live tile. One that dies there is called crashed and gets the app's card, and nothing
   // loads it again by itself (#3433). Any other that dies is unloaded: a parked one, which draws

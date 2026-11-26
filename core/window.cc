@@ -143,27 +143,13 @@ std::map<bc_id, std::unique_ptr<Window>>& Windows() {
 class AgentDialogHold {
  public:
   explicit AgentDialogHold(content::WebContents* contents) {
-    tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
-    tabs::TabFeatures* features = tab ? tab->GetTabFeatures() : nullptr;
-    tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
-    if (!dialogs) {
+    views::Widget* dialog = Window::TabDialog(contents);
+    if (!dialog || !dialog->widget_delegate()) {
       return;
     }
-    // A page coming from another window has its dialog over that one until Chrome moves it.
-    for (const auto& [id, window] : Windows()) {
-      views::Widget* parent = window->widget();
-      if (!parent) {
-        continue;
-      }
-      for (views::Widget* child : views::Widget::GetAllChildWidgets(parent->GetNativeView())) {
-        if (dialogs->IsDialogManaged(child) && child->widget_delegate()) {
-          could_ = child->widget_delegate()->CanActivate();
-          child->widget_delegate()->SetCanActivate(false);
-          dialog_ = child->GetWeakPtr();
-          return;
-        }
-      }
-    }
+    could_ = dialog->widget_delegate()->CanActivate();
+    dialog->widget_delegate()->SetCanActivate(false);
+    dialog_ = dialog->GetWeakPtr();
   }
   AgentDialogHold(const AgentDialogHold&) = delete;
   AgentDialogHold& operator=(const AgentDialogHold&) = delete;
@@ -526,13 +512,14 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 
-// The area a watched page has in a new window at its default size, in CSS pixels, so a watch
-// there shows it at 1:1: the app's 1280 by 800 (window_opening.rs, WINDOW_SIZE) less the sidebar's
-// 228 and the card's inset of 8 at the right and 8 above and below (tokens.toml, [shell]), and
-// the room of 46 under a watched page (tokens.toml, [shell.task-area] page-room). An agent's tab has
-// it until a window shows it: Chromium's tab strip gives a tab added behind the active one that
-// tab's size, and with no active tab none, which nothing can picture (#3788).
-constexpr gfx::Size kAgentPageSize(1044, 738);
+// An agent's page's size in CSS pixels: as wide as the card in a new window at its default size,
+// the app's 1280 by 800 (window_opening.rs, WINDOW_SIZE) less the sidebar's 228 and the card's
+// inset of 8 at the right (tokens.toml, [shell]), and as tall as keeps the shape of the page's
+// part of that card, 736 by 784 beside the conversation's panel, so a watch there fills it, scaled
+// down (task_area.rs, agent_page_size). An agent's tab has it until a window shows it: Chromium's
+// tab strip gives a tab added behind the active one that tab's size, and with no active tab none,
+// which nothing can picture (#3788).
+constexpr gfx::Size kAgentPageSize(1044, 1112);
 
 // Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has. Its
 // view saying it shows isn't enough: on the Mac a pop-up its page made starts shown, and a view no
@@ -902,9 +889,7 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
       if (!IsAgentTab(contents)) {
         continue;
       }
-      tabs::TabInterface* model = tabs::TabInterface::MaybeGetFromContents(contents);
-      tabs::TabFeatures* features = model ? model->GetTabFeatures() : nullptr;
-      tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+      tabs::TabDialogManager* dialogs = DialogsOf(contents);
       if (dialogs && dialogs->IsDialogManaged(dialog)) {
         PagePressed(contents);
         return;
@@ -912,6 +897,33 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
     }
     return;
   }
+}
+
+tabs::TabDialogManager* Window::DialogsOf(content::WebContents* contents) {
+  tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+  tabs::TabFeatures* features = tab ? tab->GetTabFeatures() : nullptr;
+  return features ? features->tab_dialog_manager() : nullptr;
+}
+
+views::Widget* Window::TabDialog(content::WebContents* contents) {
+  tabs::TabDialogManager* dialogs = DialogsOf(contents);
+  if (!dialogs) {
+    return nullptr;
+  }
+  // A page coming from another window has its dialog over that one until Chrome moves it. Views
+  // lists a window's child widgets hidden too, as one is before Chrome first shows it.
+  for (const auto& [id, window] : Windows()) {
+    views::Widget* parent = window->widget();
+    if (!parent) {
+      continue;
+    }
+    for (views::Widget* child : views::Widget::GetAllChildWidgets(parent->GetNativeView())) {
+      if (dialogs->IsDialogManaged(child)) {
+        return child;
+      }
+    }
+  }
+  return nullptr;
 }
 
 // static
@@ -3486,6 +3498,9 @@ bool Window::ShouldConstrainDialogBoundsByHost() {
 
 void Window::AddObserver(web_modal::ModalDialogHostObserver* observer) {
   dialog_observers_.AddObserver(observer);
+  // Before Chrome shows a tab's dialog, as it's made or its page becomes visible: a tile's is held
+  // off the screen.
+  tiles::DialogComing();
   // A tab's dialog places itself through this as it's made, so its keys are asked about from its
   // first, and again once it shows: the Mac lists a child window only once it's on screen.
   dialog_keys::Watch(widget_.get());

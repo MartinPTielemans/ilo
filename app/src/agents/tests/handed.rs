@@ -551,7 +551,9 @@ fn a_handed_tabs_picture_is_kept_only_from_a_new_document(cx: &mut TestAppContex
         (run.agents).read_with(cx, |agents, cx| agents.keeps_picture(tab, cx))
     };
     let state = |tab: u64, url: &str, loading: bool, cx: &mut TestAppContext| {
-        (run.agents).update(cx, |agents, _| agents.tab_state(tab, url, loading))
+        (run.agents).update(cx, |agents, cx| {
+            agents.tab_state(tab, url, loading, true, cx)
+        })
     };
     let new_document = |tab: u64, url: &str, cx: &mut TestAppContext| {
         state(tab, url, true, cx);

@@ -17,6 +17,7 @@
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
@@ -178,9 +179,12 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
   // The page |page| took the keyboard: if this dialog shows over it, the dialog takes it back, as
   // Chrome's dialog manager does on a key or wheel the page ignored. A click the page ignores isn't
   // reported, and on the Mac AppKit makes the clicked page view first responder all the same, as
-  // Windows gives a pane's HWND the keyboard (platform/win/window_views.cc).
+  // Windows gives a pane's HWND the keyboard (platform/win/window_views.cc). Only |page|'s own
+  // dialog: an agent's tab a tile shows may have one in the window over another tab's page.
   void PageFocused(content::WebContents* page) {
-    if (!dialog_->IsVisible() || ShownPage(window_) != page) {
+    tabs::TabDialogManager* dialogs = Window::DialogsOf(page);
+    if (!dialog_->IsVisible() || ShownPage(window_) != page || !dialogs ||
+        !dialogs->IsDialogManaged(dialog_)) {
       return;
     }
     // Posted, so it's after AppKit's click and once the window says it's active: AppKit may tell
