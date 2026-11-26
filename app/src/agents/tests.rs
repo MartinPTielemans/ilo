@@ -9053,6 +9053,85 @@ mod tasks {
         assert!(!sites.iter().any(|site| site.contains("Buy")), "{sites:?}");
     }
 
+    /// What each page's line of the trace says: the title its steps kept, else its site.
+    fn page_lines(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        use crate::agents::task::Line;
+        use crate::shell::conversation::pages::{Paged, paged};
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(agent, cx).unwrap());
+        let traces = talk.lines.iter().filter_map(|line| match line {
+            Line::Trace(trace) => Some(trace),
+            _ => None,
+        });
+        traces
+            .flat_map(|trace| {
+                (paged(&trace.items).into_iter()).filter_map(|each| match each {
+                    Paged::Page(page) if page.title.is_empty() => Some(page.site.to_string()),
+                    Paged::Page(page) => Some(page.title.to_string()),
+                    Paged::Item(..) => None,
+                })
+            })
+            .collect()
+    }
+
+    /// Moves `tab` of the made-up browser on to the page at `url` titled `title`.
+    fn tab_goes(browser: &Made, tab: u64, title: &'static str, url: &'static str) {
+        for each in browser
+            .tabs
+            .borrow_mut()
+            .iter_mut()
+            .filter(|each| each.0 == tab)
+        {
+            (each.2, each.3) = (title, url);
+        }
+    }
+
+    /// A step keeps the title its page had as it ran: once its tab goes on to another page, the
+    /// steps before still read the first, not what the tab says now.
+    #[gpui::test]
+    fn a_step_keeps_the_title_its_page_had_as_it_ran(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        let went = json!({ "tab": 30, "url": "https://slow.example/" });
+        // The core answers once it has read the page it went to; never waited on past that.
+        traced_by(&agents, &agent, "navigate", went, cx, |answer, cx| {
+            let request = browser.pages.borrow().last().unwrap().1;
+            agents.update(cx, |agents, cx| {
+                agents.page_done(request, shop_tree(), None, cx)
+            });
+            (answer.try_recv()).expect("navigate didn't answer once its page was read")
+        });
+        tab_goes(&browser, 30, "Slow page", "https://slow.example/");
+        let scroll = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "Slow page"]);
+    }
+
+    /// A step on a page with no title yet keeps its site, though the page has one later.
+    #[gpui::test]
+    fn a_step_on_a_page_with_no_title_keeps_its_site(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        tab_goes(&browser, 31, "", "https://example.com/login");
+        let scroll = json!({ "tab": 31 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        tab_goes(&browser, 31, "Welcome", "https://example.com/login");
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "example.com"]);
+    }
+
     /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
     /// else: not on the card's live line or anywhere on the card, the strip's line, the system
     /// notification, the kept list's row, nor the answer a screen reader is told, which is the

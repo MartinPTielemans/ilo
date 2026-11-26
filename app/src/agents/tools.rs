@@ -824,6 +824,10 @@ pub struct Did {
     pub tab: Option<u64>,
     /// The address it was on or opened, without its scheme, as such a line says each tab.
     pub page: String,
+    /// The title its page had as it ran, which its page's line keeps once the tab moves on; empty
+    /// for a step going somewhere new or a page with no title yet, whose line says its site. Only
+    /// the trace draws it, as `says`.
+    pub title: String,
     /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
     /// trace draws it: never a log, the activity file, a card or the kept list.
     pub says: String,
