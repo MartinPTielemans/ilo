@@ -137,8 +137,6 @@ fn pixels(image: &RenderImage) -> Option<Pixels> {
 pub struct Card {
     pub line: Option<String>,
     pub picture: Option<Pixels>,
-    /// Its log, if the file is one the app wrote (log.rs).
-    pub log: Option<Vec<super::log::Record>>,
 }
 
 /// A kept card's picture as GPUI draws it, made off the UI's thread: equal only to itself, so a
@@ -295,7 +293,8 @@ pub fn write(
 }
 
 /// What `id`'s card in `root` holds: each file that's there, reads whole and has its shape. It
-/// decodes the picture, so it's never run on the UI's thread.
+/// decodes the picture, so it's never run on the UI's thread. Its log is read alone, by
+/// `read_log`, as a launch reads cards and never logs.
 pub fn read(root: &Path, id: &CardId) -> Card {
     let Some(folder) = own_folder(root, id) else {
         return Card::default();
@@ -303,12 +302,15 @@ pub fn read(root: &Path, id: &CardId) -> Card {
     Card {
         line: read_line(&folder.join(File::Line.name())),
         picture: read_picture(&folder.join(File::Picture.name())),
-        log: read_log(&folder.join(File::Log.name())),
     }
 }
 
-/// The log's file, if it's no larger than a log may be and is one the app wrote.
-fn read_log(path: &Path) -> Option<Vec<super::log::Record>> {
+/// `id`'s log in `root`, if its file is no larger than a log may be and is one the app wrote.
+pub fn read_log(root: &Path, id: &CardId) -> Option<Vec<super::log::Record>> {
+    log_file(&own_folder(root, id)?.join(File::Log.name()))
+}
+
+fn log_file(path: &Path) -> Option<Vec<super::log::Record>> {
     use std::io::Read;
     if !std::fs::symlink_metadata(path).ok()?.is_file() {
         return None;
@@ -419,6 +421,12 @@ pub enum Job {
         Vec<CardId>,
         futures::channel::oneshot::Sender<Vec<(CardId, Back)>>,
     ),
+    /// A thread a run before left, first shown: its card's `read_log`.
+    ReadLog(
+        PathBuf,
+        CardId,
+        futures::channel::oneshot::Sender<Option<Vec<super::log::Record>>>,
+    ),
 }
 
 impl Job {
@@ -455,6 +463,7 @@ impl Job {
                 // A launch that went on without it, as a window closed meanwhile, wants none.
                 _ = answer.send(back);
             }
+            Job::ReadLog(root, id, answer) => _ = answer.send(read_log(&root, &id)),
         }
     }
 }

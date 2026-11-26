@@ -256,13 +256,13 @@ fn a_cards_log_is_a_file_of_its_own_read_back_whole_or_not_at_all() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    assert_eq!(read(&root, &id).log, Some(records));
+    assert_eq!(read_log(&root, &id), Some(records));
 
     std::fs::write(folder.join("log"), "button\tPay\n").unwrap();
-    let card = read(&root, &id);
-    assert_eq!((card.log, card.line.as_deref()), (None, Some("Line.")));
+    assert_eq!(read_log(&root, &id), None);
+    assert_eq!(read(&root, &id).line.as_deref(), Some("Line."));
     std::fs::write(folder.join("log"), "x".repeat(log::MOST + 1)).unwrap();
-    assert_eq!(read(&root, &id).log, None);
+    assert_eq!(read_log(&root, &id), None);
 
     assert!(write(&root, &id, Some("Line."), &Picture::Remove, None));
     assert_eq!(names(&folder), ["line"]);

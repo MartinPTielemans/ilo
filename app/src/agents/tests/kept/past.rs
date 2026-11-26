@@ -491,6 +491,55 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     assert!(replied.kept_picture.is_none());
 }
 
+/// A kept thread's log comes back only when the thread is shown, never with the launch: until
+/// then its conversation holds no line of it. Shown, its stored lines draw under what was asked,
+/// settled, with the answer's time, and ilo's lines as words alone. Remove All takes them with
+/// the card.
+#[gpui::test]
+fn a_kept_threads_log_comes_back_only_when_it_is_shown(cx: &mut TestAppContext) {
+    use crate::agents::task::Line;
+    use crate::agents::task::ilo::IloKind;
+    let run = Run::new("log-back", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    let result = json!({ "result": "Two seats at 9:05, car 4." });
+    _ = call(&run.agents, &agent, "finish", result, cx);
+    cx.run_until_parked();
+    run.finish(&agent, cx);
+    quit(&run, cx);
+    cx.run_until_parked();
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    cx.run_until_parked();
+    let shown = |next: &Run, cx: &mut TestAppContext| {
+        (next.agents).read_with(cx, |agents, cx| {
+            let talk = agents.conversation(&past, cx).expect("no conversation");
+            let answer = (talk.lines.iter())
+                .position(|line| matches!(line, Line::Said(text) if text.contains("car 4")));
+            let at = |at: usize| talk.finished.iter().any(|(line, _)| *line == at);
+            let pressed = (talk.lines.iter()).any(|line| match line {
+                Line::Ilo(line) => !line.settled && matches!(line.kind, IloKind::Kept { .. }),
+                Line::Trace(trace) => trace.running,
+                _ => false,
+            });
+            let asked_twice = (talk.lines.iter())
+                .any(|line| matches!(line, Line::You(text) if *text == talk.asked));
+            (answer.map(at), pressed, asked_twice)
+        })
+    };
+    // The launch read its card's line and picture, never its log.
+    assert_eq!(shown(&next, cx), (None, false, false));
+
+    (next.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&next, cx), (Some(true), false, false));
+
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&next, cx).0, None);
+}
+
 /// Settings › Agents' Remove on a kept task brought back takes its card's line and picture off
 /// the card shown, as its card's folder goes; Remove All takes every one's.
 #[gpui::test]

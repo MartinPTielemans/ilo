@@ -59,6 +59,16 @@ fn card(run: &Run, agent: &str, cx: &mut TestAppContext) -> cards::Card {
     cards::read(&root(run), &card_id(run, agent, cx))
 }
 
+/// The task's kept log as its card folder holds it, once what was asked of it is done.
+fn kept_log(
+    run: &Run,
+    agent: &str,
+    cx: &mut TestAppContext,
+) -> Option<Vec<crate::agents::kept::log::Record>> {
+    cx.run_until_parked();
+    cards::read_log(&root(run), &card_id(run, agent, cx))
+}
+
 fn size(card: &cards::Card) -> Option<(u32, u32)> {
     (card.picture.as_ref()).map(|picture| (picture.width, picture.height))
 }
@@ -382,7 +392,7 @@ fn a_done_kept_task_keeps_its_log_and_remove_all_takes_it(cx: &mut TestAppContex
     _ = call(&run.agents, &agent, "finish", result, cx);
     cx.run_until_parked();
     run.finish(&agent, cx);
-    let log = card(&run, &agent, cx).log.expect("a log");
+    let log = kept_log(&run, &agent, cx).expect("a log");
     assert!(matches!(log.first(), Some(Record::You(_))), "{log:?}");
     assert!(
         log.iter()
@@ -423,7 +433,7 @@ fn a_page_off_limits_keeps_its_site_alone_in_the_log(cx: &mut TestAppContext) {
     let title = (run.agents).read_with(cx, |agents, cx| agents.browser.tab(tab, cx).title);
     (run.agents).update(cx, |agents, cx| agents.fence("www.example.com", cx));
     run.finish(&agent, cx);
-    let log = card(&run, &agent, cx).log.expect("a log");
+    let log = kept_log(&run, &agent, cx).expect("a log");
     let pages: Vec<&String> = (log.iter())
         .filter_map(|record| match record {
             Record::Page(page) => Some(page),

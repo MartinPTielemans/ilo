@@ -245,8 +245,10 @@ impl Agents {
             record.resumed.push((said, back));
         }
         self.tasks.picked_up.insert(agent.to_string(), was);
-        // Its card's line and picture are of the turn before; the reply's own replace them.
+        // Its card's line and picture are of the turn before; the reply's own replace them, and
+        // its kept log goes from the conversation with them.
         self.tasks.came_back.remove(agent);
+        self.tasks.came_logs.remove(agent);
         self.kept_under_way(agent);
         if let Some(task) = self.task_mut(agent) {
             task.tier = back;
@@ -599,8 +601,9 @@ impl Agents {
         };
         // Its run ends first, so nothing writes the conversation back.
         task.process = None;
-        // Its card's line and picture go with its card.
+        // Its card's line, picture and log go with its card.
         self.tasks.came_back.remove(agent);
+        self.tasks.came_logs.remove(agent);
         self.remove_copies(agent, cx);
         let task = agent.to_string();
         self.remove_kept(
@@ -614,6 +617,7 @@ impl Agents {
         self.tasks.picked_up.remove(agent);
         self.tasks.card_tiles.remove(agent);
         self.tasks.came_back.remove(agent);
+        self.tasks.came_logs.remove(agent);
         let task = agent.to_string();
         self.remove_kept(
             move |record| record.task.as_deref() == Some(task.as_str()),
@@ -658,6 +662,7 @@ impl Agents {
         // Every card goes, a task's at work too: it has none to show until it's done, and is
         // written again then. What was read back of them goes from the cards shown.
         self.tasks.came_back.clear();
+        self.tasks.came_logs.clear();
         if let Some(root) = self.cards_root() {
             (self.tasks.card_jobs).ask(cards::Job::RemoveAll(root), cx.background_executor());
         }
@@ -729,6 +734,64 @@ impl Agents {
             _ = agents.update(cx, |agents, cx| agents.cards_read(reading, read, cx));
         })
         .detach();
+    }
+
+    /// A task a run before left, shown: its kept log is asked for once, off the UI's thread
+    /// through the cards' queue, never at launch, and drawn over its kept lines once it's read.
+    pub fn task_shown(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let left = (self.task(agent)).is_some_and(|task| task.from_before() && ended(task));
+        let asked = self.tasks.came_logs.contains_key(agent);
+        if !left || asked || self.tasks.picked_up.contains_key(agent) {
+            return;
+        }
+        let (Some(record), Some(root)) = (self.tasks.kept.of(agent), self.cards_root()) else {
+            return;
+        };
+        let card = record.card.clone();
+        self.tasks.came_logs.insert(agent.to_string(), None);
+        let (answer, read) = futures::channel::oneshot::channel();
+        let job = cards::Job::ReadLog(root, card.clone(), answer);
+        self.tasks.card_jobs.ask(job, cx.background_executor());
+        let agent = agent.to_string();
+        cx.spawn(async move |agents, cx| {
+            let Ok(log) = read.await else { return };
+            _ = agents.update(cx, |agents, cx| agents.log_read(agent, card, log, cx));
+        })
+        .detach();
+    }
+
+    /// The log a task's showing asked for: kept if the task is still one a run before left that
+    /// no reply has taken up, holding that card, and its ask wasn't taken back meanwhile.
+    fn log_read(
+        &mut self,
+        agent: String,
+        card: cards::CardId,
+        log: Option<Vec<kept::log::Record>>,
+        cx: &mut Context<Self>,
+    ) {
+        let holds = (self.tasks.kept.of(&agent)).is_some_and(|record| record.card == card);
+        let left = (self.task(&agent)).is_some_and(|task| task.from_before() && ended(task));
+        let asked = self
+            .tasks
+            .came_logs
+            .get(&agent)
+            .is_some_and(Option::is_none);
+        if !holds || !left || !asked || self.tasks.picked_up.contains_key(&agent) {
+            return;
+        }
+        if let Some(log) = log {
+            self.tasks.came_logs.insert(agent, Some(log));
+            cx.notify();
+        }
+    }
+
+    /// The kept log read back for `task`, while it's one a run before left that no reply has
+    /// taken up.
+    pub(super) fn kept_log(&self, task: &Task) -> Option<&[kept::log::Record]> {
+        if !task.from_before() || self.tasks.picked_up.contains_key(&task.agent) {
+            return None;
+        }
+        self.tasks.came_logs.get(&task.agent)?.as_deref()
     }
 
     /// The cards a launch read back: each to its task, if it's still one a run before left that
