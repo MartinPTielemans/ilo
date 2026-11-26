@@ -1057,9 +1057,6 @@ pub struct Tasks {
     /// The assistants a look asked for while one ran waits to look for once it ends, as after a
     /// sign-in, each with whether the user's click on its row asked for it.
     pub(super) look_again: Vec<(Cli, bool)>,
-    /// Helpers for the tasks a test starts, whatever the switch says.
-    #[cfg(test)]
-    pub(super) helpers: bool,
     /// What answers for `wall::put_up` in a test, which no system does yet.
     #[cfg(test)]
     pub(super) wall: Option<rewall::PutUp>,
@@ -2086,7 +2083,7 @@ impl Agents {
             picked_from: None,
             placed: Vec::new(),
             told: None,
-            helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
+            helpers: Helpers::default(),
             files: self.files_at_start(),
             names: self.names_at_start(),
             rising: None,
@@ -2279,16 +2276,6 @@ impl Agents {
         self.fail(agent, Failure::Other(why), cx);
     }
 
-    /// Whether a task that starts now gets its assistant's helper tool: the switch. A test's
-    /// tasks have what the test says, on or off, whatever the switch is.
-    fn helpers_on(&self) -> bool {
-        #[cfg(test)]
-        let said = Some(self.tasks.helpers);
-        #[cfg(not(test))]
-        let said = None;
-        said.unwrap_or(helpers::ON)
-    }
-
     /// The files a task that starts now has: none, until a grant gives a task its own.
     fn files_at_start(&self) -> Given {
         #[cfg(test)]
@@ -2354,16 +2341,8 @@ impl Agents {
             },
             model,
             effort,
-            instructions: match task.helpers.on {
-                true => format!(
-                    "{}\n\n{}",
-                    tools::TASK_INSTRUCTIONS,
-                    helpers::instructions()
-                ),
-                false => tools::TASK_INSTRUCTIONS.into(),
-            },
+            instructions: tools::TASK_INSTRUCTIONS.into(),
             tools: tools::names(agent),
-            helpers: task.helpers.on,
             wall,
             // The files it starts with: a task whose wall was refused has none by now.
             reads: (task.files.folder.iter())
@@ -2382,10 +2361,6 @@ impl Agents {
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
-                    // Until its first line says which kinds of helper it has (#4102).
-                    let new = matches!(keep, super::kept::Keep::New(_));
-                    let had = (task.trace.len(), task.messages.len());
-                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
                 true
@@ -2442,7 +2417,7 @@ impl Agents {
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
         }
-        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        // A line of a run ilo ended as it started the task again isn't the task's (rewall.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
@@ -2521,11 +2496,8 @@ impl Agents {
                     notes: None,
                 });
             }
-            Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
-            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
-            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             Out::Swept(_) => {}
+            Out::Refused(why) => self.not_our_tools(&agent, &why, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -2651,6 +2623,22 @@ impl Agents {
         // What's ready may have changed.
         self.look_for_task_agents(cx);
         cx.notify();
+    }
+
+    /// ilo ended `agent`'s run as it started with a tool that isn't the browser's, or called one
+    /// (runner.rs), `why` in the dev log's words: its turn ends before its first answer, one line
+    /// of ilo's says so (AP17), and the card says the same. The next message starts a run that's
+    /// checked again.
+    fn not_our_tools(&mut self, agent: &str, why: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        log!("browser: task {agent} ended as {why}");
+        use crate::shell::conversation::words;
+        let (said, _) = words::head(&ilo::IloKind::NotOurTools, &task.name);
+        let why = format!("{} {said}.", words::MARK);
+        self.place_in(agent, super::lines::Happened::NotOurTools);
+        self.fail(agent, Failure::Other(why), cx);
     }
 
     /// The user's reply, which the agent reads once its turn under way ends.

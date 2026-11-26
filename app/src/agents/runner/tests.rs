@@ -23,14 +23,14 @@ fn launch(cli: Cli) -> Launch {
         effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
-        helpers: false,
         wall: None,
         reads: Vec::new(),
     }
 }
 
+/// What a run of `launch(Cli::Claude)`'s says, line by line.
 fn read(lines: &[Value]) -> Vec<Out> {
-    let mut turn = Turn::default();
+    let mut turn = Turn::of(&launch(Cli::Claude));
     lines
         .iter()
         .flat_map(|line| claude_read(line, &mut turn))
@@ -49,37 +49,28 @@ fn set(launch: &Launch) -> Vec<(String, String)> {
         .collect()
 }
 
-/// A task without helpers is started with none of the helpers' variables, and one with them has
-/// each, set on its process, so ilo's value is the one it reads whatever ilo's own environment
-/// holds. Codex's start has none either way.
+/// A thread's start sets nothing of its assistant's own helpers, which it has none of: Claude's
+/// sets the PATH alone, and Codex's the PATH and its token.
 #[test]
-fn only_a_task_with_helpers_is_started_with_their_variables() {
-    let helpers = |set: &[(String, String)]| -> Vec<(String, String)> {
-        let ours = |(name, _): &&(String, String)| name.starts_with("CLAUDE_");
-        set.iter().filter(ours).cloned().collect()
+fn a_threads_start_sets_none_of_its_assistants_helper_variables() {
+    let names = |cli| -> Vec<String> {
+        let mut names: Vec<String> = set(&launch(cli))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        names.sort();
+        names
     };
-    let off = set(&launch(Cli::Claude));
-    assert_eq!(helpers(&off), []);
-    assert_eq!(off.len(), 1, "more than the PATH is set: {off:?}");
-    let mut on = launch(Cli::Claude);
-    on.helpers = true;
-    let wanted: Vec<(String, String)> = (crate::agents::helpers::ENV.iter())
-        .map(|(name, value)| (name.to_string(), value.to_string()))
-        .collect();
-    let mut has = helpers(&set(&on));
-    has.sort();
-    let mut sorted = wanted.clone();
-    sorted.sort();
-    assert_eq!(has, sorted);
-    for name in [
-        "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
-        "CLAUDE_CODE_FORK_SUBAGENT",
-        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
-        "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
-    ] {
-        assert!(wanted.iter().any(|(each, _)| each == name), "{name}");
+    assert_eq!(names(Cli::Claude), ["PATH"]);
+    let mut codex = vec!["PATH".to_string(), crate::agents::bridge::TOKEN.to_string()];
+    codex.sort();
+    assert_eq!(names(Cli::Codex), codex);
+    for cli in [Cli::Claude, Cli::Codex] {
+        assert!(
+            !kept(cli).iter().any(|name| name.contains("SUBAGENT")),
+            "{cli:?}"
+        );
     }
-    assert_eq!(helpers(&set(&launch(Cli::Codex))), []);
 }
 
 #[test]
@@ -233,7 +224,7 @@ fn claudes_config_names_the_browsers_server_alone() {
 #[test]
 fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither() {
     let outs = read(&[
-        json!({ "type": "system", "subtype": "init", "tools": [format!("mcp__{SERVER}__open_tab")] }),
+        init(&[&format!("mcp__{SERVER}__open_tab")], &[SERVER]),
         json!({ "type": "assistant", "message": { "content": [
             { "type": "thinking", "thinking": "Hmm." },
             { "type": "text", "text": "  Looking for flights.  " },
@@ -241,14 +232,13 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    // Its first line lists no kind of helper, which is read as one that isn't ilo's (helpers.rs).
-    assert_eq!(outs[0], Out::Kinds { ours: false });
-    let Out::Thought { text, .. } = &outs[1] else {
+    // Its init line, with the browser's server and its tools alone, says nothing.
+    let Out::Thought { text, .. } = &outs[0] else {
         panic!("{outs:?}")
     };
     assert_eq!(text, "Hmm.");
     assert_eq!(
-        outs[2..],
+        outs[1..],
         [
             Out::Said("Looking for flights.".into()),
             Out::Calling,
@@ -1140,14 +1130,9 @@ fn every_name_a_start_sets_is_in_the_kept_list() {
         once.dedup();
         assert_eq!(once.len(), names.len(), "{cli:?} keeps a name twice");
         assert!(names.len() <= crate::agents::wall::launch::KEPT_MAX);
-        // Claude Code's alone, as a task's helpers are.
-        let with_helpers = Launch {
-            helpers: cli == Cli::Claude,
-            ..walled(cli, None)
-        };
         let starts = [
             launch(cli),
-            with_helpers,
+            walled(cli, None),
             walled(cli, Some("/nonexistent/tmp")),
             listening(cli),
         ];
@@ -1251,22 +1236,188 @@ fn claude_has_neither_its_providers_search_nor_its_fetch() {
     assert_eq!(hosts(Cli::Codex), ["chatgpt.com", "auth.openai.com"]);
 }
 
-/// A search with Claude's provider's tool is no step of the browser's: it says only that a call
-/// comes, and its words and result are never read.
+/// Claude's init line, listing `tools` and the servers `servers`.
+fn init(tools: &[&str], servers: &[&str]) -> Value {
+    let servers: Vec<Value> = (servers.iter())
+        .map(|name| json!({ "name": name, "status": "connected" }))
+        .collect();
+    json!({ "type": "system", "subtype": "init", "tools": tools, "mcp_servers": servers })
+}
+
+/// Its arguments give Claude none of its own tools and no helper of its own: `--tools ""`, and no
+/// search, fetch, helper tool, helper kinds or helper denials, walled or not.
 #[test]
-fn claudes_own_search_says_nothing_of_its_words() {
-    let mut turn = Turn::default();
+fn claudes_tools_are_the_browsers_alone() {
+    for launch in [launch(Cli::Claude), walled(Cli::Claude, None)] {
+        let args = claude_args(&launch);
+        let at = (args.iter().position(|arg| arg == "--tools")).expect("--tools");
+        assert_eq!(args[at + 1], "");
+        let allowed = (args.iter().position(|arg| arg == "--allowedTools")).expect("allowed");
+        let ours = format!("mcp__{SERVER}__");
+        assert!(
+            args[allowed + 1]
+                .split(',')
+                .all(|tool| tool.starts_with(&ours))
+        );
+        for theirs in [
+            "Agent",
+            "Task",
+            "WebSearch",
+            "WebFetch",
+            "--agents",
+            "--disallowedTools",
+        ] {
+            let named = |arg: &String| arg == theirs || arg.split(',').any(|each| each == theirs);
+            assert!(!args.iter().any(named), "{theirs} in {args:?}");
+        }
+    }
+}
+
+/// A user's own servers and settings never reach a thread's Claude, whatever their own config
+/// holds (Hole 7): it reads the browser's config alone, which holds the browser's server alone,
+/// and no settings file.
+#[test]
+fn a_users_own_servers_and_settings_never_reach_a_thread() {
+    let launch = launch(Cli::Claude);
+    let args = claude_args(&launch);
+    let after = |flag: &str| {
+        let at = (args.iter().position(|arg| arg == flag)).unwrap_or_else(|| panic!("no {flag}"));
+        args[at + 1].as_str()
+    };
+    assert!(
+        args.iter().any(|arg| arg == "--strict-mcp-config"),
+        "{args:?}"
+    );
+    assert_eq!(args.iter().filter(|arg| *arg == "--mcp-config").count(), 1);
+    assert_eq!(after("--mcp-config"), launch.config.to_string_lossy());
+    let config: Value = serde_json::from_str(&claude_config(&launch.server)).unwrap();
+    let servers = config["mcpServers"].as_object().expect("servers");
+    assert_eq!(servers.keys().collect::<Vec<_>>(), [SERVER]);
+    assert_eq!(after("--setting-sources"), "");
+}
+
+/// An init line with the browser's server and only its tools says nothing. Any other ends the run
+/// there, before its first answer, and nothing it says after is read: a tool of Claude's own, a
+/// second server, a tool of the browser's this thread wasn't given, no tools, or a line ilo can't
+/// read.
+#[test]
+fn an_init_line_with_a_tool_of_claudes_own_ends_the_run() {
+    let ours = |tool: &str| format!("mcp__{SERVER}__{tool}");
+    let (open, finish) = (ours("open_tab"), ours("finish"));
+    assert_eq!(read(&[init(&[&open, &finish], &[SERVER])]), []);
+    let refused = [
+        init(&[&open, "Bash"], &[SERVER]),
+        init(&["WebSearch", &finish], &[SERVER]),
+        init(&[&open, "Agent"], &[SERVER]),
+        init(&[&open], &[SERVER, "the-users-own"]),
+        init(
+            &[&open, "mcp__the-users-own__run"],
+            &[SERVER, "the-users-own"],
+        ),
+        init(&[&open], &[]),
+        init(&[&ours("click")], &[SERVER]),
+        init(&[], &[SERVER]),
+        json!({ "type": "system", "subtype": "init", "mcp_servers": [{ "name": SERVER }] }),
+        json!({ "type": "system", "subtype": "init", "tools": [&open] }),
+        json!({ "type": "system", "subtype": "init", "tools": [1], "mcp_servers": [{ "name": SERVER }] }),
+    ];
+    // What follows at once, words and a call of the browser's own, is nothing: no Said, no
+    // Calling, no end of a turn.
+    let said = json!({ "type": "assistant", "message": { "content": [
+        { "type": "text", "text": "Opening it." },
+        { "type": "tool_use", "id": "o1", "name": &open, "input": {} },
+    ] } });
+    let calls = json!({ "type": "stream_event", "event": {
+        "type": "content_block_start",
+        "content_block": { "type": "tool_use", "id": "o2", "name": &open, "input": {} },
+    } });
+    let ended = json!({ "type": "result", "subtype": "success", "is_error": false, "result": "" });
+    for line in refused {
+        let outs = read(&[line.clone(), calls.clone(), said.clone(), ended.clone()]);
+        assert!(matches!(outs[..], [Out::Refused(_)]), "{line}: {outs:?}");
+    }
+}
+
+/// A call of a tool of Claude's own ends the run as it starts, or once its message comes whole,
+/// whatever its init line said, and nothing of the call is read: its words aren't in why.
+#[test]
+fn a_call_of_claudes_own_tool_ends_the_run() {
     let search = json!({ "type": "assistant", "message": { "content": [
+        { "type": "text", "text": "Searching." },
         { "type": "tool_use", "id": "s1", "name": "WebSearch", "input": {
             "query": "night trains to Lisbon",
         } },
     ] } });
-    assert_eq!(claude_read(&search, &mut turn), [Out::Calling]);
     let result = json!({ "type": "user", "message": { "content": [
         { "type": "tool_result", "tool_use_id": "s1",
           "content": "Night train · https://timetables.example/lisbon" },
     ] } });
-    assert_eq!(claude_read(&result, &mut turn), []);
+    let outs = read(&[search, result]);
+    let [Out::Refused(why)] = &outs[..] else {
+        panic!("{outs:?}")
+    };
+    assert!(
+        !why.contains("Lisbon") && !why.contains("timetables"),
+        "{why}"
+    );
+    let starts = json!({ "type": "stream_event", "event": {
+        "type": "content_block_start",
+        "content_block": { "type": "tool_use", "id": "b1", "name": "Bash", "input": {} },
+    } });
+    assert!(matches!(read(&[starts])[..], [Out::Refused(_)]));
+    // One of the browser's is a call like any.
+    let ours = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "o1", "name": format!("mcp__{SERVER}__open_tab"), "input": {} },
+    ] } });
+    assert_eq!(read(&[ours]), [Out::Calling]);
+}
+
+/// The stand-in row: a stand-in for Claude Code, never the real one, reads its first message,
+/// says it started with Bash, and would act two seconds later. ilo ends it there, before it can:
+/// the run is refused, then gone, and it never acted.
+#[cfg(unix)]
+#[test]
+fn a_run_whose_init_lists_another_tool_ends_before_it_acts() {
+    let dir = std::env::temp_dir().join(format!("ilo-claude-init-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let stand_in = dir.join("claude");
+    let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+IFS= read -r line
+echo '{"type":"system","subtype":"init","tools":["Bash","mcp__SERVER__open_tab"],"mcp_servers":[{"name":"SERVER","status":"connected"}]}'
+sleep 2
+touch "$dir/acted"
+echo '{"type":"result","subtype":"success","is_error":false,"result":"Done."}'
+"#
+    .replace("SERVER", SERVER);
+    std::fs::write(&stand_in, script).unwrap();
+    std::fs::set_permissions(
+        &stand_in,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let mut launch = launch(Cli::Claude);
+    (launch.program, launch.path) = (stand_in, Some("/usr/bin:/bin".into()));
+    launch.dir = dir.join("task");
+    launch.config = dir.join("task.json");
+    let (events, mut said) = futures::channel::mpsc::unbounded();
+    let process = Process::start(&launch, "task-1", "Open it.", events).unwrap();
+    let mut outs = Vec::new();
+    while let Some(event) = futures::executor::block_on(futures::StreamExt::next(&mut said)) {
+        let gone = matches!(event.out, Out::Gone(_));
+        outs.push(event.out);
+        if gone {
+            break;
+        }
+    }
+    assert!(
+        matches!(outs[..], [Out::Refused(_), Out::Gone(_)]),
+        "{outs:?}"
+    );
+    drop(process);
+    assert!(!dir.join("acted").exists(), "the stand-in acted");
+    _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Codex's own search item, which its config turns off, says nothing, whatever its action.

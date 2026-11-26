@@ -699,7 +699,6 @@ mod walled {
             effort: None,
             instructions: String::new(),
             tools: Vec::new(),
-            helpers: false,
             wall: Some(Arc::new(wall)),
             reads: Vec::new(),
         }

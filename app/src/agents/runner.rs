@@ -130,8 +130,6 @@ pub struct Launch {
     pub instructions: String,
     /// The tools it may call, as the server lists them.
     pub tools: Vec<String>,
-    /// Whether it gets its helper tool (#4102), which only Claude's arguments read.
-    pub helpers: bool,
     /// The wall it starts inside (#4101), or None for a start that asked for none.
     pub wall: Option<Arc<Wall>>,
     /// What Codex's commands may read under its own sandbox (codex.rs): the folder the user
@@ -158,37 +156,13 @@ pub enum Out {
     /// A start inside a wall with files: the assistant is inside it, or nothing started and why.
     /// Before anything else of the run's, and Gone follows a no.
     Walled(Result<(), WallRefused>),
-    /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
-    Helper { id: String, told: Helper },
-    /// Its CLI says a helper started, by the call of the task's that asked for it if it names
-    /// one, `deep` levels under the task, or 0 if it doesn't say how deep: what ilo counts for
-    /// the limit, and from when the helper shows.
-    Started { id: Option<String>, deep: u64 },
-    /// Its output shows a helper ilo doesn't allow, which stops the task.
-    NotAllowed(super::task::ilo::HelpersLimit),
-    /// A run's first line lists its kinds of helper: whether each is ilo's.
-    Kinds { ours: bool },
+    /// Claude Code started with a tool or a server that isn't the browser's, or called one: ilo
+    /// ended the run there, before anything else of it was handed on, and Gone follows. Why, in
+    /// the dev log's words alone.
+    Refused(String),
     /// What the sweep after a walled run's end found: everything its assistant started was
     /// ended, or not. The run has ended, so this is the last of it and never its task's next.
     Swept(Result<leftovers::Swept, leftovers::SweepFailed>),
-}
-
-/// What a task's output tells of one of its helpers, for its line in the conversation. A label:
-/// nothing ilo allows or refuses reads it.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Helper {
-    /// The task asked for it, by the name it gave it: one line of plain text, cut short, or
-    /// empty.
-    Asked(String),
-    /// It calls one of the browser's tools on this tab.
-    On(u64),
-    /// It calls the browser's tool that opens a tab, which names none: the page is its own once
-    /// it's open.
-    Opens,
-    /// It calls a tool that names no tab.
-    Calls,
-    /// Its CLI says it ended, however it did.
-    Ended,
 }
 
 /// Why a turn or a run ended badly.
@@ -216,7 +190,9 @@ pub struct Event {
 /// A task's running CLI.
 pub struct Process {
     cli: Cli,
-    child: Option<Child>,
+    /// Under a lock its output's thread takes too, which ends a run whose start ilo refuses: it's
+    /// taken from here only to be reaped, so while it's here its id is still its own.
+    child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     id: u32,
     /// Codex's thread and turn, once it has them.
@@ -291,9 +267,10 @@ impl Process {
         let stderr = child.stderr.take().expect("piped");
         let codex = (launch.cli == Cli::Codex).then(|| Arc::new(super::codex::State::default()));
         let id = child.id();
+        let child = Arc::new(Mutex::new(Some(child)));
         let process = Process {
             cli: launch.cli,
-            child: Some(child),
+            child: child.clone(),
             id,
             stdin: stdin.clone(),
             codex: codex.clone(),
@@ -310,6 +287,7 @@ impl Process {
             })?;
         let agent = agent.to_string();
         let codex_launch = launch.clone();
+        let mut turn = Turn::of(launch);
         std::thread::Builder::new()
             .name("task-output".into())
             .spawn(move || {
@@ -330,7 +308,6 @@ impl Process {
                         return;
                     }
                 }
-                let mut turn = Turn::default();
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
                     let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -340,6 +317,10 @@ impl Process {
                         Some(state) => super::codex::read(&message, state, &stdin, &codex_launch),
                         None => claude_read(&message, &mut turn),
                     };
+                    // A start ilo refuses ends before anything else of it is handed on.
+                    if outs.iter().any(|out| matches!(out, Out::Refused(_))) {
+                        end(&child, walled, id);
+                    }
                     for out in outs {
                         if events
                             .unbounded_send(Event {
@@ -416,7 +397,7 @@ impl Process {
     pub fn interrupt(&mut self) {
         // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
         if self.rising.load(Ordering::Acquire) {
-            if let Some(child) = &mut self.child {
+            if let Some(child) = self.child.lock().unwrap().as_mut() {
                 _ = child.kill();
             }
             return;
@@ -443,7 +424,8 @@ impl Drop for Process {
     /// under way. A thread waits for it, so it leaves no zombie behind.
     fn drop(&mut self) {
         self.stdin.lock().unwrap().take();
-        if let Some(mut child) = self.child.take() {
+        let child = self.child.lock().unwrap().take();
+        if let Some(mut child) = child {
             // A walled start's whole group first, while its leader isn't reaped and so no other
             // process can have the group's id. What left the group is the sweep's, after.
             let walled = self.walled.take();
@@ -460,6 +442,19 @@ impl Drop for Process {
                 });
         }
     }
+}
+
+/// Ends a run's process where it stands, while it's still held: a walled start's whole group
+/// first, as Drop ends it. Drop still reaps it.
+fn end(child: &Mutex<Option<Child>>, walled: bool, id: u32) {
+    let mut child = child.lock().unwrap();
+    let Some(child) = child.as_mut() else {
+        return;
+    };
+    if walled {
+        leftovers::System::end_group(&leftovers::Os, id);
+    }
+    _ = child.kill();
 }
 
 /// After a run's end and its reap: the sweep of what its wall still holds, answered to its task.
@@ -534,10 +529,6 @@ pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
     if launch.cli == Cli::Codex {
         sets.push((super::bridge::TOKEN, (&launch.server.token).into()));
     }
-    // With helpers, what leaves the assistant ilo's kind of helper alone (#4102).
-    if launch.helpers {
-        sets.extend(super::helpers::ENV.map(|(name, value)| (name, value.into())));
-    }
     // Inside a wall Claude Code keeps nothing of its own in the user's folders, which the wall
     // denies it: no history of what it was asked, no memory, no copies of the files it changes,
     // no update of itself and no report of its use. Its temporary files go in the wall's folder
@@ -585,16 +576,7 @@ const PROXY_CLEARED: [&str; 5] = [
 /// say so: `sets` answers from these alone, which a test holds.
 pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
-        Cli::Claude => {
-            let helpers = super::helpers::ENV.map(|(name, _)| name);
-            [
-                &[PATH, CLAUDE_TMP][..],
-                &CLAUDE_WALLED[..],
-                &helpers[..],
-                &PROXY[..],
-            ]
-            .concat()
-        }
+        Cli::Claude => [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &PROXY[..]].concat(),
         Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }
@@ -627,16 +609,7 @@ pub fn claude_config(server: &Server) -> String {
 /// init message then listed that tool alone, no slash commands or skills, and only its built-in
 /// plugins and agent types, which no tool could reach.
 pub fn claude_args(launch: &Launch) -> Vec<String> {
-    let mut allowed: Vec<String> = launch
-        .tools
-        .iter()
-        .map(|tool| format!("mcp__{SERVER}__{tool}"))
-        .collect();
-    // A thread searches with the browser's own search tool, never its provider's.
-    let tools = match launch.helpers {
-        true => super::helpers::TOOLS[0].into(),
-        false => String::new(),
-    };
+    let allowed: Vec<String> = Turn::of(launch).tools;
     let mut args: Vec<String> = [
         // Print mode, reading the user's messages as stream-json, so a reply is one more line.
         "-p",
@@ -647,14 +620,14 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--verbose",
         // Its text as it writes it, which the conversation shows as it comes.
         "--include-partial-messages",
-        // None of its own tools: no shell, files, web search or fetch. With helpers on, only the
-        // one that starts a helper.
+        // None of its own tools: no shell, files, web search, fetch or helper. It searches with
+        // the browser's own tool.
         "--tools",
+        "",
     ]
     .map(String::from)
     .into();
     args.extend([
-        tools,
         // The browser's server alone, none of the user's.
         "--strict-mcp-config".into(),
         "--mcp-config".into(),
@@ -689,9 +662,6 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--append-system-prompt-file".into(),
         instructions_file(launch).to_string_lossy().into_owned(),
     ]);
-    if launch.helpers {
-        args.extend(super::helpers::claude_args(&allowed));
-    }
     // Inside ilo's wall its own sandbox is off: the wall is what holds it. No settings file is
     // read, so this is its only setting.
     if launch.wall.is_some() {
@@ -703,9 +673,13 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
 /// A walled Claude Code's settings.
 const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
 
-/// What a turn of Claude's has shown so far that its result needs: a limit it hit.
+/// What a run of Claude's has shown so far that its result needs: a limit it hit. And what it
+/// may call, by the names its init line and its calls give them.
 #[derive(Default)]
 pub struct Turn {
+    tools: Vec<String>,
+    /// ilo refused the run, so nothing more of it is read.
+    refused: bool,
     limit: Option<Option<u64>>,
     /// When the last whole line came, which a thought took since.
     heard: Option<Instant>,
@@ -713,23 +687,78 @@ pub struct Turn {
     writing: String,
 }
 
-/// What a line of Claude's stream-json output says to the user, if anything.
+impl Turn {
+    /// A run of `launch`, which may call the browser's tools it lists and nothing else.
+    pub fn of(launch: &Launch) -> Turn {
+        let tools = (launch.tools.iter())
+            .map(|tool| format!("mcp__{SERVER}__{tool}"))
+            .collect();
+        Turn {
+            tools,
+            ..Default::default()
+        }
+    }
+
+    /// Why ilo ends a run whose init line says it has `message`'s tools and servers, if it does:
+    /// anything but the browser's server and its tools, or a list it can't read. Its agent types
+    /// aren't read, as with no tool of Claude's own nothing reaches them.
+    fn refuses_init(&self, message: &Value) -> Option<String> {
+        let listed = |name| message.get(name).and_then(Value::as_array);
+        let (Some(tools), Some(servers)) = (listed("tools"), listed("mcp_servers")) else {
+            return Some("its init line lists no tools or servers".into());
+        };
+        let server = |each: &Value| each.get("name").and_then(Value::as_str) == Some(SERVER);
+        if servers.len() != 1 || !servers.iter().all(server) {
+            let count = servers.len();
+            return Some(format!(
+                "it started with {count} servers, not the browser's alone"
+            ));
+        }
+        if tools.is_empty() {
+            return Some("it started with no tools".into());
+        }
+        let ours = |name: &str| self.tools.iter().any(|tool| tool == name);
+        match tools.iter().find(|tool| !tool.as_str().is_some_and(ours)) {
+            Some(tool) => Some(format!("it started with the tool {tool}")),
+            None => None,
+        }
+    }
+
+    /// Why ilo ends a run that calls `block`'s tool, if it does: one not the browser's, which
+    /// its init line didn't list.
+    fn refuses_call(&self, block: &Value) -> Option<String> {
+        let name = block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let ours = self.tools.iter().any(|tool| tool == name);
+        (!ours).then(|| format!("it called the tool {name:?}"))
+    }
+
+    /// Ends what's read of the run, for `why`.
+    fn refuse(&mut self, why: String) -> Vec<Out> {
+        self.refused = true;
+        vec![Out::Refused(why)]
+    }
+}
+
+/// What a line of Claude's stream-json output says to the user, if anything. A run whose init
+/// line lists a tool or a server that isn't the browser's is refused there, before its first
+/// answer, and so is one that calls such a tool all the same; nothing after says anything.
 pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
+    if turn.refused {
+        return Vec::new();
+    }
     let kind = message
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102),
-    // its end is told as its start is, and a run's first line says which kinds of helper it has.
-    let helpers =
-        super::helpers::started(kind, message).or_else(|| super::helpers::ended(kind, message));
-    if let Some(told) = helpers.or_else(|| super::helpers::kinds(kind, message)) {
-        return vec![told];
-    }
-    // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
-    // the task's, shown or kept. It tells only that the helper calls a tool, and on which tab.
-    if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
-        return super::helpers::claude_read(parent, kind, message);
+    let init = message.get("subtype").and_then(Value::as_str) == Some("init");
+    if kind == "system" && init {
+        return match turn.refuses_init(message) {
+            Some(why) => turn.refuse(why),
+            None => Vec::new(),
+        };
     }
     if kind == "stream_event" {
         return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
@@ -745,6 +774,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
             let content = message
                 .pointer("/message/content")
                 .and_then(Value::as_array);
+            let call =
+                |block: &&Value| block.get("type").and_then(Value::as_str) == Some("tool_use");
+            let refused = (content.into_iter().flatten())
+                .filter(call)
+                .find_map(|block| turn.refuses_call(block));
+            if let Some(why) = refused {
+                return turn.refuse(why);
+            }
             (content.into_iter().flatten())
                 .filter_map(|block| {
                     let text = |name| block.get(name).and_then(Value::as_str).map(str::trim);
@@ -764,7 +801,6 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                         _ => None,
                     }
                 })
-                .chain(super::helpers::asked(content.into_iter().flatten()))
                 .collect()
         }
         "rate_limit_event" => {
@@ -809,7 +845,15 @@ fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
         }
         "content_block_start" => match event.pointer("/content_block/type").and_then(Value::as_str)
         {
-            Some("tool_use") => vec![Out::Calling],
+            // A call of a tool not the browser's is refused as it starts, before its message
+            // comes whole.
+            Some("tool_use") => {
+                let block = event.get("content_block").unwrap_or(&Value::Null);
+                match turn.refuses_call(block) {
+                    Some(why) => turn.refuse(why),
+                    None => vec![Out::Calling],
+                }
+            }
             // Each text block comes whole as a message of its own, so the next starts afresh.
             Some("text") => {
                 turn.writing.clear();
