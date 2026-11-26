@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, MouseButton, Pixels, SharedString, Size, Task,
-    Window, canvas, div, point, prelude::*, px, rgb, rgba, size,
+    Window, canvas, div, point, prelude::*, px, rgba, size,
 };
 
 use super::{
@@ -32,7 +32,6 @@ use super::{
 use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::Tone;
-use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST, PAGE_ROOM};
 use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT};
@@ -46,10 +45,9 @@ pub(super) struct TaskArea {
     /// A page of the task's that came to need the user while the one watched went back, which ilo
     /// opens once that one is in its thumbnail, never over it on its way.
     opens: Option<u64>,
-    /// The card the page's own outline was drawn round in the last frame, and where the agent's
-    /// ring was: what a test reads of the lines round the page watched.
+    /// The card the page's own outline was drawn round in the last frame: what a test reads of the
+    /// line round the page watched.
     outlined: Cell<Option<Bounds<Pixels>>>,
-    ringed: Cell<Option<Bounds<Pixels>>>,
 }
 
 /// A task's view as it stood when the user asked the window to close or the browser to quit,
@@ -480,7 +478,6 @@ impl Shell {
                     page: None,
                     opens: None,
                     outlined: Cell::default(),
-                    ringed: Cell::default(),
                 })
             }
         }
@@ -1623,7 +1620,6 @@ impl Shell {
             }
         }
         area.outlined.take();
-        area.ringed.take();
         let Some(page) = &area.page else {
             // Watched again, the page's place is logged again.
             self.task_page_at.set(None);
@@ -1655,23 +1651,6 @@ impl Shell {
         if in_place {
             layer = layer.child(self.watched_outline(place));
         }
-        // While the agent drives the page, its pointer's ring goes round it, in `primary`.
-        let driving = in_place && self.task_drives(page.tab);
-        if driving {
-            let ring = place.dilate(px(RING));
-            self.ring_drawn(ring);
-            layer = layer.child(
-                div()
-                    .absolute()
-                    .left(ring.left())
-                    .top(ring.top())
-                    .w(ring.size.width)
-                    .h(ring.size.height)
-                    .rounded(px(self.card_radius() + RING))
-                    .border(px(RING))
-                    .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0)),
-            );
-        }
         if in_place {
             // A page that died leaves its place to its card, as in the user's own Space.
             layer = layer
@@ -1685,7 +1664,7 @@ impl Shell {
 
     /// The page's own outline round a watched page's card at `place`, as any page has it
     /// (`Shell::cards`): outside it on its top, right and bottom in the tone's own ink, and none
-    /// on its left, where the conversation is beside it. The agent's ring is drawn over it.
+    /// on its left, where the conversation is beside it.
     fn watched_outline(&self, place: Bounds<Pixels>) -> gpui::Div {
         let ink = match self.palette.tone {
             Tone::Dark => PAGE_OUTLINE,
@@ -1697,17 +1676,10 @@ impl Shell {
         card_outline(place, self.card_radius(), Some(false), rgba(ink).into())
     }
 
-    /// Notes where the agent's ring was drawn round the watched page.
-    fn ring_drawn(&self, at: Bounds<Pixels>) {
-        if let Some(area) = &self.task_area {
-            area.ringed.set(Some(at));
-        }
-    }
-
     /// What the area draws under a page watched in its tile, which the core draws over it: the
-    /// page's own outline and the area's ground round the page, fading in as it zooms; the agent's
-    /// ring round it while the agent drives; and where the tile is, what takes a press on it,
-    /// which takes the page over. Nothing takes a scroll or a key there.
+    /// page's own outline and the area's ground round the page, fading in as it zooms; and where
+    /// the tile is, what takes a press on it, which takes the page over. Nothing takes a scroll or
+    /// a key there.
     fn watch_tile_ground(
         &self,
         tab: u64,
@@ -1717,19 +1689,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let radius = self.card_radius();
-        let ring = (zoom >= 1. && self.task_drives(tab)).then(|| {
-            let ring = at.dilate(px(RING));
-            self.ring_drawn(ring);
-            div()
-                .absolute()
-                .left(ring.left())
-                .top(ring.top())
-                .w(ring.size.width)
-                .h(ring.size.height)
-                .rounded(px(radius + RING))
-                .border(px(RING))
-                .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0))
-        });
         // A page full screen takes the window and has no edge to keep.
         let outline = (!self.page_fullscreen).then(|| self.watched_outline(place).opacity(zoom));
         // Going back, the tile takes no press: the conversation's pictures under it do, as they do
@@ -1756,7 +1715,6 @@ impl Shell {
             .size_full()
             .children(outline)
             .child(card(place, radius, self.palette.page).opacity(zoom))
-            .children(ring)
             .children(press)
             .into_any_element()
     }
@@ -1808,39 +1766,6 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The dot of the task whose page the strip is under, as that page has it: the strip is the
-    /// page's own, never the task's. A task that waits on the user at another page, one it handed
-    /// them, is at work on this one (#4102).
-    pub(super) fn task_strip_dot(&self) -> Option<Dot> {
-        let card = self.task_card_shown()?;
-        let shown = self.task_page_drawn().map(|(_, tab)| tab);
-        let elsewhere = (self.agent_status.iter())
-            .filter(|status| status.agent == card.agent)
-            .flat_map(|status| status.held.iter())
-            .any(|(held, why)| Some(*held) != shown && !why.is_empty());
-        Some(match card.dot {
-            Dot::Waiting if elsewhere => Dot::Working,
-            dot => dot,
-        })
-    }
-
-    /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:
-    /// the page its agent is at work in, or once it works on several, each that has a step of
-    /// its own.
-    fn task_drives(&self, tab: u64) -> bool {
-        let Some(Bar::Working { tab: at, .. }) = self.agent_bar() else {
-            return false;
-        };
-        let Some(card) = self.task_card_shown() else {
-            return false;
-        };
-        let own = card.page_steps.iter().any(|(each, _)| *each == tab);
-        match card.page_steps.is_empty() {
-            true => self.task_working() && at == tab,
-            false => self.task_strip_dot() == Some(Dot::Working) && own,
-        }
-    }
-
     /// The agent of the task whose page the strip is under.
     pub(super) fn task_strip_agent(&self) -> Option<SharedString> {
         self.task_card_shown().map(|card| card.agent.clone())
@@ -1861,12 +1786,6 @@ impl Shell {
         (card.open.iter())
             .find(|(each, _)| *each == tab)
             .map(|(_, site)| format!("Open {site}"))
-    }
-
-    /// Whether the task the page area shows is at work, which its page's ring says.
-    pub(super) fn task_working(&self) -> bool {
-        self.task_card_shown()
-            .is_some_and(|card| card.dot == Dot::Working)
     }
 }
 

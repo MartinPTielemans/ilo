@@ -323,7 +323,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             .collect();
     }
     // The bench's task that has ended (#4105) is done on its card too, which the strip under its
-    // page and the page's ring follow, with the page it left the user.
+    // page follows, with the page it left the user.
     if let Some(name) = bench_ended() {
         cards[0].name = name.into();
         cards[0].status = "Two seats in row 12 are in your basket".into();
