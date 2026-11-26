@@ -2159,6 +2159,43 @@ fn a_resize_moves_only_the_tile(cx: &mut TestAppContext) {
     );
 }
 
+/// A page watched in its tile is logged where the tile is, once it's in place, not as all of its
+/// part: a check presses the middle of the place it reads, which the tile takes. On its way out of
+/// its picture it's logged nowhere, as each frame moves it.
+#[gpui::test]
+fn a_page_in_its_tile_is_logged_where_the_tile_is_once_in_place(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    cx.simulate_resize(size(px(1000.), px(640.)));
+    draw(&shell, cx);
+    let place = tile_place(&shell, cx);
+    let part = shell.read_with(cx, |shell, _| {
+        let (card, _) = shell.page_frame(shell.viewport);
+        watched(shell.page_part(card))
+    });
+    assert_ne!(place, part, "the tile fills its part here");
+    let logged =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.task_page_at.get());
+    assert_eq!(logged(cx), Some(place));
+
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::Out(Instant::now() + Duration::from_secs(60)),
+    );
+    shell.update(cx, |shell, _| shell.task_page_at.set(None));
+    draw(&shell, cx);
+    assert_eq!(logged(cx), None, "logged on its way out of its picture");
+    set_zoom(&shell, cx, Zoom::Rest);
+    draw(&shell, cx);
+    assert_eq!(logged(cx), Some(place));
+
+    host.take();
+    cx.simulate_click(place.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30"]);
+}
+
 /// A press on the watched tile takes the page over and reaches nothing in it: it, and any press in
 /// the ARM after it, are the tile's, so the page has no click; once the ARM is past and the user
 /// holds the page, it's the window's page, the user's tab, with the keyboard. Hand Back gives the

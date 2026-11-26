@@ -1622,6 +1622,11 @@ impl Shell {
         let place = watched(part);
         if let Some(tile) = page.tile.as_ref().filter(|tile| tile.shown) {
             let at = (tile.placed).map_or_else(|| self.watch_tile_frame(page, now).0, |(at, _)| at);
+            // In its tile the page is where the tile is, not all of its part, and a press there
+            // is the tile's: logged once it's in place, as each frame of the zoom moves it.
+            if self.task_page_live() == Some(page.tab) {
+                super::permission::logged_at("task page", &self.task_page_at, page.tab, at);
+            }
             return Some(
                 layer
                     .child(self.watch_tile_ground(page.tab, place, at, zoom, cx))
