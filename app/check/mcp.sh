@@ -3468,8 +3468,12 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   send key escape
   await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
   await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
+  # Counted, as a page watched before has its lines already: the one read below is this watch's,
+  # where its tile came to rest.
+  page_places=$(grep -c "^browser: task page $opened_tab at " "$log" || true)
   watch "$opened_tab"
-  await_log "^browser: task page $opened_tab at " "the page watched was never placed beside the panel"
+  await_more "^browser: task page $opened_tab at " "$page_places" ||
+    fail "the page watched was never placed beside the panel"
   ../tools/window-screenshot.sh "$pid" "$out/agent-page.png" || fail "no window to capture"
   read -r px py pw ph <<PAGE
 $(grep "^browser: task page $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
