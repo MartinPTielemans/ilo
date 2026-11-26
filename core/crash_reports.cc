@@ -23,6 +23,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -128,6 +129,41 @@ scoped_refptr<base::SequencedTaskRunner> Reports() {
   return *reports;
 }
 
+// The id of the last report the collector took while Send Crash Reports was on, which Report a
+// Problem lists (bc_last_crash_report). Its file is beside the reports, not in the Spaces' file,
+// whose backups would keep it, and turning Send Crash Reports off deletes it.
+std::string& Last() {
+  static base::NoDestructor<std::string> last;
+  return *last;
+}
+
+std::optional<base::FilePath> LastFile() {
+  std::optional<base::FilePath> reports = ProfilesReports();
+  return reports ? std::optional(reports->Append(FILE_PATH_LITERAL("Last Sent"))) : std::nullopt;
+}
+
+std::string ReadLast() {
+  std::optional<base::FilePath> file = LastFile();
+  std::string id;
+  if (!file || !base::ReadFileToStringWithMaxSize(*file, &id, 32) || id.size() != 32 ||
+      !std::ranges::all_of(id, base::IsHexDigit<char>)) {
+    return std::string();
+  }
+  return id;
+}
+
+void WriteLast(const std::string& id) {
+  if (std::optional<base::FilePath> file = LastFile()) {
+    base::WriteFile(*file, id);
+  }
+}
+
+void DeleteLast() {
+  if (std::optional<base::FilePath> file = LastFile()) {
+    base::DeleteFile(*file);
+  }
+}
+
 // The Crashpad database the handler writes, if it's the profile's, as another reader of it, as
 // Chrome's crashes page is.
 std::unique_ptr<CrashReportDatabase> OpenReports() {
@@ -161,10 +197,20 @@ bool LeftOutSwitch(const std::string& flag) {
          std::ranges::contains(kLeftOut, std::string_view(flag).substr(2, flag.find('=') - 2));
 }
 
-// For a Sentry collector, which takes the report's IP address from its connection and keeps it
-// with the report, with the place it gives: to take none. Other collectors leave the field.
-constexpr char kSentryFields[] =
-    R"({"sdk":{"name":"browser_core","version":"1","settings":{"infer_ip":"never"}}})";
+// The report's id as a Sentry event's: 32 hex digits, without the UUID's dashes.
+std::string Id(const crashpad::UUID& uuid) {
+  std::string id = uuid.ToString();
+  std::erase(id, '-');
+  return id;
+}
+
+// For a Sentry collector: the report's own id as the event's, so the id Report a Problem lists
+// finds it (bc_last_crash_report), and no IP address, which it would take from its connection and
+// keep with the report, with the place it gives. Other collectors leave the field.
+std::string SentryFields(const crashpad::UUID& uuid) {
+  return R"({"event_id":")" + Id(uuid) +
+         R"(","sdk":{"name":"browser_core","version":"1","settings":{"infer_ip":"never"}}})";
+}
 
 struct Unsent {
   crashpad::UUID uuid;
@@ -280,6 +326,11 @@ void Sent(int round,
   }
   // check.sh waits for this line.
   fprintf(stderr, "browser: crash report sent\n");
+  // Kept only while Send Crash Reports is on, not for the one report the user said to send.
+  if (Sending()) {
+    Last() = Id(uuid);
+    Reports()->PostTask(FROM_HERE, base::BindOnce(&WriteLast, Last()));
+  }
   Reports()->PostTaskAndReply(FROM_HERE, base::BindOnce(&Delete, uuid), base::BindOnce(&SendNext));
 }
 
@@ -299,7 +350,7 @@ void Send(int round, bool asked, std::optional<Unsent> report) {
   net::AddMultipartValueForUploadWithFileName("upload_file_minidump",
                                               report->uuid.ToString() + ".dmp", report->minidump,
                                               boundary, "application/octet-stream", &body);
-  net::AddMultipartValueForUpload("sentry", kSentryFields, boundary, "", &body);
+  net::AddMultipartValueForUpload("sentry", SentryFields(report->uuid), boundary, "", &body);
   net::AddMultipartFinalDelimiterForUpload(boundary, &body);
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = Collector();
@@ -416,6 +467,10 @@ std::string CollectorHost() {
   return std::string(Collector().host());
 }
 
+std::string LastReport() {
+  return Last();
+}
+
 bool Sending() {
   return UserSettings().send_crash_reports && Collector().is_valid();
 }
@@ -433,6 +488,8 @@ void SetSending(bool send) {
   ++g_round;
   g_busy = false;
   Loader().reset();
+  Last().clear();
+  Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteLast));
   Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteUnsent));
 }
 
@@ -444,11 +501,22 @@ void Started() {
     return;
   }
   if (Sending()) {
+    Reports()->PostTaskAndReplyWithResult(FROM_HERE, base::BindOnce(&ReadLast),
+                                          base::BindOnce([](std::string id) {
+                                            // Unless one was sent or the switch turned off since.
+                                            if (Sending() && Last().empty()) {
+                                              Last() = std::move(id);
+                                            }
+                                          }));
     AfterStartupTaskUtils::PostTask(FROM_HERE, base::SequencedTaskRunner::GetCurrentDefault(),
                                     base::BindOnce(&SendNext));
   } else if (Collector().is_valid() && LastSessionCrashed()) {
     AfterStartupTaskUtils::PostTask(FROM_HERE, base::SequencedTaskRunner::GetCurrentDefault(),
                                     base::BindOnce(&OfferNewest));
+  }
+  if (!Sending()) {
+    // Turned off as the browser quit, before its file was deleted.
+    Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteLast));
   }
 }
 
