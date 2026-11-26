@@ -3428,7 +3428,7 @@ fn standing_on_a_page_ends_the_conversations_other_tiles(cx: &mut TestAppContext
     );
     assert!(untouched(&did), "a page was the window's: {did:?}");
 
-    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, cx)));
+    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, None, cx)));
     let did = draw(cx);
     assert!(
         ended(&did, 30),

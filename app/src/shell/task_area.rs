@@ -608,11 +608,13 @@ impl Shell {
 
     /// Standing on one of the task's pages, the user stands on its `tab` instead, at once, as a tab
     /// switch is: it goes back into the picture the page it replaces would have. Says whether it
-    /// did.
+    /// did. The conversation's press gives its own `tiles`, since the shell can't read the
+    /// conversation while it's being updated; without them they're read from it.
     pub fn stand_on_task_page(
         &mut self,
         tab: u64,
         picture: Option<PagePicture>,
+        tiles: Option<Rc<LiveTiles>>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(area) = &self.task_area else {
@@ -627,7 +629,7 @@ impl Shell {
         if area.page.as_ref().is_some_and(|page| page.tab == tab) {
             return true;
         }
-        let tiles = self.talk.as_ref().map(|talk| talk.tiles(cx));
+        let tiles = tiles.or_else(|| self.talk.as_ref().map(|talk| talk.tiles(cx)));
         let tile = self.watch_tile(tab, thumb, tiles);
         self.show_watched(
             Watched {
