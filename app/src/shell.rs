@@ -1918,6 +1918,10 @@ pub struct Shell {
     /// The top of the edge knot's window while it shows, and the content's width and the
     /// sidebar's side it was placed for (edge_knot.rs).
     edge_knot_at: Option<(f32, f32, bool)>,
+    /// When the edge knot's knot came to wait, which its motion runs from, and whether the frame
+    /// drawn last moved it, for its window to draw the next (edge_knot.rs).
+    edge_knot_sign: knot::Timed,
+    edge_knot_moving: bool,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     task_list: task_cards::TaskList,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
@@ -2404,6 +2408,8 @@ impl Shell {
             edge_knot_since: None,
             waiting_order: Vec::new(),
             edge_knot_at: None,
+            edge_knot_sign: knot::Timed::default(),
+            edge_knot_moving: false,
             task_list: task_cards::TaskList::default(),
             closed_task: None,
             archived_tasks: Vec::new(),

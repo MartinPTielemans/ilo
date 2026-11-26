@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
 use super::edge_knot::PRESS_GUARD;
 use super::task_cards::tests::card;
@@ -35,8 +35,7 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualT
     (shell, host, cx)
 }
 
-/// Thread 1 in state `dot`. One turning to wait brings the hidden sidebar out once (#1080), and
-/// the pointer, not over it, sends it away again.
+/// Thread 1 in state `dot`, and the sidebar in, as a reveal before it may have left it.
 fn waiting(shell: &Entity<Shell>, dot: Dot, cx: &mut VisualTestContext) {
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(1, dot)], cx));
     cx.run_until_parked();
@@ -63,8 +62,8 @@ fn shown(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
     shell.read_with(cx, |shell, _| shell.edge_knot_shown())
 }
 
-/// Shown at the window's edge, at its fixed place, as a thread comes to need the user, and gone as
-/// none does.
+/// Shown at the window's edge, at its fixed place, as soon as a thread comes to need the user, the
+/// sidebar left hidden (#1080), and gone as none does.
 #[gpui::test]
 fn it_shows_while_a_thread_needs_the_user(cx: &mut TestAppContext) {
     let (shell, host, cx) = window(cx);
@@ -78,11 +77,6 @@ fn it_shows_while_a_thread_needs_the_user(cx: &mut TestAppContext) {
         shell.set_task_cards(vec![card(1, Dot::Waiting)], cx)
     });
     cx.run_until_parked();
-    assert!(
-        !shown(&shell, cx),
-        "it showed with the sidebar brought out over the page"
-    );
-    away(&shell, cx);
     assert_eq!(
         knot_calls(&host),
         [format!("edge knot at {TOP} {WIDTH} {HEIGHT}")]
@@ -274,4 +268,47 @@ fn a_still_knot_wakes_nothing(cx: &mut TestAppContext) {
         );
     }
     assert!(shown(&shell, cx));
+}
+
+/// The knot's window, as the app's holds it (edge_knot.rs in the app).
+struct KnotWindow(Entity<Shell>);
+
+impl gpui::Render for KnotWindow {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        self.0
+            .update(cx, |shell, cx| shell.render_edge_knot(window, cx))
+    }
+}
+
+/// The knot moves as the thread's does while it waits, on the loading dots' clock, and stands whole
+/// and still with motion reduced, asking for no frame.
+#[gpui::test]
+fn the_knot_moves_while_it_waits_and_stands_still_with_motion_reduced(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = window(cx);
+    waiting(&shell, Dot::Waiting, cx);
+    assert!(shown(&shell, cx));
+    let pending =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.breath.pending());
+    let knot = cx.update(|_, cx| {
+        let shell = shell.clone();
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| KnotWindow(shell)))
+            .unwrap()
+    });
+    for still in [true, false] {
+        cx.update(|_, cx| cx.set_reduce_motion(still));
+        // The frame a moving sign asked for before comes, so only what is drawn now asks again.
+        cx.executor().advance_clock(Duration::from_secs(1));
+        knot.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.run_until_parked();
+        let moving = shell.read_with(cx, |shell, _| shell.edge_knot_moving());
+        assert_eq!(
+            (moving, pending(cx)),
+            (!still, !still),
+            "with motion reduced {still}: moving, and a frame asked for"
+        );
+    }
 }

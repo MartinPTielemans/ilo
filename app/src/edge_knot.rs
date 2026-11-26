@@ -51,12 +51,13 @@ pub fn open(shell: Entity<Shell>, ui_view: *mut c_void, cx: &mut App) -> Option<
     };
     let window = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
-            // It draws only as what it shows changes while it shows, so a still tab costs nothing.
+            // It draws only as what it shows changes while it shows, and the knot's next frame
+            // while it moves, so a still tab costs nothing.
             let mut drawn = None;
             cx.observe(&shell, move |_, shell, cx| {
                 let shell = shell.read(cx);
                 let now = shell.edge_knot_shown().then(|| shell.edge_knot_look());
-                if now.is_some() && now != drawn {
+                if now.is_some() && (now != drawn || shell.edge_knot_moving()) {
                     cx.notify();
                 }
                 drawn = now;

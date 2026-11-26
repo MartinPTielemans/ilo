@@ -47,7 +47,9 @@
 # discards it. While a page's own alert is up in its tab, a call there answers at once and close_tab
 # closes the tab. A site's sign-in that the browser asks for hands its tab to the user, as hand_off
 # does, and shows over its page once they watch it; the call that met it waits until Hand Back, and
-# the password they type never reaches the agent, the log or the profile. Its download at Work on pages, where each
+# the password they type never reaches the agent, the log or the profile. A hand-off with the
+# sidebar hidden leaves it hidden (#1080), the tab at the window's edge its sign, captured light
+# and dark on the Mac. Its download at Work on pages, where each
 # task starts, answers with the file, which the answer names. Its upload hands the field's step to
 # the user by the field's name, in a subdomain's frame, an object's or another site's, ilo opening
 # no dialog: Hand Back on ilo's line gives the tab back and Not Now leaves it the user's. Before any
@@ -3114,10 +3116,39 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   opened_watched="^browser: task page $opened_tab watched\$"
   opens=$(grep -c "$opened_watched" "$log" || true)
   placed=$(grep -c "^browser: task page $opened_tab in place\$" "$log" || true)
+  # With the sidebar hidden, the thread turning to wait leaves it hidden: nothing slides over the
+  # page unasked, and the tab at the window's edge is the sign instead (#1080).
+  send key s cmd
+  hidden_at=$step
+  expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar before the hand-off" "$hidden_at"
+  waits=$(grep -c "^browser: task card $session Waiting " "$log" || true)
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in for the check\"}" >&4
   await_log "^browser: agent mcp-client hands off $opened_tab: Sign in for the check\$" \
     "hand_off didn't hand the tab to the user"
+  await_more "^browser: task card $session Waiting " "$waits" ||
+    fail "the hand-off didn't turn the client's card to wait for the user: $(grep "^browser: task card $session " "$log" | tail -1)"
   send state
+  none_since '^browser: reveal shown$' "$hidden_at" ||
+    fail "a thread turning to wait brought the hidden sidebar out"
+  # The tab over the page at its built size, light and dark, for its look: on the Mac a child
+  # window of the browser window's, so it's on screen once layout lists one more.
+  if [ "$(uname)" = Darwin ]; then
+    for scheme in light dark; do
+      item=Light
+      [ $scheme = light ] || item=Dark
+      send menu "Appearance › $item"
+      expect "^browser: appearance $scheme\$" "View › Appearance › $item didn't change the appearance"
+      send layout
+      edge_children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' || true)
+      [ "$edge_children" -gt 0 ] ||
+        fail "with the sidebar hidden and the client's thread waiting, the window has no child window for the tab at its edge: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout' | tr '\n' ';')"
+      ../tools/window-screenshot.sh "$pid" "$out/edge-knot-$scheme.png" all || fail "no window to capture"
+    done
+    send menu "Appearance › Automatic"
+    expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't give back the system's appearance"
+  fi
+  send key s cmd
+  expect '^browser: sidebar shown$' "⌘S didn't show the sidebar again after the hand-off"
   [ "$(grep -c "$opened_watched" "$log" || true)" = "$opens" ] ||
     fail "the page handed to the user took the place of the page they watched"
   # Back in the conversation, the page handed to the user says so under its picture (#1080), and

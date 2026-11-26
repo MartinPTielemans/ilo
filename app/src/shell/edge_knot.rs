@@ -15,6 +15,7 @@ use gpui::{
 
 use super::Shell;
 use super::access::Accessible as _;
+use super::knot::{self, Knot};
 use crate::agents::task::Dot;
 use crate::palette::{Palette, Tone, over};
 use crate::tokens::floating::{FILL, RIM};
@@ -91,6 +92,11 @@ impl Shell {
             (Some(_), Some(_)) => self.edge_knot_since,
         };
         self.edge_knot_at = at;
+        // A wait that comes again moves from its gap's opening.
+        if at.is_none() {
+            self.edge_knot_sign = knot::Timed::default();
+            self.edge_knot_moving = false;
+        }
         match at {
             Some((top, ..)) => self.browser.show_edge_knot(top, WIDTH, HEIGHT, cx),
             None => self.browser.hide_edge_knot(cx),
@@ -102,6 +108,12 @@ impl Shell {
         self.edge_knot_at.is_some()
     }
 
+    /// Whether the knot moved in the frame drawn last, so its window draws the next on the
+    /// breath's clock.
+    pub fn edge_knot_moving(&self) -> bool {
+        self.edge_knot_moving
+    }
+
     /// What the knot's drawing reads, so its window draws again only as that changes.
     pub fn edge_knot_look(&self) -> (bool, bool, crate::palette::Palette, Option<SharedString>) {
         (self.right, self.a11y, self.palette, self.edge_knot_said())
@@ -109,9 +121,9 @@ impl Shell {
 
     /// What the knot's window shows: the tab, flush with the window's edge, its other corners
     /// rounded, in the floating fill with its rim inside, its shadow in the room round it, and the
-    /// knot still in it until the knot's own drawing is in. The window is the tab and that room on
-    /// each side but the edge's.
-    pub fn render_edge_knot(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// knot in it, in its waiting motion. The window is the tab and that room on each side but the
+    /// edge's.
+    pub fn render_edge_knot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Dark in either look, as the board draws it in a light window: it lies on the site's page,
         // not on the window's own colours, so it stands out from a page of any colour the same way.
         let fill = rgba(FILL);
@@ -133,6 +145,16 @@ impl Shell {
             inset: false,
         };
         let said = self.edge_knot_said();
+        // The knot moves as the conversation's does while its thread waits, on the loading dots'
+        // clock, only where it can be seen to and motion isn't reduced: still, it asks for no frame.
+        let now = self.clock.now();
+        let gap = (self.edge_knot_sign).gap(Some(Knot::Waiting), now, knot::moves(window, cx));
+        self.edge_knot_moving = gap.is_some();
+        if gap.is_some() {
+            self.breath.keep();
+            let shell = cx.entity();
+            cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
+        }
         // Where the tab is in the browser window's content, for the tooltip beside it.
         let x = match self.right {
             true => f32::from(self.viewport.width) - WIDTH,
@@ -173,7 +195,7 @@ impl Shell {
                     shell.edge_knot_pressed(cx);
                 }),
             )
-            .child(crate::product::mark(MARK, &palette));
+            .child(knot::knot(MARK, &palette, gap));
         // Square and rimless where it meets the window's edge, and the knot as far past the middle
         // the other way.
         let tab = match self.right {
