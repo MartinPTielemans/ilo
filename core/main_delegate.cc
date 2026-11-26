@@ -752,7 +752,9 @@ void Install(const bc_host& host) {
   SetUpMiniPlayer();
   g_browser_core_register_local_state = &RegisterLocalState;
   g_browser_core_component_allowed = &widevine::MayUpdate;
-  g_browser_core_no_passwords = &IsAgentTab;
+  g_browser_core_no_passwords = [](content::WebContents* contents) {
+    return IsAgentTab(contents) || sync::InSignInWindow(contents);
+  };
   g_browser_core_no_autofill = &IsAgentTab;
   g_browser_core_no_permission = &NoPermission;
   g_browser_core_permission_refused = &PermissionRefused;

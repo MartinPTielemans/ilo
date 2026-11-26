@@ -207,6 +207,20 @@ source_set("sync_trouble") {
   public_deps = [ "//components/sync" ]
 }
 
+# Where the sign-in window goes and what a server's discovery says it offers, apart so
+# browser_core_unittests tests them alone.
+source_set("sync_sign_in") {
+  sources = [
+    "sync_sign_in.cc",
+    "sync_sign_in.h",
+  ]
+  deps = [ "//net" ]
+  public_deps = [
+    "//base",
+    "//url",
+  ]
+}
+
 # Whether a newer ilo wrote one of the account's Spaces, apart so browser_core_unittests tests the
 # rule alone.
 source_set("sync_spaces_newer") {
@@ -1103,6 +1117,7 @@ source_set("browser_core") {
     ":sync_keys",
     ":sync_spaces_handed",
     ":sync_spaces_newer",
+    ":sync_sign_in",
     ":sync_today_folders",
     ":sync_trouble",
     ":link_card_rule",
@@ -1485,6 +1500,7 @@ test("browser_core_unittests") {
     "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "sync_sign_in_unittest.cc",
     "sync_spaces_handed_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_today_folders_unittest.cc",
@@ -1557,6 +1573,7 @@ test("browser_core_unittests") {
     ":sync_keys",
     ":sync_spaces_handed",
     ":sync_spaces_newer",
+    ":sync_sign_in",
     ":sync_today_folders",
     ":sync_trouble",
     ":link_card_rule",

@@ -49,6 +49,7 @@
 #include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_settings.h"
+#include "browser_core/sync_sign_in.h"
 #include "browser_core/sync_spaces.h"
 #include "browser_core/sync_trouble.h"
 #include "browser_core/sync_relay.h"
@@ -122,8 +123,7 @@ namespace browser_core::sync {
 
 namespace {
 
-// ilo-server's OIDC client id for the browser (protocol.md, Sign-in).
-constexpr char kClientId[] = "ilo";
+using sync_sign_in::kClientId;
 
 // The prefix of the sign-in window's off-the-record profile's id, by which Chrome's passkey dialog
 // in it reads as a normal window's: the user opened no Incognito window (#1302).
@@ -326,6 +326,14 @@ class SignInWindow : public views::WidgetObserver,
   void DidStartNavigation(content::NavigationHandle* navigation) override { Caught(navigation); }
   void DidRedirectNavigation(content::NavigationHandle* navigation) override {
     Caught(navigation);
+  }
+  // The title names the host of the page the user is looking at, such as Google's while the
+  // server's page has gone on to it, as a tab's address does.
+  void DidFinishNavigation(content::NavigationHandle* navigation) override {
+    if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
+        !navigation->IsSameDocument() && delegate_) {
+      delegate_->SetTitle(base::UTF8ToUTF16(navigation->GetURL().host()));
+    }
   }
   // For the checks, which type in the page once it's there.
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override {
@@ -636,10 +644,15 @@ class Account : public syncer::SyncServiceObserver,
     problem_ = BC_SYNC_PROBLEM_NONE;
     Save();
     Notify();
+    // As the user names the server, which is their own act: the build's own is read as its
+    // sign-in starts.
+    if (server_.is_valid()) {
+      ReadDiscovery();
+    }
     return true;
   }
 
-  void SignIn() {
+  void SignIn(bool google) {
     if (!loaded_ || SignedIn() || signing_in_) {
       if (sign_in_window_) {
         sign_in_window_->Activate();
@@ -660,16 +673,14 @@ class Account : public syncer::SyncServiceObserver,
     crypto::RandBytes(state_bytes);
     state_ = Base64Url(state_bytes);
     redirect_ = server.Resolve("/signed-in");
-    GURL authorize = server.Resolve("/authorize");
-    authorize = net::AppendQueryParameter(authorize, "response_type", "code");
-    authorize = net::AppendQueryParameter(authorize, "client_id", kClientId);
-    authorize = net::AppendQueryParameter(authorize, "redirect_uri", redirect_.spec());
-    authorize = net::AppendQueryParameter(authorize, "scope", "openid email offline_access");
-    authorize = net::AppendQueryParameter(authorize, "state", state_);
-    authorize = net::AppendQueryParameter(
-        authorize, "code_challenge",
-        Base64Url(crypto::hash::Sha256(base::as_byte_span(verifier_))));
-    authorize = net::AppendQueryParameter(authorize, "code_challenge_method", "S256");
+    // The build's own server is asked nothing before the user signs in, so this is when it's
+    // read, for the next time the account offers Google; its own page offers it meanwhile.
+    if (!server_.is_valid()) {
+      ReadDiscovery();
+    }
+    const GURL authorize = sync_sign_in::AuthorizeUrl(
+        server, redirect_, state_, Base64Url(crypto::hash::Sha256(base::as_byte_span(verifier_))),
+        google && Google());
     signing_in_ = true;
     sign_in_window_ = std::make_unique<SignInWindow>(
         authorize, redirect_,
@@ -869,6 +880,11 @@ class Account : public syncer::SyncServiceObserver,
         weak_factory_.GetWeakPtr(), url));
   }
 
+  // The Google sign-in linked to the account (protocol.md, /api/identities), and removing it: the
+  // mailed code still signs in.
+  void ReadGoogle() { AskIdentities("GET", "/api/identities", false); }
+  void RemoveGoogle() { AskIdentities("DELETE", "/api/identities/google", false); }
+
   void ReadActivity(bc_sync_activity* activity) const {
     *activity = {};
     syncer::SyncService* service = Service();
@@ -965,6 +981,30 @@ class Account : public syncer::SyncServiceObserver,
     return url.is_valid() ? url.DeprecatedGetOriginAsURL() : GURL();
   }
 
+  // Whether the server signs in with Google, as its discovery last said.
+  bool Google() const { return google_.is_valid() && google_ == Server(); }
+
+  // Whether the server signs in with Google too (sync_sign_in::OffersGoogle), kept with the server
+  // it's of. An answer that didn't come keeps the last.
+  void ReadDiscovery() {
+    const GURL server = Server();
+    if (!server.is_valid()) {
+      return;
+    }
+    Fetch("GET", server.Resolve("/.well-known/openid-configuration"), std::string(), std::string(),
+          base::BindOnce(
+              [](base::WeakPtr<Account> account, GURL asked, int status,
+                 std::optional<base::DictValue> json) {
+                if (!account || account->Server() != asked || status != 200 || !json) {
+                  return;
+                }
+                account->google_ = sync_sign_in::OffersGoogle(*json) ? asked : GURL();
+                account->Save();
+                account->Notify();
+              },
+              weak_factory_.GetWeakPtr(), server));
+  }
+
   syncer::SyncService* Service() const {
     Profile* start = StartProfile();
     return start ? SyncServiceFactory::GetForProfile(start) : nullptr;
@@ -1013,15 +1053,17 @@ class Account : public syncer::SyncServiceObserver,
         !server.empty() && server.back() == '/' ? server.substr(0, server.size() - 1) : server;
     const std::string code = request_ ? request_->pairing.code() : std::string();
     const std::string email = SignedIn() ? email_ : std::string();
-    const std::array<std::string, 3> now = {trimmed, email, code};
+    const std::string google_email = SignedIn() ? google_email_ : std::string();
+    const std::array<std::string, 4> now = {trimmed, email, code, google_email};
     const int status = Status();
     const bool on = status == BC_SYNC_ON;
     const std::array<bool, 2> chosen = {on && Chosen(syncer::UserSelectableType::kPreferences),
                                         on && Chosen(syncer::UserSelectableType::kExtensions)};
+    const bool google = Google();
     bc_sync_activity activity;
     ReadActivity(&activity);
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
-        now == notified_strings_ && chosen == notified_chosen_ &&
+        now == notified_strings_ && chosen == notified_chosen_ && google == notified_google_ &&
         SameActivity(activity, notified_activity_)) {
       return;
     }
@@ -1031,6 +1073,7 @@ class Account : public syncer::SyncServiceObserver,
     notified_problem_ = problem_;
     notified_strings_ = now;
     notified_chosen_ = chosen;
+    notified_google_ = google;
     if (!Host().sync_changed) {
       return;
     }
@@ -1041,7 +1084,9 @@ class Account : public syncer::SyncServiceObserver,
                            .email = email.c_str(),
                            .code = code.c_str(),
                            .settings = chosen[0],
-                           .extensions = chosen[1]};
+                           .extensions = chosen[1],
+                           .google = google,
+                           .google_email = google_email.c_str()};
     Host().sync_changed(Host().context, &state);
   }
 
@@ -1095,6 +1140,9 @@ class Account : public syncer::SyncServiceObserver,
       if (const std::string* server = root->FindString("server")) {
         server_ = GURL(*server);
       }
+      if (const std::string* google = root->FindString("google")) {
+        google_ = GURL(*google);
+      }
       const std::string* email = root->FindString("email");
       const std::string* account = root->FindString("account");
       const std::string* device = root->FindString("device");
@@ -1130,6 +1178,9 @@ class Account : public syncer::SyncServiceObserver,
     base::DictValue root;
     if (server_.is_valid()) {
       root.Set("server", server_.spec());
+    }
+    if (google_.is_valid()) {
+      root.Set("google", google_.spec());
     }
     if (SignedIn()) {
       root.Set("email", email_);
@@ -1454,6 +1505,7 @@ class Account : public syncer::SyncServiceObserver,
     access_.clear();
     SetSecret(std::nullopt);
     email_.clear();
+    google_email_.clear();
     account_.clear();
     device_.clear();
     // The server signs this device out as it deletes the account, which the relay or a refresh
@@ -1986,11 +2038,73 @@ class Account : public syncer::SyncServiceObserver,
     Host().sync_devices_changed(Host().context, listed.data(), listed.size());
   }
 
+  void AskIdentities(const std::string& method, const std::string& path, bool again) {
+    if (!SignedIn()) {
+      return;
+    }
+    WithToken(base::BindOnce(
+        [](base::WeakPtr<Account> account, int generation, std::string method, std::string path,
+           bool again, const std::string& token) {
+          if (!account || generation != account->generation_ || token.empty()) {
+            return;
+          }
+          account->Fetch(method, account->Server().Resolve(path), token, std::string(),
+                         base::BindOnce(&Account::IdentitiesAnswered, account, generation, method,
+                                        path, again));
+        },
+        weak_factory_.GetWeakPtr(), generation_, method, path, again));
+  }
+
+  void IdentitiesAnswered(int generation,
+                          std::string method,
+                          std::string path,
+                          bool again,
+                          int status,
+                          std::optional<base::DictValue> json) {
+    if (generation != generation_) {
+      return;
+    }
+    // The server took the access token back before its time: once more, with a new one.
+    if (status == 401 && !again) {
+      access_.clear();
+      AskIdentities(method, path, true);
+      return;
+    }
+    if (method == "DELETE") {
+      // Removed, or another device had removed it (404): the list says so either way.
+      if (status == 204 || status == 404) {
+        ReadGoogle();
+      }
+      return;
+    }
+    const base::ListValue* list = json ? json->FindList("identities") : nullptr;
+    if (status != 200 || !list) {
+      return;
+    }
+    // A provider this browser doesn't know is left out, so a newer server's lists nothing here.
+    google_email_.clear();
+    for (const base::Value& value : *list) {
+      const base::DictValue* dict = value.GetIfDict();
+      const std::string* provider = dict ? dict->FindString("provider") : nullptr;
+      const std::string* email = dict ? dict->FindString("email") : nullptr;
+      if (provider && email && *provider == "google") {
+        google_email_ = *email;
+        break;
+      }
+    }
+    Notify();
+  }
+
   bool loaded_ = false;
   scoped_refptr<os_crypt_async::Encryptor> encryptor_;
   // Unset for the build's own, from --sync-url.
   GURL server_;
+  // The server whose discovery last said it signs in with Google too, which Google() compares with
+  // the one signed in to now.
+  GURL google_;
   std::string email_;
+  // The address Google signs in to the account with, as the server last listed it, or none.
+  std::string google_email_;
   std::string account_;
   std::string device_;
   std::string device_name_;
@@ -2038,8 +2152,9 @@ class Account : public syncer::SyncServiceObserver,
   bool notified_ = false;
   int notified_status_ = 0;
   int notified_problem_ = 0;
-  std::array<std::string, 3> notified_strings_;
+  std::array<std::string, 4> notified_strings_;
   std::array<bool, 2> notified_chosen_ = {};
+  bool notified_google_ = false;
   bc_sync_activity notified_activity_ = {};
   // The cycles' troubles, the changes the server refused in the cycle under way, and the commit
   // request whose response is yet to come.
@@ -2099,17 +2214,19 @@ void Install() {
     const Space* space = Window::SpaceOf(contents);
     return !space || !space->agent();
   };
-  g_browser_core_passkey_normal_wording = [](content::WebContents* contents) {
-    const Profile* profile =
-        contents ? Profile::FromBrowserContext(contents->GetBrowserContext()) : nullptr;
-    if (!profile || !profile->IsOffTheRecord()) {
-      return false;
-    }
-    // OTRProfileID's ToString is private; its stream operator is the public way to the id.
-    std::ostringstream id;
-    id << profile->GetOTRProfileID();
-    return id.str().starts_with(kSignInProfile);
-  };
+  g_browser_core_passkey_normal_wording = &InSignInWindow;
+}
+
+bool InSignInWindow(content::WebContents* contents) {
+  const Profile* profile =
+      contents ? Profile::FromBrowserContext(contents->GetBrowserContext()) : nullptr;
+  if (!profile || !profile->IsOffTheRecord()) {
+    return false;
+  }
+  // OTRProfileID's ToString is private; its stream operator is the public way to the id.
+  std::ostringstream id;
+  id << profile->GetOTRProfileID();
+  return id.str().starts_with(kSignInProfile);
 }
 
 void Start() {
@@ -2124,8 +2241,8 @@ bool SetServer(const std::string& server) {
   return Account::Get().SetServer(server);
 }
 
-void SignIn() {
-  Account::Get().SignIn();
+void SignIn(bool google) {
+  Account::Get().SignIn(google);
 }
 
 void Cancel() {
@@ -2175,6 +2292,14 @@ void AskForShares(std::string method, std::string path, std::string json, ShareA
 
 void RemoveDevice(const std::string& id) {
   Account::Get().RemoveDevice(id);
+}
+
+void ReadGoogle() {
+  Account::Get().ReadGoogle();
+}
+
+void RemoveGoogle() {
+  Account::Get().RemoveGoogle();
 }
 
 void ReadActivity(bc_sync_activity* activity) {
