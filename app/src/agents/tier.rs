@@ -2,6 +2,8 @@
 //! and refuses what's above it, never asking, and only the user changes it (#4086). What each one
 //! refuses is a row of this table, so nothing else decides.
 
+use crate::product::PRODUCT;
+
 /// Settings › Agents' group that explains each tier, the one place that does; the level's menu
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
@@ -249,17 +251,17 @@ pub fn told(why: Why, tier: Tier, what: &str, site: &str) -> String {
     let what = capped(what, TOLD_MOST);
     match why {
         Why::Fenced => format!(
-            "ilo stopped this: {what}. {site} is off limits to agents, whatever a task's access. \
-             Only the user can change that, in ilo. Don't try another way to the same end."
+            "{PRODUCT} stopped this: {what}. {site} is off limits to agents, whatever a task's access. \
+             Only the user can change that, in {PRODUCT}. Don't try another way to the same end."
         ),
         Why::Never => format!(
-            "ilo stopped this: {what}. The user set {site} to Never for this agent, whatever a \
-             task's access. Only the user can change that, in ilo. Don't try another way to the \
+            "{PRODUCT} stopped this: {what}. The user set {site} to Never for this agent, whatever a \
+             task's access. Only the user can change that, in {PRODUCT}. Don't try another way to the \
              same end."
         ),
         _ => format!(
-            "ilo stopped this: {what}. It isn't part of this task's access ({}). Only the user can \
-             change a task's access, in ilo. Don't try another way to the same end; if they change \
+            "{PRODUCT} stopped this: {what}. It isn't part of this task's access ({}). Only the user can \
+             change a task's access, in {PRODUCT}. Don't try another way to the same end; if they change \
              it, the same call will go through.",
             tier.label()
         ),

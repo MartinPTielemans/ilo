@@ -15,6 +15,7 @@ use super::runner::Cli;
 use super::sign_in::Offer;
 use super::tier::{Stop, Tier, Why};
 use super::*;
+use crate::product::PRODUCT;
 
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
@@ -2112,6 +2113,56 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// A connection saved before the server took the product's name is void: its token reaches
+/// nothing and its row asks to connect again. Connect Again takes the old name out of the
+/// client's config before it writes the new, and the command's Add Again takes its own away.
+#[gpui::test]
+fn a_connection_from_before_the_products_name_connects_again(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let clients = [Client::Codex, Client::ClaudeCode, Client::Command];
+    let saved = json!({ "agents": [
+        { "client": Client::Codex.id(), "token": "codex-before" },
+        { "client": Client::ClaudeCode.id(), "token": "claude-before", "name": "another" },
+        { "client": Client::Command.id(), "token": "command-before" },
+    ] });
+    agents.update(cx, |agents, cx| agents.load(&saved.to_string(), cx));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(!agents.is_connected(client), "{client:?} is connected");
+            assert!(agents.is_stale(client), "{client:?} isn't asked again");
+        }
+        assert!(
+            agents.tokens.lock().unwrap().is_empty(),
+            "an old token works"
+        );
+        assert_eq!(agents.command_state(), crate::agents::cli::State::Stale);
+        assert_eq!(agents.setup(Client::Codex), None);
+    });
+
+    for client in clients {
+        agents.update(cx, |agents, cx| agents.connect(client, cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        *configs.disconnected.lock().unwrap(),
+        [
+            (Client::Codex, old_server_name()),
+            (Client::ClaudeCode, old_server_name())
+        ]
+    );
+    let connected: Vec<_> = (configs.connected.lock().unwrap().iter())
+        .map(|(client, entry)| (*client, entry.name.clone()))
+        .collect();
+    assert_eq!(connected, clients.map(|client| (client, server_name())));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(agents.is_connected(client) && !agents.is_stale(client));
+        }
+        assert_eq!(agents.tokens.lock().unwrap().len(), clients.len());
+    });
+}
+
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
 /// that orders.
 fn shop_tree() -> String {
@@ -3336,9 +3387,12 @@ fn an_order_is_refused_until_the_user_gives_full_access(cx: &mut TestAppContext)
     );
     assert_eq!(
         told.text,
-        "ilo stopped this: click “Place order” on example.com. It isn't part of this task's access \
-         (Work on pages). Only the user can change a task's access, in ilo. Don't try another way \
-         to the same end; if they change it, the same call will go through."
+        format!(
+            "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of this \
+             task's access (Work on pages). Only the user can change a task's access, in \
+             {PRODUCT}. Don't try another way to the same end; if they change it, the same call \
+             will go through."
+        )
     );
     assert_eq!(browser.pages.borrow().len(), pages, "it clicked");
     assert!(log(&agents, "claude-code", cx).contains(&(
@@ -5694,10 +5748,10 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
     let stopped = run.recv().unwrap();
     assert!(stopped.error);
     assert!(
-        stopped.text.starts_with(
-            "Step 2 failed: ilo stopped this: click “Place order” on example.com. It isn't part \
-             of this task's access"
-        ),
+        stopped.text.starts_with(&format!(
+            "Step 2 failed: {PRODUCT} stopped this: click “Place order” on example.com. It isn't \
+             part of this task's access"
+        )),
         "{}",
         stopped.text
     );
@@ -12019,9 +12073,12 @@ mod sessions {
         assert!(refused.error, "it ordered: {}", refused.text);
         assert_eq!(
             refused.text,
-            "ilo stopped this: click “Place order” on example.com. It isn't part of this task's \
-             access (Work on pages). Only the user can change a task's access, in ilo. Don't try \
-             another way to the same end; if they change it, the same call will go through."
+            format!(
+                "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of \
+                 this task's access (Work on pages). Only the user can change a task's access, \
+                 in {PRODUCT}. Don't try another way to the same end; if they change it, the \
+                 same call will go through."
+            )
         );
         assert!(!refused.text.contains("Refund"), "{}", refused.text);
         assert_eq!(
@@ -13063,6 +13120,7 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
+            format!("the-{PRODUCT}-Command"),
             // So is one that only reads as one (#3585): a word mixing scripts, letters of one
             // script that look like another's, compatibility forms, marks that don't show or
             // join, and any case.
@@ -13715,7 +13773,7 @@ mod sessions {
         ] {
             hello(&agents, agent, posing, cx);
             let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
-            assert_eq!(name, "ilo CLI", "{posing} passed");
+            assert_eq!(name, Client::Command.name(), "{posing} passed");
         }
         hello(&agents, agent, "Researcher", cx);
         command(1, "read_page", json!({ "tab": 20 }), cx);

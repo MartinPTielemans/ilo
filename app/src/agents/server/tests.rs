@@ -325,7 +325,7 @@ fn initialize_begins_a_session() {
     assert_eq!(answer["id"], 1);
     let result = &answer["result"];
     assert_eq!(result["protocolVersion"], "2025-03-26");
-    assert_eq!(result["serverInfo"]["name"], env!("APP_NAME"));
+    assert_eq!(result["serverInfo"]["name"], env!("PRODUCT_NAME"));
     assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
     assert!(
         result["instructions"]
@@ -652,7 +652,7 @@ fn the_bridge_carries_a_clients_stdio() {
     let said = format!(
         "{0} isn't running, or access for other apps is off. Open {0} and turn it on in Settings › \
          Other apps.",
-        env!("APP_NAME")
+        env!("PRODUCT_NAME")
     );
     assert_eq!(bridge::off(), said);
     assert!(off.unwrap_err().contains(&said));

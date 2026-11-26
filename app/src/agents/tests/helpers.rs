@@ -6,12 +6,13 @@
 use super::kept::{Run, after, beside};
 use super::*;
 use crate::agents::helpers::NAME_YOUR_TAB;
-use crate::agents::runner::{Cli, Failure, Helper, Out};
+use crate::agents::runner::{Cli, Failure, Helper, Out, SERVER};
 use crate::agents::task::ilo::{self, HelpersLimit, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     Card, Counted, Dot, Line, NEEDS_YOU, State, TaskAction, Trace, TraceItem,
 };
 use crate::agents::tier::{self, Tier};
+use crate::product::PRODUCT;
 use crate::tokens::agents::helpers::{DEEP, MOST};
 
 /// The task's Space, the first the browser makes, and its helpers' pages.
@@ -227,7 +228,7 @@ fn a_level_lowered_mid_turn_refuses_a_helpers_next_act(cx: &mut TestAppContext) 
     let refused = refused.try_recv().expect("it wasn't refused at once");
     assert!(refused.error, "{}", refused.text);
     assert!(
-        refused.text.contains("ilo stopped this"),
+        refused.text.contains(&format!("{PRODUCT} stopped this")),
         "{}",
         refused.text
     );
@@ -258,7 +259,7 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
     started(&run, &agent, 1, DEEP, cx);
     let was = sent(&run, "\"interrupt\"", 1);
     assert!(
-        !was.contains("ilo stopped that turn"),
+        !was.contains(&format!("{PRODUCT} stopped that turn")),
         "it was told before its turn ended"
     );
     let line = limit_line(&run, &agent, cx).expect("no line");
@@ -275,7 +276,7 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
     let interrupted = Failure::Other("Interrupted".into());
     run.said(&agent, Out::Ended(Some(interrupted)), cx);
     assert_eq!(run.state(&agent, cx), State::Working);
-    let told = sent(&run, "ilo stopped that turn", 1);
+    let told = sent(&run, &format!("{PRODUCT} stopped that turn"), 1);
     assert!(
         told.contains(&format!("more than {MOST} helpers")),
         "{told}"
@@ -298,7 +299,7 @@ fn past_the_limit_again_the_turn_ends_and_the_task_waits_for_the_user(cx: &mut T
     started(&run, &agent, MOST + 1, DEEP, cx);
     sent(&run, "\"interrupt\"", 1);
     run.said(&agent, Out::Ended(None), cx);
-    sent(&run, "ilo stopped that turn", 1);
+    sent(&run, &format!("{PRODUCT} stopped that turn"), 1);
 
     started(&run, &agent, 1, DEEP, cx);
     sent(&run, "\"interrupt\"", 2);
@@ -314,7 +315,11 @@ fn past_the_limit_again_the_turn_ends_and_the_task_waits_for_the_user(cx: &mut T
     // The user writes: what the task was sent since has its one telling and its two stops.
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, "Go on.", cx));
     let was = sent(&run, "Go on.", 1);
-    assert_eq!(was.matches("ilo stopped that turn").count(), 1, "{was}");
+    assert_eq!(
+        was.matches(&format!("{PRODUCT} stopped that turn")).count(),
+        1,
+        "{was}"
+    );
     assert_eq!(was.matches("\"interrupt\"").count(), 2, "{was}");
     started(&run, &agent, MOST, DEEP, cx);
     assert_eq!(run.state(&agent, cx), State::Working);
@@ -352,7 +357,12 @@ fn stopped_over(run: &Run, agent: &str, limit: HelpersLimit, says: &str, cx: &mu
         agents.reply(agent, "Go on without it.", cx)
     });
     let was = sent(run, "Go on without it.", 1);
-    assert_eq!(was.matches("ilo stopped this task.").count(), 1, "{was}");
+    assert_eq!(
+        was.matches(&format!("{PRODUCT} stopped this task."))
+            .count(),
+        1,
+        "{was}"
+    );
     assert!(was.contains(says), "{was}");
     assert_eq!(was.matches("\"interrupt\"").count(), 1, "{was}");
     assert_eq!(run.state(agent, cx), State::Working);
@@ -386,7 +396,7 @@ fn a_helper_ilo_doesnt_allow_stops_the_task(cx: &mut TestAppContext) {
         &run,
         &agent,
         HelpersLimit::Kind,
-        "a helper ilo doesn't allow",
+        &format!("a helper {PRODUCT} doesn't allow"),
         cx,
     );
 
@@ -448,7 +458,7 @@ fn a_start_of_another_kind_stops_the_task(cx: &mut TestAppContext) {
             start[key] = value.clone();
         }
         line(&run, &agent, start, cx);
-        let says = "a helper ilo doesn't allow";
+        let says = &format!("a helper {PRODUCT} doesn't allow");
         stopped_over(&run, &agent, HelpersLimit::Kind, says, cx);
     }
 }
@@ -476,11 +486,11 @@ fn a_helpers_call_without_a_start_stops_the_task(cx: &mut TestAppContext) {
     let calls = |parent: &str| {
         json!({ "type": "assistant", "parent_tool_use_id": parent,
             "message": { "content": [
-                { "type": "tool_use", "id": "toolu_c", "name": "mcp__ilo__open_tab",
+                { "type": "tool_use", "id": "toolu_c", "name": format!("mcp__{SERVER}__open_tab"),
                   "input": { "url": "https://stalls.example/saturday" } },
             ] } })
     };
-    let says = "a helper ilo doesn't allow";
+    let says = &format!("a helper {PRODUCT} doesn't allow");
     let (run, agent) = with_helpers("no-start", cx);
     told(
         &run,
@@ -839,7 +849,7 @@ fn a_first_line_with_another_kind_after_an_answer_stops_the_task(cx: &mut TestAp
         &run,
         &agent,
         HelpersLimit::Kind,
-        "a helper ilo doesn't allow",
+        &format!("a helper {PRODUCT} doesn't allow"),
         cx,
     );
 }

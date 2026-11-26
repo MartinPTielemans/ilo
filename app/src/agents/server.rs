@@ -94,7 +94,10 @@ const MAX_CONNECTIONS: usize = 32;
 /// room for a machine that's stalled.
 const TOKEN_WAIT: Duration = Duration::from_secs(5);
 /// What a client is told when every place is taken.
-const FULL: &str = "ilo is at its limit for connected clients. Quit another client session, then reconnect or restart this one.";
+const FULL: &str = concat!(
+    env!("PRODUCT_NAME"),
+    " is at its limit for connected clients. Quit another client session, then reconnect or restart this one."
+);
 
 /// The server, running until it's dropped.
 pub struct Server {
@@ -752,7 +755,7 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": env!("APP_NAME"), "version": env!("CARGO_PKG_VERSION") },
+        "serverInfo": { "name": crate::product::PRODUCT, "version": env!("CARGO_PKG_VERSION") },
         "instructions": tools::INSTRUCTIONS,
     })
 }

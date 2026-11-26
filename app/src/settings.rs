@@ -4731,13 +4731,20 @@ impl Settings {
                     }),
                 "disconnect",
             ),
+            // One connected before the server took the product's name (CN2).
             false => (
-                self.button(("connect-agent", index), "Connect")
-                    .on_click(move |_, _, cx| {
-                        // check.sh reads this line.
-                        log!("browser: connect agent {}", client.id());
-                        agents.update(cx, |agents, cx| agents.connect(client, cx))
-                    }),
+                self.button(
+                    ("connect-agent", index),
+                    match model.is_stale(client) {
+                        true => "Connect Again",
+                        false => "Connect",
+                    },
+                )
+                .on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
                 "connect",
             ),
         };
@@ -4780,7 +4787,7 @@ impl Settings {
                     // Add follows the row, not the agent: on Windows a command whose PATH entry
                     // was taken off is still connected, and Add puts the entry back (#3783).
                     agents.update(cx, |agents, cx| match agents.command_state() {
-                        agents::cli::State::Off => {
+                        agents::cli::State::Off | agents::cli::State::Stale => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
@@ -4804,6 +4811,8 @@ impl Settings {
         }
         controls.push(match state {
             agents::cli::State::Off => action("Add", "add-command"),
+            // Added before the command took the product's name (CN2).
+            agents::cli::State::Stale => action("Add Again", "add-command"),
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())

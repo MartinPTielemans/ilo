@@ -84,6 +84,10 @@ fn started_without_the_variables_the_assistant_keeps_kinds_of_its_own() {
 /// helper.
 #[test]
 fn off_claude_starts_with_the_arguments_it_had() {
+    let allowed = format!(
+        "mcp__{SERVER}__open_tab,mcp__{SERVER}__read_page,mcp__{SERVER}__title,mcp__{SERVER}__ask,\
+         mcp__{SERVER}__finish,WebSearch"
+    );
     let had = [
         "-p",
         "--input-format",
@@ -106,7 +110,7 @@ fn off_claude_starts_with_the_arguments_it_had() {
         "--disable-slash-commands",
         "--no-session-persistence",
         "--allowedTools",
-        "mcp__ilo__open_tab,mcp__ilo__read_page,mcp__ilo__title,mcp__ilo__ask,mcp__ilo__finish,WebSearch",
+        allowed.as_str(),
         "--model",
         "haiku",
         "--append-system-prompt-file",
@@ -144,7 +148,11 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     // The search its task has, never a fetch.
     assert_eq!(
         has,
-        ["mcp__ilo__open_tab", "mcp__ilo__read_page", "WebSearch"]
+        [
+            format!("mcp__{SERVER}__open_tab").as_str(),
+            format!("mcp__{SERVER}__read_page").as_str(),
+            "WebSearch"
+        ]
     );
     assert!(!kinds[KIND]["prompt"].as_str().unwrap().is_empty());
     // The task is told the kind by the name it's described under.
@@ -161,7 +169,10 @@ fn a_stopped_task_is_told_its_limit_as_a_sentence() {
     for most in [1, several] {
         let told = told(Limit::Count, most);
         assert!(told.contains(&format!("at most {most} for each message")));
-        assert!(told.starts_with("ilo stopped that turn."), "{told}");
+        assert!(
+            told.starts_with(&format!("{PRODUCT} stopped that turn.")),
+            "{told}"
+        );
     }
     let deep = told(Limit::Depth, several);
     assert!(
@@ -171,8 +182,14 @@ fn a_stopped_task_is_told_its_limit_as_a_sentence() {
     assert!(!deep.contains("You started"), "{deep}");
     // A task ilo stopped is told so, and the kind it may start by its name.
     let kind = told(Limit::Kind, several);
-    assert!(kind.starts_with("ilo stopped this task."), "{kind}");
-    assert!(deep.starts_with("ilo stopped this task."), "{deep}");
+    assert!(
+        kind.starts_with(&format!("{PRODUCT} stopped this task.")),
+        "{kind}"
+    );
+    assert!(
+        deep.starts_with(&format!("{PRODUCT} stopped this task.")),
+        "{deep}"
+    );
     assert!(kind.contains(KIND), "{kind}");
 }
 
@@ -247,8 +264,8 @@ fn only_the_browsers_tools_label_a_page() {
         "message": { "content": [
             { "type": "text", "text": "The seats page lists row 12." },
             { "type": "thinking", "thinking": "The button is the second one." },
-            { "type": "tool_use", "id": "a", "name": "mcp__ilo__read_page", "input": { "tab": 41 } },
-            { "type": "tool_use", "id": "b", "name": "mcp__ilo__click",
+            { "type": "tool_use", "id": "a", "name": format!("mcp__{SERVER}__read_page"), "input": { "tab": 41 } },
+            { "type": "tool_use", "id": "b", "name": format!("mcp__{SERVER}__click"),
               "input": { "tab": "42", "ref": "e2" } },
         ] } });
     assert_eq!(
@@ -267,8 +284,8 @@ fn only_the_browsers_tools_label_a_page() {
     let other = serde_json::json!({ "type": "assistant", "parent_tool_use_id": "toolu_task_a",
         "message": { "content": [
             { "type": "tool_use", "id": "x", "name": "mcp__other__click", "input": { "tab": 41 } },
-            { "type": "tool_use", "id": "y", "name": "mcp__ilo__list_tabs", "input": {} },
-            { "type": "tool_use", "id": "z", "name": "mcp__ilo__open_tab",
+            { "type": "tool_use", "id": "y", "name": format!("mcp__{SERVER}__list_tabs"), "input": {} },
+            { "type": "tool_use", "id": "z", "name": format!("mcp__{SERVER}__open_tab"),
               "input": { "url": "https://stalls.example/saturday" } },
         ] } });
     assert_eq!(
@@ -468,7 +485,7 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
         made_up(
             serde_json::json!({ "type": "assistant", "parent_tool_use_id": "toolu_a",
             "message": { "content": [
-                { "type": "tool_use", "id": "a", "name": "mcp__ilo__read_page",
+                { "type": "tool_use", "id": "a", "name": format!("mcp__{SERVER}__read_page"),
                   "input": { "tab": 41 } },
                 { "type": "tool_use", "id": "b", "name": name, "input": { "tab": 41 } },
             ] } }),
@@ -483,12 +500,12 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
         assert_eq!(calls(tool), said, "{tool}");
     }
     for tool in ["title", "ask", "finish", "done", "hand_off"] {
-        let name = format!("mcp__ilo__{tool}");
+        let name = format!("mcp__{SERVER}__{tool}");
         assert_eq!(calls(&name), [Out::NotAllowed(Limit::Kind)], "{tool}");
     }
     // The task's own line calls them as it always has.
     let own = serde_json::json!({ "type": "assistant", "message": { "content": [
-        { "type": "tool_use", "id": "a", "name": "mcp__ilo__title", "input": { "text": "Shops" } },
+        { "type": "tool_use", "id": "a", "name": format!("mcp__{SERVER}__title"), "input": { "text": "Shops" } },
     ] } });
     assert_eq!(made_up(own), [Out::Calling]);
     // And ilo's kind is described without any of them.
@@ -499,6 +516,6 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
     let has = kinds[KIND]["tools"].to_string();
     assert_eq!(
         has,
-        r#"["mcp__ilo__open_tab","mcp__ilo__read_page","WebSearch"]"#
+        format!(r#"["mcp__{SERVER}__open_tab","mcp__{SERVER}__read_page","WebSearch"]"#)
     );
 }
