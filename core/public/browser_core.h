@@ -1732,6 +1732,10 @@ typedef struct bc_host {
   // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
   // app is quitting. |answer| lasts only for the call.
   void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
+  // How |read| (bc_pdf_read) ended, from a task of its own, once a read: a BC_PDF_ |result|, and
+  // with BC_PDF_READ the document's |page_count| and how many of the pages asked for it read,
+  // |pages_read|, fewer than asked past the document's end. Else both 0.
+  void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
   // The product's name as the user reads it, for what Chrome shows in words of its own that name
   // the browser: its warning before http. Null or empty, those keep Chrome's own name. Not a
   // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
@@ -2226,6 +2230,41 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 // left that agent's Space, or that the user holds. The app's: agents get none, and no name or path
 // of a file is logged.
 BC_EXPORT bool bc_file_field_put(bc_id field, const char* const* paths, size_t count);
+
+// What came of bc_pdf_read (pdf_read_done).
+// Its pages are read: bc_pdf_page_text and bc_pdf_page_picture give them.
+#define BC_PDF_READ 0
+// It needs a password, which nothing asks for.
+#define BC_PDF_LOCKED 1
+// PDFium can't open it, or the process reading it stopped, as a crash there stops it.
+#define BC_PDF_BROKEN 2
+// bc_pdf_drop came before the answer.
+#define BC_PDF_CLOSED 3
+
+// The most pages one bc_pdf_read reads.
+#define BC_PDF_MOST_PAGES 30
+
+// Reads |size| bytes of a PDF the app read from a file it holds, its pages |first| (from 0) to
+// |first| + |count| - 1, by the engine's PDFium in a sandboxed utility process of its own, never
+// the browser's, and answers once with pdf_read_done, from a task of its own. A page's text is
+// PDFium's, and a page with under 16 characters but spaces, as a scan with no text layer, gets a
+// picture too. The bytes are copied before it returns, and nothing is sent anywhere. Returns the
+// read's id, or 0 for no bytes or over 256 MB, a |first| under 0, or a |count| under 1 or over
+// BC_PDF_MOST_PAGES. The app's: agents get none, and no byte of it is logged.
+BC_EXPORT bc_id bc_pdf_read(const uint8_t* bytes, size_t size, int first, int count);
+
+// The text of |read|'s |index|th page, from 0 within the read, UTF-8, copied as bc_space_name
+// copies it. Empty before its answer or for an index past what it read.
+BC_EXPORT size_t bc_pdf_page_text(bc_id read, int index, char* text, size_t capacity);
+
+// The picture of |read|'s |index|th page as JPEG, at most 1568 px on its long side, for a page
+// with under 16 characters but spaces; none, 0, for one with text. Copies up to |capacity| bytes
+// into |jpeg| and returns the picture's whole length.
+BC_EXPORT size_t bc_pdf_page_picture(bc_id read, int index, uint8_t* jpeg, size_t capacity);
+
+// Forgets |read| and what it answered, ending its process if it's still reading. One unanswered
+// answers BC_PDF_CLOSED.
+BC_EXPORT void bc_pdf_drop(bc_id read);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only

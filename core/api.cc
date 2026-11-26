@@ -75,6 +75,7 @@
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
+#include "browser_core/pdf_reads.h"
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
@@ -936,6 +937,30 @@ bool bc_file_field_put(bc_id field, const char* const* paths, size_t count) {
     files.emplace_back(paths[i]);
   }
   return browser_core::AgentFileField::Put(field, std::move(files));
+}
+
+bc_id bc_pdf_read(const uint8_t* bytes, size_t size, int first, int count) {
+  if (!bytes || !size) {
+    return 0;
+  }
+  // SAFETY: the app gives |size| bytes at |bytes|, as the header says.
+  return browser_core::StartPdfRead(UNSAFE_BUFFERS(base::span<const uint8_t>(bytes, size)), first, count);
+}
+
+size_t bc_pdf_page_text(bc_id read, int index, char* text, size_t capacity) {
+  return CopyString(std::string(browser_core::PdfPageText(read, index)), text, capacity);
+}
+
+size_t bc_pdf_page_picture(bc_id read, int index, uint8_t* jpeg, size_t capacity) {
+  const base::span<const uint8_t> picture = browser_core::PdfPagePicture(read, index);
+  if (jpeg) {
+    std::copy_n(picture.begin(), std::min(capacity, picture.size()), jpeg);
+  }
+  return picture.size();
+}
+
+void bc_pdf_drop(bc_id read) {
+  browser_core::DropPdfRead(read);
 }
 
 bc_id bc_agent_open_tab(const char* agent, const char* url) {

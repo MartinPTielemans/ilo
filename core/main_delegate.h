@@ -1,6 +1,7 @@
 #ifndef BROWSER_CORE_MAIN_DELEGATE_H_
 #define BROWSER_CORE_MAIN_DELEGATE_H_
 
+#include <memory>
 #include <optional>
 
 #include "browser_core/public/browser_core.h"
@@ -9,6 +10,8 @@
 #include "chrome/app/chrome_main_delegate.h"  // nogncheck
 
 namespace browser_core {
+
+class UtilityClient;
 
 // Runs Chromium with the app's callbacks and returns its exit code.
 int Run(int argc, const char** argv, const bc_host& host);
@@ -40,6 +43,11 @@ class MainDelegate : public ChromeMainDelegate {
 #endif
   content::ContentClient* CreateContentClient() override;
   content::ContentBrowserClient* CreateContentBrowserClient() override;
+  // Chrome's, with the core's own services too (UtilityClient).
+  content::ContentUtilityClient* CreateContentUtilityClient() override;
+
+ private:
+  std::unique_ptr<UtilityClient> utility_client_;
 };
 
 }  // namespace browser_core

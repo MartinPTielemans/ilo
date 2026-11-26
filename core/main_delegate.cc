@@ -71,6 +71,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/utility_client.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
@@ -1049,6 +1050,12 @@ content::ContentBrowserClient* MainDelegate::CreateContentBrowserClient() {
   chrome_content_browser_client_ = std::make_unique<ContentBrowserClient>();
   chrome_content_browser_client_->SetSamplingProfiler(std::move(sampling_profiler_));
   return chrome_content_browser_client_.get();
+}
+
+content::ContentUtilityClient* MainDelegate::CreateContentUtilityClient() {
+  // As ChromeMainDelegate's, with ours in place of Chrome's, which ours runs first.
+  utility_client_ = std::make_unique<UtilityClient>();
+  return utility_client_.get();
 }
 
 }  // namespace browser_core

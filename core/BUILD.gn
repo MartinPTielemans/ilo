@@ -663,6 +663,33 @@ source_set("agent_close_rule") {
   ]
 }
 
+# A PDF's pages, read by PDFium in the core's reader, a sandboxed utility process (bc_pdf_read,
+# #4367), apart so browser_core_unittests tests the reading alone.
+source_set("pdf_read") {
+  sources = [
+    "pdf_read.cc",
+    "pdf_read.h",
+  ]
+  public_deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
+  deps = [
+    "//skia",
+    "//third_party/pdfium",
+    "//ui/gfx/codec",
+  ]
+}
+
+# The reader's interface, from the browser to the utility process it reads in.
+mojom("pdf_reader") {
+  sources = [ "pdf_reader.mojom" ]
+  public_deps = [
+    "//mojo/public/mojom/base",
+    "//sandbox/policy/mojom",
+  ]
+}
+
 # Whether a file the user picks for an agent's file field goes into it, and whether a page may open
 # its own file dialog, apart so browser_core_unittests tests the rule alone (#3656).
 source_set("agent_file_field_rule") {
@@ -993,6 +1020,8 @@ source_set("browser_core") {
     "password_offer.h",
     "passwords.cc",
     "passwords.h",
+    "pdf_reads.cc",
+    "pdf_reads.h",
     "page_dialog.cc",
     "page_dialog.h",
     "permission_question.cc",
@@ -1053,6 +1082,8 @@ source_set("browser_core") {
     "tile.cc",
     "tile.h",
     "trace.cc",
+    "utility_client.cc",
+    "utility_client.h",
     "webrtc.cc",
     "webrtc.h",
     "widevine.cc",
@@ -1088,6 +1119,8 @@ source_set("browser_core") {
     ":boost_script",
     ":clear_both_engines",
     ":drm_request",
+    ":pdf_read",
+    ":pdf_reader",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
@@ -1273,6 +1306,7 @@ source_set("browser_core") {
     "//components/zoom",
     "//content/public/browser",
     "//content/public/common",
+    "//content/public/utility",
     "//crypto",
     "//extensions/browser",
     "//extensions/common",
@@ -1458,6 +1492,7 @@ test("browser_core_unittests") {
     "agent_close_rule_unittest.cc",
     "tab_background_unittest.cc",
     "agent_file_field_rule_unittest.cc",
+    "pdf_read_unittest.cc",
     "agent_permission_rule_unittest.cc",
     "agent_space_rule_unittest.cc",
     "link_preview_rule_unittest.cc",
@@ -1544,6 +1579,7 @@ test("browser_core_unittests") {
     ":agent_close_rule",
     ":tab_background",
     ":agent_file_field_rule",
+    ":pdf_read",
     ":agent_permission_rule",
     ":agent_space_rule",
     ":link_preview_rule",
