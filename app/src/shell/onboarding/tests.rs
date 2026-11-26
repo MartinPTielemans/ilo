@@ -1867,6 +1867,31 @@ fn help_improve_follows_the_settings_the_build_has(cx: &mut TestAppContext) {
     }
 }
 
+/// Other apps comes only where the stat at the card's start finds an agent program's files:
+/// Claude Code's or Codex's, on a made-up computer; none found, or only another MCP client, and
+/// the step is left out. Nothing is looked for of an assistant's program.
+#[gpui::test]
+fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
+    use crate::agents::Client;
+    for (found, shown) in [
+        (vec![Client::ClaudeCode], true),
+        (vec![Client::Codex], true),
+        (vec![], false),
+    ] {
+        let (shell, cx, host) = first_window(cx);
+        host.other_apps.set(Some(false));
+        let (_agents, looks) =
+            cx.update(|_, cx| crate::agents::tests::stand_in_with(Vec::new(), found.clone(), cx));
+        started(&shell, cx);
+        assert_eq!(
+            steps(&shell, cx).contains(&Step::OtherApps),
+            shown,
+            "{found:?}"
+        );
+        assert_eq!(looks(), 0, "{found:?}: no program looked for");
+    }
+}
+
 /// Other apps' switch is on its own step, Settings' own and set at once, a click on it or its row
 /// turning it either way; no other step has it, and nothing else it moves.
 #[gpui::test]
