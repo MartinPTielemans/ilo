@@ -59,6 +59,7 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
+#include "content/public/browser/restore_type.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -779,8 +780,9 @@ class Throttle : public content::NavigationThrottle {
   }
 
   // An agent's page arriving at a site kept for the system's engine, which loads in Chromium: its
-  // first request waits for the user's session there, from the system's store. Once a visit: a
-  // load within the site, or a redirect through it again, keeps what the page has since.
+  // first request waits for the user's session there, from the system's store, as the app let it
+  // through (system_engine_cookies.h). A load within the site, or a redirect through it again,
+  // keeps what the page has since.
   ThrottleCheckResult ForAgent(content::WebContents* contents) {
     const Space* space = Window::SpaceOf(contents);
     if (!space) {
@@ -789,20 +791,46 @@ class Throttle : public content::NavigationThrottle {
     if (!space || !space->agent()) {
       return PROCEED;
     }
-    const std::string site = SiteOf(navigation_handle()->GetURL());
-    if (site == copied_ || SiteOf(contents->GetLastCommittedURL()) == site) {
+    content::NavigationHandle* navigation = navigation_handle();
+    const std::string site = SiteOf(navigation->GetURL());
+    const std::vector<GURL>& chain = navigation->GetRedirectChain();
+    const Arrival arrival = {
+        .browser_initiated = !navigation->IsRendererInitiated(),
+        .history = navigation->IsHistory() ||
+                   navigation->GetRestoreType() != content::RestoreType::kNotRestored,
+        .started_at_site = !chain.empty() && SiteOf(chain.front()) == site,
+        // A page the system's engine showed last left Chromium's discarded, at what it had
+        // before, as a given tab's has: that isn't where the tab is.
+        .at_site = site == copied_ ||
+                   (!contents->WasDiscarded() && SiteOf(contents->GetLastCommittedURL()) == site),
+    };
+    if (!CopiesSession(arrival)) {
       return PROCEED;
     }
     copied_ = site;
+    wait_.Start(base::BindOnce(&Throttle::GoOn, base::Unretained(this), site));
     CopyToAgentPage(Profile::FromBrowserContext(contents->GetBrowserContext()), site,
                     base::BindOnce(&Throttle::Copied, weak_factory_.GetWeakPtr()));
     return DEFER;
   }
 
-  void Copied() { Resume(); }
+  void Copied() { wait_.Answered(); }
+
+  void GoOn(const std::string& site, bool answered) {
+    if (!answered) {
+      // Counts only: never a cookie name or value.
+      fprintf(stderr,
+              "browser: no answer from the system's store for %s in %lld s, an agent's page goes "
+              "on without the session\n",
+              site.c_str(), static_cast<long long>(StoreWait::kWait.InSeconds()));
+    }
+    Resume();
+  }
 
   // The site this navigation copied the session of, so its redirects copy it once.
   std::string copied_;
+  // Only while the navigation waits for the copy.
+  StoreWait wait_;
   base::WeakPtrFactory<Throttle> weak_factory_{this};
 };
 

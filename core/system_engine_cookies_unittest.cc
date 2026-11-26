@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/bind.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_constants.h"
@@ -88,6 +90,73 @@ TEST(SystemEngineCookiesTest, ATieKeepsTheCookieThere) {
   const std::vector<net::CanonicalCookie> system = {
       Cookie("session", "user", kSignedIn, kSignedIn)};
   EXPECT_TRUE(Newer(chromium, Store::kChromium, system).empty());
+}
+
+// The agent's open or navigate, and the give's load, which the app let through before they load.
+constexpr Arrival kOpened = {.browser_initiated = true,
+                             .history = false,
+                             .started_at_site = true,
+                             .at_site = false};
+
+TEST(SystemEngineCookiesTest, AnOpenTheAppLetThroughTakesTheSession) {
+  EXPECT_TRUE(CopiesSession(kOpened));
+}
+
+// A link, form or script in the agent's page: the fence judges it only once it is there, so a site
+// off limits to agents gets no session from it.
+TEST(SystemEngineCookiesTest, APagesLinkTakesNoSession) {
+  Arrival link = kOpened;
+  link.browser_initiated = false;
+  EXPECT_FALSE(CopiesSession(link));
+}
+
+TEST(SystemEngineCookiesTest, BackForwardOrARestoreTakesNoSession) {
+  Arrival back = kOpened;
+  back.history = true;
+  EXPECT_FALSE(CopiesSession(back));
+}
+
+TEST(SystemEngineCookiesTest, ARedirectFromAnotherSiteTakesNoSession) {
+  Arrival redirected = kOpened;
+  redirected.started_at_site = false;
+  EXPECT_FALSE(CopiesSession(redirected));
+}
+
+// Within a visit the page has the session already: once a visit.
+TEST(SystemEngineCookiesTest, ALoadWithinTheSiteCopiesNothingMore) {
+  Arrival again = kOpened;
+  again.at_site = true;
+  EXPECT_FALSE(CopiesSession(again));
+}
+
+// A store that never answers: the navigation goes on, without the session, at kWait.
+TEST(SystemEngineCookiesTest, NoAnswerGoesOnAtTheWait) {
+  base::test::TaskEnvironment tasks(base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  StoreWait wait;
+  std::vector<bool> went;
+  wait.Start(base::BindOnce(
+      [](std::vector<bool>* went, bool answered) { went->push_back(answered); }, &went));
+  tasks.FastForwardBy(StoreWait::kWait - base::Milliseconds(1));
+  EXPECT_TRUE(went.empty());
+  tasks.FastForwardBy(base::Milliseconds(1));
+  EXPECT_EQ(went, std::vector<bool>{false});
+  // The copy ending late changes nothing.
+  wait.Answered();
+  EXPECT_EQ(went, std::vector<bool>{false});
+}
+
+TEST(SystemEngineCookiesTest, AnAnswerGoesOnOnceAndEndsTheTimer) {
+  base::test::TaskEnvironment tasks(base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  StoreWait wait;
+  std::vector<bool> went;
+  wait.Start(base::BindOnce(
+      [](std::vector<bool>* went, bool answered) { went->push_back(answered); }, &went));
+  tasks.FastForwardBy(base::Seconds(1));
+  wait.Answered();
+  EXPECT_EQ(went, std::vector<bool>{true});
+  tasks.FastForwardBy(StoreWait::kWait * 2);
+  EXPECT_EQ(went, std::vector<bool>{true});
+  EXPECT_EQ(tasks.GetPendingMainThreadTaskCount(), 0u);
 }
 
 }  // namespace
