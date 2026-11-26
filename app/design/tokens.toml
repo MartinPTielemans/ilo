@@ -3621,6 +3621,24 @@ bubble-x = 12.0
 bubble-text = 13.0
 bubble-line = 18.0
 
+[shell.conversation.sign]
+# The sign above the composer (spec-thread-stage.md, "A wait on the user"): the product's mark at
+# the brand's small form, `size` across in the mark's ink, its right edge `right` in from the
+# composer's and its foot `above` over it, in the stage and in the panel beside a page alike. While
+# the thread works, a gap `working-gap` of the cord's length travels round it, a lap in `lap` at an
+# even pace; while it waits on the user, at the top of the upper right loop a gap opens to
+# `waiting-gap` over `open`, holds `hold`, closes over `open`, and the knot rests `rest` before the
+# next. In seconds. Neither working nor waiting: no sign.
+size = 22.0
+right = 4.0
+above = 6.0
+working-gap = 0.16
+lap = 1.5
+waiting-gap = 0.14
+open = 0.35
+hold = 0.14
+rest = 1.0
+
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it
 # shares): only what changes while the conversation shows moves. What the user sent goes from the

@@ -5268,3 +5268,85 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
         }
     }
 }
+
+/// The sign over the composer as last drawn: what it said, and where.
+fn sign_drawn(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> Option<(super::Sign, gpui::Bounds<gpui::Pixels>)> {
+    view.read_with(cx, |view, _| view.sign_drawn.get())
+}
+
+/// The sign says working while the thread's step or turn is under way, waiting while it waits on
+/// the user in each way it can, and is gone once the thread can't be stopped, read from the
+/// thread's own state alone: an assistant's words that say it waits change nothing.
+#[gpui::test]
+fn the_sign_says_working_waiting_or_nothing_from_the_threads_own_state(cx: &mut TestAppContext) {
+    use super::Sign::{Waiting, Working};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    let mut talk = conversation(1);
+    talk.lines
+        .push(Line::Said("I'm waiting for you to sign in.".into()));
+    for (live, stoppable, sign) in [
+        (Live::Working, true, Some(Working)),
+        (Live::Refused, true, Some(Waiting)),
+        (Live::Handed, true, Some(Waiting)),
+        (yours, true, Some(Waiting)),
+        (Live::Asked, true, Some(Waiting)),
+        (Live::Working, false, None),
+        (Live::Asked, false, None),
+        (Live::Working, true, Some(Working)),
+    ] {
+        talk.live = live.clone();
+        talk.stoppable = stoppable;
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        redraw(&shell, &view, cx);
+        assert_eq!(
+            sign_drawn(&view, cx).map(|(sign, _)| sign),
+            sign,
+            "{live:?}, stoppable {stoppable}"
+        );
+    }
+}
+
+/// The sign stands over the composer's right corner, its right edge `right` in from the
+/// composer's and its foot `above` over it, `size` across, in the stage and in the panel beside a
+/// page alike.
+#[gpui::test]
+fn the_sign_stands_over_the_composers_right_corner_in_the_stage_and_beside_a_page(
+    cx: &mut TestAppContext,
+) {
+    use crate::tokens::shell::conversation::sign::{ABOVE, RIGHT, SIZE};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let mut talk = foot_talk(2, vec![handed(1)]);
+    talk.live = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
+    redraw(&shell, &view, cx);
+    let placed = |cx: &mut VisualTestContext, at: &str| {
+        let (_, sign) = sign_drawn(&view, cx).unwrap_or_else(|| panic!("no sign {at}"));
+        let composer = view
+            .read_with(cx, |view, _| view.composer_drawn.get())
+            .unwrap_or_else(|| panic!("no composer {at}"));
+        let (right, top) = (composer.right(), composer.top());
+        assert_eq!(sign.size.width, px(SIZE), "{at}");
+        assert_eq!(sign.size.height, px(SIZE), "{at}");
+        assert_eq!(right - sign.right(), px(RIGHT), "{at}");
+        assert_eq!(top - sign.bottom(), px(ABOVE), "{at}");
+    };
+    placed(cx, "in the stage");
+    hand_off(&shell, &view, cx);
+    placed(cx, "beside a page");
+}
