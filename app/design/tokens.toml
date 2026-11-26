@@ -2684,6 +2684,23 @@ broom = [210.0, 52.0, 14.0]
 # Your first Space, until the theme editor's parts (#4274): the theme picker's swatches in the
 # column, and the transparency picker under them.
 space-gap = 24.0
+# Other apps (v9 §8): two cards side by side, a way in each, centred: their top, width, height,
+# gap and corners, their padding top and side, and how much both grow while the command's line
+# takes two lines. A card's row: its glyph's plate, corners and glyph, the gap after it and the
+# name's size. Its line: the gap over it, size and line. Its plate, near-black in Dark and the
+# field in Light: the gap over it, width, height, corners, padding top and side, and the mono
+# face's size and line. The small line under it: gap, size and line. Off, a plate's text is at
+# `way-off` of itself, and a Copied stays for `way-copied` seconds.
+ways = [100.0, 336.0, 148.0, 16.0, 12.0]
+way-inset = [12.0, 14.0]
+way-grow = 16.0
+way-glyph = [28.0, 7.0, 14.0, 10.0, 13.0]
+way-line = [6.0, 12.0, 16.0]
+way-plate = [8.0, 308.0, 42.0, 8.0, 5.0, 9.0, 11.0, 16.0]
+way-plate-fill = 0x17171b
+way-small = [7.0, 11.0, 14.0]
+way-off = 0.45
+way-copied = 1.2
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
