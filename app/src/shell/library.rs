@@ -3013,14 +3013,14 @@ impl Shell {
             crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
         });
         let group: SharedString = format!("past-{index}").into();
-        // When it ended, as History's rows say when, under the same headings.
-        let when = (self.library.as_ref()).map(|library| {
-            // The Library's times are milliseconds.
-            let ended = past.ended as f64 * 1000.;
-            history_when(ended, library.starts, crate::clock::twelve_hour())
-        });
-        let about = SharedString::from(past.about(&when.unwrap_or_default()));
-        let mark = self.status_mark(crate::agents::task::Dot::Done);
+        // How its last turn ended and when, as its card and Settings say it (W4), and no more.
+        let about = SharedString::from(past.ended(&crate::agents::time_or_day(past.ended)));
+        // Its mark says the same: a tick for one done, the ring of one that ended otherwise.
+        let dot = match past.end {
+            Some(crate::agents::kept::End::Done) | None => crate::agents::task::Dot::Done,
+            Some(_) => crate::agents::task::Dot::Ended,
+        };
+        let mark = self.status_mark(dot);
         let close = div()
             .id(("past-delete", index))
             .absolute()

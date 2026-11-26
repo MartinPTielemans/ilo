@@ -64,6 +64,8 @@ pub struct Past {
     /// connected app's id, or a ⌘T CLI's (`agents::task_answers`). Empty for an entry from before
     /// they were kept.
     pub answers: String,
+    /// How its last turn ended, or None for an entry from before that was kept, and for a sort.
+    pub end: Option<crate::agents::kept::End>,
     /// A sort of today's tabs into folders, in place of a task: then its entry is its counts, its
     /// assistant's id in `agent`, and when it ran, and nothing else.
     pub sorted: Option<Sorted>,
@@ -93,6 +95,7 @@ impl Past {
             messages: 0,
             steps: Vec::new(),
             answers: String::new(),
+            end: None,
             sorted: Some(sorted),
         }
     }
@@ -113,6 +116,16 @@ impl Past {
             count(self.pages.len(), "page", "pages"),
         ];
         parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    }
+
+    /// What its row says under its title, with `when` it ended as W4 says a time, today's time or
+    /// an earlier day's date: how its last turn ended, "Done 14:02", or the time alone for an entry
+    /// from before that was kept.
+    pub fn ended(&self, when: &str) -> String {
+        match self.end {
+            Some(end) => format!("{} {when}", end.word().alone(&self.agent)),
+            None => when.to_string(),
+        }
     }
 
     /// What its page says under its title: "Claude Code · 12 min · 14:02 · 1 order placed · 3
@@ -189,12 +202,16 @@ impl Past {
                 kept
             })
             .collect();
-        json!({
+        let mut kept = json!({
             "id": self.id, "title": self.title, "agent": self.agent,
             "started": self.started, "ended": self.ended, "pages": pages,
             "orders": self.orders, "messages": self.messages, "steps": steps,
             "answers": self.answers,
-        })
+        });
+        if let Some(end) = self.end {
+            kept["end"] = json!(end.id());
+        }
+        kept
     }
 
     fn from_json(value: &Value) -> Option<Past> {
@@ -269,6 +286,10 @@ impl Past {
             messages: number("messages")? as usize,
             steps,
             answers: text("answers").unwrap_or_default(),
+            // An entry from before its end was kept has none, nor one a later build ended otherwise.
+            end: text("end").and_then(|end| {
+                (crate::agents::kept::End::ALL.into_iter()).find(|each| each.id() == end)
+            }),
             sorted: None,
         })
     }
