@@ -38,6 +38,11 @@ views::NativeWidget* NewNativeWidget(views::Widget* widget,
 // them: an NSView on the Mac, or null.
 void AddWindowViews(views::Widget* widget, void* ui_view);
 
+// Marks |widget|'s window as a Little ilo one, once it's known to be. On the Mac its pages leave no
+// strip at the window's side for the UI (page_edge_strips.h), as macOS resizes the window itself;
+// elsewhere it does nothing.
+void SetLittle(views::Widget* widget, bool little);
+
 // A page's DevTools, docked: they fill the page's frame, and the page goes at |page_frame| in it,
 // over them, or under them if |page_under|.
 struct DockedDevTools {

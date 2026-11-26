@@ -639,6 +639,9 @@ Window* Window::OpenOwn(const gfx::Rect& bounds, void* ui_view, Profile* profile
     return nullptr;
   }
   window->own_space_ = true;
+  if (own == Space::Own::kLittle) {
+    platform::SetLittle(window->widget_.get(), true);
+  }
   if (own == Space::Own::kPrivate) {
     window->off_the_record_ = true;
     // Its Browser now, which holds the private session for as long as the window is open.
