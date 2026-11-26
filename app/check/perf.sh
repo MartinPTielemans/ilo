@@ -577,12 +577,12 @@ fi
 # shows them through the tab strip, as ⌘1–⌘8 do; ilo's are timed from ↩ in ⌘T's bar and from the
 # key. A profile of its own, launched once first, as ilo's was.
 # CHECK_CHROME names another, such as Chrome for Testing on the owner's Mac, whose own Chrome a run
-# never launches or quits: off CI, there's none without it.
-chrome_id=com.google.Chrome
+# never launches or quits: off CI, there's none without it, and a Google Chrome it names is refused.
+# Each launch's PID is kept in perf/chrome-pids, and Chrome is quit by it, never by its bundle id,
+# which would reach every Chrome of that id on the machine.
 if [ -n "${CHECK_CHROME:-}" ]; then
   chrome=$CHECK_CHROME
   chrome_procs=${chrome%/MacOS/*}
-  [ "$(uname)" != Darwin ] || chrome_id=$(defaults read "$chrome_procs/Info" CFBundleIdentifier)
   [ "$(uname)" = Darwin ] || chrome_procs=$chrome
 elif [ -z "${CI:-}" ]; then
   chrome=none
@@ -609,7 +609,8 @@ if [ "$(uname)" = Darwin ] && [ "$chrome" != none ]; then
 fi
 # Launches Chrome on page $1, with the arguments after, and check/cdp.py on the DevTools port it
 # picks, which logs its pages' titles to $log, as the app's log has its own, and takes commands on
-# fd 5. Sets $pid and $launched, the Unix ms just before, or says Chrome didn't stay.
+# fd 5. Sets $pid and $chrome_pid, its PID, which perf/chrome-pids keeps too, and $launched, the
+# Unix ms just before, or says Chrome didn't stay.
 chrome_launch() {
   chrome_url="$page?$1"
   shift
@@ -624,6 +625,8 @@ chrome_launch() {
     $([ -z "$chrome_at" ] || echo "--window-position=${chrome_at% *},${chrome_at#* }" \
       --window-size=1280,800) "$@" "$chrome_url" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
   pid=$!
+  chrome_pid=$pid
+  echo "$pid" >> "$perf_dir/chrome-pids"
   # Its port, then the browser's path, with no newline after, once DevTools listens, which a
   # runner's first launch of it, from a cold disk, took 15.5 s to (#2385).
   tries=0
@@ -718,17 +721,16 @@ chrome_switches() {
     [ -z "${3:-}" ] || [ "$i" -gt 8 ] || sleep 1
   done
 }
-# Quits Chrome as quit_app does the app, then ends what's left of it after $1 s, or 20.
+# Quits the last launch's Chrome by its PID, as Chrome quits on SIGINT, then ends what's left of it
+# after $1 s, or 20.
 chrome_quit() {
   # cdp.py ends as its commands do, and as Chrome closes its socket.
   exec 5>&-
   if windows; then
     # Without /F, taskkill asks its windows to close, as their close button does.
-    taskkill //PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
-  elif [ "$(uname)" = Darwin ]; then
-    osascript -e "tell application id \"$chrome_id\" to quit" || true
+    taskkill //PID "$(cat "/proc/$chrome_pid/winpid")" > /dev/null 2>&1 || true
   else
-    kill -INT "$pid" 2> /dev/null || true
+    kill -INT "$chrome_pid" 2> /dev/null || true
   fi
   for _ in $(seq $((${1:-20} * 2))); do
     perf_snap chrome-left
@@ -757,6 +759,10 @@ elif [ ! -x "$chrome" ]; then
   else
     echo "skip: perf's Chrome. Off CI, CHECK_CHROME names the one to run, as the owner's own never is."
   fi
+elif [ -z "${CI:-}" ] && [ "$(uname)" = Darwin ] && [ "$(defaults read "$chrome_procs/Info" \
+  CFBundleIdentifier 2> /dev/null)" = com.google.Chrome ]; then
+  echo "skip: perf's Chrome. CHECK_CHROME names a Google Chrome, which a run off CI never" \
+    "launches; name a copy of its own, such as Chrome for Testing."
 else
   snap_procs=$chrome_procs
   : > "$perf_dir/chrome.log"
