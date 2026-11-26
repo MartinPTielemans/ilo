@@ -165,7 +165,7 @@ pub(crate) fn drawn(records: &[Record]) -> Drawn {
                 opens: Opens::Nothing,
                 under: SharedString::default(),
                 page: on,
-                says: SharedString::default(),
+                says: tools::Note::default(),
             };
         match record {
             Record::You(text) => {

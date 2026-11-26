@@ -8950,7 +8950,7 @@ mod tasks {
         };
         let says: Vec<_> = (trace.items.iter())
             .filter_map(|item| match item {
-                TraceItem::Step(step) => Some(step.says.to_string()),
+                TraceItem::Step(step) => Some(step.says.as_ref().to_string()),
                 TraceItem::Said(_) | TraceItem::Helper { .. } => None,
             })
             .collect();
@@ -8979,7 +8979,7 @@ mod tasks {
     fn notes_drawn(talk: &crate::agents::task::Conversation) -> Vec<String> {
         use crate::agents::task::{Line, Opens, TraceItem, TraceStep};
         fn of(step: &TraceStep, notes: &mut Vec<String>) {
-            notes.push(step.says.to_string());
+            notes.push(step.says.as_ref().to_string());
             if let Opens::Steps(steps) = &step.opens {
                 steps.iter().for_each(|step| of(step, notes));
             }

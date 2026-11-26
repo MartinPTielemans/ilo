@@ -2660,12 +2660,12 @@ impl TalkView {
                 .id(("conversation-says", step.key))
                 .when(look.a11y, |says| {
                     says.role(Role::Label)
-                        .aria_label(words::says(&name, &step.says))
+                        .aria_label(words::says(&name, step.says.as_ref()))
                 })
                 .pl(px(under))
                 .pt(px(SAYS_TOP))
                 .child(
-                    assistant_words(look.palette, step.says.clone())
+                    assistant_words(look.palette, step.says.words())
                         .whitespace_nowrap()
                         .truncate(),
                 )

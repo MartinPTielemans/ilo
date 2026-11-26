@@ -353,7 +353,7 @@ pub struct TraceStep {
     pub page: Option<OnPage>,
     /// The assistant's own word on why it took the step, made plain, or empty: under its line in
     /// the opened trace, as the assistant's. Never on a step that failed or was refused.
-    pub says: SharedString,
+    pub says: tools::Note,
 }
 
 /// The page a step acted on.
@@ -3047,7 +3047,12 @@ impl Agents {
     /// of its client's session, which its first call that opens or acts on a tab starts. A
     /// run's steps are steps of their own (`trace_step`); its name and its finish aren't steps of
     /// its work.
-    pub(super) fn trace_call(&mut self, call: &super::Call, says: String, cx: &mut Context<Self>) {
+    pub(super) fn trace_call(
+        &mut self,
+        call: &super::Call,
+        says: tools::Note,
+        cx: &mut Context<Self>,
+    ) {
         let tool = call.tool.as_str();
         let key = match self.task(&call.agent) {
             Some(_) => call.agent.clone(),
@@ -3088,7 +3093,7 @@ impl Agents {
         call: u64,
         tab: u64,
         step: &Value,
-        says: String,
+        says: tools::Note,
         cx: &App,
     ) {
         let Some(key) = self.tracer(agent, call) else {
@@ -5075,7 +5080,7 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
             Line::Trace(trace) => (trace.items.into_iter())
                 .filter_map(|item| match item {
                     TraceItem::Step(step) => Some(Line::Step(TraceStep {
-                        says: SharedString::default(),
+                        says: tools::Note::default(),
                         opens: match step.opens {
                             Opens::Thought(_) => Opens::Nothing,
                             opens => opens,
@@ -5396,7 +5401,7 @@ fn helper_began(key: usize, running: bool) -> TraceStep {
         opens: Opens::Nothing,
         under: SharedString::default(),
         page: None,
-        says: "".into(),
+        says: tools::Note::default(),
     }
 }
 
@@ -5421,7 +5426,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             opens: Opens::Nothing,
             under: SharedString::default(),
             page: on_page(&step.did),
-            says: "".into(),
+            says: tools::Note::default(),
         };
     }
     let description = match (&step.error, took) {
@@ -5469,8 +5474,8 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         page: on_page(&step.did),
         // The assistant's word on its step, only on one that went as it asked.
         says: match step.error {
-            None => step.did.says.clone().into(),
-            Some(_) => SharedString::default(),
+            None => step.did.says.clone(),
+            Some(_) => tools::Note::default(),
         },
     }
 }
@@ -5521,7 +5526,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             opens: Opens::Steps(tabs),
             under: SharedString::default(),
             page: None,
-            says: "".into(),
+            says: tools::Note::default(),
         };
     }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
@@ -5574,7 +5579,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         opens: Opens::Steps(tabs),
         under: SharedString::default(),
         page: None,
-        says: "".into(),
+        says: tools::Note::default(),
     }
 }
 

@@ -312,11 +312,53 @@ pub const NOTE_MOST: usize = 80;
 /// not the guard, the core, a log or the activity file. Where it may carry one (`noted`: a tool in
 /// `NOTED`, or any step of a run) it comes back made plain (`plain_note`), else empty, whatever
 /// was sent.
-pub fn take_note(noted: bool, arguments: &mut Value) -> String {
+pub fn take_note(noted: bool, arguments: &mut Value) -> Note {
     let note = (arguments.as_object_mut()).and_then(|arguments| arguments.remove("note"));
     match (noted, note) {
-        (true, Some(Value::String(note))) => plain_note(&note),
-        _ => String::new(),
+        (true, Some(Value::String(note))) => Note(plain_note(&note).into()),
+        _ => Note::default(),
+    }
+}
+
+/// The assistant's own words on a step (`take_note`), which only the trace draws and reads out.
+/// Its Debug says how long it is and never what, so a step printed whole, in a log line or a
+/// panic's message, carries nothing of the assistant's words.
+#[derive(Clone, Default, PartialEq)]
+pub struct Note(gpui::SharedString);
+
+impl Note {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The words, for the trace's line and its spoken label alone.
+    pub fn words(&self) -> gpui::SharedString {
+        self.0.clone()
+    }
+}
+
+impl std::fmt::Debug for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Note({} chars)", self.0.chars().count())
+    }
+}
+
+impl AsRef<str> for Note {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<&str> for Note {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_ref() == *other
+    }
+}
+
+/// Made plain as `take_note` makes one: for the preview's and the tests' made-up steps.
+impl From<&str> for Note {
+    fn from(words: &str) -> Note {
+        Note(plain_note(words).into())
     }
 }
 
@@ -826,7 +868,7 @@ pub struct Did {
     pub page: String,
     /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
     /// trace draws it: never a log, the activity file, a card or the kept list.
-    pub says: String,
+    pub says: Note,
 }
 
 /// The tool of a step that's a search the assistant's program made, by its provider's own search:
@@ -1374,5 +1416,21 @@ mod note_tests {
         let mut arguments = json!({ "tab": 3, "note": 7 });
         assert_eq!(take_note(true, &mut arguments), "");
         assert_eq!(plain_note(&"x".repeat(500)).chars().count(), NOTE_MOST);
+    }
+
+    /// A step printed whole, as a log line or a failed assertion prints it, says how long its
+    /// note is and never what: the assistant's words are the trace's alone.
+    #[test]
+    fn a_printed_step_carries_nothing_of_its_note() {
+        let mut arguments = json!({ "tab": 3, "note": "Applying the coupon first" });
+        let did = Did {
+            tool: "click".into(),
+            says: take_note(true, &mut arguments),
+            ..Did::default()
+        };
+        let printed = format!("{did:?} {did:#?}");
+        assert!(!printed.contains("coupon"), "{printed}");
+        assert!(printed.contains("Note(25 chars)"), "{printed}");
+        assert_eq!(did.says.as_ref(), "Applying the coupon first");
     }
 }
