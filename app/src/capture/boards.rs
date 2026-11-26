@@ -517,7 +517,7 @@ impl Capture {
                 .flex()
                 .flex_col()
                 .rounded(px(RADIUS))
-                .bg(rgba(palette.fill))
+                .bg(look.fill())
                 .shadow(Level::Popover.shadow())
                 .occlude()
                 .on_mouse_move(cx.listener(|capture, event: &MouseMoveEvent, _, cx| {

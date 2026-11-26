@@ -29,7 +29,7 @@ use gpui::{
 };
 
 use crate::{
-    palette::{self, STATE_PRESSED},
+    palette::{self, Float, STATE_PRESSED},
     settling::Settling,
     shell::cubic_bezier,
     text_input::TextInput,
@@ -1615,7 +1615,7 @@ impl Render for Dialog {
             .rounded(px(RADIUS))
             .border_1()
             .border_color(Level::Modal.rim_in(&palette))
-            .bg(palette.dialog)
+            .bg(Float::Dialog.fill(palette.tone))
             .shadow(Level::Modal.shadow())
             .opacity(pose.opacity)
             .children(
