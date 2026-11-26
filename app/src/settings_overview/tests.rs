@@ -63,10 +63,9 @@ fn a_tile_says_nothing_it_doesnt_know() {
     }
 }
 
-/// Each line comes from its fact, and each tile opens its own page.
-#[test]
-fn each_tile_says_what_its_settings_hold() {
-    let facts = Facts {
+/// Every fact known, so each tile says both its lines.
+fn known() -> Facts {
+    Facts {
         edge: true,
         zoom: Some(1.1),
         archive: Some("12 hours".into()),
@@ -79,7 +78,13 @@ fn each_tile_says_what_its_settings_hold() {
         logins: Some((1, "Personal".into())),
         signed_in: true,
         devices: Some(2),
-    };
+    }
+}
+
+/// Each line comes from its fact, and each tile opens its own page.
+#[test]
+fn each_tile_says_what_its_settings_hold() {
+    let facts = known();
     let lines: Vec<(Section, Vec<String>)> = (tiles(&facts).into_iter())
         .map(|tile| (tile.section, tile.lines))
         .collect();
@@ -165,4 +170,95 @@ fn a_put_away_loose_end_stays_away() {
     assert_eq!(kept, format!("{}\n", end.key()));
     assert!(PutAway::load(&folder).has(&end.key()));
     std::fs::remove_dir_all(&folder).ok();
+}
+
+/// Overview's tiles as Settings lays them out, in two rows of three.
+struct Grid(Facts);
+
+impl Render for Grid {
+    fn render(&mut self, window: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        let look = Look::settings(true);
+        let a11y = window.is_a11y_active();
+        let cards = (tiles(&self.0).iter())
+            .map(|tile| tile_card(&look, tile, a11y, Rc::new(|_, _| {})))
+            .collect();
+        div().size_full().child(tiles_grid(cards))
+    }
+}
+
+/// The width `words` take in a tile's line.
+fn line_width(cx: &mut gpui::VisualTestContext, words: &str) -> f32 {
+    cx.update(|window, _| {
+        let run = window.text_style().to_run(words.len());
+        let size = px(form::TILE_BODY);
+        let line = (window.text_system()).shape_line(words.to_string().into(), size, &[run], None);
+        f32::from(line.width)
+    })
+}
+
+/// Each tile as an assistive app is told of it: its name, what it says, and where it was drawn,
+/// its width and height. A release build keeps these, where it keeps no debug selector.
+fn told(cx: &mut gpui::VisualTestContext) -> Vec<(String, Option<String>, f32, f32)> {
+    use gpui::accesskit::Role;
+    let scale = cx.update(|window, _| f64::from(window.scale_factor()));
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    (tree.nodes.iter())
+        .filter(|(_, node)| node.role() == Role::Button)
+        .map(|(_, node)| {
+            let at = node.bounds().expect("a tile with no bounds");
+            (
+                node.label().unwrap_or_default().to_string(),
+                node.description().map(str::to_string),
+                ((at.x1 - at.x0) / scale) as f32,
+                ((at.y1 - at.y0) / scale) as f32,
+            )
+        })
+        .collect()
+}
+
+/// On tiles narrower than drawn, no tile's line is cut: one wider than its tile's text takes a
+/// second line, and its row grows for them only past the drawn height. An assistive app reads
+/// each tile's lines whole, after its page's name.
+#[gpui::test]
+fn a_tiles_line_is_never_cut(cx: &mut TestAppContext) {
+    let (_, cx) = cx.add_window_view(|_, _| Grid(known()));
+    // Three tiles across 480, each about 150 wide: narrower than the drawing's.
+    cx.simulate_resize(gpui::size(px(480.), px(600.)));
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let told = told(cx);
+    let tiles = tiles(&known());
+    let mut grew = false;
+    for row in tiles.chunks(3) {
+        // A row's tiles are as tall as its tallest needs, and the drawn height at least.
+        let mut needed = form::TILE;
+        for tile in row {
+            let (_, said, width, _) = (told.iter())
+                .find(|(name, ..)| name == tile.title)
+                .unwrap_or_else(|| panic!("no {} tile", tile.title));
+            assert_eq!(said.as_deref(), Some(tile.lines.join(", ").as_str()));
+            let room = width - 2. * form::TILE_X;
+            let lines: f32 = (tile.lines.iter())
+                .map(|words| if line_width(cx, words) > room { 2. } else { 1. })
+                .sum();
+            let head = 2. * form::TILE_Y + form::TILE_TITLE_LINE + form::TILE_GAP;
+            needed = needed.max(head + lines * form::TILE_BODY_LINE);
+        }
+        for tile in row {
+            let (.., height) = told.iter().find(|(name, ..)| name == tile.title).unwrap();
+            assert!(
+                *height + 0.5 >= needed,
+                "{} is {height} tall, its lines need {needed}: one was cut",
+                tile.title
+            );
+            if needed == form::TILE {
+                assert!((height - form::TILE).abs() < 0.5, "{} grew", tile.title);
+            }
+        }
+        grew |= needed > form::TILE;
+    }
+    assert!(
+        grew,
+        "no row's lines needed more than the drawn height at this width"
+    );
 }

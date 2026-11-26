@@ -312,7 +312,8 @@ pub fn loose_end_row(
 }
 
 /// A tile: its glyph and page's name, then its lines. A click anywhere on it calls `open`;
-/// nothing is changed from it.
+/// nothing is changed from it. A line is never cut: on a tile narrower than drawn it takes a second
+/// line, and the tile grows only once its lines need more than the drawn height.
 pub fn tile_card(
     look: &Look,
     tile: &Tile,
@@ -341,14 +342,18 @@ pub fn tile_card(
                 .text_color(look.ink)
                 .child(tile.title),
         );
-    let lines = (tile.lines.iter()).map(|line| div().truncate().child(line.clone()));
+    let lines = (tile.lines.iter()).map(|line| div().child(line.clone()));
     let title = tile.title;
     div()
         .id(("overview-tile", tile.section as usize))
-        .when(a11y, |card| crate::settings_rows::named_button(card, title))
+        .when(a11y, |card| {
+            let said = tile.lines.join(", ");
+            crate::settings_rows::named_button(card, title)
+                .when(!said.is_empty(), |card| card.aria_description(said))
+        })
         .flex_1()
         .min_w_0()
-        .h(px(form::TILE))
+        .min_h(px(form::TILE))
         .py(px(form::TILE_Y))
         .px(px(form::TILE_X))
         .rounded(px(form::TILE_RADIUS))
