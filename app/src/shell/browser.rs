@@ -1126,6 +1126,11 @@ pub trait Browser {
     /// Keeps the system's glass and shadow round first run's card to its size and corners now,
     /// as its entry grows it, where the host draws them.
     fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32) {}
+    /// Grows first run's window to the browser window's frame, in one step, and says whether it
+    /// did. The host finds its own held window. On a yes the UI draws the card growing in it
+    /// (first-run v9 §10), shaped each frame by `shape_first_run`; on a no nothing changed and
+    /// the exit is the cross-fade.
+    fn grows_first_run(&self) -> bool;
     /// First run's window opens on screen at once, for a host with no call that shows it.
     fn shows_first_run_at_open(&self) -> bool {
         false

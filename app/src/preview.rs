@@ -2058,6 +2058,11 @@ impl Browser for Fake {
         true
     }
 
+    // Nor one to grow it, so its exit is the cross-fade.
+    fn grows_first_run(&self) -> bool {
+        false
+    }
+
     // A made-up account, signed out, so the onboarding opens on its Welcome; elsewhere none, as
     // the other states show a build that names no sync server.
     fn account_host(&self) -> Option<Rc<dyn browser::account::Host>> {

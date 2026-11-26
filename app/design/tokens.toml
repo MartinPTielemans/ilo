@@ -2201,9 +2201,9 @@ welcome-mark = 1.5
 welcome-size = 44.0
 welcome-line = 52.0
 button-gap = 28.0
-# The onboarding's last line, at the card's foot under the command bar it leaves up, as the line
-# under the mark is set.
-hint-bottom = 40.0
+# First run's one-time hint under the landing field, this far under it, at the line's size
+# under the mark (first-run v9 §10 gives no gap).
+hint-gap = 12.0
 
 
 [shell.composer]
@@ -2622,8 +2622,6 @@ progress-motion = 0.5
 step-fade = 0.2
 picture-fade = 0.24
 still-fade = 0.15
-# The card's fade from its window as its last step is left, on the scroll edge's curve.
-end-fade = 0.2
 # A button's opacity under the pointer.
 button-hover = 0.9
 # The entry (§2): a plate of this size and corners in the display's middle, holding the knot,
@@ -2762,6 +2760,20 @@ way-plate-fill = 0x17171b
 way-small = [7.0, 11.0, 14.0]
 way-off = 0.45
 way-copied = 1.2
+
+[shell.onboarding.exit]
+# First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing
+# fades the card's content over `content`, then the card grows to the window over `grow` on
+# ARRIVE, its `corners` from the card's to the window's, its fill crossing to the window's
+# tint over `material`, and the last step's knot travelling over `knot` to the empty page's mark.
+# Where it can't, and with Reduce Motion, the card cross-fades over `cross-fade`. No host grows
+# it yet.
+content = 0.12
+grow = 0.52
+corners = [20.0, 12.0]
+material = 0.3
+knot = 0.42
+cross-fade = 0.22
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

@@ -2004,6 +2004,7 @@ fn with_calculation(text: &str, mut rows: Vec<Suggestion>) -> Vec<Suggestion> {
 
 impl CommandBar {
     fn edited(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        shell::field_typed(cx);
         let input = self.input.read(cx);
         let (text, selection) = (input.text().to_string(), input.selection());
         let (length, start) = std::mem::replace(&mut self.before, (text.len(), selection.start));

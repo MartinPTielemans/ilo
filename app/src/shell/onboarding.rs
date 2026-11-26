@@ -20,7 +20,7 @@ use gpui::{
     canvas, div, prelude::*, px, rgb,
 };
 
-use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
+use super::{Command, Shell, cubic_bezier, display_face::display_text};
 use crate::account::{self, Account, AccountEvent, Problem, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{ImportEvent, ImportView, Look};
@@ -32,6 +32,7 @@ use card::Inks;
 
 mod bring;
 mod card;
+mod exit;
 mod other_apps;
 mod resume;
 mod space;
@@ -252,8 +253,9 @@ impl Switch {
     }
 }
 
-/// The card fades from its window at the end, on the scroll edge's curve.
-const END_FADE: f32 = t::END_FADE;
+/// How long the exit takes where the host doesn't grow first run's window.
+#[cfg(test)]
+const END_FADE: f32 = crate::tokens::shell::onboarding::exit::CROSS_FADE;
 
 /// The account isn't signed in, only waiting perhaps for the sign-in window, as the core said last,
 /// or before it has said.
@@ -349,6 +351,8 @@ pub(super) struct Onboarding {
     progress: (f32, f32, Instant),
     /// When the last step was left, for the card's fade.
     pub(super) ending: Option<Instant>,
+    /// The host's answer, once the exit has asked, to whether it grows first run's window.
+    grows: Option<bool>,
     /// Light or dark where check.sh says, else the window's.
     light: Option<bool>,
     /// The step has come all the way and said so.
@@ -608,6 +612,7 @@ impl Shell {
             signing: Vec::new(),
             progress: (0., 0., now),
             ending: None,
+            grows: None,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
                 "dark" => Some(false),
@@ -847,6 +852,11 @@ impl Shell {
             // Ended, there's nothing to resume, whether or not a quit then closes the card.
             None => {
                 onboarding.ending = Some(onboarding.clock.now());
+                // Asked here at the press, never from a draw, so a host that grows the window
+                // has a turn to before the grow's first frame; never with Reduce Motion.
+                if !still {
+                    onboarding.grows = Some(self.browser.grows_first_run());
+                }
                 if !onboarding.replay {
                     resume::clear(cx);
                 }
@@ -1220,6 +1230,10 @@ impl Shell {
         let Some(onboarding) = self.onboarding.as_mut() else {
             return;
         };
+        // The exit has the keyboard to itself: no key presses a step's button as it plays.
+        if onboarding.ending.is_some() {
+            return;
+        }
         if onboarding.entry.is_some() {
             onboarding.end_entry();
             return cx.notify();
@@ -1347,8 +1361,11 @@ impl Shell {
         let rest = self.onboarding_rest(cx);
         let glass = self.blurred;
         let still = crate::motion::still(cx);
+        let landing = self.landing_mark(window.viewport_size());
+        let window_tint = self.window_tint();
         let onboarding = self.onboarding.as_mut()?;
-        let ended = (onboarding.ending).is_some_and(|at| onboarding.secs_since(at) >= END_FADE);
+        let exiting = onboarding.exit_clock(window.is_visible());
+        let ended = exiting.is_some_and(|at| at >= onboarding.exit_length(still));
         if ended {
             self.onboarding = None;
             // check.sh waits for this line.
@@ -1360,7 +1377,7 @@ impl Shell {
             let shell = cx.entity();
             let quit = super::quit_gone_ahead();
             if !quit {
-                self.in_hint = true;
+                self.show_hint(cx);
             }
             cx.defer(move |cx| {
                 shell.update(cx, |shell, cx| {
@@ -1499,6 +1516,13 @@ impl Shell {
                 )
             }
         };
+        // As the window grows, the card fills it, shaped each frame (first-run v9 §10).
+        let exit = exiting.map(|at| {
+            let size = window.viewport_size();
+            let size = (f32::from(size.width), f32::from(size.height));
+            exit::frame(at, still, onboarding.grows, size, landing)
+        });
+        let plate = exit.as_ref().map_or(plate, |exit| exit.plate);
         let (_, _, w, h, radius) = plate;
         if onboarding.shaped.replace((w, h, radius)) != Some((w, h, radius)) {
             self.browser.shape_first_run(w, h, radius);
@@ -1513,7 +1537,12 @@ impl Shell {
                 .opacity(opacity)
                 .child(card::knot(size, drawn, inks.text(1.)))
         });
-        let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
+        let opacity = exit.as_ref().map_or(1., |exit| exit.card);
+        let content_opacity = content_opacity * exit.as_ref().map_or(1., |exit| exit.content);
+        let exit_knot = exit
+            .as_ref()
+            .and_then(|exit| exit.knot)
+            .map(|(size, x, y)| card::at(x, y).child(card::whole_knot(size, inks.text(1.))));
         let (x, y, w, h, radius) = plate;
         let ends_entry = onboarding.entry.is_some();
         Some(
@@ -1527,24 +1556,47 @@ impl Shell {
                 .font_family(crate::face::UI)
                 // A press on the card away from its controls moves the window, as it has no title
                 // bar; each control stops its own press, or the move would take its click.
-                .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+                // Not while it leaves, when the card may be the whole window.
+                .when(exiting.is_none(), |card| {
+                    card.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+                })
                 .child(
                     card::at(x, y)
                         .w(px(w))
                         .h(px(h))
                         .rounded(px(radius))
-                        .bg(inks.fill(glass))
+                        .bg(exit.as_ref().map_or(inks.fill(glass), |exit| {
+                            exit::crossed(inks.fill(glass), window_tint, exit.tint)
+                        }))
                         .border_1()
                         .border_color(inks.rim()),
                 )
-                .child(
-                    div()
+                .child(match exit.as_ref().map(|exit| exit.offset) {
+                    // Centred in the window as the card is, however the host has grown it.
+                    Some((left, top)) => card::at(left, top)
+                        .w(px(t::WIDTH))
+                        .h(px(t::HEIGHT))
+                        .opacity(content_opacity)
+                        .child(content),
+                    None => div()
                         .absolute()
                         .inset_0()
                         .opacity(content_opacity)
                         .child(content),
-                )
+                })
                 .children(entry_knot)
+                .children(exit_knot)
+                // While the card leaves, a click presses nothing on it and moves no window.
+                .when(exiting.is_some(), |card| {
+                    card.child(
+                        div()
+                            .id("onboarding-exit")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                    )
+                })
                 // While the entry plays, a click anywhere ends it and presses nothing under it.
                 .when(ends_entry, |card| {
                     card.child(

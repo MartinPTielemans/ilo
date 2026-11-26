@@ -23,7 +23,6 @@ pub(super) const FADE: f32 = 0.1;
 use crate::product;
 use crate::product::PRODUCT;
 use crate::tokens::shell::empty::BUTTON_GAP;
-use crate::tokens::shell::empty::HINT_BOTTOM;
 use crate::tokens::shell::empty::KEYS_FILL;
 use crate::tokens::shell::empty::KEYS_GAP;
 use crate::tokens::shell::empty::KEYS_HEIGHT;
@@ -57,7 +56,7 @@ impl Shell {
             self.empty_since = None;
             self.empty_settled = false;
             self.welcome = false;
-            self.in_hint = false;
+            self.drop_hint();
             self.card_back = None;
             return;
         }
@@ -188,39 +187,13 @@ impl Shell {
                     shell.clicked_bar_target(Command::NewTab, "card", cx)
                 }))
                 .child(sign.opacity(self.card_opacity(cx.background_executor().now())))
-                .children(self.in_hint.then(|| self.hint(cx))),
+                // Under ⌘T's bar, which first run's end leaves up over the welcome.
+                .children(self.landing_hint(
+                    self.opened_bar_top(f32::from(frame.top())),
+                    f32::from(frame.size.width),
+                    cx,
+                )),
         )
-    }
-
-    /// The onboarding's last word, at the card's foot under the command bar it leaves up: what the
-    /// bar is, and its key.
-    fn hint(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let keys = user_keys(cx).label(Command::NewTab).map(|keys| {
-            div()
-                .h(px(KEYS_HEIGHT))
-                .px(px(KEYS_INSET))
-                .flex()
-                .items_center()
-                .rounded(px(KEYS_RADIUS))
-                .bg(self.palette.plate(rgba(KEYS_FILL).a))
-                .text_size(px(KEYS_SIZE))
-                .child(keys)
-        });
-        div()
-            .absolute()
-            .bottom(px(HINT_BOTTOM))
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .items_center()
-            .gap(px(KEYS_GAP))
-            .text_size(px(WORDS_SIZE))
-            .text_color(self.palette.gray(SECONDARY))
-            .child("Type a site, a search or a command.")
-            .when_some(keys, |hint, keys| {
-                hint.child(keys).child("brings it back from anywhere.")
-            })
     }
 
     /// The mark, the Space's name in the display face, and the line.
@@ -299,5 +272,7 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
 }
 
 pub(super) mod composer;
+mod hint;
+pub use hint::field_typed;
 #[cfg(test)]
 mod tests;

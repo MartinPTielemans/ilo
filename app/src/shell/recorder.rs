@@ -83,6 +83,10 @@ pub(crate) struct Recorder {
     pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
     pub(super) default_browser: Cell<bool>,
+    /// What the host answers when first run's exit asks whether it grows first run's window.
+    pub(super) grows_first_run: Cell<bool>,
+    /// How many times it was asked whether it grows first run's window.
+    pub(super) asked_to_grow: Cell<u32>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
     /// The search engines and the default's keyword, as `search_engines` answers.
@@ -2148,6 +2152,12 @@ impl Browser for Recorder {
 
     fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
         self.record(format!("first run shaped {width} {height} {radius}"))
+    }
+
+    fn grows_first_run(&self) -> bool {
+        // Counted, not recorded, so what the host was told reads as before.
+        self.asked_to_grow.set(self.asked_to_grow.get() + 1);
+        self.grows_first_run.get()
     }
 
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
