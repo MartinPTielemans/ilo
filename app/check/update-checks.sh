@@ -67,9 +67,9 @@ update_checks_built() {
 
 # Settings' About tab, drawn, with its update row's Check.
 update_checks_about() {
-  send menu "About $app_name"
+  send menu "About $product"
   expect '^browser: settings \(shown\|tab\|drew\) About$' \
-    "About $app_name didn't show Settings' About tab"
+    "About $product didn't show Settings' About tab"
   drawn "update check" > /dev/null || fail "About's row had no Check for Updates"
 }
 
@@ -83,9 +83,9 @@ update_checks_check() {
     pid=$!
     exec 3> "$out/drive"
     await_load
-    send menu "About $app_name"
+    send menu "About $product"
     expect '^browser: settings \(shown\|tab\|drew\) About$' \
-      "About $app_name didn't show Settings' About tab"
+      "About $product didn't show Settings' About tab"
     drawn "switch whats new" > /dev/null || fail "About didn't draw its rows"
     grep -q '^browser: settings switch automatic update checks at ' "$log" &&
       fail "About on Linux has a switch for automatic update checks, which are Flathub's"

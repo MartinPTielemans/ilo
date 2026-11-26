@@ -43,7 +43,7 @@ start() {
 # which an earlier run may have turned off. Quit is the driver's last command.
 quit_through() {
   if [ "$1" != key ]; then
-    post menu "Quit $app_name"
+    post menu "Quit $product"
   else
     post key q cmd
   fi

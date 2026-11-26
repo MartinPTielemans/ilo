@@ -45,7 +45,7 @@ if [ "$(uname)" != Darwin ]; then
   # The control's middle: 8 and a pitch of 34 in from the sidebar's 228, 25 above the window's foot.
   check_layout
   control="170 $((${content#*x} - 25))"
-  app_menu=$(cased "Settings…, Import from Other Browsers…, Privacy Policy, About ilo, Quit ilo")
+  app_menu=$(cased "Settings…, Import from Other Browsers…, Privacy Policy, About $product, Quit $product")
   post click $control
   expect "^browser: menu shown $app_menu\$" "a click on the footer's menu control didn't show ilo's menu: \
 $(grep '^browser: menu shown' "$log" | tail -1)"
@@ -69,9 +69,9 @@ fi
 loaded=
 for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
   id=${row%%:*} file=${row#*:}
-  send menu "About ilo"
+  send menu "About $product"
   # Settings says which tab it shows as it opens, changes tab or draws, which differ by OS.
-  expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings' About tab"
+  expect '^browser: settings \(shown\|tab\|drew\) About$' "About $product didn't show Settings' About tab"
   if [ -z "$loaded" ] && [ -n "$engine_version" ]; then
     await '^browser: settings about Version .*, on Chromium [0-9]*\.[0-9.]*$' ||
       fail "About didn't name the engine's Chromium version"
@@ -106,8 +106,8 @@ done
 ../tools/window-screenshot.sh "$pid" "$out/about-opened.png" all || fail "no window to capture"
 # A section that fits its card doesn't scroll: a scroll over Sync & Import, signed out, holds
 # nothing of its name at the card's top, over its title (#2102).
-send menu "About ilo"
-expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings again"
+send menu "About $product"
+expect '^browser: settings \(shown\|tab\|drew\) About$' "About $product didn't show Settings again"
 # shellcheck disable=SC2046 # x and y
 send clickkey $(drawn "toolbar Sync & Import")
 expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
@@ -128,4 +128,4 @@ exec 3>&-
 quit
 [ -n "$engine_version" ] || echo "skip: about's engine version. This engine was packaged before" \
   "it carried one (engine/linux/package.sh)."
-echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$build_said$minimized$app_menu_said Windows: $out/about.png, $out/about-opened.png"
+echo "ok: About $product showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$build_said$minimized$app_menu_said Windows: $out/about.png, $out/about-opened.png"

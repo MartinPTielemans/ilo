@@ -657,7 +657,7 @@ expect '^browser: settings search "copy" finds ' "the search for copy didn't end
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-rows.png" || fail "no window to capture"
 # Every command the user can give keys has a row (#1062), these among them.
 for name in "Duplicate Current Tab" "Favorite Tab" "Rename Current Tab" Share "Capture Full Page" \
-  "Site Controls" "Export Space as Markdown" "View Media" "About $app_name" "Check for Updates" \
+  "Site Controls" "Export Space as Markdown" "View Media" "About $product" "Check for Updates" \
   "Import from Other Browsers" "Privacy Policy" Passwords "Site Search Settings" \
   "Welcome to $app_name" "Help Center" "What's New" "Report a Problem" "Copy Build Info"; do
   # The Mac's driver types only lowercase letters, dots and spaces, and the search ignores case.
@@ -899,16 +899,16 @@ expect '^browser: shortcut new-tab cmd-t$' "↺ didn't give New Tab ⌘T back"
 # Settings has the keyboard from the click on ↺, so the menu's command runs inside its window's
 # own update, which crashed the app when About read that window there.
 [ "$key" = GPUIWindow ] || fail "Settings didn't have the keyboard after a click on ↺: $key does"
-send menu About $app_name
-expect '^browser: settings tab About$' "About $app_name didn't show Settings' About tab"
+send menu About $product
+expect '^browser: settings tab About$' "About $product didn't show Settings' About tab"
 expect '^browser: settings drew About$' \
-  "Settings didn't draw About after About $app_name with Settings key"
+  "Settings didn't draw About after About $product with Settings key"
 ../tools/window-screenshot.sh "$pid" "$out/about.png" || fail "no window to capture"
 # Again with About showing: Settings comes forward and draws it again, with no tab to change.
-send menu About $app_name
+send menu About $product
 expect '^browser: settings drew About$' \
-  "Settings didn't draw About after About $app_name with About already showing"
-none_since '^browser: settings tab ' || fail "About $app_name with About showing changed the tab"
+  "Settings didn't draw About after About $product with About already showing"
+none_since '^browser: settings tab ' || fail "About $product with About showing changed the tab"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point

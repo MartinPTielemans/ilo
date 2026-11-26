@@ -142,9 +142,9 @@ nightly_launch() {
 }
 # Settings' About tab, with its update row's Check.
 nightly_about() {
-  send menu "About $app_name"
+  send menu "About $product"
   expect '^browser: settings \(shown\|tab\|drew\) About$' \
-    "About $app_name didn't show Settings' About tab"
+    "About $product didn't show Settings' About tab"
   drawn "update check" > /dev/null || fail "About's row had no Check for Updates"
 }
 # Since the last command, the updater read the feed $1, the run's read $4 of it, whose build $2 is
