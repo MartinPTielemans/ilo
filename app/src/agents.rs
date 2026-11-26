@@ -36,6 +36,7 @@ pub mod saved_read;
 pub mod scripts;
 mod server;
 pub mod sign_in;
+pub mod skill;
 pub mod task;
 pub mod tier;
 pub mod tools;
@@ -61,9 +62,19 @@ use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
 
-/// The name the clients list the server by: the browser's, a dev build's apart.
+/// The name the clients list the server by: the product's, a dev build's apart.
 pub fn server_name() -> String {
-    let name = env!("APP_NAME").to_lowercase();
+    listed_as(PRODUCT)
+}
+
+/// The name the clients listed the server by before it took the product's, which Connect Again
+/// takes out of a client's config.
+pub fn old_server_name() -> String {
+    listed_as(env!("APP_NAME"))
+}
+
+fn listed_as(name: &str) -> String {
+    let name = name.to_lowercase();
     match cfg!(feature = "prod") {
         true => name,
         false => format!("{name}-dev"),
@@ -788,11 +799,14 @@ pub fn next_entry_id() -> u64 {
     NEXT_ENTRY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// An agent the user connected.
+/// An agent the user connected. One connected before the server took the product's name, whose
+/// stored entry has no name or another, is stale: its token is void, and its row says Connect
+/// Again, or for the command Add Again.
 #[derive(Clone, Debug)]
 pub struct Agent {
     pub client: Client,
     token: String,
+    stale: bool,
 }
 
 /// Whether a press of the X server's `button` in an agent's page takes it over: a click of any of
@@ -852,9 +866,22 @@ pub struct Agents {
     /// Whether the user's shell looks in the `ilo` command's folder, as Settings › Agents last
     /// asked it.
     command_searched: bool,
-    /// The client whose Connect is writing its config, and the client whose last failed, and why.
+    /// The client whose Connect is writing its config, those waiting their turn after it (first
+    /// run's MCP switch connects each app found), and those to take out again as theirs lands, as
+    /// the switch was turned off while it ran. Each client whose last Connect or Disconnect failed,
+    /// and why.
     connecting: Option<Client>,
-    failed: Option<(Client, SharedString)>,
+    queued: Vec<Client>,
+    unwanted: Vec<Client>,
+    /// The clients a click in first run is connecting whose write landing turns the outside
+    /// switch on, so one that fails, or a quit before it lands, leaves the switch as it was.
+    outside_on_landing: Vec<Client>,
+    failed: Vec<(Client, SharedString)>,
+    /// The skill files the command's Add wrote (skill.rs), as kept beside the settings, shared
+    /// with the runs that write and remove them, and as last shown, and the programs whose file
+    /// the last Remove left, as the user had changed it.
+    skills: skill::Shared,
+    skills_shown: (u64, Vec<(skill::Kept, skill::Place)>),
     /// The agents with a session open.
     live: HashSet<String>,
     log: Vec<Activity>,
@@ -1092,7 +1119,12 @@ impl Agents {
             found: Vec::new(),
             command_searched: true,
             connecting: None,
-            failed: None,
+            queued: Vec::new(),
+            unwanted: Vec::new(),
+            outside_on_landing: Vec::new(),
+            failed: Vec::new(),
+            skills: skill::Shared::default(),
+            skills_shown: (0, Vec::new()),
             live: HashSet::new(),
             log: Vec::new(),
             reading: HashMap::new(),
@@ -1146,7 +1178,12 @@ impl Agents {
             .filter_map(|agent| {
                 let client = Client::from_id(agent.get("client")?.as_str()?)?;
                 let token = agent.get("token")?.as_str()?.to_string();
-                Some(Agent { client, token })
+                let stale = agent.get("name").and_then(Value::as_str) != Some(PRODUCT);
+                Some(Agent {
+                    client,
+                    token,
+                    stale,
+                })
             })
             .collect();
         self.tokens_changed();
@@ -1210,9 +1247,11 @@ impl Agents {
                 let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
                 Some((cli, model.get(1)?.as_str()?.to_string()))
             });
+            let effort = (last.get("effort").and_then(Value::as_str)).and_then(task::known_effort);
             let last = task::Last {
                 tier: tier.unwrap_or_default(),
                 model,
+                effort,
             };
             Some((profile.clone(), last))
         }))
@@ -1497,6 +1536,9 @@ impl Agents {
     /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783). A
     /// Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
     pub fn command_state(&self) -> cli::State {
+        if self.is_stale(Client::Command) {
+            return cli::State::Stale;
+        }
         let added = self.is_connected(Client::Command);
         let flatpak = self.command_flatpak_line().is_some();
         cli::state(added, self.command_searched || flatpak, cfg!(windows))
@@ -1529,8 +1571,141 @@ impl Agents {
         .detach();
     }
 
+    /// The kept skills' file, beside the settings, in the data folder all profiles share: None in
+    /// the tests.
+    fn skills_file(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name(skill::FILE_KEPT))
+    }
+
+    /// Where each kept skill's file is, read off the UI thread by the remover's walk, as
+    /// Settings › Other apps opens: never on a timer, never at launch.
+    pub fn look_skills(&mut self, cx: &mut Context<Self>) {
+        let (clients, file, skills) = (
+            self.clients.clone(),
+            self.skills_file(),
+            self.skills.clone(),
+        );
+        cx.spawn(async move |agents, cx| {
+            let shown = (cx.background_spawn(async move {
+                let mut skills = skill::Skills::lock(&skills);
+                skills.read_once(file.as_deref());
+                let keep = |kept: &[skill::Kept]| _ = keep_skills(file.as_deref(), kept);
+                skills.settle(|kept| clients.look_skills(kept), keep)
+            }))
+            .await;
+            agents
+                .update(cx, |agents, cx| agents.skills_shown(shown, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The agent programs found here by the stat, which runs nothing, that the command's Add
+    /// writes a skill for and first run's MCP switch connects.
+    pub fn skill_programs(&self) -> Vec<Client> {
+        (skill::PROGRAMS.into_iter())
+            .filter(|program| self.found.contains(program))
+            .collect()
+    }
+
+    /// The kept skills the last look found at `place`, while the command is added or isn't.
+    fn skills_at(&self, place: skill::Place, added: bool) -> impl Iterator<Item = &skill::Kept> {
+        let shown = (self.is_connected(Client::Command) == added).then_some(&self.skills_shown.1);
+        (shown.into_iter().flatten())
+            .filter(move |(_, at)| *at == place)
+            .map(|(kept, _)| kept)
+    }
+
+    /// The programs a file of the command's skill that the product wrote is in place for, while
+    /// it's added: the row's "Skill added for {apps}." (SK1).
+    pub fn skills(&self) -> Vec<Client> {
+        (self.skills_at(skill::Place::Ours, true))
+            .map(|kept| kept.program)
+            .collect()
+    }
+
+    /// The programs whose skill a Remove left as the user had changed it, while it's still there
+    /// and the command isn't added again (SK2).
+    pub fn skills_changed(&self) -> Vec<Client> {
+        (self.skills_at(skill::Place::Changed, false))
+            .map(|kept| kept.program)
+            .collect()
+    }
+
+    /// The file SK2's reveal shows, the first left, made at the click from the home, the program
+    /// and the checked name.
+    pub fn skill_to_reveal(&self) -> Option<PathBuf> {
+        let kept = self.skills_at(skill::Place::Changed, false).next()?;
+        self.clients.skill_at(kept)
+    }
+
+    /// Brings the command's skills to what its row is, off the UI thread: written for each
+    /// program found while the command is added, the kept ones still byte for byte ours taken
+    /// away while it isn't, one the user changed staying kept for the row to say so; then where
+    /// each kept one is. Only the command's Add and Remove, at the user's click, come here. An Add and a Remove close together each look at the row as
+    /// they run, under one lock, so whichever runs last leaves what the row says.
+    fn sync_skills(&mut self, cx: &mut Context<Self>) {
+        self.skills.want(self.is_connected(Client::Command));
+        let programs = self.skill_programs();
+        let (clients, file, skills) = (
+            self.clients.clone(),
+            self.skills_file(),
+            self.skills.clone(),
+        );
+        cx.spawn(async move |agents, cx| {
+            let shown = cx
+                .background_spawn(async move {
+                    let mut skills = skill::Skills::lock(&skills);
+                    skills.read_once(file.as_deref());
+                    let file = file.as_deref();
+                    if skills.wanted() {
+                        let after = clients.add_skills(&programs, &skills.kept);
+                        skills.kept = skill::kept_or_undone(
+                            after,
+                            |kept| keep_skills(file, kept),
+                            |fresh| _ = clients.remove_skills(fresh),
+                        );
+                    } else if !skills.kept.is_empty() {
+                        // What the user changed stays, and is kept, for the row to say so.
+                        let removed = clients.remove_skills(&skills.kept);
+                        let left = (skills.kept.iter().zip(removed))
+                            .filter(|(_, (_, removed))| *removed == skill::Removed::Changed)
+                            .map(|(kept, _)| kept.clone())
+                            .collect::<Vec<_>>();
+                        _ = keep_skills(file, &left);
+                        skills.kept = left;
+                    }
+                    let keep = |kept: &[skill::Kept]| _ = keep_skills(file, kept);
+                    skills.settle(|kept| clients.look_skills(kept), keep)
+                })
+                .await;
+            agents
+                .update(cx, |agents, cx| agents.skills_shown(shown, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Shows the kept skills as a run of the lock left them, unless a later run's are shown.
+    fn skills_shown(
+        &mut self,
+        shown: (u64, Vec<(skill::Kept, skill::Place)>),
+        cx: &mut Context<Self>,
+    ) {
+        if shown.0 >= self.skills_shown.0 {
+            self.skills_shown = shown;
+            cx.notify();
+        }
+    }
+
     pub fn is_connected(&self, client: Client) -> bool {
-        self.agents.iter().any(|agent| agent.client == client)
+        (self.agents.iter()).any(|agent| agent.client == client && !agent.stale)
+    }
+
+    /// Whether the client was connected before the server took the product's name, and needs
+    /// Connect Again.
+    pub fn is_stale(&self, client: Client) -> bool {
+        (self.agents.iter()).any(|agent| agent.client == client && agent.stale)
     }
 
     /// Whether the client's Connect is still writing its config.
@@ -1538,12 +1713,53 @@ impl Agents {
         self.connecting == Some(client)
     }
 
+    /// Whether the client's Connect is writing its config or waits its turn to.
+    pub fn is_pending(&self, client: Client) -> bool {
+        self.is_connecting(client) || self.queued.contains(&client)
+    }
+
     /// Why the client's last Connect or Disconnect failed.
     pub fn failure(&self, client: Client) -> Option<SharedString> {
-        self.failed
-            .as_ref()
-            .filter(|(each, _)| *each == client)
+        (self.failed.iter())
+            .find(|(each, _)| *each == client)
             .map(|(_, why)| why.clone())
+    }
+
+    /// Connects each of `clients` not connected or on its way, one at a time as Connect is, each
+    /// after the one before has written its config.
+    pub fn connect_each(&mut self, clients: &[Client], cx: &mut Context<Self>) {
+        for &client in clients {
+            self.unwanted.retain(|each| *each != client);
+            if !self.is_connected(client) && !self.is_pending(client) {
+                self.queued.push(client);
+            }
+        }
+        self.connect_next(cx);
+        cx.notify();
+    }
+
+    /// First run's way on, at the user's click: connects each of `clients`, and the outside
+    /// switch goes on as the first of them lands, or at once where one is connected already.
+    pub fn connect_for_outside(&mut self, clients: &[Client], cx: &mut Context<Self>) {
+        match clients.iter().any(|&client| self.is_connected(client)) {
+            true => self.set_other_apps(true, cx),
+            false => {
+                for &client in clients {
+                    if !self.outside_on_landing.contains(&client) {
+                        self.outside_on_landing.push(client);
+                    }
+                }
+            }
+        }
+        self.connect_each(clients, cx);
+    }
+
+    /// The next waiting client's Connect, once none is writing.
+    fn connect_next(&mut self, cx: &mut Context<Self>) {
+        if self.connecting.is_none() && !self.queued.is_empty() {
+            let client = self.queued.remove(0);
+            self.connect(client, cx);
+        }
     }
 
     /// Whether the agent has a session open now.
@@ -1560,13 +1776,25 @@ impl Agents {
         }
         let token = random_token();
         let entry = self.entry(&token);
+        // Connect Again takes the server's old name out of the client's config first. The
+        // command's Add takes its old link and file away itself (cli::Install).
+        // A build whose name and product are one adds under the same name, so takes none out.
+        let old = (self.is_stale(client) && client != Client::Command)
+            .then(old_server_name)
+            .filter(|old| cli::renamed(old, &server_name()));
         self.connecting = Some(client);
-        self.failed = None;
+        self.failed.retain(|(each, _)| *each != client);
         cx.notify();
         let clients = self.clients.clone();
         cx.spawn(async move |agents, cx| {
             let done = cx
-                .background_spawn(async move { clients.connect(client, &entry) })
+                .background_spawn(async move {
+                    // A name the user took out by hand fails its remove, and leaves nothing to take.
+                    if let Some(old) = old {
+                        _ = clients.disconnect(client, &old);
+                    }
+                    clients.connect(client, &entry)
+                })
                 .await;
             agents
                 .update(cx, |agents, cx| agents.connected(client, token, done, cx))
@@ -1588,26 +1816,51 @@ impl Agents {
                 // check.sh reads this line.
                 log!("browser: agent {} connected", client.id());
                 self.agents.retain(|agent| agent.client != client);
-                self.agents.push(Agent { client, token });
+                self.agents.push(Agent {
+                    client,
+                    token,
+                    stale: false,
+                });
                 self.tokens_changed();
+                // In the same save as what it added, unless turned off while it was writing.
+                if self.outside_on_landing.contains(&client) && !self.unwanted.contains(&client) {
+                    self.outside_on_landing.clear();
+                    self.set_other_apps(true, cx);
+                }
                 self.save();
                 self.note(client.id(), 0, "connected", "", "");
                 if client == Client::Command {
                     self.look_for_command(cx);
+                    self.sync_skills(cx);
+                }
+                // Turned off while it was writing: off takes away what on added.
+                if self.unwanted.contains(&client) {
+                    self.disconnect(client, cx);
                 }
             }
             Err(why) => {
                 log!("browser: agent {} couldn't connect: {why}", client.id());
-                self.failed = Some((client, why.into()));
+                self.failed.push((client, why.into()));
             }
         }
+        self.outside_on_landing.retain(|each| *each != client);
+        self.unwanted.retain(|each| *each != client);
+        self.connect_next(cx);
         cx.notify();
     }
 
     /// Takes the server out of the client's config, and its token from the agent, which ends its
     /// sessions. Its Space stays the user's to keep or delete.
     pub fn disconnect(&mut self, client: Client, cx: &mut Context<Self>) {
+        self.queued.retain(|each| *each != client);
+        self.outside_on_landing.retain(|each| *each != client);
+        if self.is_connecting(client) && !self.unwanted.contains(&client) {
+            self.unwanted.push(client);
+        }
         if !self.is_connected(client) {
+            // Turned off, a Connect that failed says so no more.
+            self.failed.retain(|(each, _)| *each != client);
+            cx.notify();
             return;
         }
         // check.sh reads this line.
@@ -1625,7 +1878,10 @@ impl Agents {
             self.browser.disconnected(client.id(), cx);
         }
         self.note(client.id(), 0, "disconnected", "", "");
-        self.failed = None;
+        self.failed.retain(|(each, _)| *each != client);
+        if client == Client::Command {
+            self.sync_skills(cx);
+        }
         let clients = self.clients.clone();
         let name = server_name();
         cx.spawn(async move |agents, cx| {
@@ -1636,7 +1892,7 @@ impl Agents {
                 log!("browser: agent {} config kept: {why}", client.id());
                 agents
                     .update(cx, |agents, cx| {
-                        agents.failed = Some((client, why.into()));
+                        agents.failed.push((client, why.into()));
                         cx.notify();
                     })
                     .ok();
@@ -1649,7 +1905,7 @@ impl Agents {
     /// What an MCP client's config needs, for the user to paste: the bridge, its socket and the
     /// agent's token, as most clients write a stdio server.
     pub fn setup(&self, client: Client) -> Option<String> {
-        let agent = self.agents.iter().find(|agent| agent.client == client)?;
+        let agent = (self.agents.iter()).find(|agent| agent.client == client && !agent.stale)?;
         let config = json!({ "mcpServers": { server_name(): self.entry(&agent.token).json() } });
         serde_json::to_string_pretty(&config).ok()
     }
@@ -3149,6 +3405,13 @@ impl Agents {
         // The core ends the agent's session there, which logs it.
         self.carry(tab, held::Event::TakeOver, life, actions, cx);
         cx.notify();
+    }
+
+    /// Whether the user took `tab` over and nothing of its agent's waits on it: a page whose row
+    /// in the panel says it's theirs, with Hand Back. A hand-off's, a passkey's or an ask for the
+    /// tab back has its own line with its own button.
+    pub(crate) fn taken_over(&self, tab: u64) -> bool {
+        (self.held.get(&tab)).is_some_and(|held| held.taken && held.life() == held::Life::Held)
     }
 
     /// The tabs of the agent's Space the user doesn't hold.
@@ -5594,9 +5857,8 @@ impl Agents {
     }
 
     fn tokens_changed(&self) {
-        let tokens = self
-            .agents
-            .iter()
+        let tokens = (self.agents.iter())
+            .filter(|agent| !agent.stale)
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
         // A session's calls come with its client's token: it has none of its own. A thread of the
         // product's own has one only while the inside switch is on.
@@ -5610,7 +5872,12 @@ impl Agents {
     fn save(&self) {
         let Some(path) = &self.path else { return };
         let agents: Vec<Value> = (self.agents.iter())
-            .map(|agent| json!({ "client": agent.client.id(), "token": agent.token }))
+            .map(|agent| match agent.stale {
+                true => json!({ "client": agent.client.id(), "token": agent.token }),
+                false => {
+                    json!({ "client": agent.client.id(), "token": agent.token, "name": PRODUCT })
+                }
+            })
             .collect();
         let grants: serde_json::Map<String, Value> = (self.grants.iter())
             .map(|(agent, sites)| {
@@ -5631,7 +5898,7 @@ impl Agents {
                 let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
                 (
                     profile.clone(),
-                    json!({ "level": last.tier.id(), "model": model }),
+                    json!({ "level": last.tier.id(), "model": model, "effort": last.effort }),
                 )
             })
             .collect();
@@ -6321,6 +6588,25 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
         3600..86400 => format!("{} h ago", seconds / 3600),
         _ => format!("{} d ago", seconds / 86400),
     }
+}
+
+/// The programs `clients` names, as a line does: "Claude Code", or "Claude Code and Codex".
+pub fn named(clients: &[Client]) -> String {
+    let names: Vec<&str> = clients.iter().map(|client| client.name()).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).into(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Keeps the list of skills in `file`, where there is one, and logs a failure.
+fn keep_skills(file: Option<&std::path::Path>, kept: &[skill::Kept]) -> std::io::Result<()> {
+    let kept = file.map_or(Ok(()), |file| skill::write_kept(file, kept));
+    if let Err(why) = &kept {
+        log!("browser: skills not kept: {why}");
+    }
+    kept
 }
 
 #[cfg(test)]

@@ -7,13 +7,13 @@ use gpui::SharedString;
 use crate::agents::task::{TraceItem, TraceStep};
 
 /// A stretch's item as the log draws it: alone, by its place in the stretch, or a page.
-pub(super) enum Paged<'a> {
+pub(crate) enum Paged<'a> {
     Item(usize, &'a TraceItem),
     Page(Page<'a>),
 }
 
 /// A page the stretch acted on, and its steps there in order.
-pub(super) struct Page<'a> {
+pub(crate) struct Page<'a> {
     /// Its first step's, which keeps the user's opening of it.
     pub key: usize,
     /// Its tab, from the first of its steps that names one: going to a page in a new tab names
@@ -34,7 +34,7 @@ impl Page<'_> {
 
 /// `items` by page: a step joins the page before it while it acts on the same tab and didn't go
 /// somewhere new.
-pub(super) fn paged(items: &[TraceItem]) -> Vec<Paged<'_>> {
+pub(crate) fn paged(items: &[TraceItem]) -> Vec<Paged<'_>> {
     let mut paged: Vec<Paged> = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let on = match item {

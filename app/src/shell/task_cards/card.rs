@@ -9,15 +9,14 @@ use gpui::{
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{
-    Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
-};
+use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
+use crate::palette::Palette;
 use crate::shell::conversation::{stage_fill, words};
-use crate::shell::join::join;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
+use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
@@ -27,7 +26,6 @@ use crate::tokens::shell::task_card::{
     RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
     UNVISITED,
 };
-use crate::tokens::shell::{DIVIDER, FAVICON_DRAWN};
 use crate::tokens::text;
 
 /// A waiting card's second line: the site of the page it waits on and the state's word (words
@@ -39,11 +37,12 @@ fn needs_you(site: &str) -> SharedString {
     }
 }
 
-/// A done card's second line, with no finding: when it ended (Z6, after the wording pass).
-fn done_at(card: &Card) -> SharedString {
+/// A done card's second line, with no finding: when it ended (Z6, after the wording pass). With
+/// it, how much of it is its lead (`second`).
+fn done_at(card: &Card) -> (SharedString, usize) {
     match card.ended_time.is_empty() {
-        true => state_line(card),
-        false => format!("Done · {}", card.ended_time).into(),
+        true => state(card),
+        false => (format!("Done · {}", card.ended_time).into(), 0),
     }
 }
 
@@ -79,12 +78,25 @@ pub(super) fn count(card: &Card) -> Option<SharedString> {
 
 /// The second line of a whole card in `form`: ilo's words alone.
 pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
+    second(card, form, site).0
+}
+
+/// How much of a whole card's second line in `form` is its lead, in the title's ink: the level's
+/// label where the line is its state's and the card is at Full access, by the card's level and
+/// never by what the line begins with.
+pub(super) fn second_lead(card: &Card, form: Form) -> usize {
+    second(card, form, "").1
+}
+
+/// A whole card's second line in `form` and how much of it is its lead: only its state's line
+/// has one.
+fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
     match form {
-        Form::Working if !card.status.is_empty() => card.status.clone(),
-        Form::Waits => needs_you(site),
-        Form::DoneUnseen if !card.finding.is_empty() => card.finding.clone(),
+        Form::Working if !card.status.is_empty() => (card.status.clone(), 0),
+        Form::Waits => (needs_you(site), 0),
+        Form::DoneUnseen if !card.finding.is_empty() => (card.finding.clone(), 0),
         Form::DoneUnseen => done_at(card),
-        _ => state_line(card),
+        _ => state(card),
     }
 }
 
@@ -98,6 +110,18 @@ pub(super) struct Look {
     pub(super) dot: bool,
     /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
     pub(super) from: bool,
+}
+
+/// The product's mark for an outside app's session, in `palette`'s ink at `from-ink`: its card's
+/// and its panel's.
+pub(in crate::shell) fn from_mark(palette: &Palette) -> impl IntoElement + use<> {
+    let colour = Hsla::from(palette.ink).opacity(FROM_INK);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
+    )
+    .flex_none()
+    .size(px(FROM_MARK))
 }
 
 /// Whether `card` is an outside app's session rather than a thread: from the kind of its connection
@@ -119,11 +143,11 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
     }
 }
 
-/// A card's frame: one shape with its stage, or closed in its outline at `outline` of the ink,
-/// `width` wide.
+/// A card's frame: a shape of its own in its stage's colour, or closed in its outline at `outline`
+/// of the ink, `width` wide.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Framed {
-    Joined,
+    Own,
     Outlined { outline: f32, width: f32 },
 }
 
@@ -244,12 +268,7 @@ impl Shell {
         };
         let unseen = self.task_list.unseen.contains(&card.agent);
         let framed = self.card_framed(card, placed.form, unseen);
-        // The shown thread's card runs to the sidebar's edge, where it meets its stage.
-        let block = match (framed, self.right) {
-            (Framed::Joined, false) => block.pl(px(PLATE_INSET)),
-            (Framed::Joined, true) => block.pr(px(PLATE_INSET)),
-            (Framed::Outlined { .. }, _) => block.px(px(PLATE_INSET)),
-        };
+        let block = block.px(px(PLATE_INSET));
         let now = clock();
         let coming = self.task_list.coming.get(&card.agent);
         let rest = self.slide(Slot::Task(n)) == 0. && coming.is_none_or(|ease| !ease.moving(now));
@@ -284,14 +303,12 @@ impl Shell {
             .rounded(px(RADIUS))
             .opacity(opacity)
             .cursor_pointer();
-        // Joined, the card's own outline gives way to the stage's line round the shape, in the
-        // same width of room, so nothing inside it moves.
+        // In its stage's colour, the card's own outline gives way to the line a dark stage's
+        // shape has round it, in the same width of room, so nothing inside it moves.
         let frame = match framed {
-            Framed::Joined => {
-                let stage = stage_fill(&self.palette);
-                let line = self.palette.on_fill(stage).faint(DIVIDER);
+            Framed::Own => {
+                let shape = self.in_own_colour(stage_fill(&self.palette), 1., RADIUS);
                 // Placed from the frame's corner: left to itself it starts inside the room.
-                let shape = join(stage.into(), Some(line), self.right, RADIUS);
                 (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
             }
             Framed::Outlined { outline, width } => frame
@@ -327,12 +344,12 @@ impl Shell {
         block.child(frame).into_any_element()
     }
 
-    /// How `card` in `form` is framed: joined to its stage while its thread is the one shown and
-    /// the stage starts at the sidebar's edge, in either of the thread's forms, and otherwise in
-    /// its state's outline, the waiting one's rim.
+    /// How `card` in `form` is framed: in its stage's colour while its thread is the one shown
+    /// and the stage starts at the sidebar's edge, in either of the thread's forms, and otherwise
+    /// in its state's outline, the waiting one's rim.
     pub(super) fn card_framed(&self, card: &Card, form: Form, unseen: bool) -> Framed {
-        if self.joins_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
-            return Framed::Joined;
+        if self.beside_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
+            return Framed::Own;
         }
         let rim = look(card, form, unseen).rim;
         Framed::Outlined {
@@ -380,17 +397,6 @@ impl Shell {
             .child(drawn)
     }
 
-    /// The product's mark for an outside app's session, in the ink at `from-ink`.
-    fn from_mark(&self) -> impl IntoElement + use<> {
-        let colour = Hsla::from(self.palette.ink).opacity(FROM_INK);
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
-        )
-        .flex_none()
-        .size(px(FROM_MARK))
-    }
-
     /// An outside app's line over a whole card's first row: the product's mark in the glyph's
     /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
     /// an ellipsis.
@@ -405,7 +411,7 @@ impl Shell {
                     .w(px(GLYPH))
                     .flex()
                     .justify_center()
-                    .child(self.from_mark()),
+                    .child(from_mark(&self.palette)),
             )
             .child(
                 div()
@@ -474,7 +480,7 @@ impl Shell {
         let second = match finding {
             true => self.card_finding(card, text_2).into_any_element(),
             false => {
-                let lead = state_lead(&words);
+                let lead = second_lead(card, form);
                 let line = match form {
                     Form::DoneUnseen => DONE_LINE,
                     _ => LIVE_LINE,
@@ -537,8 +543,9 @@ impl Shell {
     }
 
     /// A whole card's third row, if it has one: at work its pages, those not yet visited faint,
-    /// and how many it has been on; waiting the page it waits on and Show Page; done or ended the
-    /// pages it visited, and an ended task's chip.
+    /// and how many it has been on; waiting the page it waits on and Show Page, which isn't drawn
+    /// while that page is the one shown, the row as high without it so the list stays where it is;
+    /// done or ended the pages it visited, and an ended task's chip.
     fn card_third(
         &self,
         card: &Card,
@@ -583,32 +590,33 @@ impl Shell {
                 let tab = self.waiting_page(card)?;
                 let agent = card.agent.clone();
                 let label: SharedString = words::button(IloButton::ShowPage).into();
-                let button = div()
-                    .id(("task-show-page", n))
-                    .flex_none()
-                    .h(px(BUTTON_HEIGHT))
-                    .px(px(BUTTON_X))
-                    .flex()
-                    .items_center()
-                    .rounded(px(BUTTON_RADIUS))
-                    .bg(Hsla::from(self.palette.ink))
-                    .text_size(px(text::SMALL))
-                    .line_height(px(BUTTON_LINE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.on_primary());
-                let button = self
-                    .strip_stop(button, StripStop::Chip(n), label.clone(), BUTTON_RADIUS)
-                    .child(label)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |shell, _, _, cx| {
-                        cx.stop_propagation();
-                        shell.card_button(agent.clone(), cx);
-                    }));
+                let button = self.offers_page(card).then(|| {
+                    let button = div()
+                        .id(("task-show-page", n))
+                        .flex_none()
+                        .h(px(BUTTON_HEIGHT))
+                        .px(px(BUTTON_X))
+                        .flex()
+                        .items_center()
+                        .rounded(px(BUTTON_RADIUS))
+                        .bg(Hsla::from(self.palette.ink))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(BUTTON_LINE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.on_primary());
+                    self.strip_stop(button, StripStop::Chip(n), label.clone(), BUTTON_RADIUS)
+                        .child(label)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            cx.stop_propagation();
+                            shell.card_button(agent.clone(), cx);
+                        }))
+                });
                 let row = row()
                     .h(px(BUTTON_HEIGHT))
                     .child(self.card_icon(tab, 1.))
                     .child(div().flex_1())
-                    .child(button);
+                    .children(button);
                 Some(row.into_any_element())
             }
             Form::DoneUnseen if !card.visited.is_empty() => {
@@ -675,7 +683,7 @@ impl Shell {
             .map(|tab| self.card_icon(tab, 1.));
         // An outside app's mark at the right, before the page's icon; its name is the line's
         // tooltip and spoken label, not drawn.
-        let from = outside(card).then(|| self.from_mark());
+        let from = outside(card).then(|| from_mark(&self.palette));
         let end = (from.is_some() || on.is_some()).then(|| {
             div()
                 .flex_none()

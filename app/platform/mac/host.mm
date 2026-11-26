@@ -1463,8 +1463,8 @@ void WatchHeldEscape() {
 namespace {
 
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the window
-// is inactive, and with Reduce Transparency or Increase Contrast.
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
+// isn't the active one, and with Reduce Transparency or Increase Contrast.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
@@ -1473,11 +1473,42 @@ void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
+// From the first browser window, every browser window's material follows the app: active while
+// the app is the active one, AppKit's inactive fill once another app is in front. Following the
+// window's own key state instead gives a window the inactive fill behind its own command bar, a
+// menu or Settings, each a window that takes the keyboard from it.
+void WatchAppActiveForMaterial() {
+  static bool watching = false;
+  if (watching) {
+    return;
+  }
+  watching = true;
+  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
+    for (auto& browser : g_browsers) {
+      browser->material.state = state;
+    }
+  };
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center addObserverForName:NSApplicationDidBecomeActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    follow(NSVisualEffectStateActive);
+                  }];
+  [center addObserverForName:NSApplicationDidResignActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    follow(NSVisualEffectStateInactive);
+                  }];
+}
+
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
+  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSVisualEffectStateFollowsWindowActiveState;
+  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
@@ -2113,6 +2144,9 @@ void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
 
+// Whether the window first run held is on, in the place of first run's (host_close_first_run).
+static bool g_took_first_runs_place;
+
 void host_show_window_behind(void* ui_view, void* above_ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
@@ -2122,6 +2156,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  // The window first run held comes on at its frame whole, with none of AppKit's motion for a
+  // window ordered in: first run's card has just grown to that frame, or faded where it stood.
+  if (browser->held) {
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
+    g_took_first_runs_place = true;
+  }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
   if (browser->sidebar_right) {
@@ -6243,27 +6283,94 @@ static NSImage* FirstRunMask(double radius) {
   return mask;
 }
 
-void host_set_first_run_frame(double width, double height, double radius) {
-  if (!g_first_run) {
-    return;
-  }
+// The card as the UI shaped it last, none before the first: a window that grows places its glass
+// by it again, as the UI gives a shape only when it changes.
+static NSSize g_first_run_card;
+static double g_first_run_radius;
+
+// Keeps the glass and the shadow to the card as last shaped, centred in first run's window.
+static void PlaceFirstRunGlass() {
   NSView* content = g_first_run.contentView;
   const NSRect bounds = content.bounds;
-  const NSRect card = NSMakeRect(round(NSMidX(bounds) - width / 2),
-                                 round(NSMidY(bounds) - height / 2), width, height);
+  const NSRect card = NSMakeRect(round(NSMidX(bounds) - g_first_run_card.width / 2),
+                                 round(NSMidY(bounds) - g_first_run_card.height / 2),
+                                 g_first_run_card.width, g_first_run_card.height);
   // GPUI's glass fills the window; it's kept to the card, which the UI draws over it.
   for (NSView* view in content.subviews) {
     if ([view isKindOfClass:NSVisualEffectView.class]) {
       NSVisualEffectView* glass = (NSVisualEffectView*)view;
       glass.autoresizingMask = NSViewNotSizable;
       glass.frame = card;
-      glass.maskImage = FirstRunMask(radius);
+      glass.maskImage = FirstRunMask(g_first_run_radius);
     }
   }
   // The shadow is the window's drawn shape, read once this frame is on screen.
   dispatch_async(dispatch_get_main_queue(), ^{
     [g_first_run invalidateShadow];
   });
+}
+
+void host_set_first_run_frame(double width, double height, double radius) {
+  if (!g_first_run) {
+    return;
+  }
+  g_first_run_card = NSMakeSize(width, height);
+  g_first_run_radius = radius;
+  PlaceFirstRunGlass();
+}
+
+// Whether Stage Manager, which places the windows on its stage itself, is on, read from the setting
+// its switch writes as the system has no documented call for it: a wrong read means the cross-fade
+// or a grow nobody tried, never a prompt.
+static bool StageManagerOn() {
+  return [[[NSUserDefaults alloc] initWithSuiteName:@"com.apple.WindowManager"]
+      boolForKey:@"GloballyEnabled"];
+}
+
+bool host_grow_first_run(void) {
+  if (!g_first_run.visible || g_first_run_card.width <= 0 || StageManagerOn()) {
+    return false;
+  }
+  // The window first run ends on: the one held, and with none or more than one there's no saying.
+  NSWindow* held = nil;
+  for (auto& browser : g_browsers) {
+    if (!browser->held) {
+      continue;
+    }
+    if (held) {
+      return false;
+    }
+    held = browser->window;
+  }
+  if (!held || held.miniaturized || (held.styleMask & NSWindowStyleMaskFullScreen)) {
+    return false;
+  }
+  // The card stays where it is as its window grows round it, so the held window's frame must hold
+  // first run's with the same centre, as it does unless either was moved, and be whole on its
+  // display.
+  const NSRect from = g_first_run.frame;
+  const NSRect to = held.frame;
+  NSScreen* screen = g_first_run.screen;
+  if (!screen || !NSContainsRect(screen.frame, to) || !NSContainsRect(to, from) ||
+      fabs(NSMidX(to) - NSMidX(from)) > 1 || fabs(NSMidY(to) - NSMidY(from)) > 1) {
+    return false;
+  }
+  // On the next turn, not here: the ask comes while the UI handles the press, and GPUI can neither
+  // hear of the new size nor draw at it until that's over. The frame, the glass in its place in it
+  // and the UI's picture at the new size then reach the screen as one. Where either window isn't
+  // by then the one this answered for, nothing changes, and the card grows to the window as it is.
+  NSWindow* first_run = g_first_run;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (g_first_run != first_run || !first_run.visible || !StaysHeld(held) ||
+        !NSEqualRects(held.frame, to) || !NSEqualRects(first_run.frame, from)) {
+      return;
+    }
+    [g_first_run setFrame:to display:NO];
+    PlaceFirstRunGlass();
+    [g_first_run_view.layer setNeedsDisplay];
+    [g_first_run_view.layer displayIfNeeded];
+  });
+  return true;
 }
 
 void host_show_first_run(void) {
@@ -6290,9 +6397,16 @@ void host_show_first_run(void) {
 }
 
 void host_close_first_run(void) {
+  // With the window it held on in its place, it goes whole on this turn, with none of AppKit's
+  // fade for a window ordered out: what fades behind that window shows through its material.
+  if (g_took_first_runs_place) {
+    g_took_first_runs_place = false;
+    g_first_run.animationBehavior = NSWindowAnimationBehaviorNone;
+  }
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;
+  g_first_run_card = NSZeroSize;
 }
 
 bool host_close_other_window(void) {

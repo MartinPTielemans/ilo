@@ -85,6 +85,7 @@ use crate::tokens::shell::task::{
     RAIL_WORD, RAIL_WORD_LINE, RING_TRACK, STATUS, TILE_FILL, TILE_LINE, TILE_LINE_ON,
     TILE_PICTURE, TILE_RADIUS, TILE_RING, TILE_RING_STROKE,
 };
+use crate::tokens::shell::task_card::FROM_LINE;
 use crate::tokens::shell::{HAIRLINE, ICON_INK};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_GAP};
@@ -94,8 +95,8 @@ actions!(conversation, [SendReply, StopTask]);
 mod ilo_keys;
 mod markdown;
 mod motion;
-mod pages;
-pub(super) mod words;
+pub(crate) mod pages;
+pub(crate) mod words;
 
 /// The assistant's said words, in the answer and between a stretch's steps alike: the text's ink.
 fn said_ink(palette: &super::Palette) -> Hsla {
@@ -103,7 +104,7 @@ fn said_ink(palette: &super::Palette) -> Hsla {
 }
 
 /// The stage's fill, the conversation's ground in the page area: also the fill of the shown
-/// thread's card, which is one shape with it (task_cards.rs).
+/// thread's card, a shape of its own beside it (task_cards.rs).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }
@@ -277,6 +278,8 @@ pub struct TalkView {
     visited: HashSet<u64>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the composer's round button was drawn last, Stop or Send, for a test.
+    round_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Whether its step under way shimmered as it last drew, which check.sh hears of.
@@ -285,8 +288,10 @@ pub struct TalkView {
     scroll: ScrollHandle,
     /// Its rail of pages, which brings a tile into sight once as its word turns to Needs you.
     rail_scroll: ScrollHandle,
-    /// The window's size as last drawn: a change keeps the lines at their end if they were.
-    viewport: Size<Pixels>,
+    /// The window's size as last drawn, and whether the lines stood in the panel beside a page:
+    /// a change of either is a change of the lines' own column, which keeps them at their end if
+    /// they were.
+    viewport: (Size<Pixels>, bool),
     /// What the user opened or folded of its traces and their lines, which wins over what the
     /// trace would do by itself.
     opened: HashMap<Fold, bool>,
@@ -302,6 +307,8 @@ pub struct TalkView {
     /// as it lands, and the view.
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where an outside app's line was drawn last in the panel's head, for a test.
+    from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Each ilo line's button, by its line's key, where it was drawn last and since when it has
     /// stood there: one that widens what the agent may do takes no press until it has stood a
@@ -326,6 +333,8 @@ pub struct TalkView {
     menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
     folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The plus before the level's chip, the add menu's (`crate::plus`).
+    plus: crate::plus::Plus,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// The page row's case as last logged, with the page it was for.
@@ -520,11 +529,12 @@ impl Shell {
                     said_logged: RefCell::default(),
                     visited: HashSet::new(),
                     stop_logged: Rc::default(),
+                    round_drawn: Rc::default(),
                     stale: false,
                     shimmering: false,
                     scroll: ScrollHandle::new(),
                     rail_scroll: ScrollHandle::new(),
-                    viewport: Size::default(),
+                    viewport: Default::default(),
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
                     folding: HashMap::new(),
@@ -532,6 +542,7 @@ impl Shell {
                     made: Instant::now(),
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
+                    from_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
@@ -544,6 +555,7 @@ impl Shell {
                     model_drawn: Rc::default(),
                     menu_open: None,
                     folder_drawn: Rc::default(),
+                    plus: crate::plus::Plus::default(),
                     take_over_drawn: Rc::default(),
                     row_logged: Cell::default(),
                     hand_back_drawn: Rc::default(),
@@ -1532,6 +1544,34 @@ impl TalkView {
                 .child(icon)
                 .on_click(cx.listener(move |view, _, _, cx| view.stand(tab, cx)))
         });
+        // An outside app's session, from the kind of its connection alone, has the card's line
+        // under its title: the product's mark and the name it gave.
+        let name = shown.map(|shown| shown.name.clone()).unwrap_or_default();
+        let drawn = self.from_drawn.clone();
+        let from = (!self.replies).then(|| {
+            div()
+                .relative()
+                .mt(px(panel::FROM_GAP))
+                .h(px(FROM_LINE))
+                .flex()
+                .items_center()
+                .gap(px(panel::FROM_NAME_GAP))
+                .child(
+                    canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+                .child(super::task_cards::from_mark(&palette))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(text::SMALL))
+                        .line_height(px(FROM_LINE))
+                        .text_color(answer_text_3(&palette))
+                        .child(name),
+                )
+        });
         div()
             .flex_none()
             .w_full()
@@ -1545,12 +1585,19 @@ impl TalkView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(px(text::BODY))
-                    .line_height(px(panel::TITLE_LINE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text(TITLE))
-                    .child(title),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(text::BODY))
+                            .line_height(px(panel::TITLE_LINE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.text(TITLE))
+                            .child(title),
+                    )
+                    .children(from),
             )
             .children(speaker)
             .child(
@@ -1629,6 +1676,11 @@ impl TalkView {
             }
             Live::Yours { tab, .. } if shown.stoppable && *tab == on => {
                 words::live(&shown.live).map(|said| RowCase::Yours(said.into()))
+            }
+            // A page the user took over is theirs on its own row, whatever the line is about.
+            _ if shown.stoppable && shown.held.contains(&on) => {
+                let yours = crate::agents::task::yours(on, &shown.tabs);
+                words::live(&yours).map(|said| RowCase::Yours(said.into()))
             }
             _ => None,
         };
@@ -2571,7 +2623,7 @@ impl TalkView {
     }
 
     /// The turn the user sent, until its trace or the agent's message takes its place: Thinking,
-    /// shimmering as the step under way does, or why the agent couldn't start on it, in red.
+    /// shimmering as the step under way does, or why the agent couldn't start on it.
     fn thinking(&self, key: usize, failed: Option<SharedString>, look: &Look) -> gpui::AnyElement {
         let fold = Fold::Trace(key);
         let line = match failed {
@@ -3125,12 +3177,11 @@ impl TalkView {
             .child(self.choices(&form, look, cx))
     }
 
-    /// The composer's row under its field, the bar's own (choices.rs): the thread's level, which
-    /// opens its menu (#4094), the folder it holds (#4101), its model, which opens its assistant's
-    /// models where its program takes another for the next message and is plain words elsewhere,
-    /// and the round button: Stop while it works and nothing is
-    /// typed, else Send, which does nothing with nothing typed. A reply never carries files or a
-    /// folder, so there's no way to add one here.
+    /// The composer's row under its field, the bar's own (choices.rs): the plus, disabled where a
+    /// reply has nothing to add, the thread's level, which opens its menu (#4094), the folder it
+    /// holds (#4101), its model, which opens its assistant's models where its program takes
+    /// another for the next message and is plain words elsewhere, and the round button: Stop while
+    /// it works and nothing is typed, else Send, which does nothing with nothing typed.
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
         let tier = shown.map(|shown| shown.tier).unwrap_or_default();
@@ -3155,9 +3206,14 @@ impl TalkView {
                 Box::new(cx.listener(|view, _, window, cx| view.send_reply(window, cx))),
             ),
         };
-        let logged = self.stop_logged.clone();
-        let round_at = (round == choices::Round::Stop)
-            .then(|| Box::new(stop_told(logged)) as Box<dyn Fn(Bounds<Pixels>)>);
+        let stop = (round == choices::Round::Stop).then(|| stop_told(self.stop_logged.clone()));
+        let drawn = self.round_drawn.clone();
+        let round_at: Box<dyn Fn(Bounds<Pixels>)> = Box::new(move |bounds| {
+            drawn.set(Some(bounds));
+            if let Some(stop) = &stop {
+                stop(bounds);
+            }
+        });
         let level = choices::Trigger {
             id: LEVEL,
             at: self.level_drawn.clone(),
@@ -3167,24 +3223,59 @@ impl TalkView {
         };
         // The model opens its menu where the thread's program takes another for its next message;
         // elsewhere it's plain words.
-        let model = (shown.and_then(|shown| shown.model.clone())).map(|(mark, said, opens)| {
-            let click: Option<Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>> = opens
-                .then(|| {
-                    Box::new(cx.listener(|view, _, window, cx| view.model_menu(window, cx))) as _
-                });
-            let trigger = choices::Trigger {
-                id: MODEL,
-                at: self.model_drawn.clone(),
-                click,
-            };
-            (Some(mark), said, trigger)
-        });
+        let model =
+            (shown.and_then(|shown| shown.model.clone())).map(|(mark, said, word, opens)| {
+                let click: Option<Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>> =
+                    opens.then(|| {
+                        Box::new(cx.listener(|view, _, window, cx| view.model_menu(window, cx)))
+                            as _
+                    });
+                let trigger = choices::Trigger {
+                    id: MODEL,
+                    at: self.model_drawn.clone(),
+                    click,
+                };
+                // The panel speaks a default by its own word, as it draws it; a named model whole.
+                let said = match form.row.model_word && word == crate::command_bar::DEFAULT_ROW {
+                    true => word.clone(),
+                    false => said,
+                };
+                (Some(mark), said, word, trigger)
+            });
+        // Where the model's own word gives way, never under its first word's width.
+        let model_least = match (&model, form.row.model_word) {
+            (Some((_, _, word, _)), true) => {
+                let first = word.split_whitespace().next().unwrap_or_default();
+                let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+                let first = SharedString::from(first.to_string());
+                crate::tooltip::text_width(&first, form.row.text, gpui::FontWeight::NORMAL, &system)
+                    .ceil()
+            }
+            _ => 0.,
+        };
+        let inks = self.inks(look);
+        let plus = choices::plus_look(
+            inks.dim,
+            inks.plate,
+            crate::tokens::command_bar::PLUS,
+            crate::tokens::command_bar::CHOICES_MENU_DROP,
+            look.a11y,
+        );
+        let plus = (self.plus).draw(
+            "conversation-plus",
+            self.reply_rows(),
+            &plus,
+            cx.entity_id(),
+        );
         choices::row(choices::Row {
             form: form.row,
-            inks: self.inks(look),
+            inks,
             a11y: look.a11y,
+            plus: Some(plus),
+            added: Vec::new(),
             level: (tier, level),
             model,
+            model_least,
             effort: None,
             held: self
                 .folder_chip(look, cx)
@@ -3193,8 +3284,14 @@ impl TalkView {
                 .collect(),
             open: self.menu_open,
             round: ("conversation-round", said, round, go),
-            round_at,
+            round_at: Some(round_at),
         })
+    }
+
+    /// The plus's rows under the reply field: none, as a reply never carries files or a folder,
+    /// which a task is given at its start only, so the plus is disabled.
+    fn reply_rows(&self) -> Vec<crate::plus::Row> {
+        Vec::new()
     }
 
     /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
@@ -3769,6 +3866,8 @@ impl Composer {
                     round: panel::COMPOSER_ROUND,
                     arrow: panel::COMPOSER_ARROW,
                     square: panel::COMPOSER_SQUARE,
+                    round_space: panel::COMPOSER_ROUND_SPACE,
+                    model_word: true,
                     ..stage
                 },
             },
@@ -3902,6 +4001,16 @@ fn steps(lines: &[Line]) -> usize {
 /// Where the words of ilo's lines were drawn and how they were laid out, by line.
 type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>>;
 
+/// The colours a trace's line draws in (`TraceLine::inks`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LineInks {
+    words: Hsla,
+    note: Hsla,
+    glyph: Hsla,
+    /// Its words under the pointer, where the line opens and no shimmer lights them.
+    pointed: Option<Hsla>,
+}
+
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
@@ -3975,6 +4084,36 @@ impl TraceLine {
             chevron_alpha: 1.,
             rolled: None,
             joined: false,
+        }
+    }
+
+    /// Its colours. Each is the text's ink at one strength or another, and a failed line's are
+    /// any other's, a cross for its glyph and why at its end: never red, at rest or under the
+    /// pointer.
+    fn inks(&self, palette: &super::Palette) -> LineInks {
+        let ilos = self.mark.is_some();
+        let words = match self.shimmers {
+            _ if ilos => palette.text(ILO_INK),
+            _ if self.head == Some(true) => palette.text(TITLE),
+            _ if self.page == Some(true) => palette.text(TITLE),
+            _ if self.page == Some(false) => palette.gray(TRACE_NOTE),
+            _ if self.ring.is_some() => palette.text(TITLE),
+            Some(None) => palette.text(TITLE),
+            // At the shimmer's peak, which each part fades down from.
+            Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
+            None => palette.text(TRACE_TITLE),
+        };
+        let opens = self.chevron.is_some() || self.page.is_some();
+        // A shimmering title is lit by its shimmer, under the pointer too.
+        let lit = opens && !matches!(self.shimmers, Some(Some(_)));
+        LineInks {
+            words,
+            note: palette.gray(TRACE_NOTE),
+            glyph: match ilos {
+                true => palette.text(MARK_INK),
+                false => palette.glyph(TRACE_GLYPH_ALPHA),
+            },
+            pointed: lit.then(|| palette.text(TITLE)),
         }
     }
 
@@ -4087,6 +4226,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
     let parts = line.note_parts();
     let at_right = line.note_at_right();
+    let inks = line.inks(&palette);
     let TraceLine {
         key,
         glyph,
@@ -4139,26 +4279,16 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             format!("trace-group-{key}").into(),
         ),
     };
-    // A failed line is as quiet as any other, a cross for its glyph and why at its end: never
-    // red.
-    let note = palette.gray(TRACE_NOTE);
+    let LineInks {
+        words,
+        note,
+        glyph: glyph_ink,
+        pointed,
+    } = inks;
     let ilos = mark.is_some();
-    let words = match shimmers {
-        _ if ilos => palette.text(ILO_INK),
-        _ if head == Some(true) => palette.text(TITLE),
-        _ if page == Some(true) => palette.text(TITLE),
-        _ if page == Some(false) => palette.gray(TRACE_NOTE),
-        _ if ring.is_some() => palette.text(TITLE),
-        Some(None) => palette.text(TITLE),
-        // At the shimmer's peak, which each part fades down from.
-        Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
-        None => palette.text(TRACE_TITLE),
-    };
     let glyph = glyph.map(|glyph| {
-        let (color, size) = match ilos {
-            true => (palette.text(MARK_INK), ILO_GLYPH),
-            false => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
-        };
+        let size = if ilos { ILO_GLYPH } else { TRACE_GLYPH };
+        let color = glyph_ink;
         let path = if failed { "icons/x.svg" } else { glyph };
         match ring {
             Some(turned) => div()
@@ -4245,11 +4375,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .when(head == Some(true), |title| {
             title.font_weight(FontWeight::MEDIUM)
         })
-        // A shimmering title is lit by its shimmer, under the pointer too.
-        .when(
-            opens && !failed && !matches!(shimmers, Some(Some(_))),
-            |title| title.group_hover(hover, move |style| style.text_color(palette.text(TITLE))),
-        )
+        .when_some(pointed, |title, pointed| {
+            title.group_hover(hover, move |style| style.text_color(pointed))
+        })
         .child(match shimmers {
             Some(Some(phase)) => shimmering(&palette, title, phase),
             _ => {
@@ -4704,14 +4832,20 @@ impl Render for TalkView {
         {
             self.visited.insert(tab);
         }
-        // A shorter or narrower window keeps the newest line in view while the user reads at the
-        // end, as the scroll keeps its distance from the top.
-        let viewport = window.viewport_size();
-        if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
+        // A shorter or narrower window, or the lines' column narrower or wider as a page goes
+        // beside them or away, keeps the newest line in view while the user reads at the end, as
+        // the scroll keeps its distance from the top; a follow under way ends there. Only the
+        // user's own scroll takes the lines off their end.
+        let viewport = (window.viewport_size(), look.standing);
+        if std::mem::replace(&mut self.viewport, viewport) != viewport
+            && (self.at_end() || self.motion.follow.is_some())
+        {
             self.scroll.scroll_to_bottom();
+            self.motion.follow = None;
         }
         self.level_drawn.set(None);
         self.folder_drawn.set(None);
+        self.plus.forget();
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         self.reply_drawn.set(None);

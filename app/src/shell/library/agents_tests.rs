@@ -31,6 +31,7 @@ fn past(id: &str, ended: u64) -> Past {
             ..Default::default()
         }],
         answers: "claude-code".into(),
+        end: Some(crate::agents::kept::End::Done),
         sorted: None,
     }
 }

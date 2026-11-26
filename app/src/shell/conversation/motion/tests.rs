@@ -53,6 +53,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         tabs: Vec::new(),
         on: None,
         handed: Vec::new(),
+        held: Vec::new(),
         stoppable: true,
         live: Default::default(),
         open: None,

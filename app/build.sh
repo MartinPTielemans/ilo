@@ -89,7 +89,7 @@ case "$(uname -s)" in
     # shellcheck disable=SC2086 # no features, or one flag and its value
     cargo build --release --manifest-path windows/Cargo.toml --target-dir target $features
     # The bridge an agent's MCP client runs, which finds the browser's pipe (src/agents/bridge.rs),
-    # and the ilo command, in bin as package.sh puts it (src/agents/cli.rs).
+    # and the command, in bin as package.sh puts it (src/agents/cli.rs).
     # shellcheck disable=SC2086
     cargo build --release --bin mcp-bridge --bin ilo-command $features
     rm -rf build/Browser
@@ -97,7 +97,7 @@ case "$(uname -s)" in
     cp -al .deps/engine build/Browser
     cp target/release/Browser.dll target/release/mcp-bridge.exe build/Browser/
     mkdir build/Browser/bin
-    cp target/release/ilo-command.exe build/Browser/bin/ilo.exe
+    cp target/release/ilo-command.exe "build/Browser/bin/$(cat branding/product).exe"
     cp -R "$(./fetch-ublock.sh)" build/Browser/ublock
     ./copy-board.sh build/Browser/board
     # shellcheck disable=SC2086

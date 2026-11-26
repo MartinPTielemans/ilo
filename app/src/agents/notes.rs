@@ -59,7 +59,7 @@ pub static NOTES: [Note; 3] = [
 ];
 
 /// What the frame begins with, before the site's name.
-const FRAME: &str = concat!(env!("APP_NAME"), "'s notes for ");
+const FRAME: &str = concat!(env!("PRODUCT_NAME"), "'s notes for ");
 
 /// Settings › Agents' heading over the list, its switch and the sentence under it.
 pub const HEADING: &str = "Site notes";

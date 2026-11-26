@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
-use super::card::{Look, count, look, second_line, spoken};
+use super::card::{Look, count, look, second_lead, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
@@ -42,6 +42,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -264,11 +265,8 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
         state_line(&working).as_ref(),
         "Full access · Working · 3 helpers"
     );
-    assert_eq!(
-        super::state_lead(&state_line(&working)),
-        "Full access".len()
-    );
-    assert_eq!(super::state_lead(&state_line(&done)), 0);
+    assert_eq!(super::state(&working).1, Tier::Full.label().len());
+    assert_eq!(super::state(&done).1, 0);
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
     asks.status = "Which would you rather visit?".into();
@@ -312,6 +310,30 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// How much of a card's line is in the title's ink is its level's: a card at Full access leads its
+/// state's line with the level's label, and a card at any other level has no lead, though its
+/// client is named as the label and its line so begins as that one does. A line that isn't its
+/// state's, its step at work, has none at either level.
+#[test]
+fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
+    let label = Tier::Full.label();
+    let mut posing = card(1, Dot::Ended);
+    posing.name = label.into();
+    let mut full = card(2, Dot::Ended);
+    full.tier = Tier::Full;
+    assert_eq!(state_line(&posing), state_line(&full));
+    for form in [Form::Ended, Form::EndedLine, Form::DoneUnseen] {
+        assert_eq!(second_lead(&posing, form), 0, "{form:?}");
+        assert_eq!(second_lead(&full, form), label.len(), "{form:?}");
+    }
+    // At work the line is the step, which for a session begins with its client's name.
+    for card in [&mut posing, &mut full] {
+        card.dot = Dot::Working;
+        card.status = format!("{label} · Opening tap.pt").into();
+        assert_eq!(second_lead(card, Form::Working), 0);
+    }
 }
 
 /// An outside app's card has its line from the kind of its connection alone, a session with no
@@ -537,6 +559,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
         finding: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -594,6 +617,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         told: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(1, Dot::Done)
     };
     assert_eq!(
@@ -1309,6 +1333,61 @@ fn show_page_watches_its_page_and_nothing_else(cx: &mut TestAppContext) {
     assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
 }
 
+/// A waiting card's Show Page shows the page that waits, so while that page is the one the page
+/// area shows it has nothing left to do: it isn't drawn and the keys' ring has no stop for it. The
+/// card keeps its waiting form and its height. The button is back once the user stands elsewhere.
+#[gpui::test]
+fn show_page_is_not_drawn_while_its_page_is_the_one_shown(cx: &mut TestAppContext) {
+    let (shell, _, cx) = with_task_spaces(cx, vec![paged(1, Dot::Waiting, &[1010, 1011])]);
+    still(cx);
+    tick(5.);
+    // Where the button is drawn, if it is, whether the ring stops on it, and how high its card is.
+    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(shell, cx);
+        let button = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied());
+        let (stop, height) = shell.read_with(cx, |shell, _| {
+            let stop = (shell.card_stops().iter()).any(|(stop, _)| *stop == StripStop::Chip(1));
+            let plate = shell.task_plate_drawn("task-1").expect("its card");
+            (stop, plate.size.height)
+        });
+        (button, stop, height)
+    };
+    // Its conversation first, so the card is the shown thread's before and after the button goes.
+    let plate = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+    let header = plate.expect("its card").origin + gpui::point(gpui::px(24.), gpui::px(8.));
+    cx.simulate_click(header, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None
+    );
+    let (button, stop, height) = drawn(&shell, cx);
+    assert!(stop, "the ring has no stop for Show Page");
+    cx.simulate_click(button.expect("Show Page").center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((101, 1010))
+    );
+    assert_eq!(
+        drawn(&shell, cx),
+        (None, false, height),
+        "Show Page with its page the one shown"
+    );
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Waits));
+
+    // Another tab, the user's own: the page isn't the one shown, so the button shows it again.
+    shell.update(cx, |shell, cx| shell.run(Command::SelectTab(1), "test", cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None
+    );
+    let (button, stop, _) = drawn(&shell, cx);
+    assert!(button.is_some() && stop, "Show Page isn't back");
+}
+
 /// Every card is reached by the keys, among Today's rows where it stands: the arrows go over the
 /// cards and their buttons with the rows, Return on a card shows its conversation, and Focus
 /// Sidebar then rings that card.
@@ -1627,14 +1706,19 @@ fn the_joined_cards_title_reads_on_its_stage() {
     }
 }
 
-/// The shown thread's card is one shape with its stage (spec-thread-stage, the join): it takes the
-/// stage's fill, has no outline of its own and reaches the sidebar's edge. A card not shown keeps
-/// its state's outline, and a waiting one shown gives up its rim and has it back once another
-/// thread is shown.
+/// The shown thread's card is a shape of its own in its stage's colour (spec-sidebar, "Thread,
+/// shown"): it takes the stage's fill, has no outline of its own, is inset at both sides and has
+/// four round corners, with a hairline of light round it on a dark stage and none on a light one.
+/// A card not shown keeps its state's outline, and a waiting one shown gives up its rim and has
+/// it back once another thread is shown.
 #[gpui::test]
-fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut TestAppContext) {
     use super::card::Framed;
-    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
+    use crate::palette::Tone;
+    use crate::shell::own_shape::OWN_SHAPE;
+    use crate::theme::Appearance;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RADIUS, RIM, RIM_WIDTH};
+    use crate::tokens::shell::{DIVIDER, PLATE_INSET};
     let two = vec![
         paged(2, Dot::Waiting, &[1020]),
         paged(1, Dot::Working, &[1010]),
@@ -1681,25 +1765,47 @@ fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
             .as_deref(),
         Some("task-2")
     );
-    assert_eq!(framed(&shell, "task-2", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Own);
     assert_eq!(framed(&shell, "task-1", cx), outline);
-    let (edge, plate) = shell.read_with(cx, |shell, _| {
-        (
-            shell.width(),
-            shell.task_plate_drawn("task-2").expect("its card"),
-        )
-    });
-    assert_eq!(
-        f32::from(plate.right()),
-        edge,
-        "the joined card's right end"
-    );
-    let joined = crate::shell::join::JOINED.take().expect("the card's join");
-    let palette = shell.read_with(cx, |shell, _| shell.palette);
-    let stage = crate::shell::conversation::stage_fill(&palette);
-    assert_eq!(joined.fill, gpui::Hsla::from(stage));
-    assert_eq!(joined.line, plate);
+    for appearance in [Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        OWN_SHAPE.set(None);
+        draw(&shell, cx);
+        let own = OWN_SHAPE.take().expect("the card's own shape");
+        let (edge, plate, palette) = shell.read_with(cx, |shell, _| {
+            (
+                shell.width(),
+                shell.task_plate_drawn("task-2").expect("its card"),
+                shell.palette,
+            )
+        });
+        assert_eq!(f32::from(plate.left()), PLATE_INSET, "{appearance:?}");
+        assert_eq!(
+            f32::from(plate.right()),
+            edge - PLATE_INSET,
+            "{appearance:?}: the shown card's right end"
+        );
+        let stage = crate::shell::conversation::stage_fill(&palette);
+        assert_eq!(own.fill, gpui::Hsla::from(stage), "{appearance:?}");
+        assert_eq!(own.shape, plate, "{appearance:?}");
+        assert_eq!(
+            own.corners,
+            gpui::Corners::all(gpui::px(RADIUS)),
+            "{appearance:?}"
+        );
+        let on = palette.on_fill(stage);
+        let line = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER));
+        assert_eq!(own.outline, line, "{appearance:?}");
+        assert_eq!(
+            own.outline.is_some(),
+            appearance == Appearance::Dark,
+            "{appearance:?}"
+        );
+    }
     show(&shell, "task-1", cx);
-    assert_eq!(framed(&shell, "task-1", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-1", cx), Framed::Own);
     assert_eq!(framed(&shell, "task-2", cx), rim);
 }

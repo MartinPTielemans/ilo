@@ -135,7 +135,6 @@ impl Shell {
                     .child(history_text(
                         board.name.clone().into(),
                         format!("Changed {when}").into(),
-                        false,
                         &self.palette,
                     )),
             )

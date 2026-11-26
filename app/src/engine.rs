@@ -697,12 +697,17 @@ impl Browser for Engine {
     }
 
     fn ask_again(&self, asked: SharedString, cx: &mut App) {
-        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
+        // The bar's ask reads the front window's Shell, which asks this inside its own update.
+        cx.defer(move |cx| with_overlays(move |cx| command_bar::ask_again(asked, cx), cx));
     }
 
-    fn show_task(&self, _: SharedString, _: &mut App) {
-        // The Agents send a window its conversation as it changes; this sends it now.
-        agents_core::update(|_, cx| cx.notify());
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        // The Agents send a window its conversation as it changes; this sends it now, and a task
+        // a run before left asks for its kept log.
+        agents_core::update(move |agents, cx| {
+            agents.task_shown(&agent, cx);
+            cx.notify();
+        });
     }
 
     fn keeps_picture(&self, tab: u64, url: &str, cx: &App) -> bool {
@@ -2231,8 +2236,7 @@ impl Browser for Engine {
         settings::set_send_crash_reports(on, cx);
     }
 
-    // Every build has the agents' server. The first launch picks its steps before the first
-    // frame, when agents_core makes the Agents, and a new profile's are off until then.
+    // Every build has the agents' server, a new profile's off.
     fn threads(&self, cx: &App) -> Option<bool> {
         Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).threads()))
     }
@@ -2244,14 +2248,8 @@ impl Browser for Engine {
         }
     }
 
-    fn other_apps(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
-    }
-
-    fn set_other_apps(&self, on: bool, cx: &mut App) {
-        if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
-        }
+    fn start_agents(&self, cx: &mut App) {
+        agents_core::start(cx);
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
@@ -2446,12 +2444,28 @@ impl Browser for Engine {
         unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
     }
 
+    // The Mac's host grows first run's window where it can (host_grow_first_run); no other does
+    // yet, so there the exit is the cross-fade.
+    fn grows_first_run(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            unsafe { platform::host_grow_first_run() }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        // The browser window first, then first run's off on the same turn, as the launch window
+        // gives way: taken off first, it would still be leaving behind the browser window, and
+        // show through its material.
+        show_window_held_for_first_run();
         unsafe { platform::host_close_first_run() };
         window
             .update(cx, |_, window, _| window.remove_window())
             .ok();
-        show_window_held_for_first_run();
     }
 
     fn new_private_window(&self, cx: &mut App) {

@@ -67,7 +67,7 @@ mod clean_link;
 mod close_tab;
 mod command_names;
 mod commands;
-mod conversation;
+pub(crate) mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;
@@ -91,7 +91,6 @@ mod help_tests;
 mod history;
 mod hover_cards;
 mod into_folder;
-mod join;
 mod keys;
 mod launch_room;
 mod library;
@@ -113,6 +112,7 @@ mod naming;
 mod new_space;
 mod new_window;
 mod onboarding;
+mod own_shape;
 mod page_dialog;
 mod page_ends;
 mod page_menu;
@@ -198,6 +198,7 @@ pub use commands::{
 pub use display_face::{display_text, display_text_weighted};
 pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::{Elsewhere, PlayReady};
+pub use empty::field_typed;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
@@ -1620,9 +1621,11 @@ pub struct Shell {
     /// The first launch's import, made at its first step and kept for the window's life, so an
     /// import under way goes on while the steps after it show and once the flow has ended.
     importing: Option<onboarding::Importing>,
-    /// The onboarding has just ended, so the empty card says what the command bar over it is,
-    /// until a page shows.
+    /// First run has just ended, so the landing field has its one-time hint under it, until the
+    /// first key or a page shows (first-run v9 §10). A flag alone: nothing of what's typed.
     in_hint: bool,
+    /// While the hint shows, what takes it away at the first key.
+    hint_keys: Option<gpui::Subscription>,
     /// The press under way was on a target that opens the command bar while it was open, so the
     /// click that follows only closes it.
     press_closed_bar: bool,
@@ -1829,6 +1832,8 @@ pub struct Shell {
     /// The download whose row the left button last pressed, where, and whether the press became
     /// the system's drag of its file.
     download_press: Option<(u64, Point<Pixels>, bool)>,
+    /// The download whose row in the Library is under the pointer, which shows its buttons.
+    download_pointed: Option<u64>,
     /// The drag of a download's file from the Library closed it, to come back if nothing takes it.
     library_dragged: bool,
     /// The captures saved to the Library, newest first.
@@ -2272,6 +2277,7 @@ impl Shell {
             first_run: None,
             importing: None,
             in_hint: false,
+            hint_keys: None,
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
@@ -2365,6 +2371,7 @@ impl Shell {
             downloads: Vec::new(),
             download_icons: HashMap::new(),
             download_press: None,
+            download_pointed: None,
             library_dragged: false,
             captures: Vec::new(),
             download_previews: HashMap::new(),
@@ -3743,6 +3750,8 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        // First run's hint was under its field.
+        self.drop_hint();
         self.field_let_go(cx);
         self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
@@ -4905,7 +4914,6 @@ impl Render for Shell {
             .as_ref()
             .is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
-            || self.agent_pointer_shown()
             || self.download_flying(cx);
         if drop_targets || self.drop_targets_shown {
             self.drop_targets_shown = drop_targets;
@@ -5146,13 +5154,13 @@ impl Shell {
         let (scale, radius) = (self.content_scale.now(), self.card_radius());
         let scaled = |bounds| split_targets::scaled_about(bounds, frame.center(), scale);
         let card = |bounds, fill| card(scaled(bounds), radius, fill);
-        // A page that takes the window has no edge to keep. The side that meets the docked
-        // sidebar has no line: the open tab's row runs into the page there.
+        // A page that takes the window has no edge to keep, and the side that meets the docked
+        // sidebar has no line.
         let outlined = self.card_left() > 0.;
         let meets_sidebar = self.card_left() == self.width();
-        // A page of a colour of its own is one shape with its tab's line (join.rs). A dark one is
-        // told from a dark window by a hairline of the ink that reads on it, round the line and
-        // the page, so down the sidebar's side too.
+        // A dark page of a colour of its own is told from a dark window by a hairline of the ink
+        // that reads on it, round the whole page, so down the sidebar's side too, as its tab's
+        // line has one round its own shape (own_shape.rs).
         let own = self.page_fill(self.selected);
         let lit = own
             .map(|fill| self.palette.on_fill(fill))
@@ -5193,8 +5201,8 @@ impl Shell {
             .filter(|_| outlined)
             .map(|&bounds| outline(bounds));
         let cards = frames.iter().enumerate().map(|(index, &bounds)| {
-            // Under a page of a colour of its own the card is that colour, so the line and the
-            // page stay one shape while the page's view has nothing drawn.
+            // Under a page of a colour of its own the card is that colour, so the page keeps
+            // its tab's line's colour while its view has nothing drawn.
             let fill = own.filter(|_| index == 0).unwrap_or(self.palette.page);
             card(bounds, fill).when(focused == Some(index), |card| {
                 card.shadow(vec![glow.clone()])
@@ -5934,6 +5942,8 @@ fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
 /// the one that meets the sidebar: `open` is None with no sidebar beside it, or whether that side
 /// is the right. It has no fill, as the card's own may show the window through.
 fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, color: Hsla) -> gpui::Div {
+    #[cfg(test)]
+    PAGE_OUTLINES.with_borrow_mut(|lines| lines.push((bounds, radius, open, color)));
     let width = px(PAGE_OUTLINE_WIDTH);
     let [left, right] = [Some(false), Some(true)].map(|side| match open == side {
         true => px(0.),
@@ -5951,6 +5961,14 @@ fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, color: 
         .border_b(width)
         .border_l(left)
         .border_r(right)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What `card_outline` was asked for since a test last took it: each page's box, its corner,
+    /// its side with no line and the line's colour, for a test of the page area's outline.
+    static PAGE_OUTLINES: std::cell::RefCell<Vec<(Bounds<Pixels>, f32, Option<bool>, Hsla)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// `way`, but past `low` or `high` only a little further, on the Space pages' rubber band.

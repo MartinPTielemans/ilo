@@ -30,6 +30,9 @@ pub const MAKE_DEFAULT: &str = "Make Default";
 /// computer alone, never synced.
 pub const PUT_AWAY_FILE: &str = "Loose ends put away";
 
+/// The Sync tile's line while no account is signed in (table OV4).
+pub const NOT_SIGNED_IN: &str = "Not signed in";
+
 /// The notice's name while the product isn't the default (the drawing's).
 pub fn not_default() -> String {
     format!("{PRODUCT} isn't your default browser")
@@ -172,6 +175,8 @@ pub struct Facts {
     /// The logins the passwords' profile holds, once Settings has read them, and its name.
     pub logins: Option<(usize, SharedString)>,
     pub signed_in: bool,
+    /// Whether no account is signed in: signed out, or its sign-in window still open.
+    pub signed_out: bool,
     /// The account's devices, once Settings has read them.
     pub devices: Option<usize>,
 }
@@ -261,7 +266,7 @@ pub fn tiles(facts: &Facts) -> [Tile; 6] {
             "Sync",
             Section::SyncImport.glyph(),
             [
-                line(facts.signed_in, "Signed in"),
+                line(facts.signed_in, "Signed in").or(line(facts.signed_out, NOT_SIGNED_IN)),
                 (facts.devices.filter(|_| facts.signed_in)).map(|devices| {
                     format!(
                         "{}, end-to-end encrypted",
@@ -312,7 +317,8 @@ pub fn loose_end_row(
 }
 
 /// A tile: its glyph and page's name, then its lines. A click anywhere on it calls `open`;
-/// nothing is changed from it.
+/// nothing is changed from it. A line is never cut: on a tile narrower than drawn it takes a second
+/// line, and the tile grows only once its lines need more than the drawn height.
 pub fn tile_card(
     look: &Look,
     tile: &Tile,
@@ -341,14 +347,18 @@ pub fn tile_card(
                 .text_color(look.ink)
                 .child(tile.title),
         );
-    let lines = (tile.lines.iter()).map(|line| div().truncate().child(line.clone()));
+    let lines = (tile.lines.iter()).map(|line| div().child(line.clone()));
     let title = tile.title;
     div()
         .id(("overview-tile", tile.section as usize))
-        .when(a11y, |card| crate::settings_rows::named_button(card, title))
+        .when(a11y, |card| {
+            let said = tile.lines.join(", ");
+            crate::settings_rows::named_button(card, title)
+                .when(!said.is_empty(), |card| card.aria_description(said))
+        })
         .flex_1()
         .min_w_0()
-        .h(px(form::TILE))
+        .min_h(px(form::TILE))
         .py(px(form::TILE_Y))
         .px(px(form::TILE_X))
         .rounded(px(form::TILE_RADIUS))

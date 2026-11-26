@@ -63,6 +63,7 @@ pub(super) fn card() -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -106,6 +107,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
         handed: Vec::new(),
+        held: Vec::new(),
         stoppable: true,
         live: Default::default(),
         open: None,
@@ -233,6 +235,92 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
     assert!(
         host.take().contains(&"task picture 30".to_string()),
         "the conversation wasn't sent"
+    );
+}
+
+/// Task-1's conversation shown, its page 30 its card's last and one whose picture the agents'
+/// rules let a kept card keep.
+fn kept_card_shown(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(card, cx);
+    host.keeps.borrow_mut().insert(30);
+    (shell, host, cx)
+}
+
+/// Whether a kept card may keep a page's picture is the agents' rules', asked as the
+/// conversation the Agents send is set, inside the shell's change, so the question carries the
+/// page's address. Looked up from the shell there, the app went down at the first thread opened
+/// by its card.
+#[gpui::test]
+fn the_agents_send_a_conversation_whose_pictures_are_judged_before_its_shell_changes(
+    cx: &mut TestAppContext,
+) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    let weak = shell.downgrade();
+    cx.update(|_, cx| {
+        let made = |agent: &str, _: &gpui::App| (agent == "task-1").then(|| conversation(1));
+        super::super::send_agents(
+            Vec::new(),
+            vec![card()],
+            Vec::new(),
+            Vec::new(),
+            made,
+            &[weak.clone()],
+            cx,
+        );
+    });
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the conversation wasn't sent"
+    );
+}
+
+/// A picture the conversation asked for comes while the shell changes, as the core answers in
+/// the shell's update: whether its card may keep it is still judged, without reading the shell,
+/// and the card is told.
+#[gpui::test]
+fn a_picture_that_comes_is_judged_for_its_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let request = picture_request(&shell, 30, cx);
+    host.reads_shell(shell.downgrade());
+    shell.update(cx, |shell, cx| {
+        let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+        shell.page_pictured(request, picture, cx)
+    });
+    assert_eq!(
+        host.card_pictures.borrow_mut().pop(),
+        Some(("task-1".into(), 30, true))
+    );
+}
+
+/// A page watched over the conversation goes back into its picture after its pages changed: the
+/// pictures taken again are judged for the card from inside the shell's change, without reading
+/// the shell.
+#[gpui::test]
+fn pictures_taken_again_are_judged_for_the_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |view, _| view.stale = true);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    shell.update(cx, |shell, cx| shell.retake_talk_pictures(cx));
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the pictures weren't taken again"
     );
 }
 
@@ -1925,6 +2013,10 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tab: 1,
             limit: HelpersLimit::Kind,
         },
+        // A kept log's line, as it stored one of the above.
+        IloKind::Kept {
+            words: super::words::stored(&IloKind::EndedLeft, "Claude").into(),
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1952,7 +2044,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::KeepsNothing
             | IloKind::NoProfile
             | IloKind::NoSpace
-            | IloKind::Helpers { .. } => {}
+            | IloKind::Helpers { .. }
+            | IloKind::Kept { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
         let verb = VERBS.iter().any(|verb| own.split(' ').next() == Some(verb));
@@ -2766,6 +2859,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
             model: Some((
                 "icons/terminal.svg",
                 "Claude Code \u{b7} Opus".into(),
+                "Opus".into(),
                 false,
             )),
             ..conversation(1)
@@ -4230,6 +4324,162 @@ fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
     );
 }
 
+/// Where the page row's Take Over and Hand Back were drawn last, after the panel draws again.
+fn row_buttons_drawn(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    Vec<gpui::Bounds<gpui::Pixels>>,
+    Option<gpui::Bounds<gpui::Pixels>>,
+) {
+    view.update(cx, |view, cx| {
+        view.take_over_drawn.borrow_mut().clear();
+        view.hand_back_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        (
+            view.take_over_drawn.borrow().clone(),
+            view.hand_back_drawn.get(),
+        )
+    })
+}
+
+/// Standing on page 30, which the user took over, while the thread's line is `live` about another
+/// of its pages (31, the one it's `on` if any): the row is theirs, with the line's words for a
+/// page held, Hand Back is drawn and Take Over isn't, and the press hands that page back by the
+/// strip's own road.
+fn yours_on_a_held_page(live: Live, on: Option<u64>, cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tabs: Vec<(u64, gpui::SharedString)> =
+        vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())];
+    let split = Conversation {
+        tabs: tabs.clone(),
+        on,
+        held: vec![30],
+        live: live.clone(),
+        ..conversation(3)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(split), cx));
+    watch_page(&shell, cx);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    let yours = crate::agents::task::yours(30, &tabs);
+    let said = super::words::live(&yours).expect("words for a page the user has");
+    assert_eq!(
+        row.case,
+        Some(super::RowCase::Yours(said.into())),
+        "{live:?}"
+    );
+    let (take_over, hand_back) = row_buttons_drawn(&view, cx);
+    assert!(
+        take_over.is_empty(),
+        "Take Over on a page the user has: {live:?}"
+    );
+    let hand_back = hand_back.expect("no Hand Back in the page's row");
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"], "{live:?}");
+    let stop = shell.read_with(cx, |shell, cx| shell.page_row_shown(30, cx));
+    let stop = stop.case.map(|case| case.button());
+    assert_eq!(stop, Some(crate::shell::page_ends::StripStop::HandBack));
+}
+
+/// A page the user took over is theirs on its row while the thread works on another.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_the_thread_works_on_another(
+    cx: &mut TestAppContext,
+) {
+    yours_on_a_held_page(Live::Working, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while another page's hand-off waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_another_is_handed(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Handed, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while the thread's question waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_question_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Asked, None, cx);
+}
+
+/// A page the user took over is theirs on its row while a refused step on another waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_refusal_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Refused, Some(31), cx);
+}
+
+/// Standing on the page an agent handed the user, the hand-off's own line has its Hand Back and
+/// the row draws none: it isn't a page the user took over.
+#[gpui::test]
+fn a_hand_offs_own_page_draws_no_second_hand_back(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let handed = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        on: Some(30),
+        held: Vec::new(),
+        live: Live::Handed,
+        ..conversation(3)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(handed), cx));
+    watch_page(&shell, cx);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    assert!(
+        !matches!(row.case, Some(super::RowCase::Yours(_))),
+        "{:?}",
+        row.case
+    );
+    assert_eq!(row_buttons_drawn(&view, cx).1, None, "a second Hand Back");
+}
+
+/// Standing on a page the user doesn't hold, while they hold another of the thread's, the row
+/// isn't theirs: no Hand Back for the page stood on.
+#[gpui::test]
+fn the_panels_page_row_isnt_yours_on_a_page_not_held(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tabs: Vec<(u64, gpui::SharedString)> = vec![
+        (30, "skyscanner.net".into()),
+        (31, "maat.pt".into()),
+        (32, "ccb.pt".into()),
+    ];
+    let working = Conversation {
+        tabs: tabs.clone(),
+        on: Some(32),
+        held: vec![31],
+        ..conversation(3)
+    };
+    let theirs = Conversation {
+        tabs,
+        on: None,
+        held: vec![31],
+        live: Live::Yours {
+            tab: 31,
+            site: Some("maat.pt".into()),
+        },
+        ..conversation(3)
+    };
+    for talk in [working, theirs] {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        watch_page(&shell, cx);
+        let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+        assert!(
+            !matches!(row.case, Some(super::RowCase::Yours(_))),
+            "{:?}",
+            row.case
+        );
+        assert_eq!(
+            row_buttons_drawn(&view, cx).1,
+            None,
+            "Hand Back on a page not held"
+        );
+    }
+}
+
 /// A thread's `primary`, under the round Stop and the held step's first button, is the same in
 /// every Space's colour, one per look, its words readable on it: never the Space's accent, so no
 /// control is green.
@@ -4295,6 +4545,70 @@ fn said_words_between_steps_are_in_the_texts_ink() {
     }
 }
 
+/// A failed line draws no colour that isn't the text's or text-2's, in either look: its words,
+/// its why and its glyph are the inks of the same line had it gone through, at rest and under the
+/// pointer, and each is the text's ink at some strength. The find bar's red is the find bar's.
+#[test]
+fn a_failed_line_wears_no_red() {
+    use super::TraceLine;
+    use crate::palette::{Palette, Tone};
+    use crate::tokens::shell::conversation::TRACE_NOTE;
+    let step = || {
+        let why = "There's no element e7 on the page.";
+        let mut line = TraceLine::new(Fold::Step(1), "Couldn't click “Pay”".into(), why.into());
+        line.glyph = Some("icons/x.svg");
+        line
+    };
+    // One that opens to why, one that doesn't, and a turn that couldn't start.
+    let opens = || TraceLine {
+        chevron: Some(0.),
+        ..step()
+    };
+    let unstarted = || TraceLine::new(Fold::Trace(0), "Couldn't start".into(), "".into());
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let ink = gpui::Hsla::from(palette.ink);
+        let lines: [&dyn Fn() -> TraceLine; 3] = [&step, &opens, &unstarted];
+        for line in lines {
+            let failed = TraceLine {
+                failed: true,
+                ..line()
+            };
+            let inks = failed.inks(&palette);
+            assert_eq!(
+                inks,
+                line().inks(&palette),
+                "{tone:?}: a failed line's own ink"
+            );
+            assert_eq!(
+                inks.note,
+                palette.gray(TRACE_NOTE),
+                "{tone:?}: why in text-2"
+            );
+            let drawn = [
+                Some(inks.words),
+                Some(inks.note),
+                Some(inks.glyph),
+                inks.pointed,
+            ];
+            for colour in drawn.into_iter().flatten() {
+                let opaque = gpui::Hsla { a: ink.a, ..colour };
+                assert_eq!(opaque, ink, "{tone:?}: a colour that isn't the text's");
+            }
+        }
+        assert!(
+            (TraceLine {
+                failed: true,
+                ..opens()
+            })
+            .inks(&palette)
+            .pointed
+            .is_some(),
+            "{tone:?}: under the pointer it lights as any line that opens"
+        );
+    }
+}
+
 /// The user's message wraps inside the panel's column beside a page, never wider than it, so none
 /// of it leaves the panel; the stage's measure wouldn't fit there.
 #[test]
@@ -4337,6 +4651,38 @@ fn standing_with(
     redraw(&shell, &view, cx);
     assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
     (shell, host, view, cx)
+}
+
+/// Standing on one of the thread's pages, the panel head's button of its other page stands on that
+/// one at once. Its press runs in the panel's own update, as here, so nothing the shell does for it
+/// may read the panel.
+#[gpui::test]
+fn the_panel_heads_button_of_its_other_page_stands_on_it(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        ..conversation(3)
+    };
+    let (shell, host, view, cx) = standing_with(card(), talk, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    redraw(&shell, &view, cx);
+    host.take();
+    // As the button's listener does: the stand runs inside the panel's own update.
+    view.update(cx, |view, cx| view.stand(31, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
+    );
+    assert!(host.take().contains(&"select 31".to_string()));
 }
 
 fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
@@ -4687,6 +5033,50 @@ fn row_cases() -> Vec<RowCaseShown> {
             )
         },
     ]
+}
+
+/// An outside app's panel has its card's line under the title, from the kind of its connection
+/// alone, and no reply field; a task's panel never has it, whatever either is named. However long
+/// the name, or made of the product's own state words, the line is one line where it was and the
+/// page row and Stop are as they were.
+#[gpui::test]
+fn an_outside_apps_panel_has_its_line_under_the_title(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::FROM_LINE;
+    let named = |name: &str| {
+        let (session, talk) = session_panel();
+        let session = Card {
+            name: name.into(),
+            ..session
+        };
+        let talk = Conversation {
+            name: name.into(),
+            ..talk
+        };
+        (session, talk)
+    };
+    let (session, talk) = named("Claude Code");
+    let (_, _, view, cx) = standing_with(session, talk, cx);
+    let line = view.read_with(cx, |view, _| view.from_drawn.get());
+    let line = line.expect("an outside app's line");
+    assert_eq!(line.size.height, px(FROM_LINE));
+    assert_eq!(view.read_with(cx, |view, _| view.reply_drawn.get()), None);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    let long = "Claude Code ".repeat(17);
+    for name in [long.as_str(), "Needs you", "Done · 13:31", "Working", ""] {
+        let (session, talk) = named(name);
+        let (_, _, view, cx) = standing_with(session, talk, cx);
+        let drawn = view.read_with(cx, |view, _| view.from_drawn.get());
+        assert_eq!(drawn, Some(line), "{name:?}");
+        let theirs = view.read_with(cx, |view, _| view.page_row_for(30, None));
+        assert_eq!(theirs, row, "{name:?}");
+    }
+    // A task's panel has none, even named as an app.
+    let task = Card {
+        name: "Claude Code".into(),
+        ..card()
+    };
+    let (_, _, view, cx) = standing_with(task, conversation(3), cx);
+    assert_eq!(view.read_with(cx, |view, _| view.from_drawn.get()), None);
 }
 
 /// An outside app's session, standing on tab 30: its card, with no composer, and its step lines.
@@ -5122,4 +5512,541 @@ fn a_handed_tabs_page_menu_has_the_way_back_first(cx: &mut TestAppContext) {
         ["page menu 30 closes", "task task-1 ReturnTab(30)"],
         "the way back's row"
     );
+}
+
+/// Task-1's conversation of `lines` lines of its own and then `last`, which scroll.
+fn foot_talk(lines: usize, last: Vec<Line>) -> Conversation {
+    let mut talk = conversation(1);
+    (talk.lines).extend((0..lines).map(|n| {
+        Line::Said(
+            format!("Line {n} of what the assistant said, long enough to wrap in the panel").into(),
+        )
+    }));
+    talk.lines.extend(last);
+    talk
+}
+
+/// ilo's line handing tab 30 to the user, with Hand Back and Not Now.
+fn handed(key: usize) -> Line {
+    Line::Ilo(IloLine {
+        key,
+        kind: IloKind::Yours {
+            tab: 30,
+            site: None,
+        },
+        settled: false,
+    })
+}
+
+/// ilo's line that it stopped the task at an order on tab 30, with Take Over.
+fn stopped(key: usize) -> Line {
+    Line::Ilo(IloLine {
+        key,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Place order".into(),
+            doing: "clicking “Place order”".into(),
+            why: Why::Order,
+            tier: Tier::Work,
+            count: 1,
+        },
+        settled: false,
+    })
+}
+
+/// The product puts the handed page 30 beside the conversation by itself, as at a hand-off
+/// (`open_needing_page`), and the core then shows its Space and page.
+fn hand_off(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| shell.open_needing_page(30, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_space(3, cx);
+        shell.set_selected(30, cx);
+    });
+    redraw(shell, view, cx);
+    redraw(shell, view, cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the handed page isn't beside the conversation"
+    );
+}
+
+/// Whether line `key`'s button was drawn whole inside the lines' scrolled area, by the scroll's
+/// own bounds and the place the button recorded as it was painted.
+fn in_view(
+    view: &Entity<super::TalkView>,
+    key: (usize, IloButton),
+    cx: &mut VisualTestContext,
+) -> Result<(), String> {
+    let (button, _) = ilo_button(view, key, cx).ok_or(format!("{key:?} wasn't drawn"))?;
+    let area = view.read_with(cx, |view, _| view.scroll.bounds());
+    match button.top() >= area.top() && button.bottom() <= area.bottom() {
+        true => Ok(()),
+        false => Err(format!(
+            "{key:?} drawn at {:?} to {:?}, the lines' area {:?} to {:?}",
+            button.top(),
+            button.bottom(),
+            area.top(),
+            area.bottom()
+        )),
+    }
+}
+
+/// The scroll's offset and its most, as last laid out.
+fn foot_scrolled(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (gpui::Pixels, gpui::Pixels) {
+    view.read_with(cx, |view, _| {
+        (view.scroll.offset().y, view.scroll.max_offset().y)
+    })
+}
+
+/// At a hand-off the product puts the handed page beside the conversation, whose column narrows
+/// and wraps taller: read at its foot before, it's at its foot after, so the handed line's Hand
+/// Back and Not Now stand in view, and a line that needs the user after it is followed.
+#[gpui::test]
+fn a_hand_off_keeps_a_conversation_at_its_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert!(max > px(0.), "the lines fit, so nothing scrolls");
+    assert_eq!(offset, -max, "it opened away from its foot");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    for button in [IloButton::HandBack, IloButton::NotNow] {
+        in_view(&view, (900, button), cx).unwrap_or_else(|miss| {
+            panic!("beside the handed page, the handed line's button is out of view: {miss}")
+        });
+    }
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    in_view(&view, (901, IloButton::TakeOver), cx).unwrap_or_else(|miss| {
+        panic!("a line that needs the user, beside the handed page, wasn't followed: {miss}")
+    });
+}
+
+/// The same with the lines still easing after the line before when the page goes beside: the
+/// follow ends at the foot of the narrower column, not short of it.
+#[gpui::test]
+fn a_follow_under_way_at_a_hand_off_ends_at_the_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    // The question comes wide, at the foot: the lines start to follow it on their curve.
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![stopped(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.motion.follow.is_some()),
+        "the question wasn't followed on a curve"
+    );
+    // The curve takes a step wide, then the product hands the user the page in the same moment
+    // as its line comes, and the curve goes on a step a frame to its end.
+    let step = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            if let Some(follow) = view.motion.follow.as_mut() {
+                follow.since -= std::time::Duration::from_millis(40);
+            }
+        });
+    };
+    step(&view, cx);
+    redraw(&shell, &view, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![stopped(900), handed(901)])), cx)
+    });
+    hand_off(&shell, &view, cx);
+    for _ in 0..100 {
+        if view.read_with(cx, |view, _| view.motion.follow.is_none()) {
+            break;
+        }
+        step(&view, cx);
+        redraw(&shell, &view, cx);
+    }
+    redraw(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "the follow under way ended short of the foot");
+    for button in [IloButton::HandBack, IloButton::NotNow] {
+        in_view(&view, (901, button), cx).unwrap_or_else(|miss| {
+            panic!("the handed line's button is out of view after the follow: {miss}")
+        });
+    }
+}
+
+/// Scrolled up before the hand-off, the lines stay where the user left them, and nothing that
+/// comes after moves them: the card's Needs you tells them.
+#[gpui::test]
+fn a_hand_off_leaves_lines_the_user_scrolled_up_where_they_are(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    view.update(cx, |view, _| {
+        view.scroll.set_offset(point(px(0.), px(-100.)))
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    assert_eq!(
+        foot_scrolled(&view, cx).0,
+        px(-100.),
+        "the hand-off pulled the user away from what they read"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    assert_eq!(
+        foot_scrolled(&view, cx).0,
+        px(-100.),
+        "a line after the hand-off pulled the user away from what they read"
+    );
+}
+
+/// Back from the page, the column wide again, a conversation that was at its foot still is.
+#[gpui::test]
+fn back_from_a_handed_page_a_conversation_stays_at_its_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "beside the page, it's off its foot");
+    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    redraw(&shell, &view, cx);
+    redraw(&shell, &view, cx);
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the page didn't go back"
+    );
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "back wide, it's off its foot");
+    // And a line that comes then is followed.
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    in_view(&view, (901, IloButton::TakeOver), cx)
+        .unwrap_or_else(|miss| panic!("back wide, a new line wasn't followed: {miss}"));
+}
+
+/// The words a thread's model trigger says for each assistant in Cli's own lists, its default
+/// first, then one longer than any of them, as a CLI can list: whole, and the model's own word, a
+/// default's being the model menu's `Default`.
+fn models_in_cli_lists() -> Vec<(String, String)> {
+    use crate::agents::runner::Cli;
+    let mut models = Vec::new();
+    for cli in Cli::ALL {
+        let default = crate::agents::task::model_default(cli);
+        models.push((default, crate::command_bar::DEFAULT_ROW.to_string()));
+        for (_, name) in cli.unlisted_models() {
+            models.push((format!("{} \u{b7} {name}", cli.name()), name.to_string()));
+        }
+    }
+    let long = "Sonnet 4.5 with a context of a million";
+    models.push((format!("Claude \u{b7} {long}"), long.into()));
+    models
+}
+
+/// How wide `words` are at the panel's size, laid out whole, and their first word alone.
+fn panel_widths(words: &str, cx: &mut VisualTestContext) -> (f32, f32) {
+    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL;
+    let first = words
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    cx.update(|_, cx| {
+        let system = WindowTextSystem::new(cx.text_system().clone());
+        let width = |text: &str| {
+            text_width(
+                &text.to_string().into(),
+                COMPOSER_LEVEL,
+                FontWeight::NORMAL,
+                &system,
+            )
+        };
+        (width(words), width(&first))
+    })
+}
+
+/// The composer's inside edges in the 300 panel: the panel less its foot at each side and the
+/// composer's line of 1.
+fn composer_inside(panel: gpui::Bounds<gpui::Pixels>) -> (gpui::Pixels, gpui::Pixels) {
+    use crate::tokens::shell::conversation::panel::FOOT;
+    (panel.left() + px(FOOT + 1.), panel.right() - px(FOOT + 1.))
+}
+
+/// The panel's composer row fits the panel beside a page (300) with its plus drawn: the round
+/// button's right edge is the row's inset inside the composer, at Stop and at Send, at every
+/// level, for every model in Cli's lists. The model trigger draws the model's own word; nothing
+/// of the row is cut but that word, which gives way at its end and is never narrower than its
+/// first word. The level's words are always whole. The one difference the lead named for now
+/// (26 Nov): Work on pages with a default's row stands exactly 1 over, at Stop and at Send.
+#[gpui::test]
+fn the_panels_composer_row_fits_the_panel_with_its_plus(_: &mut TestAppContext) {
+    use crate::tokens::command_bar::{TRIGGER_CHEVRON, TRIGGER_GAP};
+    use crate::tokens::shell::conversation::COMPOSER_ROW_GAP;
+    use crate::tokens::shell::conversation::panel::{
+        COMPOSER_LEVEL_X, COMPOSER_ROUND, COMPOSER_ROW_X,
+    };
+    let (_, long) = models_in_cli_lists().pop().unwrap();
+    let mut cut = false;
+    let (mut fit, mut named) = (0, 0);
+    for tier in Tier::ALL {
+        for (said, word) in models_in_cli_lists() {
+            for stoppable in [true, false] {
+                let mut each = TestAppContext::single();
+                let talk = Conversation {
+                    stoppable,
+                    tier,
+                    model: Some((
+                        "icons/terminal.svg",
+                        said.clone().into(),
+                        word.clone().into(),
+                        true,
+                    )),
+                    ..conversation(3)
+                };
+                let (_, _, view, cx) = standing_with(card(), talk, &mut each);
+                let case = format!("{tier:?}, {said:?}, Stop {stoppable}");
+                let (panel, round, plus, level, model) = view.read_with(cx, |view, _| {
+                    (
+                        view.drawn_at.get().expect("no panel"),
+                        view.round_drawn.get().expect("no round button"),
+                        view.plus.drawn().expect("no plus"),
+                        view.level_drawn.get().expect("no level"),
+                        view.model_drawn.get().expect("no model"),
+                    )
+                });
+                assert_eq!(panel.size.width, px(BESIDE), "{case}: the panel's width");
+                assert_eq!(
+                    round.size.width,
+                    px(COMPOSER_ROUND),
+                    "{case}: the round button"
+                );
+                let (left, right) = composer_inside(panel);
+                let over = tier == Tier::Work && word == crate::command_bar::DEFAULT_ROW;
+                assert_eq!(
+                    round.right(),
+                    right - px(COMPOSER_ROW_X) + px(if over { 1. } else { 0. }),
+                    "{case}: the round button's right edge isn't the row's inset inside the composer{}",
+                    if over {
+                        ", 1 over as the lead named"
+                    } else {
+                        ""
+                    }
+                );
+                *if over { &mut named } else { &mut fit } += 1;
+                let start = left + px(COMPOSER_ROW_X);
+                let end = round.left() - px(COMPOSER_ROW_GAP);
+                for (name, item) in [("plus", plus), ("level", level), ("model", model)] {
+                    assert!(
+                        item.left() >= start && item.right() <= end,
+                        "{case}: the {name} is drawn at {:?}..{:?}, outside the row's {start:?}..{end:?}",
+                        item.left(),
+                        item.right()
+                    );
+                }
+                // The level whole: its insets, its words and its chevron.
+                let whole = panel_widths(tier.label(), cx).0
+                    + 2. * COMPOSER_LEVEL_X
+                    + TRIGGER_GAP
+                    + TRIGGER_CHEVRON;
+                assert!(
+                    f32::from(level.size.width) + 1. >= whole,
+                    "{case}: the level is {:?} wide, its words cut (whole it's {whole})",
+                    level.size.width
+                );
+                // The model's word: the trigger less its insets and its chevron, as it opens.
+                let drawn = f32::from(model.size.width)
+                    - 2. * COMPOSER_LEVEL_X
+                    - TRIGGER_GAP
+                    - TRIGGER_CHEVRON;
+                let (whole, least) = panel_widths(&word, cx);
+                assert!(
+                    drawn + 1. >= least,
+                    "{case}: the model's word is {drawn} wide, under its first word ({least})"
+                );
+                // Cut only where it has no room: it then stands against the round button.
+                if drawn + 1. < whole {
+                    assert!(
+                        model.right() + px(1.) >= end,
+                        "{case}: {word:?} is cut to {drawn} with room left before the button"
+                    );
+                    cut |= word == long;
+                }
+            }
+        }
+    }
+    assert!(
+        cut,
+        "the longest model's word was never cut, so this tests no cut"
+    );
+    // Each assistant's default at Work on pages, at Stop and at Send: 1 over; every other fits.
+    assert_eq!(
+        (fit, named),
+        (32, 4),
+        "(cases that fit, Work on pages with a default 1 over)"
+    );
+}
+
+/// In the panel the model trigger draws the model's own word alone, without its assistant's
+/// name.
+#[gpui::test]
+fn the_panels_model_trigger_draws_the_models_own_word(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL_X;
+    let talk = Conversation {
+        model: Some((
+            "icons/terminal.svg",
+            "Claude \u{b7} Sonnet".into(),
+            "Sonnet".into(),
+            false,
+        )),
+        ..conversation(3)
+    };
+    let (_, _, view, cx) = standing_with(card(), talk, cx);
+    let model = view
+        .read_with(cx, |view, _| view.model_drawn.get())
+        .expect("no model");
+    // A model that can't change has no chevron: the trigger is its insets and its word.
+    let drawn = f32::from(model.size.width) - 2. * COMPOSER_LEVEL_X;
+    let (sonnet, _) = panel_widths("Sonnet", cx);
+    let (both, _) = panel_widths("Claude \u{b7} Sonnet", cx);
+    assert!(
+        (drawn - sonnet).abs() <= 1.,
+        "the panel's model is {drawn} wide: Sonnet alone is {sonnet}, with Claude's name {both}"
+    );
+}
+
+/// The panel's row alone, at the composer's width in the 300 panel and at a wider one, with and
+/// without the plus, at Stop and at Send: the round button stands the row's inset inside, and the
+/// model's word is cut at 300 only, never under its first word, and whole again where there's
+/// room.
+#[gpui::test]
+fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::panel::{COMPOSER_LEVEL_X, COMPOSER_ROW_X, FOOT};
+    use gpui::prelude::*;
+    use gpui::{Bounds, IntoElement, Pixels, SharedString, Window};
+    use std::cell::Cell;
+    type At = Rc<Cell<Option<Bounds<Pixels>>>>;
+    struct Drawn {
+        width: f32,
+        plus: bool,
+        round: choices::Round,
+        word: SharedString,
+        least: f32,
+        model: At,
+        round_at: At,
+    }
+    impl gpui::Render for Drawn {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            let ink = gpui::black();
+            let trigger = |id, at: At| choices::Trigger {
+                id,
+                at,
+                click: None,
+            };
+            let look = choices::plus_look(ink, ink, 16., 6., false);
+            let plus = (self.plus).then(|| {
+                crate::plus::Plus::default().draw("plus", Vec::new(), &look, cx.entity_id())
+            });
+            let round_at = self.round_at.clone();
+            gpui::div()
+                .font_family(crate::face::UI)
+                .w(px(self.width))
+                .flex()
+                .flex_col()
+                .child(choices::row(choices::Row {
+                    form: super::Composer::of(true).row,
+                    inks: choices::Inks {
+                        text: ink,
+                        dim: ink,
+                        plate: ink,
+                        primary: ink,
+                        on_primary: ink,
+                    },
+                    a11y: false,
+                    plus,
+                    added: Vec::new(),
+                    level: (Tier::Work, trigger("level", Rc::default())),
+                    model: Some((
+                        None,
+                        self.word.clone(),
+                        self.word.clone(),
+                        trigger("model", self.model.clone()),
+                    )),
+                    model_least: self.least,
+                    effort: None,
+                    held: Vec::new(),
+                    open: None,
+                    round: ("round", "Send".into(), self.round, Box::new(|_, _, _| {})),
+                    round_at: Some(Box::new(move |bounds| round_at.set(Some(bounds)))),
+                }))
+        }
+    }
+    let (_, long) = models_in_cli_lists().pop().unwrap();
+    // The composer's row inside the 300 panel: its foot at each side and the composer's line.
+    let narrow = BESIDE - 2. * (FOOT + 1.);
+    for width in [narrow, narrow + 240.] {
+        for plus in [true, false] {
+            for round in [choices::Round::Stop, choices::Round::Go { ready: false }] {
+                let case = format!("{width}, plus {plus}, {round:?}");
+                let least = cx.update(|cx| {
+                    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL;
+                    let system = WindowTextSystem::new(cx.text_system().clone());
+                    let first = long.split_whitespace().next().unwrap().to_string().into();
+                    text_width(&first, COMPOSER_LEVEL, FontWeight::NORMAL, &system).ceil()
+                });
+                let (model, round_at) = (At::default(), At::default());
+                let (word, at, drawn) = (long.clone().into(), model.clone(), round_at.clone());
+                let (_, cx) = cx.add_window_view(|_, _| Drawn {
+                    width,
+                    plus,
+                    round,
+                    word,
+                    least,
+                    model: at,
+                    round_at: drawn,
+                });
+                cx.run_until_parked();
+                let round = round_at.get().expect("no round button");
+                assert_eq!(round.right(), px(width - COMPOSER_ROW_X), "{case}");
+                let model = model.get().expect("no model");
+                assert!(
+                    model.right() <= round.left(),
+                    "{case}: the model past the button"
+                );
+                let shown = f32::from(model.size.width) - 2. * COMPOSER_LEVEL_X;
+                let (whole, first) = panel_widths(&long, cx);
+                assert!(shown + 1. >= first, "{case}: under its first word");
+                match width == narrow {
+                    true => assert!(shown + 1. < whole, "{case}: not cut where it hasn't room"),
+                    false => assert!(shown + 1. >= whole, "{case}: cut where there's room"),
+                }
+            }
+        }
+    }
 }

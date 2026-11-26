@@ -29,6 +29,13 @@ const IN_FIELD: usize = usize::MAX;
 const KEPT_HERE: usize = usize::MAX - 1;
 const RESUMED: usize = usize::MAX - 2;
 
+/// A kept log a task a run before left asked for: still out, or read, with none for one that
+/// had none or didn't read back.
+pub enum CameLog {
+    Asked,
+    Read(Vec<kept::log::Record>),
+}
+
 /// The last picture of a kept task's last page its conversation took, as its card keeps it.
 pub enum CardTile {
     /// Of `tab`: the picture, or none if it couldn't have been given to an agent.
@@ -90,6 +97,7 @@ impl Agents {
             return;
         }
         let line = Some(finding(&task.messages).to_string()).filter(|line| !line.is_empty());
+        let log = self.next_log(task, cx);
         let last = last_tab(task, &self.pages(task, cx));
         // A page that couldn't be kept now, as one the user held since its picture was taken,
         // keeps none, whatever its tile says.
@@ -115,6 +123,7 @@ impl Agents {
             id: card,
             line,
             picture,
+            log,
         };
         self.tasks.card_jobs.ask(job, cx.background_executor());
     }
@@ -238,8 +247,14 @@ impl Agents {
             record.resumed.push((said, back));
         }
         self.tasks.picked_up.insert(agent.to_string(), was);
-        // Its card's line and picture are of the turn before; the reply's own replace them.
+        // Its card's line and picture are of the turn before; the reply's own replace them. Its
+        // kept log stays, drawn over the new turn and kept under it at the next Done, and is
+        // asked for now if no showing has.
         self.tasks.came_back.remove(agent);
+        let asked = self.tasks.came_logs.contains_key(agent);
+        if after_a_quit && !asked {
+            self.ask_log(agent, cx);
+        }
         self.kept_under_way(agent);
         if let Some(task) = self.task_mut(agent) {
             task.tier = back;
@@ -305,7 +320,7 @@ impl Agents {
     /// and can't take a reply: its assistant keeps none, didn't keep this one as it has files, or
     /// no longer has it. One that ended in this run with its conversation kept has no
     /// line: its messages are there, over its reply field. An outside agent's session has none.
-    pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
+    pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>, kept: usize) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
             return;
         };
@@ -327,14 +342,15 @@ impl Agents {
         }
         // All a task a run before left has to show is its title, so where its messages would
         // begin it says where they are, however it ended.
-        let kept = record.is_some_and(|record| !record.gone) && self.kept_root().is_some();
-        if task.from_before() && lines.is_empty() && kept {
+        let held = record.is_some_and(|record| !record.gone) && self.kept_root().is_some();
+        if task.from_before() && lines.is_empty() && held {
             return lines.push(line(KEPT_HERE, IloKind::KeptHere));
         }
         let resumed = record.map_or(&[][..], |record| &record.resumed[..]);
-        // The last first, so each one's place still counts the lines before it.
+        // The last first, so each one's place still counts the lines before it: this run's,
+        // after the `kept` lines its kept log draws, whose messages a reply never counted.
         for (index, (said, tier)) in resumed.iter().enumerate().rev() {
-            let at = (lines.iter().enumerate())
+            let at = (lines.iter().enumerate().skip(kept))
                 .filter(|(_, line)| matches!(line, Line::You(_)))
                 .nth(*said)
                 .map(|(at, _)| at);
@@ -592,8 +608,9 @@ impl Agents {
         };
         // Its run ends first, so nothing writes the conversation back.
         task.process = None;
-        // Its card's line and picture go with its card.
+        // Its card's line, picture and log go with its card.
         self.tasks.came_back.remove(agent);
+        self.tasks.came_logs.remove(agent);
         self.remove_copies(agent, cx);
         let task = agent.to_string();
         self.remove_kept(
@@ -607,6 +624,7 @@ impl Agents {
         self.tasks.picked_up.remove(agent);
         self.tasks.card_tiles.remove(agent);
         self.tasks.came_back.remove(agent);
+        self.tasks.came_logs.remove(agent);
         let task = agent.to_string();
         self.remove_kept(
             move |record| record.task.as_deref() == Some(task.as_str()),
@@ -651,6 +669,7 @@ impl Agents {
         // Every card goes, a task's at work too: it has none to show until it's done, and is
         // written again then. What was read back of them goes from the cards shown.
         self.tasks.came_back.clear();
+        self.tasks.came_logs.clear();
         if let Some(root) = self.cards_root() {
             (self.tasks.card_jobs).ask(cards::Job::RemoveAll(root), cx.background_executor());
         }
@@ -722,6 +741,84 @@ impl Agents {
             _ = agents.update(cx, |agents, cx| agents.cards_read(reading, read, cx));
         })
         .detach();
+    }
+
+    /// A task a run before left, shown: its kept log is asked for once, off the UI's thread
+    /// through the cards' queue, never at launch, and drawn over its kept lines once it's read.
+    pub fn task_shown(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let left = (self.task(agent)).is_some_and(|task| task.from_before() && ended(task));
+        let asked = self.tasks.came_logs.contains_key(agent);
+        if !left || asked || self.tasks.picked_up.contains_key(agent) {
+            return;
+        }
+        self.ask_log(agent, cx);
+    }
+
+    /// Asks the cards' queue for `agent`'s kept log, once.
+    fn ask_log(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let (Some(record), Some(root)) = (self.tasks.kept.of(agent), self.cards_root()) else {
+            return;
+        };
+        let card = record.card.clone();
+        (self.tasks.came_logs).insert(agent.to_string(), CameLog::Asked);
+        let (answer, read) = futures::channel::oneshot::channel();
+        let job = cards::Job::ReadLog(root, card.clone(), answer);
+        self.tasks.card_jobs.ask(job, cx.background_executor());
+        let agent = agent.to_string();
+        cx.spawn(async move |agents, cx| {
+            let Ok(log) = read.await else { return };
+            _ = agents.update(cx, |agents, cx| agents.log_read(agent, card, log, cx));
+        })
+        .detach();
+    }
+
+    /// The log a task's showing or its reply asked for: kept if the task is still one a run
+    /// before left, holding that card, and its ask wasn't taken back meanwhile. A reply since
+    /// keeps it, as it's drawn over the reply's turn and kept under it.
+    fn log_read(
+        &mut self,
+        agent: String,
+        card: cards::CardId,
+        log: Option<Vec<kept::log::Record>>,
+        cx: &mut Context<Self>,
+    ) {
+        let holds = (self.tasks.kept.of(&agent)).is_some_and(|record| record.card == card);
+        let left = (self.task(&agent)).is_some_and(Task::from_before);
+        let asked = matches!(self.tasks.came_logs.get(&agent), Some(CameLog::Asked));
+        if !holds || !left || !asked {
+            return;
+        }
+        let log = log.unwrap_or_default();
+        (self.tasks.came_logs).insert(agent, CameLog::Read(log));
+        cx.notify();
+    }
+
+    /// The kept log read back for `task`, while it's one a run before left, replied to or not.
+    pub(super) fn kept_log(&self, task: &Task) -> Option<&[kept::log::Record]> {
+        if !task.from_before() {
+            return None;
+        }
+        match self.tasks.came_logs.get(&task.agent)? {
+            CameLog::Read(log) if !log.is_empty() => Some(log),
+            _ => None,
+        }
+    }
+
+    /// The log `task`'s Done writes: a task a run before left keeps its earlier records as they
+    /// were read, then this run's; one whose earlier log is still being read, or that won't fit
+    /// with it under the cap, leaves the file as it is rather than keep a part. Any other's own
+    /// log over the cap is none, and the one there goes.
+    fn next_log(&self, task: &Task, cx: &App) -> cards::Log {
+        let new = self.log_of(task, cx);
+        let earlier = match (task.from_before(), self.tasks.came_logs.get(&task.agent)) {
+            (true, Some(CameLog::Asked)) => return cards::Log::Leave,
+            (true, Some(CameLog::Read(earlier))) if !earlier.is_empty() => earlier,
+            _ => {
+                return kept::log::write(&new).map_or(cards::Log::Remove, cards::Log::Write);
+            }
+        };
+        let records: Vec<_> = earlier.iter().cloned().chain(new).collect();
+        kept::log::write(&records).map_or(cards::Log::Leave, cards::Log::Write)
     }
 
     /// The cards a launch read back: each to its task, if it's still one a run before left that

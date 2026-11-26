@@ -1165,6 +1165,12 @@ pub trait Browser {
     /// Keeps the system's glass and shadow round first run's card to its size and corners now,
     /// as its entry grows it, where the host draws them.
     fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32) {}
+    /// Grows first run's window to the browser window's frame, in one step, and says whether it
+    /// will. The host finds its own held window. A yes says it has tested that it can, and it
+    /// sets the frame on the main queue's next turn, as the ask comes inside the press. On a yes
+    /// the UI draws the card growing in the window as it is on each frame (first-run v9 §10),
+    /// shaped by `shape_first_run`; on a no nothing changes and the exit is the cross-fade.
+    fn grows_first_run(&self) -> bool;
     /// First run's window opens on screen at once, for a host with no call that shows it.
     fn shows_first_run_at_open(&self) -> bool {
         false
@@ -1201,12 +1207,9 @@ pub trait Browser {
         None
     }
     fn set_threads(&self, _on: bool, _cx: &mut App) {}
-    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
-    /// it, whatever the inside one says, or None in a build without the agents' server.
-    fn other_apps(&self, _cx: &App) -> Option<bool> {
-        None
-    }
-    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
+    /// Makes the Agents if they aren't yet. A launch makes them after its first frame, and first
+    /// run's card, which starts before it, reads what they find.
+    fn start_agents(&self, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {

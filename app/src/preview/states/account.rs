@@ -136,9 +136,7 @@ impl gpui::Render for AccountPage {
         let look = Look::settings(dark);
         // The page's look is this frame's, so its field gets it as the page draws.
         let colors = look.field();
-        self.search.update(cx, |search, _| {
-            search.set_colors(colors.placeholder, colors.caret, colors.selection)
-        });
+        self.search.update(cx, |search, _| search.wear(colors));
         self.account
             .update(cx, |account, cx| account.set_look(look, cx));
         let field = browser::settings_search::field(

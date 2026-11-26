@@ -428,7 +428,7 @@ away_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')away.html"
 elsewhere_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')elsewhere.html"
 tile="114 110"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show Settings on its General section"
+settings_on_general "Settings… didn't show Settings"
 settings_drew General
 send clickkey $(drawn "toolbar Tabs & Spaces")
 expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"

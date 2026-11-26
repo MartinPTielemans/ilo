@@ -458,8 +458,11 @@ impl Shell {
         self.end_hovers(cx);
         crate::menu::dismissed(cx);
         crate::icon_picker::leave(cx);
-        crate::theme_picker::leave(cx);
-        crate::boost_editor::leave(cx);
+        // Their close keeps what was typed, which updates this Shell, so it waits for this update.
+        cx.defer(|cx| {
+            crate::theme_picker::leave(cx);
+            crate::boost_editor::leave(cx);
+        });
         crate::site_controls::dismissed(cx);
     }
 

@@ -104,7 +104,7 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -1049,7 +1049,7 @@ if [ -n "$yours_step" ]; then
     stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
     unsent=$(call request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}")
     case "$unsent" in
-      "error: ilo stopped this: "*"It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*"the same call will go through.") ;;
+      "error: $product stopped this: "*"It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*"the same call will go through.") ;;
       *) fail "a change at Work on pages answered: $unsent" ;;
     esac
     await_more '^browser: agent mcp-client stopped Request at Work on pages: localhost$' "$stops" ||
@@ -2841,7 +2841,7 @@ addEventListener("message", (event) => {
     reached=$(grep -c '^\(POST\|PUT\|PATCH\|DELETE\) ' "$out/site.log" || true)
     case "$2" in 1) what="a change" ;; *) what="$2 changes" ;; esac
     changed=$(call request "{\"tab\":$frames_tab,\"requests\":[$1]}")
-    [ "$changed" = "error: ilo stopped this: make $what on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through." ] ||
+    [ "$changed" = "error: $product stopped this: make $what on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product. Don't try another way to the same end; if they change it, the same call will go through." ] ||
       fail "$what at Work on pages answered: $changed"
     await_more "$stops" "$before" || fail "$what refused at Work on pages wasn't logged as ilo's stop"
     await_more "$unsent" "$((noted + $2 - 1))" ||
@@ -3742,7 +3742,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     case "$level" in
       "Work on pages")
         case "$did" in
-          "error: ilo stopped this: "*" on $3"*". It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through.") ;;
+          "error: $product stopped this: "*" on $3"*". It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product. Don't try another way to the same end; if they change it, the same call will go through.") ;;
           *) fail "$1 $2 at Work on pages answered: $did" ;;
         esac
         await_more "$stop" "$before" ||
@@ -3866,7 +3866,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     case "$level" in
       "Work on pages")
         case "$allowed" in
-          "error: ilo stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*) ;;
+          "error: $product stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*) ;;
           *) fail "a bank's site at Work on pages answered: $allowed" ;;
         esac
         await_more "$stop" "$before" ||
@@ -4090,7 +4090,7 @@ for (const each of document.querySelectorAll('iframe, object'))
   # Whether $1, the answer to $2, is ilo's refusal of $3 on the site, logged as its stop since
   # $before.
   fence_refused() {
-    [ "$1" = "error: ilo stopped this: $3 pension.localhost. pension.localhost is off limits to agents, whatever a task's access. Only the user can change that, in ilo. Don't try another way to the same end." ] ||
+    [ "$1" = "error: $product stopped this: $3 pension.localhost. pension.localhost is off limits to agents, whatever a task's access. Only the user can change that, in $product. Don't try another way to the same end." ] ||
       fail "$2 answered: $1"
     await_more "$fence_stops" "$before" ||
       fail "$2 wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
@@ -4494,7 +4494,7 @@ quit
 # The switch the run turned off goes back on. The launch waits 3 s for a handoff in place of the
 # spec's 15 minutes, which the time limit's step below reaches, and ends a task 3 s after its last
 # page closed in place of 60.
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 log="$out/mcp-waits.log"
 step=0
 BROWSER_DRIVE=1 "$browser" --agent-waits=2,3,3 < "$out/drive" > "$log" 2>&1 &
@@ -4637,7 +4637,7 @@ say(); middle.onchange = say;
 </script>' > "$out/site/widths-yours.html"
   rm -rf "$profile_dir"
   mkdir -p "$profile_dir/Default"
-  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
   # The size the agent's last picture of |tab| had, as WxH.
   pictured_at() {
     grep "browser: agent picture of tab $1 at " "$log" | tail -1 | sed 's/.* at //'

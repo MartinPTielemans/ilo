@@ -31,6 +31,7 @@ use super::runner::Cli;
 use super::tier::Tier;
 
 pub mod cards;
+pub mod log;
 pub mod unkept;
 
 use cards::CardId;
@@ -199,9 +200,20 @@ pub enum End {
 }
 
 impl End {
-    const ALL: [End; 4] = [End::Done, End::Stopped, End::Failed, End::Limit];
+    pub(crate) const ALL: [End; 4] = [End::Done, End::Stopped, End::Failed, End::Limit];
 
-    fn id(self) -> &'static str {
+    /// Its state's word, as its card says it (`task::Word::of`).
+    pub fn word(self) -> super::task::Word {
+        use super::task::Word;
+        match self {
+            End::Done => Word::Done,
+            End::Stopped => Word::Stopped,
+            End::Failed => Word::Interrupted,
+            End::Limit => Word::AtLimit,
+        }
+    }
+
+    pub(crate) fn id(self) -> &'static str {
         match self {
             End::Done => "done",
             End::Stopped => "stopped",

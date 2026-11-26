@@ -56,6 +56,11 @@ fn main() {
     let product = root.join("branding/product");
     let product_text = std::fs::read_to_string(&product).expect("no branding/product");
     println!("cargo:rustc-env=PRODUCT_NAME={}", product_text.trim());
+    // The variable that names the command's agent, from the command's name (agents::command).
+    println!(
+        "cargo:rustc-env=PRODUCT_AS={}_AS",
+        product_text.trim().to_uppercase()
+    );
     println!("cargo:rerun-if-changed={}", product.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).

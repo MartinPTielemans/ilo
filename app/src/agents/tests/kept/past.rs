@@ -498,6 +498,55 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     assert!(replied.kept_picture.is_none());
 }
 
+/// A kept thread's log comes back only when the thread is shown, never with the launch: until
+/// then its conversation holds no line of it. Shown, its stored lines draw under what was asked,
+/// settled, with the answer's time, and ilo's lines as words alone. Remove All takes them with
+/// the card.
+#[gpui::test]
+fn a_kept_threads_log_comes_back_only_when_it_is_shown(cx: &mut TestAppContext) {
+    use crate::agents::task::Line;
+    use crate::agents::task::ilo::IloKind;
+    let run = Run::new("log-back", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    let result = json!({ "result": "Two seats at 9:05, car 4." });
+    _ = call(&run.agents, &agent, "finish", result, cx);
+    cx.run_until_parked();
+    run.finish(&agent, cx);
+    quit(&run, cx);
+    cx.run_until_parked();
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    cx.run_until_parked();
+    let shown = |next: &Run, cx: &mut TestAppContext| {
+        (next.agents).read_with(cx, |agents, cx| {
+            let talk = agents.conversation(&past, cx).expect("no conversation");
+            let answer = (talk.lines.iter())
+                .position(|line| matches!(line, Line::Said(text) if text.contains("car 4")));
+            let at = |at: usize| talk.finished.iter().any(|(line, _)| *line == at);
+            let pressed = (talk.lines.iter()).any(|line| match line {
+                Line::Ilo(line) => !line.settled && matches!(line.kind, IloKind::Kept { .. }),
+                Line::Trace(trace) => trace.running,
+                _ => false,
+            });
+            let asked_twice = (talk.lines.iter())
+                .any(|line| matches!(line, Line::You(text) if *text == talk.asked));
+            (answer.map(at), pressed, asked_twice)
+        })
+    };
+    // The launch read its card's line and picture, never its log.
+    assert_eq!(shown(&next, cx), (None, false, false));
+
+    (next.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&next, cx), (Some(true), false, false));
+
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&next, cx).0, None);
+}
+
 /// Settings › Agents' Remove on a kept task brought back takes its card's line and picture off
 /// the card shown, as its card's folder goes; Remove All takes every one's.
 #[gpui::test]
@@ -723,6 +772,52 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
     act(&next, &limit, TaskAction::Retry, cx);
     let (args, _) = next.ran(6);
     assert_eq!(after(&args, "--resume"), Some(made[1].1.as_str()));
+}
+
+/// Library › Threads keeps how each thread's last turn ended, which its row says: one that broke
+/// as Interrupted, one the user stopped as Stopped, one done as Done. One at its limit or still at
+/// work has no entry, and gets none.
+#[gpui::test]
+fn a_threads_entry_keeps_how_its_last_turn_ended(cx: &mut TestAppContext) {
+    use crate::agents::kept::End;
+    let run = Run::new("entry-ends", cx);
+    let names = ["Failed", "Limit", "Stopped", "Working", "Done"];
+    let mut made = Vec::new();
+    for (at, name) in names.into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push(agent);
+    }
+    for (name, agent) in names.into_iter().zip(&made) {
+        match name {
+            "Failed" => {
+                let failure = Failure::Other("It broke.".into());
+                run.said(agent, Out::Ended(Some(failure)), cx)
+            }
+            "Limit" => {
+                let resets = Failure::Limit(Some(1_900_000_000));
+                run.said(agent, Out::Ended(Some(resets)), cx)
+            }
+            "Stopped" => act(&run, agent, TaskAction::Stop, cx),
+            "Done" => run.finish(agent, cx),
+            _ => {}
+        }
+    }
+    let kept = (run.agents).update(cx, |agents, cx| agents.take_ended(cx));
+    let mut ends: Vec<(String, Option<End>)> = (kept.into_iter())
+        .map(|(_, past)| (past.title, past.end))
+        .collect();
+    ends.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        ends,
+        [
+            ("Done".to_string(), Some(End::Done)),
+            ("Failed".to_string(), Some(End::Failed)),
+            ("Stopped".to_string(), Some(End::Stopped)),
+        ],
+        "the entries kept, by title, with how each ended"
+    );
 }
 
 /// A task at work when the browser goes with no quit, as when it's killed, is there at the next
@@ -956,6 +1051,12 @@ fn a_private_window_starts_no_task_and_keeps_nothing(cx: &mut TestAppContext) {
     assert!(!started(&run, 1));
     assert!(!index(&run).exists());
     assert_eq!(run.kept(cx), (0, 0));
+    // No card, so no line, picture or log of it either.
+    assert!(
+        !run.profile
+            .join(crate::agents::kept::cards::FOLDER)
+            .exists()
+    );
 
     let agent = start_in(&run, 1, cx);
     run.ran(1);
@@ -1302,4 +1403,264 @@ fn a_past_task_has_no_token_while_threads_are_off(cx: &mut TestAppContext) {
     assert_eq!(tokens(cx), 0, "a past task has a token with threads off");
     agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     assert_eq!(tokens(cx), 1, "on again, the past task has none");
+}
+
+/// A thread that finished with its answer timed, a quit, and the next launch: that run, the
+/// thread's id in it, and where its kept log is.
+fn kept_and_back(name: &str, cx: &mut TestAppContext) -> (Run, Run, String, PathBuf) {
+    let run = Run::new(name, cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    let result = json!({ "result": "Two seats at 9:05, car 4." });
+    _ = call(&run.agents, &agent, "finish", result, cx);
+    cx.run_until_parked();
+    run.finish(&agent, cx);
+    quit(&run, cx);
+    cx.run_until_parked();
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    cx.run_until_parked();
+    let card = (next.agents).read_with(cx, |agents, _| {
+        (agents.tasks.kept.of(&past).expect("nothing kept"))
+            .card
+            .clone()
+    });
+    let log = next
+        .profile
+        .join(kept::cards::FOLDER)
+        .join(card.as_str())
+        .join("log");
+    (run, next, past, log)
+}
+
+/// What the thread's card holds as its log, once the cards' queue is done.
+fn stored(next: &Run, past: &str, cx: &mut TestAppContext) -> Vec<kept::log::Record> {
+    cx.run_until_parked();
+    let card = (next.agents).read_with(cx, |agents, _| {
+        (agents.tasks.kept.of(past).expect("nothing kept"))
+            .card
+            .clone()
+    });
+    let root = next.profile.join(kept::cards::FOLDER);
+    kept::cards::read_log(&root, &card).expect("its log")
+}
+
+/// The thread's reply ends well, with its own answer.
+fn answered(next: &Run, past: &str, cx: &mut TestAppContext) {
+    next.said(past, Out::Said("Row 12 has a window seat.".into()), cx);
+    next.said(past, Out::Ended(None), cx);
+    assert!(matches!(next.state(past, cx), State::Done { .. }));
+}
+
+/// Where each of `texts` is drawn in the thread's lines, if it is.
+fn drawn_at(next: &Run, past: &str, texts: &[&str], cx: &mut TestAppContext) -> Vec<Option<usize>> {
+    let talk = next.talk(past, cx);
+    (texts.iter())
+        .map(|text| {
+            (talk.lines.iter()).position(|line| match line {
+                Line::Said(said) | Line::You(said) => said.contains(text),
+                _ => false,
+            })
+        })
+        .collect()
+}
+
+/// A reply to a thread a run before left keeps its kept log drawn, with its answer's time, over
+/// the new turn, and its assistant is sent the reply alone. The next Done keeps the earlier
+/// records as they were read, then the new turn's, and a second Done in the run repeats none.
+#[gpui::test]
+fn a_reply_keeps_a_kept_threads_log_over_its_new_turn(cx: &mut TestAppContext) {
+    use kept::log::Record;
+    let (_run, next, past, _) = kept_and_back("log-at-reply", cx);
+    (next.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+    cx.run_until_parked();
+    let earlier = stored(&next, &past, cx);
+
+    restore(&next, &past, cx);
+    reply(&next, &past, "And a window seat?", cx);
+    let (_, first) = next.ran(2);
+    assert_eq!(
+        first, "And a window seat?",
+        "the assistant was sent more than the reply"
+    );
+    cx.run_until_parked();
+    let at = drawn_at(&next, &past, &["car 4", "a window seat?"], cx);
+    assert!(
+        matches!(at[..], [Some(old), Some(new)] if old < new),
+        "the kept answer isn't drawn over the reply: {at:?}"
+    );
+    let talk = next.talk(&past, cx);
+    assert!(
+        talk.finished.iter().any(|(line, _)| Some(*line) == at[0]),
+        "the kept answer lost its time"
+    );
+
+    answered(&next, &past, cx);
+    let after = stored(&next, &past, cx);
+    assert_eq!(
+        after[..earlier.len()],
+        earlier[..],
+        "the earlier records changed"
+    );
+    let new = &after[earlier.len()..];
+    assert!(
+        new.iter()
+            .any(|record| matches!(record, Record::You(text) if text == "And a window seat?")),
+        "the reply's own words aren't kept under the earlier log: {new:?}"
+    );
+    assert!(
+        new.iter().any(|record| matches!(record, Record::Said(text) | Record::Answer { text, .. } if text.contains("Row 12"))),
+        "the new answer isn't kept: {new:?}"
+    );
+    // What was asked and its page head the log once: the earlier records already open with them.
+    let opens = |record: &Record| matches!(record, Record::Chip(_));
+    assert_eq!(
+        after.iter().filter(|record| opens(record)).count(),
+        earlier.iter().filter(|record| opens(record)).count()
+    );
+    assert!(
+        matches!(earlier.first(), Some(Record::You(text)) if text.starts_with("Find two seats")),
+        "{earlier:?}"
+    );
+    let asked = |records: &[Record]| {
+        (records.iter())
+            .filter(
+                |record| matches!(record, Record::You(text) if text.starts_with("Find two seats")),
+            )
+            .count()
+    };
+    assert_eq!(asked(&after), 1, "what was asked is kept twice: {after:?}");
+
+    reply(&next, &past, "And on Sunday?", cx);
+    // The second reply goes to the same run, as its second message.
+    let input = beside(&next.program, "in.2");
+    for _ in 0..500 {
+        if wait_for(&input).lines().count() == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let sent = wait_for(&input);
+    assert_eq!(
+        sent.lines().count(),
+        2,
+        "the second reply wasn't sent: {sent}"
+    );
+    // Neither road to the assistant has anything of the kept log: what each reply sends, and the
+    // conversation so far a new run of it would be given (`task::conversation`).
+    let so_far = (next.agents).read_with(cx, |agents, _| {
+        crate::agents::task::conversation(agents.task(&past).expect("the thread"))
+    });
+    for text in [sent.as_str(), so_far.as_str()] {
+        assert!(
+            !text.contains("car 4"),
+            "the kept log reached the assistant: {text}"
+        );
+    }
+    assert!(so_far.contains("And a window seat?") && so_far.contains("And on Sunday?"));
+    answered(&next, &past, cx);
+    let twice = stored(&next, &past, cx);
+    assert_eq!(twice[..after.len()], after[..], "the first turn changed");
+    let asked = (twice.iter())
+        .filter(|record| matches!(record, Record::You(text) if text == "And a window seat?"))
+        .count();
+    assert_eq!(asked, 1, "a second Done kept a turn twice: {twice:?}");
+}
+
+/// Where the earlier log and the new turn won't fit under the cap together, the earlier file is
+/// left as it was, byte for byte, and the next launch draws it; a Done while the earlier log is
+/// still being read leaves it too.
+#[gpui::test]
+fn a_kept_log_too_full_or_not_yet_read_at_a_done_is_left_as_it_was(cx: &mut TestAppContext) {
+    use kept::log::{MOST, Record};
+    let (_run, next, past, file) = kept_and_back("log-full", cx);
+    let card = (next.agents).read_with(cx, |agents, _| {
+        (agents.tasks.kept.of(&past).expect("nothing kept"))
+            .card
+            .clone()
+    });
+    let root = next.profile.join(kept::cards::FOLDER);
+    // An earlier log just under the cap, as a long thread leaves.
+    let words = "a".repeat(1000);
+    let records: Vec<Record> = (0..MOST / 1010)
+        .map(|_| Record::You(words.clone()))
+        .collect();
+    let full = kept::log::write(&records).expect("under the cap");
+    assert!(kept::cards::write(
+        &root,
+        &card,
+        Some("Two seats."),
+        &kept::cards::Picture::Leave,
+        Some(&full)
+    ));
+    (next.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+    cx.run_until_parked();
+    restore(&next, &past, cx);
+    reply(&next, &past, "And a window seat?", cx);
+    next.ran(2);
+    next.said(&past, Out::Said("x".repeat(20_000)), cx);
+    next.said(&past, Out::Ended(None), cx);
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        full,
+        "the full log was replaced"
+    );
+
+    quit(&next, cx);
+    cx.run_until_parked();
+    let again = Run::again(next.profile.clone(), next.program.clone(), cx);
+    let shown = archive(&again, cx)[0].0.clone();
+    (again.agents).update(cx, |agents, cx| agents.task_shown(&shown, cx));
+    cx.run_until_parked();
+    let talk = again.talk(&shown, cx);
+    let drawn = (talk.lines.iter())
+        .filter(|line| matches!(line, Line::You(text) if *text == words))
+        .count();
+    assert_eq!(
+        drawn,
+        records.len(),
+        "the next launch didn't draw the earlier log"
+    );
+
+    // Not yet read: the reply's Done comes before the read is back.
+    let (_run, late, past, file) = kept_and_back("log-late", cx);
+    let before = std::fs::read(&file).unwrap();
+    (late.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+    restore(&late, &past, cx);
+    reply(&late, &past, "And a window seat?", cx);
+    late.ran(2);
+    late.said(&past, Out::Said("Row 12.".into()), cx);
+    late.said(&past, Out::Ended(None), cx);
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        before,
+        "a Done before the read replaced the log"
+    );
+}
+
+/// After a reply, Remove on the thread and Remove All still take its kept log at once, from
+/// what's drawn and from the card.
+#[gpui::test]
+fn removing_a_replied_kept_thread_takes_its_log(cx: &mut TestAppContext) {
+    for all in [false, true] {
+        let (_run, next, past, file) = kept_and_back(if all { "log-all" } else { "log-one" }, cx);
+        (next.agents).update(cx, |agents, cx| agents.task_shown(&past, cx));
+        cx.run_until_parked();
+        restore(&next, &past, cx);
+        reply(&next, &past, "And a window seat?", cx);
+        next.ran(2);
+        answered(&next, &past, cx);
+        cx.run_until_parked();
+        assert!(file.exists());
+        (next.agents).update(cx, |agents, cx| match all {
+            true => agents.remove_kept_tasks(cx),
+            false => agents.remove_kept_task(&past, cx),
+        });
+        cx.run_until_parked();
+        assert_eq!(drawn_at(&next, &past, &["car 4"], cx), [None], "all: {all}");
+        assert!(!file.exists(), "all: {all}: the log is still there");
+    }
 }

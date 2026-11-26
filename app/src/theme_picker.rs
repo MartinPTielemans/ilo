@@ -16,7 +16,7 @@
 
 mod layout;
 
-use std::{cell::OnceCell, rc::Rc, sync::Arc};
+use std::{cell::Cell, cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
@@ -39,8 +39,8 @@ use crate::{
     theme::{self, Appearance, MAX_COLORS, Theme},
 };
 
-pub use layout::Bar;
-use layout::{BARS, INNER};
+use layout::BARS;
+pub use layout::{Bar, Form, PANEL, palette_theme};
 
 actions!(
     theme_picker,
@@ -164,6 +164,13 @@ pub struct ThemePicker {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     editing: Option<Editing>,
+    /// How its parts are set out: the panel's, or first run's Space step's.
+    form: Form,
+    /// Drawn in another view rather than its own window (`inline`): it has no card, no head and no
+    /// note, Esc is the view's, and the keyboard goes back to `rest` as a typed value ends.
+    rest: Option<FocusHandle>,
+    /// Where its top left was last drawn in the window, which a press and a drag are read from.
+    origin: Rc<Cell<Point<Pixels>>>,
 }
 
 struct ThemePickerWindow(WindowHandle<ThemePicker>);
@@ -184,17 +191,7 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<ThemePicker>> {
-    cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("ThemePicker")),
-        KeyBinding::new("tab", NextStop, Some("ThemePicker")),
-        KeyBinding::new("shift-tab", PreviousStop, Some("ThemePicker")),
-        KeyBinding::new("left", KeyLeft, Some("ThemePicker")),
-        KeyBinding::new("right", KeyRight, Some("ThemePicker")),
-        KeyBinding::new("shift-left", KeyLeftFar, Some("ThemePicker")),
-        KeyBinding::new("shift-right", KeyRightFar, Some("ThemePicker")),
-        KeyBinding::new("space", KeyPress, Some("ThemePicker")),
-        KeyBinding::new("enter", KeyPress, Some("ThemePicker")),
-    ]);
+    bind_keys(cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // The preview's has none, so it hasn't the window buttons the host's takes off.
@@ -218,6 +215,9 @@ pub fn open_at(
             host,
             focus: cx.focus_handle(),
             editing: None,
+            form: PANEL,
+            rest: None,
+            origin: Rc::default(),
         })
     });
     match window {
@@ -229,6 +229,74 @@ pub fn open_at(
             log!("couldn't open the theme picker's window: {error}");
             None
         }
+    }
+}
+
+fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("ThemePicker")),
+        KeyBinding::new("tab", NextStop, Some("ThemePicker")),
+        KeyBinding::new("shift-tab", PreviousStop, Some("ThemePicker")),
+        KeyBinding::new("left", KeyLeft, Some("ThemePicker")),
+        KeyBinding::new("right", KeyRight, Some("ThemePicker")),
+        KeyBinding::new("shift-left", KeyLeftFar, Some("ThemePicker")),
+        KeyBinding::new("shift-right", KeyRightFar, Some("ThemePicker")),
+        KeyBinding::new("space", KeyPress, Some("ThemePicker")),
+        KeyBinding::new("enter", KeyPress, Some("ThemePicker")),
+    ]);
+}
+
+/// The panel's parts for another view to draw, set out in `form` on a sheet of `tone`, editing
+/// `space`'s `theme` and `also` its glass: first run's Space step (first-run-v9 §6). It never
+/// takes the keyboard but for a typed value, which gives it back to `rest`.
+#[allow(clippy::too_many_arguments)]
+pub fn inline(
+    host: Rc<dyn Host>,
+    form: Form,
+    tone: Tone,
+    space: u64,
+    theme: Option<Theme>,
+    also: Also,
+    changed: Changed,
+    rest: FocusHandle,
+    cx: &mut App,
+) -> Entity<ThemePicker> {
+    bind_keys(cx);
+    cx.new(|cx| ThemePicker {
+        host,
+        focus: cx.focus_handle(),
+        editing: Some(Editing {
+            space,
+            theme,
+            glass: also.transparency.clamp(0., 1.),
+            appearance: theme.map_or(Appearance::default(), |theme| theme.appearance),
+            changed,
+            also: Some(also),
+            left: false,
+            open: true,
+            drag: None,
+            chosen: 0,
+            typing: None,
+            keyed: None,
+            drawn: false,
+            drawn_handles: None,
+            palette: Palette::of(theme.as_ref(), tone),
+        }),
+        form,
+        rest: Some(rest),
+        origin: Rc::default(),
+    })
+}
+
+/// The ink of what's on the pad, its chips' plus and the value field: the panel's own second ink,
+/// and drawn inline on a light sheet, where the pad stays dark, the dark sheet's.
+fn pad_ink(palette: &Palette, theme: Option<&Theme>, inline: bool) -> Hsla {
+    match inline {
+        true => {
+            let dark = Palette::of(theme, Tone::Dark);
+            dark.on_overlay(dark.secondary())
+        }
+        false => palette.on_overlay(palette.secondary()),
     }
 }
 
@@ -446,6 +514,22 @@ pub fn open_for(cx: &App) -> Option<u64> {
         .map(|editing| editing.space)
 }
 
+/// Opens the value field, as a press in it does, and types `text` there without keeping it: for
+/// the browser window's tests, which can't reach the panel's layout.
+#[cfg(test)]
+pub(crate) fn type_value_for_test(text: &str, cx: &mut gpui::TestAppContext) {
+    let window = cx.update(|cx| cx.global::<ThemePickerWindow>().0);
+    let mut cx = gpui::VisualTestContext::from_window(window.into(), cx);
+    (window.update(&mut cx.cx, |picker, window, cx| {
+        window.activate_window();
+        picker.type_value(window, cx)
+    }))
+    .unwrap();
+    cx.run_until_parked();
+    cx.simulate_input(text);
+    cx.run_until_parked();
+}
+
 /// The panel, for the window it opens over to watch whether it still shows.
 pub fn entity(cx: &App) -> Option<Entity<ThemePicker>> {
     cx.try_global::<ThemePickerWindow>()?.0.entity(cx).ok()
@@ -453,29 +537,34 @@ pub fn entity(cx: &App) -> Option<Entity<ThemePicker>> {
 
 /// What a press at `x`, `y` from the panel's top left lands on, with `theme` on the pad.
 pub fn target(x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
+    target_in(&PANEL, x, y, theme)
+}
+
+/// What a press at `x`, `y` from the top left of parts set out in `form` lands on.
+pub fn target_in(form: &Form, x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
     let within = |left: f32, top: f32, width: f32, height: f32| {
         (left..=left + width).contains(&x) && (top..=top + height).contains(&y)
     };
     for (index, &appearance) in Appearance::ALL.iter().enumerate() {
-        let (left, top) = layout::segment(index);
+        let (left, top) = form.segment(index);
         if within(left, top, SEGMENT_WIDTH, SEGMENT_HEIGHT) {
             return Some(Target::Appearance(appearance));
         }
     }
     for index in 0..layout::palette_count() {
-        let (dx, dy) = layout::disc(index);
+        let (dx, dy) = form.disc(index);
         if (x - dx).hypot(y - dy) <= SLOT / 2. {
             return Some(Target::Palette(index));
         }
     }
     let count = theme.map_or(0, |theme| theme.count);
-    let (chip_left, chip_top, chip_width) = layout::chip(count);
+    let (chip_left, chip_top, chip_width) = form.chip(count);
     if theme.is_some() && within(chip_left, chip_top, chip_width, CHIP_HEIGHT) {
         let nearest = (0..=count.min(MAX_COLORS - 1))
             .filter(|&index| index < count || count < MAX_COLORS)
             .min_by(|&a, &b| {
-                let (ax, _) = layout::chip_item(count, a);
-                let (bx, _) = layout::chip_item(count, b);
+                let (ax, _) = form.chip_item(count, a);
+                let (bx, _) = form.chip_item(count, b);
                 (x - ax).abs().total_cmp(&(x - bx).abs())
             });
         return nearest.map(|index| match index < count {
@@ -483,18 +572,18 @@ pub fn target(x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
             false => Target::Add,
         });
     }
-    let (field_left, field_top) = layout::value_field();
+    let (field_left, field_top) = form.value_field();
     if theme.is_some() && within(field_left, field_top, FIELD_WIDTH, CHIP_HEIGHT) {
         return Some(Target::Value);
     }
-    let (pad_left, pad_top) = layout::pad();
-    if within(pad_left, pad_top, PAD_WIDTH, PAD_HEIGHT) {
+    let (pad_left, pad_top) = form.pad();
+    if within(pad_left, pad_top, form.inner(), form.pad_height) {
         // The main handle lies over the others.
         if let Some(theme) = theme {
             let mut order: Vec<usize> = (1..theme.count).collect();
             order.insert(0, 0);
             for index in order {
-                let (hx, hy) = layout::handle(theme, index);
+                let (hx, hy) = form.handle(theme, index);
                 if (x - hx).hypot(y - hy) <= handle_size(index) / 2. {
                     return Some(Target::Handle(index));
                 }
@@ -502,15 +591,15 @@ pub fn target(x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
         }
         return Some(Target::Pad);
     }
-    let (track_left, length) = layout::track();
+    let (track_left, length) = form.track();
     for bar in BARS {
-        let middle = layout::track_y(bar);
+        let middle = form.track_y(bar);
         if (track_left..=track_left + length).contains(&x) && (y - middle).abs() <= THUMB / 2. {
             return Some(Target::Bar(bar));
         }
     }
-    let note = layout::note_top();
-    if within(WIDTH - PADDING - RESET_WIDTH, note, RESET_WIDTH, LABEL) {
+    let note = form.note_top();
+    if form.note && within(WIDTH - form.padding - RESET_WIDTH, note, RESET_WIDTH, LABEL) {
         return Some(Target::Reset);
     }
     None
@@ -678,9 +767,12 @@ impl ThemePicker {
         if let Some(editing) = self.editing.as_mut()
             && editing.typing.take().is_some()
         {
-            window.focus(&self.focus, cx);
+            self.give_back(window, cx);
             cx.notify();
             return;
+        }
+        if self.rest.is_some() {
+            return cx.propagate();
         }
         self.close(Close::new(Why::Escape, By::Keyboard), window, cx);
     }
@@ -691,7 +783,8 @@ impl ThemePicker {
             return;
         };
         if let Some(theme) = editing.theme {
-            if done {
+            // In first run's card a line never says what was picked (floor 8).
+            if done && self.rest.is_none() {
                 // check.sh reads this line.
                 log!(
                     "browser: theme picker set {} {}",
@@ -709,7 +802,7 @@ impl ThemePicker {
         let Some(editing) = &self.editing else {
             return;
         };
-        if done {
+        if done && self.rest.is_none() {
             log!(
                 "browser: theme picker glass {} {:.3}",
                 editing.space,
@@ -729,7 +822,9 @@ impl ThemePicker {
         };
         editing.theme = None;
         editing.chosen = 0;
-        log!("browser: theme picker cleared {}", editing.space);
+        if self.rest.is_none() {
+            log!("browser: theme picker cleared {}", editing.space);
+        }
         if let Some(also) = &editing.also {
             (also.cleared.clone())(cx);
         }
@@ -796,12 +891,13 @@ impl ThemePicker {
     }
 
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+        let (x, y) = self.local(event.position);
+        let form = self.form;
         let Some(editing) = self.editing.as_ref().filter(|editing| editing.open) else {
             return;
         };
         let theme = editing.theme;
-        let target = target(x, y, theme.as_ref());
+        let target = target_in(&form, x, y, theme.as_ref());
         // A press off the value field keeps what's typed in it, as Return does.
         if target != Some(Target::Value) {
             self.commit_value(window, cx);
@@ -830,17 +926,17 @@ impl ThemePicker {
             (Target::Bar(bar), theme) => {
                 if bar_value(bar, theme.as_ref(), editing.glass).is_some() {
                     editing.drag = Some(Drag::Bar(bar));
-                    self.set_bar(bar, layout::value_at(x), false, cx);
+                    self.set_bar(bar, form.value_at(x), false, cx);
                 }
             }
             (Target::Handle(index), Some(theme)) => {
-                let (hx, hy) = layout::handle(&theme, index);
+                let (hx, hy) = form.handle(&theme, index);
                 editing.drag = Some(Drag::Handle(index, x - hx, y - hy));
                 editing.chosen = index;
             }
             // The first colour goes where the pad is pressed, and follows the pointer from there.
             (Target::Pad, None) => {
-                let (across, down) = layout::on_pad(x, y);
+                let (across, down) = form.on_pad(x, y);
                 let (fx, fy) = layout::field_point(across, down);
                 let appearance = editing.appearance;
                 editing.theme = Some(Theme {
@@ -871,16 +967,7 @@ impl ThemePicker {
                 });
                 self.changed(true, cx);
             }
-            (Target::Palette(0), _) => self.cleared(cx),
-            (Target::Palette(index), theme) => {
-                let Some(made) = layout::palette_theme(index, theme.as_ref()) else {
-                    return false;
-                };
-                let appearance = theme.map_or(editing.appearance, |theme| theme.appearance);
-                editing.theme = Some(Theme { appearance, ..made });
-                editing.chosen = 0;
-                self.changed(true, cx);
-            }
+            (Target::Palette(index), _) => return self.palette(index, cx),
             (Target::Point(index), Some(theme)) if index < theme.count => {
                 editing.chosen = index;
                 cx.notify();
@@ -904,6 +991,56 @@ impl ThemePicker {
             _ => return false,
         }
         true
+    }
+
+    /// Gives the Space palette `index`'s colours, the first taking them away, as a press on its
+    /// disc does; false for no palette.
+    pub fn palette(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return false;
+        };
+        if index == 0 {
+            self.cleared(cx);
+            return true;
+        }
+        let theme = editing.theme;
+        let Some(made) = layout::palette_theme(index, theme.as_ref()) else {
+            return false;
+        };
+        let appearance = theme.map_or(editing.appearance, |theme| theme.appearance);
+        editing.theme = Some(Theme { appearance, ..made });
+        editing.chosen = 0;
+        self.changed(true, cx);
+        true
+    }
+
+    /// The palette `by` along from the one chosen, held at the row's ends: ← and → where the view
+    /// it's drawn in has the keyboard. From none chosen, → starts at the first.
+    pub fn palette_by(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_ref().filter(|editing| editing.open) else {
+            return;
+        };
+        let last = layout::palette_count() - 1;
+        let next = match layout::palette_of(editing.theme.as_ref()) {
+            Some(at) => at.saturating_add_signed(by).min(last),
+            None if by > 0 => 1,
+            None => last,
+        };
+        if layout::palette_of(editing.theme.as_ref()) != Some(next) {
+            self.palette(next, cx);
+        }
+    }
+
+    /// The keyboard back where it was as a typed value ends: the panel's, or the view's it's drawn
+    /// in.
+    fn give_back(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(self.rest.as_ref().unwrap_or(&self.focus), cx);
+    }
+
+    /// A point in the window, from the parts' top left.
+    fn local(&self, position: Point<Pixels>) -> (f32, f32) {
+        let at = position - self.origin.get();
+        (f32::from(at.x), f32::from(at.y))
     }
 
     /// Puts the value field into typing, its value chosen, with the keyboard.
@@ -950,8 +1087,12 @@ impl ThemePicker {
         } else {
             typed.committed()
         };
-        window.focus(&self.focus, cx);
-        let (Some(color), Some(theme)) = (layout::typed_color(&typed), editing.theme) else {
+        let (color, theme) = (layout::typed_color(&typed), editing.theme);
+        self.give_back(window, cx);
+        let Some(editing) = self.editing.as_mut() else {
+            return;
+        };
+        let (Some(color), Some(theme)) = (color, theme) else {
             log!("browser: theme picker value refused");
             cx.notify();
             return;
@@ -1039,7 +1180,8 @@ impl ThemePicker {
     }
 
     fn drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(position.x), f32::from(position.y));
+        let (x, y) = self.local(position);
+        let form = self.form;
         let Some(editing) = self.editing.as_mut() else {
             return;
         };
@@ -1049,7 +1191,7 @@ impl ThemePicker {
         match drag {
             Drag::Bar(bar) => {
                 let before = bar_value(bar, editing.theme.as_ref(), editing.glass);
-                let value = layout::value_at(x);
+                let value = form.value_at(x);
                 let at_end = |value: f32| value <= 0. || value >= 1.;
                 // A bump as it gets to an end, not while it's held there (the owner's call).
                 if before.is_some_and(|before| before != value && !at_end(before)) && at_end(value)
@@ -1062,7 +1204,7 @@ impl ThemePicker {
                 let Some(theme) = editing.theme else {
                     return;
                 };
-                let (across, down) = layout::on_pad(x - grab_x, y - grab_y);
+                let (across, down) = form.on_pad(x - grab_x, y - grab_y);
                 let (fx, fy) = layout::field_point(across, down);
                 let moved = theme.moved(index, fx, fy);
                 if moved != theme {
@@ -1088,6 +1230,20 @@ impl ThemePicker {
     pub fn editing(&self) -> Option<(u64, Option<Theme>)> {
         let editing = self.editing.as_ref().filter(|editing| editing.open)?;
         Some((editing.space, editing.theme))
+    }
+
+    /// The palette its Space's look is, if it is one: the first for none.
+    pub fn palette_shown(&self) -> Option<usize> {
+        let editing = self.editing.as_ref().filter(|editing| editing.open)?;
+        layout::palette_of(editing.theme.as_ref())
+    }
+
+    /// Draws on a sheet of `tone`, as the view it's drawn in turns light or dark.
+    pub fn retone(&mut self, tone: Tone, cx: &mut Context<Self>) {
+        if let Some(editing) = self.editing.as_mut() {
+            editing.palette = Palette::of(editing.theme.as_ref(), tone);
+            cx.notify();
+        }
     }
 
     /// The glass it's making for its Space, while it shows.
@@ -1129,17 +1285,27 @@ impl Editing {
 }
 
 thread_local! {
-    static DOTS: OnceCell<Arc<RenderImage>> = const { OnceCell::new() };
+    static DOTS: RefCell<Vec<(Form, Arc<RenderImage>)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The pad's dots, drawn once at 2×, each in the colour a handle takes where it lies, so the pad
-/// is a picture of the colours on it.
-fn dots_image() -> Arc<RenderImage> {
+/// The pad's dots for `form`, drawn once at 2×, each in the colour a handle takes where it lies, so
+/// the pad is a picture of the colours on it.
+fn dots_image(form: Form) -> Arc<RenderImage> {
     DOTS.with(|dots| {
-        dots.get_or_init(|| {
-            let (width, height) = ((PAD_WIDTH * 2.) as usize, (PAD_HEIGHT * 2.) as usize);
+        if let Some((_, image)) = dots.borrow().iter().find(|(each, _)| *each == form) {
+            return image.clone();
+        }
+        let image = {
+            let (width, height) = (
+                (form.inner() * 2.) as usize,
+                (form.pad_height * 2.) as usize,
+            );
             let mut data = vec![0u8; width * height * 4];
-            let (across, down) = (DOTS_ACROSS as usize, DOTS_DOWN as usize);
+            let [dot_left, dot_top, reach_across, reach_down] = form.dots;
+            let (across, down) = (
+                (reach_across / DOT_PITCH).round() as usize + 1,
+                (reach_down / DOT_PITCH).round() as usize + 1,
+            );
             let radius = DOT_SIZE; // at 2×, half the dot's size twice over
             for row in 0..down {
                 for column in 0..across {
@@ -1151,8 +1317,8 @@ fn dots_image() -> Arc<RenderImage> {
                     let color = theme::color_at(fx, fy, 1.);
                     let [r, g, b] = [16, 8, 0].map(|shift| ((color >> shift) & 0xff) as u8);
                     let (cx, cy) = (
-                        (DOT_LEFT + column as f32 * DOT_PITCH) * 2.,
-                        (DOT_TOP + row as f32 * DOT_PITCH) * 2.,
+                        (dot_left + column as f32 * DOT_PITCH) * 2.,
+                        (dot_top + row as f32 * DOT_PITCH) * 2.,
                     );
                     let reach = radius.ceil() as i32 + 1;
                     for dy in -reach..=reach {
@@ -1177,8 +1343,9 @@ fn dots_image() -> Arc<RenderImage> {
             }
             let image = RgbaImage::from_raw(width as u32, height as u32, data).expect("sized");
             Arc::new(RenderImage::new(vec![Frame::new(image)]))
-        })
-        .clone()
+        };
+        dots.borrow_mut().push((form, image.clone()));
+        image
     })
 }
 
@@ -1216,8 +1383,9 @@ impl Render for ThemePicker {
         // otherwise be drawn without a listener for them (#2605). A move with nothing dragged
         // does nothing.
         let entity = cx.weak_entity();
+        let origin = self.origin.clone();
         let listener = canvas(
-            |_, _, _| {},
+            move |bounds, _, _| origin.set(bounds.origin),
             move |_, _, window, _| {
                 let moved = entity.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
@@ -1244,7 +1412,8 @@ impl Render for ThemePicker {
         let a11y = window.is_a11y_active();
         let picker = div()
             .id("theme-picker")
-            .when(a11y, |picker| {
+            // Inline it's part of the view it's drawn in, which names itself.
+            .when(a11y && self.rest.is_none(), |picker| {
                 picker.role(Role::Dialog).aria_label("Space Theme")
             })
             .key_context("ThemePicker")
@@ -1282,8 +1451,10 @@ impl Render for ThemePicker {
             return root.child(picker);
         };
         // AppKit puts the window on screen some frames after it's asked to, and only then does
-        // GPUI draw it.
-        if editing.open && !editing.drawn {
+        // GPUI draw it. In first run's card the lines are the card's, which never say what was
+        // picked (floor 8).
+        let inline = self.rest.is_some();
+        if editing.open && !editing.drawn && !inline {
             if window.is_visible() {
                 editing.drawn = true;
                 // check.sh waits for this line.
@@ -1292,8 +1463,11 @@ impl Render for ThemePicker {
                 window.request_animation_frame();
             }
         }
-        editing.log_handles();
+        if !inline {
+            editing.log_handles();
+        }
         let editing = &*editing;
+        let form = self.form;
         let theme = editing.theme;
         let colors = theme.map_or_else(Vec::new, |theme| theme.colors());
         let palette = editing.palette;
@@ -1301,6 +1475,7 @@ impl Render for ThemePicker {
         let text = palette.on_overlay(1.);
         let text_2 = palette.on_overlay(palette.secondary());
         let text_3 = palette.on_overlay(palette.tertiary());
+        let pad_text = pad_ink(&palette, theme.as_ref(), inline);
         let ring_color = palette.plate(KEYED);
         // The keyboard's ring, as Focus Sidebar's, `RING_GAP` round what it rings, `width` by
         // `height` about `x`, `y`.
@@ -1320,7 +1495,7 @@ impl Render for ThemePicker {
         let keyed_ring = keyed.map(|keyed| match keyed {
             Target::Appearance(appearance) => {
                 let index = Appearance::ALL.iter().position(|&each| each == appearance);
-                let (left, top) = layout::segment(index.unwrap_or(0));
+                let (left, top) = form.segment(index.unwrap_or(0));
                 ring(
                     left + SEGMENT_WIDTH / 2.,
                     top + SEGMENT_HEIGHT / 2.,
@@ -1329,19 +1504,19 @@ impl Render for ThemePicker {
                 )
             }
             Target::Palette(index) => {
-                let (x, y) = layout::disc(index);
+                let (x, y) = form.disc(index);
                 ring(x, y, SLOT, SLOT)
             }
             Target::Point(index) => {
-                let (x, y) = layout::chip_item(colors.len(), index);
+                let (x, y) = form.chip_item(colors.len(), index);
                 ring(x, y, CHIP_DOT, CHIP_DOT)
             }
             Target::Add => {
-                let (x, y) = layout::chip_item(colors.len(), colors.len());
+                let (x, y) = form.chip_item(colors.len(), colors.len());
                 ring(x, y, PLUS, PLUS)
             }
             Target::Value => {
-                let (left, top) = layout::value_field();
+                let (left, top) = form.value_field();
                 ring(
                     left + FIELD_WIDTH / 2.,
                     top + CHIP_HEIGHT / 2.,
@@ -1351,12 +1526,12 @@ impl Render for ThemePicker {
             }
             Target::Bar(bar) => {
                 let value = bar_value(bar, theme.as_ref(), editing.glass).unwrap_or(0.);
-                ring(layout::thumb_x(value), layout::track_y(bar), THUMB, THUMB)
+                ring(form.thumb_x(value), form.track_y(bar), THUMB, THUMB)
             }
             _ => {
-                let top = layout::note_top();
+                let top = form.note_top();
                 ring(
-                    WIDTH - PADDING - RESET_WIDTH / 2.,
+                    WIDTH - form.padding - RESET_WIDTH / 2.,
                     top + LABEL / 2.,
                     RESET_WIDTH,
                     LABEL,
@@ -1366,18 +1541,20 @@ impl Render for ThemePicker {
 
         let left = editing.left;
         let card_fill = palette::current(cx).card_drawn();
-        let card = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                icon_picker::paint_card(bounds.origin, &corners(left), card_fill, window)
-            },
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full();
+        let card = (!inline).then(|| {
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    icon_picker::paint_card(bounds.origin, &corners(left), card_fill, window)
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
         // The Space's colours over the fill, as drawn: the first fading to the second.
-        let tint = colors.first().map(|&first| {
+        let tint = colors.first().filter(|_| !inline).map(|&first| {
             let second = colors.get(1).copied().unwrap_or(first);
             div()
                 .absolute()
@@ -1394,9 +1571,9 @@ impl Render for ThemePicker {
         let label_row = |top: f32, name: SharedString, name_color: Hsla, value: Option<String>| {
             div()
                 .absolute()
-                .left(px(PADDING + LABEL_INSET))
+                .left(px(form.padding + LABEL_INSET))
                 .top(px(top))
-                .w(px(INNER - 2. * LABEL_INSET))
+                .w(px(form.inner() - 2. * LABEL_INSET))
                 .h(px(LABEL))
                 .flex()
                 .items_center()
@@ -1407,25 +1584,27 @@ impl Render for ThemePicker {
                 .children(value.map(|value| div().text_color(text_2).child(value)))
         };
 
-        let head = div()
-            .absolute()
-            .left(px(PADDING + LABEL_INSET))
-            .top(px(PADDING))
-            .h(px(HEAD))
-            .flex()
-            .items_center()
-            .text_size(px(TITLE_SIZE))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(text)
-            .child("Theme");
+        let head = (!inline).then(|| {
+            div()
+                .absolute()
+                .left(px(form.padding + LABEL_INSET))
+                .top(px(form.padding))
+                .h(px(form.head))
+                .flex()
+                .items_center()
+                .text_size(px(TITLE_SIZE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(text)
+                .child("Theme")
+        });
 
         // Auto · Light · Dark, the Space's appearance, at the head's right.
         let look = theme.map_or(editing.appearance, |theme| theme.appearance);
         let frame = 3. * SEGMENT_WIDTH + 2. * SEGMENT_INSET;
         let segments = div()
             .absolute()
-            .left(px(WIDTH - PADDING - frame))
-            .top(px(PADDING + (HEAD - SEGMENT_FRAME) / 2.))
+            .left(px(WIDTH - form.padding - frame))
+            .top(px(form.padding + (form.head - SEGMENT_FRAME) / 2.))
             .w(px(frame))
             .h(px(SEGMENT_FRAME))
             .rounded(px(SEGMENT_FRAME_RADIUS))
@@ -1440,7 +1619,7 @@ impl Render for ThemePicker {
                     Appearance::Dark => ("Dark", "Dark"),
                 };
                 let chosen = appearance == look;
-                let (left, top) = layout::segment(index);
+                let (left, top) = form.segment(index);
                 div()
                     .id(name)
                     // The panel answers presses where they land, so its press is a click there.
@@ -1480,13 +1659,13 @@ impl Render for ThemePicker {
 
         let chosen_palette = layout::palette_of(theme.as_ref());
         let palettes_label = label_row(
-            layout::palettes_top(),
+            form.palettes_top(),
             "Palettes".into(),
             text_3,
             layout::chosen_name(theme.as_ref()).map(str::to_owned),
         );
         let discs = (0..layout::palette_count()).map(|index| {
-            let (x, y) = layout::disc(index);
+            let (x, y) = form.disc(index);
             let chosen = chosen_palette == Some(index);
             let size = if chosen { CHOSEN_DISC } else { DISC };
             let colors = layout::palette_colors(index);
@@ -1538,7 +1717,7 @@ impl Render for ThemePicker {
 
         // The pad, its dots, its shade, the line between the handles, the handles, the chip and
         // the field, in the pad's own points.
-        let (pad_left, pad_top) = layout::pad();
+        let (pad_left, pad_top) = form.pad();
         let dots = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -1547,7 +1726,7 @@ impl Render for ThemePicker {
                         bounds,
                         bounds,
                         px(PAD_RADIUS).into(),
-                        dots_image(),
+                        dots_image(form),
                         0,
                         false,
                     )
@@ -1569,7 +1748,7 @@ impl Render for ThemePicker {
         let handles: Vec<(f32, f32)> = theme.map_or_else(Vec::new, |theme| {
             (0..theme.count)
                 .map(|index| {
-                    let (x, y) = layout::handle(&theme, index);
+                    let (x, y) = form.handle(&theme, index);
                     (x - pad_left, y - pad_top)
                 })
                 .collect()
@@ -1623,7 +1802,7 @@ impl Render for ThemePicker {
             });
         let count = colors.len();
         let chip = (count > 0).then(|| {
-            let (left, top, width) = layout::chip(count);
+            let (left, top, width) = form.chip(count);
             let (left, top) = (left - pad_left, top - pad_top);
             let points = (0..count).map(|index| {
                 let chosen = index == editing.chosen;
@@ -1676,7 +1855,7 @@ impl Render for ThemePicker {
                                 path.move_to(at(middle - reach, middle, bounds));
                                 path.line_to(at(middle + reach, middle, bounds));
                                 if let Ok(path) = path.build() {
-                                    window.paint_path(path, text_2);
+                                    window.paint_path(path, pad_text);
                                 }
                             },
                         )
@@ -1702,7 +1881,7 @@ impl Render for ThemePicker {
                 .children(plus)
         });
         let value_field = (count > 0).then(|| {
-            let (left, top) = layout::value_field();
+            let (left, top) = form.value_field();
             let shown = colors.get(editing.chosen).copied().unwrap_or(colors[0]);
             let content = match &editing.typing {
                 Some(input) => div().w_full().px(px(CHIP_LEFT)).child(input.clone()),
@@ -1722,7 +1901,7 @@ impl Render for ThemePicker {
                 .border_1()
                 .border_color(at_alpha(WHITE, CHIP_RIM))
                 .text_size(px(LABEL_SIZE))
-                .text_color(text_2)
+                .text_color(pad_text)
                 .child(content)
         });
         let pad = div()
@@ -1747,8 +1926,8 @@ impl Render for ThemePicker {
             .absolute()
             .left(px(pad_left))
             .top(px(pad_top))
-            .w(px(PAD_WIDTH))
-            .h(px(PAD_HEIGHT))
+            .w(px(form.inner()))
+            .h(px(form.pad_height))
             .rounded(px(PAD_RADIUS))
             .overflow_hidden()
             .bg(rgb(PAD_FILL))
@@ -1768,11 +1947,11 @@ impl Render for ThemePicker {
             );
 
         // The bars: each a label row, its track a small picture of what it changes, and a thumb.
-        let (track_left, track_length) = layout::track();
+        let (track_left, track_length) = form.track();
         let bars = BARS.iter().map(|&bar| {
             let value = bar_value(bar, theme.as_ref(), editing.glass);
             let label = label_row(
-                layout::bar_top(bar),
+                form.bar_top(bar),
                 bar.name().into(),
                 text_2,
                 value.map(|value| reading(bar, value)),
@@ -1873,7 +2052,8 @@ impl Render for ThemePicker {
                             );
                             // Three rows of dots, the middle one half a step along and a dot
                             // shorter at each end, fading in from none at the left.
-                            let rows = [(2., 2.5, 270.), (4.5, 6., 270.5), (2., 9.5, 270.)];
+                            let end = track_length - 2.;
+                            let rows = [(2., 2.5, end), (4.5, 6., end + 0.5), (2., 9.5, end)];
                             for (start, y, end) in rows {
                                 let mut x = start;
                                 while x <= end {
@@ -1901,7 +2081,7 @@ impl Render for ThemePicker {
             )
             .absolute()
             .size_full();
-            let track_top = layout::track_y(bar) - TRACK / 2.;
+            let track_top = form.track_y(bar) - TRACK / 2.;
             let track = div()
                 .absolute()
                 .left(px(track_left))
@@ -1921,8 +2101,8 @@ impl Render for ThemePicker {
                 );
             let thumb = div()
                 .absolute()
-                .left(px(layout::thumb_x(value.unwrap_or(0.)) - THUMB / 2.))
-                .top(px(layout::track_y(bar) - THUMB / 2.))
+                .left(px(form.thumb_x(value.unwrap_or(0.)) - THUMB / 2.))
+                .top(px(form.track_y(bar) - THUMB / 2.))
                 .size(px(THUMB))
                 .rounded_full()
                 .bg(rgb(WHITE))
@@ -1937,7 +2117,7 @@ impl Render for ThemePicker {
                 .id(("theme-bar", bar as usize))
                 .absolute()
                 .left(px(track_left))
-                .top(px(layout::track_y(bar) - THUMB / 2.))
+                .top(px(form.track_y(bar) - THUMB / 2.))
                 .w(px(track_length))
                 .h(px(THUMB));
             let spoken = a11y.then(|| slider(spoken, bar.name(), value, stepper));
@@ -1952,53 +2132,57 @@ impl Render for ThemePicker {
                 .children(spoken)
         });
 
-        let note_top = layout::note_top();
-        let note = div()
-            .absolute()
-            .left(px(PADDING + LABEL_INSET))
-            .top(px(note_top))
-            .h(px(LABEL))
-            .flex()
-            .items_center()
-            .text_size(px(LABEL_SIZE))
-            .text_color(text_3)
-            .child("For this Space only. Pages stay solid.");
-        let reset = div()
-            .id("theme-reset")
-            .when(a11y, |reset| {
-                reset
-                    .role(Role::Button)
-                    .aria_label("Reset")
-                    .a11y_synthetic_children(|builder| {
-                        builder.parent_node().add_action(Action::Click)
-                    })
-            })
-            .absolute()
-            .left(px(WIDTH - PADDING - RESET_WIDTH))
-            .top(px(note_top))
-            .w(px(RESET_WIDTH))
-            .h(px(LABEL))
-            .flex()
-            .items_center()
-            .justify_end()
-            .pr(px(LABEL_INSET))
-            .text_size(px(LABEL_SIZE))
-            .text_color(text_2)
-            .child("Reset");
+        let note_top = form.note_top();
+        let note = form.note.then(|| {
+            div()
+                .absolute()
+                .left(px(form.padding + LABEL_INSET))
+                .top(px(note_top))
+                .h(px(LABEL))
+                .flex()
+                .items_center()
+                .text_size(px(LABEL_SIZE))
+                .text_color(text_3)
+                .child("For this Space only. Pages stay solid.")
+        });
+        let reset = form.note.then(|| {
+            div()
+                .id("theme-reset")
+                .when(a11y, |reset| {
+                    reset
+                        .role(Role::Button)
+                        .aria_label("Reset")
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().add_action(Action::Click)
+                        })
+                })
+                .absolute()
+                .left(px(WIDTH - form.padding - RESET_WIDTH))
+                .top(px(note_top))
+                .w(px(RESET_WIDTH))
+                .h(px(LABEL))
+                .flex()
+                .items_center()
+                .justify_end()
+                .pr(px(LABEL_INSET))
+                .text_size(px(LABEL_SIZE))
+                .text_color(text_2)
+                .child("Reset")
+        });
 
         root.child(
             picker
-                .child(card)
+                .children(card)
                 .children(tint)
-                .child(head)
+                .children(head)
                 .child(segments)
                 .children(segment_words)
                 .child(palettes_label)
                 .children(discs)
                 .child(pad)
                 .children(bars)
-                .child(note)
-                .child(reset)
+                .children(note)
+                .children(reset)
                 .children(keyed_ring),
         )
     }

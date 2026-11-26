@@ -600,8 +600,8 @@ fn search_colors(cx: &App) -> Colors {
     let palette = crate::palette::current(cx);
     Colors {
         placeholder: palette.on_overlay(HINT),
-        caret: palette.on_overlay(TITLE),
-        selection: palette.plate(STATE_SELECTED),
+        caret: Some(palette.on_overlay(TITLE)),
+        selection: Some(palette.plate(STATE_SELECTED)),
     }
 }
 

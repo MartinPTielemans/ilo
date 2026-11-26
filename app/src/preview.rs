@@ -261,8 +261,6 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
-    /// Other apps' agents' switch, off to begin with.
-    other_apps: Cell<bool>,
     daily_count: Cell<bool>,
     /// Settings' switches first run shows too, each as it starts, on; and a tab's wait before the
     /// archive, Settings' 12 hours.
@@ -1057,6 +1055,12 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    // One the user stopped and one whose assistant broke, among those done.
+                    end: Some(match id {
+                        "session-3" => browser::agents::kept::End::Stopped,
+                        "task-2" => browser::agents::kept::End::Failed,
+                        _ => browser::agents::kept::End::Done,
+                    }),
                     sorted: None,
                 }
             };
@@ -2068,6 +2072,11 @@ impl Browser for Fake {
         true
     }
 
+    // Nor one to grow it, so its exit is the cross-fade.
+    fn grows_first_run(&self) -> bool {
+        false
+    }
+
     // A made-up account, signed out, so the onboarding opens on its Welcome; elsewhere none, as
     // the other states show a build that names no sync server.
     fn account_host(&self) -> Option<Rc<dyn browser::account::Host>> {
@@ -2110,14 +2119,6 @@ impl Browser for Fake {
 
     fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
-    }
-
-    fn other_apps(&self, _: &App) -> Option<bool> {
-        Some(self.other_apps.get())
-    }
-
-    fn set_other_apps(&self, on: bool, _: &mut App) {
-        self.other_apps.set(on);
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
@@ -2249,6 +2250,7 @@ impl command_bar::Host for PreviewBar {
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: browser::agents::files::Picked,
         _: &mut App,
     ) {
     }
@@ -2260,6 +2262,7 @@ impl command_bar::Host for PreviewBar {
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: browser::agents::files::Picked,
         _: &mut App,
     ) {
     }
@@ -2949,7 +2952,6 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
-                        other_apps: Cell::new(false),
                         daily_count: Cell::new(false),
                         settings: RefCell::default(),
                         archive_after: Cell::new(12. * 3600.),
@@ -3323,10 +3325,10 @@ fn main() {
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
                             shell.onboarding_show_assistants(rows, cx);
                         }
-                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth palette at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
-                            shell.onboarding_pick_swatch(index, cx);
+                            shell.onboarding_pick_palette(index, cx);
                         }
                     }
                     shell
@@ -4050,7 +4052,7 @@ fn preview_mini_bar(
     }) else {
         return;
     };
-    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent_on_dark().0.into()) else {
         return;
     };
     let selection = shown.selection;
@@ -4308,7 +4310,6 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
-                other_apps: Default::default(),
                 daily_count: Default::default(),
                 settings: Default::default(),
                 archive_after: Default::default(),

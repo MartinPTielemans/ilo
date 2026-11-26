@@ -54,7 +54,9 @@ struct Recorder {
     /// Now, in milliseconds since 1970.
     now: f64,
     /// The level and model the composer last started a thread with in the profile.
-    last: RefCell<(Tier, Option<(SharedString, String)>)>,
+    last: RefCell<Opens>,
+    /// This system can wall a thread in with the user's files.
+    files: std::cell::Cell<bool>,
 }
 
 impl Recorder {
@@ -252,6 +254,7 @@ impl Host for Recorder {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
@@ -261,7 +264,27 @@ impl Host for Recorder {
         };
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
         let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
-        self.record(format!("task {agent} {asked}{page}{tier}{model}{effort}"));
+        // The files by name and the folder by its path, as the start is given them.
+        let name =
+            |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().into_owned();
+        let files = match files.files.is_empty() {
+            true => String::new(),
+            false => format!(
+                " files {}",
+                files
+                    .files
+                    .iter()
+                    .map(|file| name(file))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        } + &match &files.folder {
+            Some(folder) => format!(" folder {}", name(folder.root())),
+            None => String::new(),
+        };
+        self.record(format!(
+            "task {agent} {asked}{page}{tier}{model}{effort}{files}"
+        ));
     }
 
     fn run_task_at_rest(
@@ -271,13 +294,18 @@ impl Host for Recorder {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, effort, cx);
+        self.run_task(agent, asked, None, tier, model, effort, files, cx);
         self.record("at rest".into());
     }
 
-    fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
+    }
+
+    fn composer_last(&self, _: &App) -> Opens {
         self.last.borrow().clone()
     }
 
@@ -467,10 +495,10 @@ impl Bar {
             .unwrap()
     }
 
-    /// The selected row's fill and its label.
-    fn accent(&mut self) -> (Hsla, Hsla) {
+    /// The mode chip's fill and its label.
+    fn site_chip(&mut self) -> (Hsla, Hsla) {
         self.window
-            .read_with(&self.cx.cx, |bar, cx| bar.accent(&palette::current(cx)))
+            .read_with(&self.cx.cx, |bar, cx| bar.site_chip(&palette::current(cx)))
             .unwrap()
     }
 
@@ -1427,22 +1455,22 @@ fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
     }
 
     let mut bar = Bar::new(cx);
-    let space = bar.accent();
+    let space = bar.site_chip();
     let youtube = Suggestion {
         site: "YouTube".into(),
         ..hinting("youtube.com")
     };
     bar.type_text("yout");
     bar.suggest("yout", vec![youtube]);
-    assert_eq!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), space);
     bar.keys("tab");
     let palette = bar
         .window
         .read_with(&bar.cx.cx, |_, cx| palette::current(cx))
         .unwrap();
     let (fill, label) = palette.site_accent(gpui::rgb(site_colors::YOUTUBE));
-    assert_eq!(bar.accent(), (fill.into(), label.into()));
-    assert_ne!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), (fill.into(), label.into()));
+    assert_ne!(bar.site_chip(), space);
 
     let mut bar = Bar::new(cx);
     bar.type_text("gith");
@@ -1454,7 +1482,53 @@ fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
         }],
     );
     bar.keys("tab");
-    assert_eq!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), space);
+}
+
+/// The bar draws none of the Space's colour (P3): its chosen row, its caret, its selection and
+/// Start are the ink at their strengths, the same over a green Space as a violet one. On the bar,
+/// in Dark and Light, the selection tells from it at 1.2:1, the least the palette's plates are told
+/// apart from what's under them, and text on it reads at 7:1, the text floor; the chosen row's
+/// kind, text-2, reads on its plate at 4.5:1.
+#[test]
+fn the_bar_draws_no_accent_and_its_selection_reads() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::Theme;
+    const TELLS: f32 = 1.2;
+    const TEXT: f32 = 7.;
+    const TEXT_2: f32 = 4.5;
+    for tone in [Tone::Dark, Tone::Light] {
+        let [green, violet] =
+            [0x2f9e5b, 0x5a2a9a].map(|color| Palette::of(Some(&Theme::of_color(color)), tone));
+        assert_ne!(green.accent, violet.accent);
+        assert_eq!(
+            chosen(&green),
+            chosen(&violet),
+            "{tone:?}: the chosen row follows the Space"
+        );
+        assert_eq!(green.ink, violet.ink, "{tone:?}");
+        let palette = Palette::of(None, tone);
+        let overlay = palette.overlay;
+        let selection = over(overlay, palette.ink, FIELD_SELECTION);
+        assert!(
+            contrast(selection, overlay) >= TELLS,
+            "{tone:?}: the selection tells from the bar at {:.2}:1",
+            contrast(selection, overlay)
+        );
+        assert!(
+            contrast(palette.ink, selection) >= TEXT,
+            "{tone:?}: text on the selection reads at {:.2}:1",
+            contrast(palette.ink, selection)
+        );
+        let (plate, kind) = chosen(&palette);
+        let plate = over(overlay, palette.ink, plate.a);
+        let kind = over(plate, palette.ink, kind.a);
+        assert!(
+            contrast(kind, plate) >= TEXT_2,
+            "{tone:?}: the chosen row's kind reads at {:.2}:1",
+            contrast(kind, plate)
+        );
+    }
 }
 
 /// Japanese input, as Windows' input method and AppKit's give it to the field: what it composes is
@@ -3594,6 +3668,17 @@ impl Bar {
             .unwrap()
     }
 
+    /// As `choice_menu`, for the trigger `id`'s menu, if it showed one.
+    fn menu_of(&mut self, id: &'static str) -> Option<(Vec<String>, Chosen)> {
+        self.shown_menu(match id {
+            PLUS_ID => CommandBar::open_add_menu_for_test,
+            FILES => CommandBar::files_menu,
+            FOLDER => CommandBar::folder_menu,
+            MODEL => CommandBar::model_menu,
+            _ => CommandBar::level_menu,
+        })
+    }
+
     fn shown_menu(
         &mut self,
         open: fn(&mut CommandBar, &mut Window, &mut Context<CommandBar>),
@@ -3628,6 +3713,48 @@ impl Bar {
             })
             .collect();
         Some((rows, chosen))
+    }
+
+    /// Whether the composer drew the trigger whose frame `at` records, as it records each frame.
+    fn drawn(&mut self, at: impl Fn(&CommandBar) -> Option<Bounds<Pixels>>) -> bool {
+        self.cx.run_until_parked();
+        (self.window)
+            .update(&mut self.cx.cx, |bar, window, _| {
+                window.refresh();
+                bar.plus.forget();
+                bar.files_at.set(None);
+                bar.folder_at.set(None);
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+        (self.window)
+            .read_with(&self.cx.cx, |bar, _| at(bar).is_some())
+            .unwrap()
+    }
+
+    /// Picks the add menu's row in the composer, and answers the system's panel with `paths`,
+    /// after checking it offers files and folders together, several at once.
+    fn add(&mut self, paths: Vec<std::path::PathBuf>) {
+        let (rows, chosen) = self.menu_of(PLUS_ID).expect("the plus showed no menu");
+        assert_eq!(
+            rows,
+            [MenuEntry::label(crate::plus::FILE_OR_FOLDER).to_string()]
+        );
+        self.pick(chosen, 0);
+        assert!(self.cx.did_prompt_for_paths(), "no panel opened");
+        self.cx.simulate_path_prompt_response(|asked| {
+            assert!(
+                asked.files && asked.directories && asked.multiple,
+                "the panel doesn't offer files and folders, several at once"
+            );
+            Some(paths)
+        });
+        self.cx.run_until_parked();
+        assert_eq!(
+            self.calls(),
+            ["take keyboard"],
+            "the bar didn't take the keyboard back as the panel answered"
+        );
     }
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
@@ -3846,6 +3973,47 @@ fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppConte
     assert_eq!(bar.calls(), ["task claude plan the week"]);
 }
 
+/// The composer opens on the effort Settings' `A new thread starts with` set, checked on its menu
+/// and gone with the start; a pick on the menu holds for the thread alone and comes back to no
+/// memory, as the host keeps only what Settings set.
+#[gpui::test]
+fn the_composer_opens_on_settings_effort(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.host.last.borrow_mut().effort = Some("high");
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said().as_deref(), Some("High"));
+    let (rows, _) = bar.effort_menu().unwrap();
+    assert_eq!(
+        rows,
+        ["Default", "Low", "Medium", "✓ High", "Extra high", "Max"]
+    );
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week effort high"]);
+}
+
+/// Settings' Effort opens the composer's effort menu, row for row; none for a program that takes
+/// no effort.
+#[test]
+fn settings_effort_is_the_composers_effort_menu() {
+    let levels = Cli::Claude.efforts();
+    let (picks, items) = effort_choices(levels, Some("max"));
+    assert_eq!(picks.len(), levels.len() + 1);
+    assert_eq!(picks[0], None);
+    assert_eq!(items[0].title.as_ref(), EFFORT_DEFAULT);
+    let checked: Vec<_> = (picks.iter().zip(&items))
+        .filter(|(_, item)| item.checked)
+        .map(|(pick, _)| *pick)
+        .collect();
+    assert_eq!(checked, [Some("max")]);
+    assert!(
+        effort_choices(Cli::Codex.efforts(), Some("max"))
+            .0
+            .is_empty()
+    );
+}
+
 /// The floor: every row on the effort menu gives the program a level from its own list, each a
 /// different one, and Default gives it none.
 #[gpui::test]
@@ -3899,7 +4067,11 @@ fn a_level_with_no_word_is_the_programs_own_capitalised() {
 fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     let host = Recorder {
         agents: RefCell::new(agents(&[("claude", None), ("codex", None)])),
-        last: RefCell::new((Tier::Look, Some(("claude".into(), "sonnet".into())))),
+        last: RefCell::new(Opens {
+            tier: Tier::Look,
+            model: Some(("claude".into(), "sonnet".into())),
+            effort: None,
+        }),
         ..Recorder::default()
     };
     let mut bar = Bar::open(cx, Vec::new(), host);
@@ -5288,5 +5460,281 @@ fn the_open_is_timed_as_its_drawn_frame_comes_on_screen(cx: &mut TestAppContext)
         screen.frame_wake_count(),
         wakes,
         "timing the first frame asked for a frame"
+    );
+}
+
+/// One open logs both of its points once, in order: its first frame drawn, off screen as the host
+/// draws it, then that frame's window on screen. A later frame logs neither again.
+#[gpui::test]
+fn an_open_logs_its_frame_drawn_then_its_window_on_screen_once(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    cx.update(text_input::bind_keys);
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no window for the bar");
+    let screen = cx.test_window(window.into());
+    screen.simulate_visibility_change(WindowVisibility::Hidden);
+    crate::heard::listen();
+    cx.update(|cx| show(None, Vec::new(), Vec::new(), None, cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    screen.simulate_visibility_change(WindowVisibility::Visible);
+    window.update(&mut visual, |_, _, cx| cx.notify()).unwrap();
+    visual.run_until_parked();
+    let points: Vec<String> = crate::heard::take()
+        .into_iter()
+        .filter(|line| {
+            line.starts_with("browser: command bar frame drawn in ")
+                || line.starts_with("browser: command bar first frame in ")
+        })
+        .map(|line| line.split(" in ").next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        points,
+        [
+            "browser: command bar frame drawn",
+            "browser: command bar first frame"
+        ],
+        "an open didn't log its frame drawn and then its window on screen, once each"
+    );
+}
+
+/// A folder the test makes, with the files named in it, as the system's panel gives them: beside
+/// the build, as ilo may give that on every system the tests run on, where the system's temporary
+/// folder is one ilo never gives on the Mac. Each is its own, as the tests run side by side.
+fn made(name: &str, files: &[&str]) -> std::path::PathBuf {
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/ilo-test-folders")
+        .join(format!("{name}-{}-{made}", std::process::id()))
+        .join(name);
+    _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    for file in files {
+        std::fs::write(folder.join(file), "made").unwrap();
+    }
+    folder.canonicalize().unwrap()
+}
+
+/// The composer opened on what's typed, by a bar over a system that can wall a thread in with the
+/// user's files, or one that can't.
+fn composing(cx: &mut TestAppContext, files: bool) -> Bar {
+    let bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.host.files.set(files);
+    let mut bar = bar;
+    bar.type_text("pack for the trip");
+    bar.keys("tab");
+    bar.calls();
+    bar
+}
+
+/// The plus is drawn in its place either way: disabled, showing no menu, where nothing can be
+/// added, and opening its menu where files can be.
+#[gpui::test]
+fn the_plus_is_disabled_where_nothing_can_be_added(cx: &mut TestAppContext) {
+    let mut bar = composing(cx, false);
+    assert!(bar.drawn(|bar| bar.plus.drawn()), "the plus left its place");
+    assert!(bar.menu_of(PLUS_ID).is_none(), "a menu with nothing to add");
+    bar.host.files.set(true);
+    assert!(bar.drawn(|bar| bar.plus.drawn()), "no plus");
+    assert!(bar.menu_of(PLUS_ID).is_some(), "no menu with files to add");
+}
+
+/// The add menu's one row opens the system's panel, and what's picked there, files and a folder,
+/// goes with the thread: each file once, the folder granted. Its triggers then show them.
+#[gpui::test]
+fn files_and_a_folder_added_on_the_plus_go_with_the_thread(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf", "hotel.txt"]);
+    let (seats, hotel) = (trip.join("seats.pdf"), trip.join("hotel.txt"));
+    let mut bar = composing(cx, true);
+    bar.add(vec![seats.clone(), hotel, trip.clone(), seats]);
+    assert!(
+        bar.drawn(|bar| bar.files_at.get()),
+        "no trigger for the files"
+    );
+    assert!(
+        bar.drawn(|bar| bar.folder_at.get()),
+        "no trigger for the folder"
+    );
+    bar.keys("enter");
+    assert_eq!(
+        bar.calls(),
+        ["task claude pack for the trip files seats.pdf hotel.txt folder trip"]
+    );
+}
+
+/// A folder ilo never gives, such as a disk's root, isn't granted: the thread starts without it,
+/// and the composer shows no folder.
+#[gpui::test]
+fn a_folder_ilo_never_gives_isnt_added(cx: &mut TestAppContext) {
+    let mut bar = composing(cx, true);
+    let root = std::path::PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" });
+    bar.add(vec![root]);
+    assert!(
+        !bar.drawn(|bar| bar.folder_at.get()),
+        "a folder ilo never gives"
+    );
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
+}
+
+/// What the plus added is taken out on its own triggers: the files' menu lists each, checked, and
+/// a pick takes it out; the folder's has Revoke, after which the thread has no folder. A later
+/// folder takes the place of the one before.
+#[gpui::test]
+fn what_the_plus_added_comes_out_on_its_triggers(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf", "hotel.txt"]);
+    let home = made("home", &[]);
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.join("seats.pdf"), trip.join("hotel.txt"), home]);
+    bar.add(vec![trip.clone()]);
+    let (rows, chosen) = bar.menu_of(FILES).expect("the files showed no menu");
+    assert_eq!(rows, ["✓ seats.pdf", "✓ hotel.txt"]);
+    bar.pick(chosen, 0);
+    let (rows, _) = bar.menu_of(FOLDER).expect("the folder showed no menu");
+    assert_eq!(rows, [MenuEntry::label(files_words::REVOKE).to_string()]);
+    bar.keys("enter");
+    assert_eq!(
+        bar.calls(),
+        ["task claude pack for the trip files hotel.txt folder trip"]
+    );
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.clone()]);
+    let (_, chosen) = bar.menu_of(FOLDER).unwrap();
+    bar.pick(chosen, 0);
+    assert!(!bar.drawn(|bar| bar.folder_at.get()), "the folder stayed");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
+}
+
+/// What the plus adds is for this thread alone: back to search, and what was added goes, as the
+/// level does, and a panel that answers after the composer left adds nothing.
+#[gpui::test]
+fn what_the_plus_added_goes_with_the_composer(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf"]);
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.join("seats.pdf"), trip.clone()]);
+    bar.keys("tab tab");
+    assert!(!bar.drawn(|bar| bar.files_at.get()), "the files stayed");
+    let (_, chosen) = bar.menu_of(PLUS_ID).unwrap();
+    bar.pick(chosen, 0);
+    bar.keys("tab");
+    bar.cx
+        .simulate_path_prompt_response(|_| Some(vec![trip.clone()]));
+    bar.cx.run_until_parked();
+    bar.keys("tab");
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
+}
+
+/// What a menu says, row by row, for comparing two menus: each row's title, its marks and where
+/// it leads.
+fn said(items: &[MenuEntry]) -> Vec<(String, bool, bool, bool, bool)> {
+    (items.iter())
+        .map(|item| {
+            let title = item.title.to_string();
+            (title, item.checked, item.enabled, item.header, item.out)
+        })
+        .collect()
+}
+
+/// Settings' Access opens the composer's level menu, the same rows but Full access, which is
+/// never where a thread starts; each row still picks its own level.
+#[test]
+fn settings_access_is_the_composers_level_menu() {
+    for current in [Tier::Look, Tier::default()] {
+        let (all, composer) = level_choices(current, true);
+        let (offered, settings) = level_choices(current, false);
+        assert!(!offered.contains(&Tier::Full));
+        let full = all.iter().position(|&tier| tier == Tier::Full).unwrap();
+        let mut expected = said(&composer);
+        expected.remove(full);
+        assert_eq!(said(&settings), expected);
+        for (at, tier) in offered.iter().enumerate() {
+            assert_eq!(settings[at].title.as_ref(), tier.label());
+        }
+    }
+}
+
+/// Settings' Model opens the composer's model menu, the same rows, checks and Sign In, but the
+/// way to Settings it's already in; and both check the model a thread starts on.
+#[test]
+fn settings_model_is_the_composers_model_menu() {
+    let mut offered = agents(&[("claude", None), ("codex", None)]).unwrap();
+    offered.signed_out = vec![("gemini".into(), "Gemini".into())];
+    let picked: (SharedString, String) = ("claude".into(), "sonnet".into());
+    for picked in [None, Some(&picked)] {
+        let (composer, composer_picks) = model_choices(&offered, picked, true);
+        let (settings, settings_picks) = model_choices(&offered, picked, false);
+        let kept = settings.len();
+        assert_eq!(said(&settings), said(&composer[..kept]));
+        assert_eq!(settings_picks, composer_picks[..kept]);
+        assert_eq!(
+            composer_picks[kept..],
+            [ModelPick::Nothing, ModelPick::Settings]
+        );
+        assert!(settings_picks.contains(&ModelPick::SignIn("gemini".into())));
+        let checked: Vec<&ModelPick> = (settings.iter().zip(&settings_picks))
+            .filter(|(item, _)| item.checked)
+            .map(|(_, pick)| pick)
+            .collect();
+        let starts = match picked {
+            Some(_) => ModelPick::Model("claude".into(), "sonnet".into()),
+            None => ModelPick::Model("claude".into(), "haiku".into()),
+        };
+        assert_eq!(checked, [&starts]);
+    }
+}
+
+/// The bar's model trigger still says its assistant's name and the model's: only the panel beside
+/// a page draws the model's own word alone.
+#[gpui::test]
+fn the_bars_model_trigger_says_its_assistant_and_its_model(cx: &mut TestAppContext) {
+    use crate::tokens::command_bar::{
+        MODEL_GAP, MODEL_LEFT, MODEL_MARK, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_TEXT, TRIGGER_X,
+    };
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        last: RefCell::new(Opens {
+            tier: Tier::Look,
+            model: Some(("claude".into(), "sonnet".into())),
+            effort: None,
+        }),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("read the menu");
+    bar.keys("tab");
+    let (_, said) = bar.choices();
+    assert_eq!(said, "claude \u{b7} Sonnet");
+    bar.cx.run_until_parked();
+    let model = bar
+        .window
+        .read_with(&bar.cx.cx, |bar, _| bar.model_at.get())
+        .unwrap();
+    let model = model.expect("no model trigger");
+    // The trigger less its inset, the assistant's mark, its chevron and the gaps between them.
+    let drawn = f32::from(model.size.width)
+        - MODEL_LEFT
+        - MODEL_MARK
+        - MODEL_GAP
+        - TRIGGER_GAP
+        - TRIGGER_CHEVRON
+        - TRIGGER_X;
+    let width = bar.cx.update(|_, cx| {
+        let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+        let measure = |text: &str| {
+            let text = gpui::SharedString::from(text.to_string());
+            crate::tooltip::text_width(&text, TRIGGER_TEXT, gpui::FontWeight::NORMAL, &system)
+        };
+        (measure(&said), measure("Sonnet"))
+    });
+    assert!(
+        (drawn - width.0).abs() <= 1.,
+        "the bar's model is {drawn} wide: both words are {}, Sonnet alone {}",
+        width.0,
+        width.1
     );
 }

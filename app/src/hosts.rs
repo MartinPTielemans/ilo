@@ -348,6 +348,41 @@ impl menu::Host for MenuHost {
         unsafe { platform::host_hide_menu_window() };
     }
 
+    // The Mac's window has the pointer over its whole frame, so a press in the room is its own.
+    // The reveal's panel isn't the window's content, so a press over it goes on as it did.
+    #[cfg(target_os = "macos")]
+    fn press_under(&self, at: Point<Pixels>, cx: &mut App) -> bool {
+        let (ui_view, in_reveal) = MENU_OVER.get();
+        if ui_view.is_null() || in_reveal {
+            return false;
+        }
+        // A browser window's is in the app's list by the host's view, which its UI draws inside;
+        // any other window the menu is over, such as Settings, is the one whose own view it is.
+        // With none, the press isn't taken: it would go nowhere.
+        let over = handle_with_view(ui_view).or_else(|| {
+            cx.windows().into_iter().find(|window| {
+                (window.update(cx, |_, window, _| ns_view(window) == ui_view)).unwrap_or(false)
+            })
+        });
+        let Some(over) = over else {
+            return false;
+        };
+        cx.defer(move |cx| {
+            (over.update(cx, |_, window, cx| {
+                let press = gpui::MouseDownEvent {
+                    button: gpui::MouseButton::Right,
+                    position: at,
+                    modifiers: window.modifiers(),
+                    click_count: 1,
+                    first_mouse: false,
+                };
+                window.dispatch_event(gpui::PlatformInput::MouseDown(press), cx);
+            }))
+            .ok();
+        });
+        true
+    }
+
     #[cfg(target_os = "linux")]
     fn blends(&self) -> bool {
         gpui_linux::overlays_blend()

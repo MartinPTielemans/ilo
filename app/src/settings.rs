@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod new_thread;
 mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
@@ -201,8 +202,10 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' Notify.
-    Notify,
+    /// Threads › A new thread starts with: its Access and its Model.
+    NewThreadAccess,
+    NewThreadModel,
+    NewThreadEffort,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -222,7 +225,9 @@ impl Popup {
                 format!("{} options", browser::settings_rows::assistant_name(cli)).into()
             }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
-            Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
+            Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadModel => browser::agents::task::MODEL.into(),
+            Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -874,6 +879,8 @@ fn look_for_clients(cx: &mut App) {
         agents.update(cx, |agents, cx| {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
+            // Whether the command's skill files are still in place, for its row.
+            agents.look_skills(cx);
         });
     }
 }
@@ -955,13 +962,13 @@ fn open(cx: &mut App) {
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
     let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
-    let title = Section::General.name().into();
+    let title = Section::OPENS.name().into();
     let options = WindowOptions {
         show: false,
         focus: false,
         ..browser::settings_column::window_options(bounds, title)
     };
-    SHOWN_SECTION.set(Section::General.name());
+    SHOWN_SECTION.set(Section::OPENS.name());
     let window = cx.open_window(options, |window, cx| {
         let settings = view(cx);
         settings.update(cx, |settings, cx| {
@@ -1162,7 +1169,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             version,
             nightly,
             _agents: agents,
-            section: Section::General,
+            section: Section::OPENS,
             focus: cx.focus_handle(),
             dark,
             appearance: shell::app_appearance(cx),
@@ -3914,6 +3921,10 @@ impl Settings {
         };
         let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
+        // Where a new thread starts, while threads are on, as the drawing has it under the switch.
+        if on {
+            threads.extend(self.new_thread(agents, cx));
+        }
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
@@ -4744,13 +4755,20 @@ impl Settings {
                     }),
                 "disconnect",
             ),
+            // One connected before the server took the product's name (CN2).
             false => (
-                self.button(("connect-agent", index), "Connect")
-                    .on_click(move |_, _, cx| {
-                        // check.sh reads this line.
-                        log!("browser: connect agent {}", client.id());
-                        agents.update(cx, |agents, cx| agents.connect(client, cx))
-                    }),
+                self.button(
+                    ("connect-agent", index),
+                    match model.is_stale(client) {
+                        true => "Connect Again",
+                        false => "Connect",
+                    },
+                )
+                .on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
                 "connect",
             ),
         };
@@ -4779,11 +4797,27 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(
+        let mut detail = agents::cli::detail(
             state,
             model.command_flatpak_line().as_deref(),
             model.command_windows_folder().as_deref(),
         );
+        // After its own line: the skill written for each program, or one a Remove left (SK1, SK2).
+        let (added, changed) = (model.skills(), model.skills_changed());
+        let skill = match (added.is_empty(), changed.is_empty()) {
+            (false, _) => Some(format!("Skill added for {}.", agents::named(&added))),
+            (_, false) => Some(format!(
+                "Skill for {} was changed, so it wasn't removed.",
+                agents::named(&changed)
+            )),
+            _ => None,
+        };
+        if let Some(skill) = skill {
+            detail.line = format!("{} {skill}", detail.line);
+        }
+        let reveal = (!changed.is_empty())
+            .then(|| model.skill_to_reveal())
+            .flatten();
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)
@@ -4793,7 +4827,7 @@ impl Settings {
                     // Add follows the row, not the agent: on Windows a command whose PATH entry
                     // was taken off is still connected, and Add puts the entry back (#3783).
                     agents.update(cx, |agents, cx| match agents.command_state() {
-                        agents::cli::State::Off => {
+                        agents::cli::State::Off | agents::cli::State::Stale => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
@@ -4815,8 +4849,23 @@ impl Settings {
                 });
             controls.push(copy.into_any_element());
         }
+        if let Some(path) = reveal {
+            // The app's words for the system's file manager.
+            let title = match cfg!(target_os = "macos") {
+                true => "Show in Finder",
+                false => "Show in Folder",
+            };
+            let show = self
+                .button("reveal-skill", title)
+                .relative()
+                .child(self.drawn("ilo-command reveal skill".into()))
+                .on_click(move |_, _, _| crate::boosts_host::show_file(&path));
+            controls.push(show.into_any_element());
+        }
         controls.push(match state {
             agents::cli::State::Off => action("Add", "add-command"),
+            // Added before the command took the product's name (CN2).
+            agents::cli::State::Stale => action("Add Again", "add-command"),
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())

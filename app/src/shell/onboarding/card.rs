@@ -72,6 +72,11 @@ impl Inks {
         self.text(if self.light { t::LIGHT_GROUP } else { t::GROUP })
     }
 
+    /// A field's fill, and the recovery words' plate.
+    pub(super) fn field(&self) -> Rgba {
+        self.text(if self.light { t::LIGHT_FIELD } else { t::FIELD })
+    }
+
     /// A quiet button's fill.
     pub(super) fn button(&self) -> Rgba {
         self.text(if self.light {
@@ -128,12 +133,24 @@ pub(super) fn heading_text(
 }
 
 pub(super) fn heading(
-    (title, line): (SharedString, SharedString),
+    said: (SharedString, SharedString),
     centred: bool,
     inks: Inks,
     cx: &mut App,
 ) -> gpui::Div {
-    let [x, y, size, height] = t::HEADING;
+    let [_, y, _, _] = t::HEADING;
+    heading_at(said, centred, y, inks, cx)
+}
+
+/// As `heading`, its top at `y`, as the Welcome's states place theirs lower under the knot.
+pub(super) fn heading_at(
+    (title, line): (SharedString, SharedString),
+    centred: bool,
+    y: f32,
+    inks: Inks,
+    cx: &mut App,
+) -> gpui::Div {
+    let [x, _, size, height] = t::HEADING;
     let [gap, line_size, line_height] = t::LINE;
     let place = |row: gpui::Div| match centred {
         true => row.w(px(t::WIDTH)).flex().justify_center().text_center(),
@@ -206,6 +223,16 @@ pub(super) fn quiet(id: &'static str, label: SharedString, inks: Inks) -> Statef
         .child(label)
 }
 
+/// A small quiet button, as the recovery words' Copy is.
+pub(super) fn small(id: &'static str, label: SharedString, inks: Inks) -> Stateful<gpui::Div> {
+    let [height, radius, inset, size] = t::SMALL_BUTTON;
+    quiet(id, label, inks)
+        .h(px(height))
+        .px(px(inset))
+        .rounded(px(radius))
+        .text_size(px(size))
+}
+
 /// The step's main button, `button` with its words in it: the text's ink as its fill and the key
 /// that presses it, `key`, in a cap at its end, if it has one.
 pub(super) fn main_button(
@@ -215,6 +242,7 @@ pub(super) fn main_button(
 ) -> Stateful<gpui::Div> {
     let [height, radius, inset, gap] = t::BUTTON_SIZE;
     let [cap, cap_radius, cap_text, cap_alpha] = t::CAP;
+    let [rest, hovered, pressed] = main_fills(inks);
     let end = if key.is_some() { t::MAIN_END } else { inset };
     let chip = key.map(|key| {
         div()
@@ -243,14 +271,23 @@ pub(super) fn main_button(
         .justify_center()
         .gap(px(gap))
         .rounded(px(radius))
-        .bg(inks.text(1.))
+        .bg(rest)
         .text_color(inks.on_main())
         .text_size(px(t::BUTTON_TEXT))
         .font_weight(FontWeight::SEMIBOLD)
-        .hover(|style| style.opacity(t::BUTTON_HOVER))
+        .hover(move |style| style.bg(hovered))
+        .active(move |style| style.bg(pressed))
         .focus_visible(card_ring(inks))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .children(chip)
+}
+
+/// The main button's fill at rest, under the pointer and pressed: the text's ink, then a step and
+/// a further step toward its label's, as every button filled with ink goes in both looks.
+pub(super) fn main_fills(inks: Inks) -> [Rgba; 3] {
+    let rest = inks.text(1.);
+    let (hovered, pressed) = crate::palette::ink_states(rest, inks.on_main());
+    [rest, hovered, pressed]
 }
 
 /// The Welcome's taller button, a column wide.
@@ -273,8 +310,28 @@ pub(super) fn knot(size: f32, fraction: f32, ink: Rgba) -> gpui::Svg {
         .text_color(ink)
 }
 
+/// The card's sheet and rim at `plate`: x, y, width, height and corners.
+pub(super) fn plate(plate: super::exit::Plate, fill: Rgba, rim: Rgba) -> gpui::Div {
+    let (x, y, w, h, radius) = plate;
+    at(x, y)
+        .w(px(w))
+        .h(px(h))
+        .rounded(px(radius))
+        .bg(fill)
+        .border_1()
+        .border_color(rim)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many whole knots have been drawn, for a test of what a frame draws.
+    pub(super) static KNOTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// The mark whole, `size` across.
 pub(super) fn whole_knot(size: f32, ink: Rgba) -> gpui::Svg {
+    #[cfg(test)]
+    KNOTS.set(KNOTS.get() + 1);
     svg()
         .path(crate::product::mark_path(size))
         .size(px(size))
@@ -286,11 +343,20 @@ pub(super) fn whole_knot(size: f32, ink: Rgba) -> gpui::Svg {
 /// column on the split ones, so nothing of the foot sits on the picture.
 pub(super) fn foot_span(step: Step) -> (f32, f32) {
     let side = t::FOOT_SIDE;
+    match step.split() {
+        true => (side, side + column(step)),
+        false => (side, t::WIDTH - side),
+    }
+}
+
+/// How wide a step's column is: a pictured step's own, beside its picture or centred without it,
+/// and the centred steps' otherwise.
+pub(super) fn column(step: Step) -> f32 {
     let [_, column] = t::COLUMN;
     match step {
-        Step::Assistant | Step::Tidy => (side, side + column),
-        Step::Space => (side, side + t::SPACE_FOOT),
-        _ => (side, t::WIDTH - side),
+        Step::Assistant | Step::Tidy => column,
+        Step::Space => t::SPACE_FOOT,
+        _ => t::CENTRED_COLUMN,
     }
 }
 

@@ -70,8 +70,9 @@ pub(crate) struct Recorder {
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// Whether the resting bars are over a private window, as the host reads it of the front one.
     pub(super) private_bar: Rc<std::cell::Cell<bool>>,
-    /// Whether it can wall a task in with its files, as `files_available` answers.
-    pub(super) files: std::cell::Cell<bool>,
+    /// Whether it can wall a task in with its files, as `files_available` answers, here and to
+    /// its resting bars.
+    pub(super) files: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -85,6 +86,10 @@ pub(crate) struct Recorder {
     pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
     pub(super) default_browser: Cell<bool>,
+    /// What the host answers when first run's exit asks whether it grows first run's window.
+    pub(super) grows_first_run: Cell<bool>,
+    /// How many times it was asked whether it grows first run's window.
+    pub(super) asked_to_grow: Cell<u32>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
     /// The search engines and the default's keyword, as `search_engines` answers.
@@ -124,7 +129,9 @@ pub(crate) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) threads: Cell<Option<bool>>,
-    pub(super) other_apps: Cell<Option<bool>>,
+    /// The programs found by the Agents `start_agents` makes, as a launch makes them after the card
+    /// starts; None leaves them unmade.
+    pub(super) agents_found: RefCell<Option<Vec<crate::agents::Client>>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -943,7 +950,9 @@ impl Browser for Recorder {
         !self.history_unloaded.get()
     }
 
-    fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
+    fn act_on_download(&self, id: u64, action: DownloadAction, _: &mut App) {
+        self.record(format!("act on download {id} {action:?}"));
+    }
 
     fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
         self.record(format!("clear downloads {private:?}"));
@@ -1953,6 +1962,7 @@ impl Browser for Recorder {
             asked: self.resting.clone(),
             unlearned: self.unlearned.clone(),
             private: self.private_bar.clone(),
+            files: self.files.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
@@ -2193,6 +2203,12 @@ impl Browser for Recorder {
         self.record(format!("first run shaped {width} {height} {radius}"))
     }
 
+    fn grows_first_run(&self) -> bool {
+        // Counted, not recorded, so what the host was told reads as before.
+        self.asked_to_grow.set(self.asked_to_grow.get() + 1);
+        self.grows_first_run.get()
+    }
+
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
     fn shows_first_run_at_open(&self) -> bool {
         true
@@ -2241,13 +2257,12 @@ impl Browser for Recorder {
         }
     }
 
-    fn other_apps(&self, _: &App) -> Option<bool> {
-        self.other_apps.get()
-    }
-
-    fn set_other_apps(&self, on: bool, _: &mut App) {
-        self.other_apps.set(Some(on));
-        self.record(format!("other apps {on}"))
+    fn start_agents(&self, cx: &mut App) {
+        if crate::agents::global(cx).is_none()
+            && let Some(found) = self.agents_found.take()
+        {
+            _ = crate::agents::tests::stand_in_with(Vec::new(), found, cx);
+        }
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {

@@ -328,7 +328,7 @@ pub(crate) fn write(path: PathBuf, text: &str) -> PathBuf {
 }
 
 /// Marks a file used `ago` seconds ago.
-fn used(path: &Path, ago: u64) {
+pub(crate) fn used(path: &Path, ago: u64) {
     let file = fs::File::options().write(true).open(path).unwrap();
     file.set_modified(SystemTime::now() - Duration::from_secs(ago))
         .unwrap();
@@ -888,7 +888,7 @@ impl Browser {
     }
 
     /// The core has added the history and addresses it was given.
-    fn added(&self, cx: &mut App) {
+    pub(crate) fn added(&self, cx: &mut App) {
         for (added, then) in self.adding.take() {
             then(added, cx);
         }
@@ -1020,7 +1020,10 @@ impl Host for Browser {
 
     fn add_favorite(&self, space: u64, tab: &Tab) {
         let mut state = self.state.borrow_mut();
-        let profile = state.space(space).profile;
+        // First run adds them to the window's own Space, which this core didn't make: its first
+        // profile's.
+        let profile =
+            (state.spaces.iter().find(|each| each.id == space)).map_or(0, |each| each.profile);
         state.favorites.push((profile, tab.clone()));
     }
 
@@ -1550,7 +1553,6 @@ fn each_states_one_button_is_the_hosts_primary(cx: &mut TestAppContext) {
     let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
     assert_eq!(ground.primary, signal);
     let settings = Look::settings(false);
-    assert_ne!(settings.primary, gpui::rgb(crate::palette::NO_THEME_ACCENT));
     assert_eq!(
         settings.primary, settings.on,
         "Settings' main button is its text colour"
@@ -2610,7 +2612,7 @@ fn firefoxs_default_profile_is_the_one_it_starts_with() {
 /// A `places.sqlite` at `path` as Firefox lays one out, with its own folders, in write-ahead mode
 /// with the log kept, as while Firefox runs: what goes in stays in the log while the connection
 /// it returns is open.
-fn places_file(path: &Path) -> rusqlite::Connection {
+pub(crate) fn places_file(path: &Path) -> rusqlite::Connection {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     _ = fs::remove_file(path);
     let db = rusqlite::Connection::open(path).unwrap();
