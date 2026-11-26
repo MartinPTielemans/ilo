@@ -28,7 +28,7 @@ use crate::palette::{Palette, Tone};
 pub(super) const MOST_FAVORITES: usize = 12;
 
 use crate::tokens::palette::SHOWN;
-use crate::tokens::shell::{LIGHT_TILE, SPLIT_TILE_FAVICON};
+use crate::tokens::shell::SPLIT_TILE_FAVICON;
 
 /// Who shares the favorites, as Settings lists the choices. Each is the core's BC_FAVORITES_ value
 /// of the same name, which the bin checks at compile time.
@@ -894,21 +894,12 @@ impl Shell {
 }
 
 /// A tile's fill while it isn't shown, `hover` of the way to its hover fill: the ink's quiet plate
-/// on a dark window and white on a light one, a step firmer for a tab in Developer Mode.
+/// in both looks, a step firmer for a tab in Developer Mode.
 fn tile_fill(palette: &Palette, developer: bool, hover: f32) -> Hsla {
-    let (color, rest) = match palette.tone {
-        Tone::Dark => (palette.plate(1.), TILE),
-        Tone::Light => (gpui::white(), LIGHT_TILE),
-    };
-    let rest = if developer {
-        rest + DEVELOPER_TILE - TILE
-    } else {
-        rest
-    };
-    // The ladder's hover step over the resting plate, uncapped, as a light tile's white is
-    // already past the ladder's top.
+    let rest = if developer { DEVELOPER_TILE } else { TILE };
+    // The ladder's hover step over the resting plate.
     let under = rest + crate::palette::STATE_HOVERED * (1. - rest);
-    color.opacity(rest + (under - rest) * hover)
+    palette.plate(rest + (under - rest) * hover)
 }
 
 /// The selected tile's fill, ring width and ring: a colourful icon's ring is drawn with the blurred
