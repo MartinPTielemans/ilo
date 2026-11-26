@@ -1089,8 +1089,9 @@ pub trait Browser {
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
     /// Whether a picture of `tab` taken now could have been given to an agent, by the agents'
-    /// rules (Agents::keeps_picture), for a kept task's card. None is, without agents.
-    fn keeps_picture(&self, _tab: u64, _cx: &App) -> bool {
+    /// rules (Agents::keeps_picture_at), for a kept task's card, its page at `url`. None is,
+    /// without agents.
+    fn keeps_picture(&self, _tab: u64, _url: &str, _cx: &App) -> bool {
         false
     }
     /// The conversation of `agent`'s task took a picture of `tab`: `picture` if its card may keep
@@ -1166,12 +1167,6 @@ pub trait Browser {
         None
     }
     fn set_threads(&self, _on: bool, _cx: &mut App) {}
-    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
-    /// it, whatever the inside one says, or None in a build without the agents' server.
-    fn other_apps(&self, _cx: &App) -> Option<bool> {
-        None
-    }
-    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {

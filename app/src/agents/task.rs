@@ -150,6 +150,9 @@ pub struct Conversation {
     pub tabs: Vec<(u64, SharedString)>,
     /// The tab the agent is on while it works, whose picture has the Signal ring.
     pub on: Option<u64>,
+    /// Those of its pages the user took over, with nothing of the agent's waiting on them: each
+    /// theirs on its own row in the panel, whatever the live line is about.
+    pub held: Vec<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
     /// What the live line over the reply field says of it, read where its card's word is, so the
@@ -196,6 +199,16 @@ pub enum Live {
     },
     /// Its own question waits on the user, which the question's line says with its answers.
     Asked,
+}
+
+/// What the live line says of `tab`, a page of `tabs` the user holds: `site` names it while the
+/// task has more than one page.
+pub fn yours(tab: u64, tabs: &[(u64, SharedString)]) -> Live {
+    let site = (tabs.len() > 1)
+        .then(|| tabs.iter().find(|(each, _)| *each == tab))
+        .flatten()
+        .map(|(_, site)| tier::plain(site).into());
+    Live::Yours { tab, site }
 }
 
 /// A line of a task's conversation.
@@ -986,9 +999,9 @@ pub struct Tasks {
     /// What each kept task a run before left read back of its card, until a reply takes it up or
     /// it goes (pick_up.rs).
     came_back: HashMap<String, super::kept::cards::Back>,
-    /// The kept log of each task a run before left that was shown, asked once (None until it's
-    /// read, and for one with none), until a reply takes the task up or it goes.
-    came_logs: HashMap<String, Option<Vec<super::kept::log::Record>>>,
+    /// The kept log of each task a run before left that was shown or replied to, asked once,
+    /// which stays through its replies until the task goes (pick_up.rs).
+    came_logs: HashMap<String, pick_up::CameLog>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1248,6 +1261,18 @@ impl Agents {
     /// as it worked folded into its steps, so only the user's messages, the agent's questions and
     /// each turn's last message show.
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
+        self.conversation_with(agent, true, cx)
+    }
+
+    /// `agent`'s conversation, with its kept log drawn first where it has one and `kept` says,
+    /// or without it, as its next log is made: the earlier records go into that log as they were
+    /// read, never through what they draw (log_of.rs).
+    pub(super) fn conversation_with(
+        &self,
+        agent: &str,
+        kept: bool,
+        cx: &App,
+    ) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -1267,11 +1292,7 @@ impl Agents {
             (State::Asking { .. }, None) => Live::Asked,
             (_, Some(_)) => Live::Handed,
             _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
-            _ if let Some((tab, _)) = taken => Live::Yours {
-                tab: *tab,
-                site: (tabs.len() > 1)
-                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
-            },
+            _ if let Some((tab, _)) = taken => yours(*tab, &tabs),
             _ => Live::Working,
         };
         let working = task.state == State::Working;
@@ -1324,7 +1345,8 @@ impl Agents {
         // A task a run before left draws its kept log first, settled, under what was asked,
         // which heads it already (kept/log.rs).
         let mut kept_finished = Vec::new();
-        if let Some(log) = self.kept_log(task) {
+        let mut kept_lines = 0;
+        if let Some(log) = self.kept_log(task).filter(|_| kept) {
             let mut drawn = log_of::drawn(log);
             let asked = matches!(drawn.lines.first(), Some(Line::You(text)) if *text == task.asked);
             if asked {
@@ -1334,10 +1356,11 @@ impl Agents {
             kept_finished = (drawn.finished.into_iter())
                 .filter_map(|(at, when)| Some((at.checked_sub(past)?, when)))
                 .collect();
+            kept_lines = drawn.lines.len();
             lines.splice(0..0, drawn.lines);
         }
         // ilo's own lines of a task that can be replied to after it ended (#4105).
-        self.kept_lines(task, &mut lines);
+        self.kept_lines(task, &mut lines, kept_lines);
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -1357,6 +1380,10 @@ impl Agents {
         };
         let mut finished = finished(&task.messages, &lines);
         finished.splice(0..0, kept_finished);
+        let held = (tabs.iter())
+            .map(|(tab, _)| *tab)
+            .filter(|tab| self.taken_over(*tab))
+            .collect();
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.name.clone(),
@@ -1367,6 +1394,7 @@ impl Agents {
             lines,
             tabs,
             on,
+            held,
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
             live,
             open: open_label(&self.open_tabs(task, cx)),
@@ -3714,6 +3742,13 @@ impl Agents {
                 (Some(_), None) => fallback(&task.trace).unwrap_or_else(|| task.name.to_string()),
                 _ => task.title.to_string(),
             };
+            let end = match task.state {
+                State::Done { .. } => super::kept::End::Done,
+                State::Stopped => super::kept::End::Stopped,
+                State::Failed { .. } => super::kept::End::Failed,
+                State::Limit { .. } => super::kept::End::Limit,
+                State::Working | State::Asking { .. } => continue,
+            };
             let past = crate::agent_history::Past {
                 id: format!("{}-{}", task.agent, seconds(task.started)),
                 title,
@@ -3731,6 +3766,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                end: Some(end),
                 sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.

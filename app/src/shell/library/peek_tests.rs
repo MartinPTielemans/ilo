@@ -6,12 +6,10 @@ use std::rc::Rc;
 
 use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, point, px};
 
-use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, HEADING_BOTTOM,
-    HEADING_HEIGHT, HEADING_TOP,
-};
+use super::{ARCHIVE_TOP, Archived, COLUMN_WIDTH, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP};
 use crate::shell::recorder::Recorder;
 use crate::shell::{Folders, Section, Shell};
+use crate::tokens::shell::library::{HISTORY_PITCH, SEARCH_X};
 
 fn tab(id: u64, url: &str) -> Archived {
     Archived {
@@ -63,8 +61,8 @@ fn archive(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut Visual
 fn row(row: usize) -> gpui::Point<gpui::Pixels> {
     let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
     point(
-        px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
-        px(top + ARCHIVED_PITCH * (row as f32 + 0.5)),
+        px(COLUMN_WIDTH + SEARCH_X + 60.),
+        px(top + HISTORY_PITCH * (row as f32 + 0.5)),
     )
 }
 

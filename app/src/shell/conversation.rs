@@ -698,7 +698,9 @@ impl Shell {
     fn keeps_picture(&self, tab: u64, cx: &gpui::App) -> bool {
         let page = self.page(tab);
         let in_use = page.camera || page.microphone || page.sharing || page.shared;
-        !self.private && !in_use && self.browser.keeps_picture(tab, cx)
+        // The address goes with the question: this is asked inside the shell's own update, where
+        // nothing may read the shell for it.
+        !self.private && !in_use && self.browser.keeps_picture(tab, &page.url, cx)
     }
 
     /// Those of `tabs` whose picture taken now could be kept.
@@ -1617,6 +1619,11 @@ impl TalkView {
             }
             Live::Yours { tab, .. } if shown.stoppable && *tab == on => {
                 words::live(&shown.live).map(|said| RowCase::Yours(said.into()))
+            }
+            // A page the user took over is theirs on its own row, whatever the line is about.
+            _ if shown.stoppable && shown.held.contains(&on) => {
+                let yours = crate::agents::task::yours(on, &shown.tabs);
+                words::live(&yours).map(|said| RowCase::Yours(said.into()))
             }
             _ => None,
         };

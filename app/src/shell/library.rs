@@ -16,7 +16,7 @@ use gpui::{
     Entity, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, list, point, prelude::*, px, relative, rgba, svg,
+    canvas, div, img, list, point, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -148,7 +148,6 @@ use crate::tokens::shell::library::{
 };
 
 use super::recent_downloads::{come, progress, tile_glyph};
-use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::palette::{LIGHT_SHOWN, SHOWN};
 use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
@@ -159,6 +158,7 @@ use crate::tokens::shell::library::ARCHIVED_PITCH;
 use crate::tokens::shell::library::ARCHIVED_PLATE;
 use crate::tokens::shell::library::ARCHIVED_RADIUS;
 use crate::tokens::shell::library::ARCHIVED_RIGHT;
+use crate::tokens::shell::library::ARCHIVED_TEXT_END;
 use crate::tokens::shell::library::ARCHIVED_TEXT_X;
 use crate::tokens::shell::library::HEADING_BOTTOM;
 use crate::tokens::shell::library::HEADING_HEIGHT;
@@ -237,7 +237,7 @@ mod board_list;
 mod history_list;
 pub(super) mod keys;
 pub use history_list::Visited;
-use history_list::{History, Pointed, history_text, history_when};
+use history_list::{History, Pointed, history_time, history_when};
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
 /// its first.
@@ -357,6 +357,25 @@ const SHOW: &str = match super::OFF_THE_MAC {
     true => "Show in Folder",
     false => "Show in Finder",
 };
+
+/// A closed tab's button under the pointer, in its time's place, as drawn.
+const REOPEN: &str = "Reopen";
+
+/// A Library row's end button's fill at rest, under the pointer and pressed.
+fn end_fills(palette: &Palette) -> [Hsla; 3] {
+    [
+        palette.plate(BUTTON_PLATE),
+        palette.ground_plate(Ground::Library, STATE_HOVERED),
+        palette.ground_plate(Ground::Library, STATE_PRESSED),
+    ]
+}
+
+/// The ink of every word and glyph on a Library row's end button, a held file's Delete's too:
+/// the menus' red reads at 4.5 only on a menu's fill, and on the window nothing is red. Delete's
+/// menu item keeps the red.
+fn end_ink(palette: &Palette) -> Hsla {
+    palette.text(UNSELECTED_TITLE)
+}
 
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
@@ -2788,83 +2807,62 @@ impl Shell {
             &self.palette,
             self.page_favicons.get(&url).cloned().flatten(),
         );
-        // What the row is and when, and Little ilo's while others' are listed.
-        let (when, host) = match &self.library {
-            Some(library) => {
-                let twelve = crate::clock::twelve_hour();
-                (
-                    history_when(tab.archived, library.starts, twelve),
-                    host(&url),
-                )
-            }
-            None => (String::new(), host(&url)),
-        };
+        // When it closed, and in Little ilo while others' are listed; under the pointer, Reopen
+        // in its place, as drawn, which restores it as Open as Tab does.
         let named = self.library.as_ref().is_some_and(|library| library.named);
-        let about = SharedString::from(match tab.little && named {
-            true => format!("Closed {when} in a Little Window · {host}"),
-            false => format!("Closed {when} · {host}"),
-        });
+        let when = history_time(tab.archived, crate::clock::twelve_hour());
         let pointed = (self.library.as_ref())
             .is_some_and(|library| library.history.pointed == Some(Pointed::Closed(id)));
-        let trash = pointed.then(|| {
+        let mut end = match pointed {
+            true => vec![
+                (self.end_word(("archived-reopen", id), REOPEN))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.restore_archived(id, cx)
+                    }))
+                    .into_any_element(),
+            ],
+            false => vec![
+                self.history_end_words(
+                    match tab.little && named {
+                        true => format!("Closed {when} in a Little Window"),
+                        false => format!("Closed {when}"),
+                    }
+                    .into(),
+                ),
+            ],
+        };
+        end.extend(pointed.then(|| {
             let remove = move |shell: &mut Shell, cx: &mut Context<Shell>| {
                 // check.sh waits for this line.
                 log!("browser: remove archived {id}");
                 shell.delete_archived(id, cx)
             };
-            self.history_trash(("archived-trash", id), "Delete from Archive", remove, cx)
-        });
+            (self.history_trash(("archived-trash", id), "Delete from Archive", remove, cx))
+                .into_any_element()
+        }));
         // Where the row is, which History's visits newer than the tab move down (#2337).
         let drawn = (self.library.as_ref()).map(|library| {
             crate::settings_rows::drawn(format!("library archived {id}"), library.drawn.clone())
         });
-        div()
-            .h(px(ARCHIVED_PITCH))
-            .pl(px(ARCHIVED_LEFT))
-            .pr(px(ARCHIVED_RIGHT))
-            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
-            .child(
-                div()
-                    .id(("archived", id))
-                    .map(|plate| self.library_row(plate, row, 0, ARCHIVED_RADIUS))
-                    .size_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .rounded(px(ARCHIVED_RADIUS))
-                    .block_mouse_except_scroll()
-                    .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
-                        shell.point_history(Pointed::Closed(id), *hovered, cx)
-                    }))
-                    .hover(|style| {
-                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
-                    })
-                    .active(|style| {
-                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
-                    })
-                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
-                        shell.open_archived(id, event.position(), event.modifiers(), cx)
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                            shell.archived_menu(id, event.position, cx)
-                        }),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(ARCHIVED_FAVICON_X))
-                            .top_0()
-                            .bottom_0()
-                            .flex()
-                            .items_center()
-                            .child(icon),
-                    )
-                    .child(history_text(title, about, trash.is_some(), &self.palette))
-                    .children(trash)
-                    .children(drawn),
+        let plate = div()
+            .id(("archived", id))
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                shell.point_history(Pointed::Closed(id), *hovered, cx)
+            }))
+            .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
+            .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
+            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                shell.open_archived(id, event.position(), event.modifiers(), cx)
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    shell.archived_menu(id, event.position, cx)
+                }),
             )
+            .children(drawn);
+        self.history_row(plate, row, icon, title, end, pointed)
             .into_any_element()
     }
 
@@ -3015,14 +3013,14 @@ impl Shell {
             crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
         });
         let group: SharedString = format!("past-{index}").into();
-        // When it ended, as History's rows say when, under the same headings.
-        let when = (self.library.as_ref()).map(|library| {
-            // The Library's times are milliseconds.
-            let ended = past.ended as f64 * 1000.;
-            history_when(ended, library.starts, crate::clock::twelve_hour())
-        });
-        let about = SharedString::from(past.about(&when.unwrap_or_default()));
-        let mark = self.status_mark(crate::agents::task::Dot::Done);
+        // How its last turn ended and when, as its card and Settings say it (W4), and no more.
+        let about = SharedString::from(past.ended(&crate::agents::time_or_day(past.ended)));
+        // Its mark says the same: a tick for one done, the ring of one that ended otherwise.
+        let dot = match past.end {
+            Some(crate::agents::kept::End::Done) | None => crate::agents::task::Dot::Done,
+            Some(_) => crate::agents::task::Dot::Ended,
+        };
+        let mark = self.status_mark(dot);
         let close = div()
             .id(("past-delete", index))
             .absolute()
@@ -4185,6 +4183,38 @@ impl Shell {
             .into_any_element()
     }
 
+    /// A button at a Library row's end, as drawn: 26 high, radius 8, in `button`. Its press is its
+    /// own, not the row's, which would open what the row lists.
+    fn end_button(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .when(self.a11y, |button| button.button_named(label))
+            .flex_none()
+            .h(px(DOWNLOAD_BUTTON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(DOWNLOAD_BUTTON_RADIUS))
+            .map(|button| {
+                let [rest, hovered, pressed] = end_fills(&self.palette);
+                button
+                    .bg(rest)
+                    .hover(move |style| style.bg(hovered))
+                    .active(move |style| style.bg(pressed))
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    }
+
+    /// An `end_button` with its `label` in words, 10 either side, medium, 12, in `end_ink`.
+    fn end_word(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
+        self.end_button(id, label)
+            .px(px(DOWNLOAD_BUTTON_PAD))
+            .text_size(px(DOWNLOAD_BUTTON_TEXT))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(end_ink(&self.palette))
+            .child(label)
+    }
+
     /// The buttons at the end of a download's row: Pause or Resume while it comes, Keep and Delete
     /// while the browser holds it, and under the pointer the folder it's in and More, its menu,
     /// for one that's done, or More alone for the rest. Each is a press of its own, not the
@@ -4197,36 +4227,14 @@ impl Shell {
         filed: bool,
         cx: &mut Context<Self>,
     ) -> Vec<Stateful<Div>> {
-        let ink = self.palette.text(UNSELECTED_TITLE);
-        let button = |name: &'static str, label: &'static str| {
-            div()
-                .id((name, id))
-                .when(self.a11y, |button| button.button_named(label))
-                .flex_none()
-                .h(px(DOWNLOAD_BUTTON))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(DOWNLOAD_BUTTON_RADIUS))
-                .bg(self.palette.plate(BUTTON_PLATE))
-                .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
-                .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
-                // Not the row's press, which would open the file or drag it out.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
+        let ink = end_ink(&self.palette);
+        let button = |name: &'static str, label: &'static str| self.end_button((name, id), label);
         let glyph = |name, label, path: &'static str, size: f32| {
             button(name, label)
                 .w(px(DOWNLOAD_BUTTON))
                 .child(svg().path(path).size(px(size)).text_color(ink))
         };
-        let word = |name, label: &'static str, color: Hsla| {
-            button(name, label)
-                .px(px(DOWNLOAD_BUTTON_PAD))
-                .text_size(px(DOWNLOAD_BUTTON_TEXT))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(color)
-                .child(label)
-        };
+        let word = |name: &'static str, label: &'static str| self.end_word((name, id), label);
         let act = |action| {
             cx.listener(move |shell: &mut Shell, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -4245,16 +4253,10 @@ impl Shell {
         }));
         let pointed = self.download_pointed == Some(id);
         match state {
-            _ if held => {
-                let delete = self
-                    .palette
-                    .toned(rgba(DARK_DESTRUCTIVE), rgba(LIGHT_DESTRUCTIVE));
-                vec![
-                    word("download-keep", "Keep", ink).on_click(act(DownloadAction::Keep)),
-                    word("download-delete", "Delete", delete.into())
-                        .on_click(act(DownloadAction::Remove)),
-                ]
-            }
+            _ if held => vec![
+                word("download-keep", "Keep").on_click(act(DownloadAction::Keep)),
+                word("download-delete", "Delete").on_click(act(DownloadAction::Remove)),
+            ],
             DownloadState::Running => vec![
                 glyph(
                     "download-pause",
@@ -4779,8 +4781,8 @@ mod tests {
         FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
         LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST, SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
         SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, day_heading,
-        download_menu_items, downloads_progress, history_list, library_band, list_width,
-        media_tile, panel_at_rest, past_end, plus_x, receded_opacity, spaces_width,
+        download_menu_items, downloads_progress, end_fills, end_ink, history_list, library_band,
+        list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity, spaces_width,
     };
     use std::rc::Rc;
 
@@ -5812,6 +5814,57 @@ mod tests {
             assert!(!trashes(state, true));
         }
         assert!(!trashes(Done, true));
+    }
+
+    /// A held file's Delete is red only in its menu. On its button it's in the ink Keep is in,
+    /// which reads better there than the menus' red would at every level, in both looks, at
+    /// rest, under the pointer and pressed, over a black and a white backdrop; the red reads
+    /// under 4.5 on each.
+    #[test]
+    fn a_held_file_s_delete_is_red_only_in_its_menu() {
+        use crate::palette::{Palette, Tone, contrast, over, set_transparency};
+        use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+        use crate::transparency::Transparency;
+        let menu = download_menu_items(&download(DownloadState::Done, true), true);
+        let delete = menu
+            .iter()
+            .find(|(entry, _)| entry.title.as_ref() == "Delete");
+        assert!(delete.is_some_and(|(entry, _)| entry.destructive));
+        for level in Transparency::ALL {
+            set_transparency(level);
+            for tone in [Tone::Dark, Tone::Light] {
+                let palette = Palette::of(None, tone);
+                let mut window = Vec::new();
+                for foot in 0..=4 {
+                    for far in 0..=4 {
+                        window.extend(palette.window_at(foot as f32 / 4., far as f32 / 4.));
+                    }
+                }
+                let red = gpui::Rgba::from(
+                    palette.toned(gpui::rgba(DARK_DESTRUCTIVE), gpui::rgba(LIGHT_DESTRUCTIVE)),
+                );
+                let ink = gpui::Rgba::from(end_ink(&palette));
+                for (state, fill) in ["at rest", "under the pointer", "pressed"]
+                    .into_iter()
+                    .zip(end_fills(&palette))
+                {
+                    let fill = gpui::Rgba::from(fill);
+                    let worst = |word: gpui::Rgba| {
+                        (window.iter())
+                            .map(|&at| over(at, fill, fill.a))
+                            .map(|under| contrast(over(under, word, word.a), under))
+                            .fold(f32::MAX, f32::min)
+                    };
+                    let (ink, red) = (worst(ink), worst(red));
+                    assert!(
+                        red < 4.5 && ink > red,
+                        "{level:?}, {tone:?}, {state}: Delete's ink reads {ink:.2}:1 on its \
+                         button and the menus' red {red:.2}:1"
+                    );
+                }
+            }
+        }
+        set_transparency(Transparency::Standard);
     }
 
     fn running(received: i64, total: i64) -> Download {

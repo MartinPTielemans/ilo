@@ -35,7 +35,7 @@ if windows; then
   in_browser RenderWidgetHostViewCocoa \
     "a click on the page once the window was back from minimized didn't give it the keyboard"
   page_shortcut , settings
-  expect '^browser: settings shown General$' "⌘, from the page didn't show Settings on its General tab"
+  settings_on_general "⌘, from the page didn't show Settings"
   settings_drew General
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -60,7 +60,7 @@ $(grep '^browser: menu shown' "$log" | tail -1)"
   send key down
   send key return
   expect '^browser: command settings via footer$' "down and return in the menu control's menu didn't run Settings…"
-  expect '^browser: settings shown General$' "Settings… from the menu control didn't show Settings on its General tab"
+  settings_on_general "Settings… from the menu control didn't show Settings"
   settings_drew General
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings shown from the menu control"

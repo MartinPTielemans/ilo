@@ -83,7 +83,7 @@ none_since 'browser: battery saver on at 18%' "$eighteen" ||
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
 # back, below 20% on battery.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_on_general "Settings… didn't show Settings"
 settings_drew General
 send clickkey $(drawn "toolbar Tabs & Spaces")
 expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"

@@ -248,7 +248,27 @@ pub fn write(
     picture: &Picture,
     log: Option<&str>,
 ) -> bool {
-    if line.is_none() && log.is_none() && matches!(picture, Picture::Remove) {
+    write_files(root, id, line, picture, Some(log))
+}
+
+/// What a card's write does with its log: writes it, removes the one there, or leaves that one
+/// as it is, as a thread whose earlier log and new turn won't fit together under the cap does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Log {
+    Write(String),
+    Remove,
+    Leave,
+}
+
+/// `write`, with the log left as it is where `log` is None.
+fn write_files(
+    root: &Path,
+    id: &CardId,
+    line: Option<&str>,
+    picture: &Picture,
+    log: Option<Option<&str>>,
+) -> bool {
+    if line.is_none() && log == Some(None) && matches!(picture, Picture::Remove) {
         remove(root, id);
         return true;
     }
@@ -270,7 +290,7 @@ pub fn write(
         Picture::Taken(image) => Some(pixels(image).as_ref().and_then(png)),
     };
     let line = Some(line.map(|line| line.as_bytes().to_vec()));
-    let log = Some(log.map(|log| log.as_bytes().to_vec()));
+    let log = log.map(|log| log.map(|log| log.as_bytes().to_vec()));
     let mut written = true;
     for (file, bytes) in [
         (File::Line, line),
@@ -405,8 +425,8 @@ pub enum Job {
         id: CardId,
         line: Option<String>,
         picture: Picture,
-        /// Its log as the file holds it (log.rs), or None for none.
-        log: Option<String>,
+        /// Its log as the file holds it (log.rs), none, or the one there as it is.
+        log: Log,
     },
     /// Threads gone for good: `remove`, each.
     Remove(PathBuf, Vec<CardId>),
@@ -438,7 +458,14 @@ impl Job {
                 line,
                 picture,
                 log,
-            } => _ = write(&root, &id, line.as_deref(), &picture, log.as_deref()),
+            } => {
+                let log = match &log {
+                    Log::Write(log) => Some(Some(log.as_str())),
+                    Log::Remove => Some(None),
+                    Log::Leave => None,
+                };
+                _ = write_files(&root, &id, line.as_deref(), &picture, log)
+            }
             Job::Remove(root, ids) => {
                 for id in &ids {
                     remove(&root, id);

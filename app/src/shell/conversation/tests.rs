@@ -105,6 +105,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         })],
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
+        held: Vec::new(),
         stoppable: true,
         live: Default::default(),
         open: None,
@@ -232,6 +233,92 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
     assert!(
         host.take().contains(&"task picture 30".to_string()),
         "the conversation wasn't sent"
+    );
+}
+
+/// Task-1's conversation shown, its page 30 its card's last and one whose picture the agents'
+/// rules let a kept card keep.
+fn kept_card_shown(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(card, cx);
+    host.keeps.borrow_mut().insert(30);
+    (shell, host, cx)
+}
+
+/// Whether a kept card may keep a page's picture is the agents' rules', asked as the
+/// conversation the Agents send is set, inside the shell's change, so the question carries the
+/// page's address. Looked up from the shell there, the app went down at the first thread opened
+/// by its card.
+#[gpui::test]
+fn the_agents_send_a_conversation_whose_pictures_are_judged_before_its_shell_changes(
+    cx: &mut TestAppContext,
+) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    let weak = shell.downgrade();
+    cx.update(|_, cx| {
+        let made = |agent: &str, _: &gpui::App| (agent == "task-1").then(|| conversation(1));
+        super::super::send_agents(
+            Vec::new(),
+            vec![card()],
+            Vec::new(),
+            Vec::new(),
+            made,
+            &[weak.clone()],
+            cx,
+        );
+    });
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the conversation wasn't sent"
+    );
+}
+
+/// A picture the conversation asked for comes while the shell changes, as the core answers in
+/// the shell's update: whether its card may keep it is still judged, without reading the shell,
+/// and the card is told.
+#[gpui::test]
+fn a_picture_that_comes_is_judged_for_its_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let request = picture_request(&shell, 30, cx);
+    host.reads_shell(shell.downgrade());
+    shell.update(cx, |shell, cx| {
+        let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+        shell.page_pictured(request, picture, cx)
+    });
+    assert_eq!(
+        host.card_pictures.borrow_mut().pop(),
+        Some(("task-1".into(), 30, true))
+    );
+}
+
+/// A page watched over the conversation goes back into its picture after its pages changed: the
+/// pictures taken again are judged for the card from inside the shell's change, without reading
+/// the shell.
+#[gpui::test]
+fn pictures_taken_again_are_judged_for_the_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |view, _| view.stale = true);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    shell.update(cx, |shell, cx| shell.retake_talk_pictures(cx));
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the pictures weren't taken again"
     );
 }
 
@@ -3635,6 +3722,162 @@ fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
     );
 }
 
+/// Where the page row's Take Over and Hand Back were drawn last, after the panel draws again.
+fn row_buttons_drawn(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    Vec<gpui::Bounds<gpui::Pixels>>,
+    Option<gpui::Bounds<gpui::Pixels>>,
+) {
+    view.update(cx, |view, cx| {
+        view.take_over_drawn.borrow_mut().clear();
+        view.hand_back_drawn.set(None);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        (
+            view.take_over_drawn.borrow().clone(),
+            view.hand_back_drawn.get(),
+        )
+    })
+}
+
+/// Standing on page 30, which the user took over, while the thread's line is `live` about another
+/// of its pages (31, the one it's `on` if any): the row is theirs, with the line's words for a
+/// page held, Hand Back is drawn and Take Over isn't, and the press hands that page back by the
+/// strip's own road.
+fn yours_on_a_held_page(live: Live, on: Option<u64>, cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tabs: Vec<(u64, gpui::SharedString)> =
+        vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())];
+    let split = Conversation {
+        tabs: tabs.clone(),
+        on,
+        held: vec![30],
+        live: live.clone(),
+        ..conversation(3)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(split), cx));
+    watch_page(&shell, cx);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    let yours = crate::agents::task::yours(30, &tabs);
+    let said = super::words::live(&yours).expect("words for a page the user has");
+    assert_eq!(
+        row.case,
+        Some(super::RowCase::Yours(said.into())),
+        "{live:?}"
+    );
+    let (take_over, hand_back) = row_buttons_drawn(&view, cx);
+    assert!(
+        take_over.is_empty(),
+        "Take Over on a page the user has: {live:?}"
+    );
+    let hand_back = hand_back.expect("no Hand Back in the page's row");
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"], "{live:?}");
+    let stop = shell.read_with(cx, |shell, cx| shell.page_row_shown(30, cx));
+    let stop = stop.case.map(|case| case.button());
+    assert_eq!(stop, Some(crate::shell::page_ends::StripStop::HandBack));
+}
+
+/// A page the user took over is theirs on its row while the thread works on another.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_the_thread_works_on_another(
+    cx: &mut TestAppContext,
+) {
+    yours_on_a_held_page(Live::Working, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while another page's hand-off waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_another_is_handed(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Handed, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while the thread's question waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_question_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Asked, None, cx);
+}
+
+/// A page the user took over is theirs on its row while a refused step on another waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_refusal_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Refused, Some(31), cx);
+}
+
+/// Standing on the page an agent handed the user, the hand-off's own line has its Hand Back and
+/// the row draws none: it isn't a page the user took over.
+#[gpui::test]
+fn a_hand_offs_own_page_draws_no_second_hand_back(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let handed = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        on: Some(30),
+        held: Vec::new(),
+        live: Live::Handed,
+        ..conversation(3)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(handed), cx));
+    watch_page(&shell, cx);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    assert!(
+        !matches!(row.case, Some(super::RowCase::Yours(_))),
+        "{:?}",
+        row.case
+    );
+    assert_eq!(row_buttons_drawn(&view, cx).1, None, "a second Hand Back");
+}
+
+/// Standing on a page the user doesn't hold, while they hold another of the thread's, the row
+/// isn't theirs: no Hand Back for the page stood on.
+#[gpui::test]
+fn the_panels_page_row_isnt_yours_on_a_page_not_held(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tabs: Vec<(u64, gpui::SharedString)> = vec![
+        (30, "skyscanner.net".into()),
+        (31, "maat.pt".into()),
+        (32, "ccb.pt".into()),
+    ];
+    let working = Conversation {
+        tabs: tabs.clone(),
+        on: Some(32),
+        held: vec![31],
+        ..conversation(3)
+    };
+    let theirs = Conversation {
+        tabs,
+        on: None,
+        held: vec![31],
+        live: Live::Yours {
+            tab: 31,
+            site: Some("maat.pt".into()),
+        },
+        ..conversation(3)
+    };
+    for talk in [working, theirs] {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        watch_page(&shell, cx);
+        let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+        assert!(
+            !matches!(row.case, Some(super::RowCase::Yours(_))),
+            "{:?}",
+            row.case
+        );
+        assert_eq!(
+            row_buttons_drawn(&view, cx).1,
+            None,
+            "Hand Back on a page not held"
+        );
+    }
+}
+
 /// A thread's `primary`, under the round Stop and the held step's first button, is the same in
 /// every Space's colour, one per look, its words readable on it: never the Space's accent, so no
 /// control is green.
@@ -3806,6 +4049,38 @@ fn standing_with(
     redraw(&shell, &view, cx);
     assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
     (shell, host, view, cx)
+}
+
+/// Standing on one of the thread's pages, the panel head's button of its other page stands on that
+/// one at once. Its press runs in the panel's own update, as here, so nothing the shell does for it
+/// may read the panel.
+#[gpui::test]
+fn the_panel_heads_button_of_its_other_page_stands_on_it(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        ..conversation(3)
+    };
+    let (shell, host, view, cx) = standing_with(card(), talk, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    redraw(&shell, &view, cx);
+    host.take();
+    // As the button's listener does: the stand runs inside the panel's own update.
+    view.update(cx, |view, cx| view.stand(31, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
+    );
+    assert!(host.take().contains(&"select 31".to_string()));
 }
 
 fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {

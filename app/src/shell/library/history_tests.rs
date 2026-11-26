@@ -8,15 +8,15 @@ use std::rc::Rc;
 use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
-use super::history_list::history_text_end;
 use super::{
-    ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived,
-    COLUMN_WIDTH, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP,
-    Item, LIBRARY_WIDTH, Pointed, SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, Visited, history_when,
+    ARCHIVE_TOP, ARCHIVE_WIDTH, Archived, COLUMN_WIDTH, FILTER_CHEVRON, FILTER_PAD_RIGHT,
+    HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH, Pointed, SEARCH_HEIGHT,
+    SEARCH_RIGHT, SEARCH_TOP, Visited, history_when,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::{Command, Folders, Section, Shell, recorder::Recorder};
-use crate::tokens::shell::{CLOSE_RIGHT, CLOSE_SIZE};
+use crate::tokens::shell::CLOSE_SIZE;
+use crate::tokens::shell::library::{HISTORY_GAP, HISTORY_PITCH, HISTORY_POINTED_RIGHT, SEARCH_X};
 
 /// The profile of the window's Space.
 const PROFILE: u64 = 7;
@@ -160,8 +160,8 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
 fn row(row: usize) -> gpui::Point<gpui::Pixels> {
     let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
     point(
-        px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
-        px(top + ARCHIVED_PITCH * (row as f32 + 0.5)),
+        px(COLUMN_WIDTH + SEARCH_X + 60.),
+        px(top + HISTORY_PITCH * (row as f32 + 0.5)),
     )
 }
 
@@ -659,6 +659,7 @@ fn past(agent: &str, started: u64, ended: u64, pages: &[&str]) -> Past {
         messages: 0,
         steps: Vec::new(),
         answers: String::new(),
+        end: None,
         sorted: None,
     }
 }
@@ -808,17 +809,16 @@ fn a_click_on_a_visited_page_opens_it_in_peek(cx: &mut TestAppContext) {
     assert!(!library_open(&shell, cx));
 }
 
-/// Where a History row's trash is, at the end of the list's `row`th row, as the sidebar's ✕ is
-/// at the end of a tab's.
+/// Where a History row's trash is, at the end of the list's `row`th row under the pointer.
 fn trash(
     shell: &Entity<Shell>,
     row: usize,
     cx: &mut VisualTestContext,
 ) -> gpui::Point<gpui::Pixels> {
     let end = shell.read_with(cx, |shell, _| {
-        shell.library_x() + LIBRARY_WIDTH - ARCHIVED_RIGHT
+        shell.library_x() + LIBRARY_WIDTH - SEARCH_RIGHT - HISTORY_POINTED_RIGHT
     });
-    point(px(end - CLOSE_RIGHT - CLOSE_SIZE / 2.), self::row(row).y)
+    point(px(end - CLOSE_SIZE / 2.), self::row(row).y)
 }
 
 fn pointed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Pointed> {
@@ -866,22 +866,26 @@ fn a_closed_tabs_trash_shows_under_the_pointer(cx: &mut TestAppContext) {
     assert!(library_open(&shell, cx));
 }
 
-/// A long title has the row's whole width at rest, running over the trash's place, and truncates 4
-/// before the trash only while the trash shows, as a tab row's title does before its ✕ (the
-/// orchestrator's call 2 on #2337, 11-14).
-#[test]
-fn a_title_has_the_trashs_room_until_the_trash_shows() {
-    let trash_start = CLOSE_RIGHT + CLOSE_SIZE;
-    let at_rest = history_text_end(false);
-    assert!(
-        at_rest < trash_start,
-        "at rest a title ends {at_rest} from the row's end, short of the trash's place, which starts {trash_start} from it"
-    );
-    assert_eq!(
-        history_text_end(true),
-        trash_start + 4.,
-        "while the trash shows, a title ends 4 before it"
-    );
+/// A closed tab under the pointer has Reopen in its time's place, before its trash, as drawn,
+/// which restores it as Open as Tab does and closes the Library.
+#[gpui::test]
+fn a_closed_tab_under_the_pointer_reopens(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, Vec::new(), false, cx);
+    cx.simulate_mouse_move(row(0), None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(pointed(&shell, cx), Some(Pointed::Closed(5)));
+    // Just inside Reopen's end, which is the gap before the trash.
+    let trash = trash(&shell, 0, cx);
+    let reopen = point(trash.x - px(CLOSE_SIZE / 2. + HISTORY_GAP + 4.), trash.y);
+    cx.simulate_mouse_move(reopen, None, Modifiers::none());
+    next_frame(cx);
+    made(&host);
+    cx.simulate_click(reopen, Modifiers::none());
+    assert_eq!(made(&host), ["restore archived 5"]);
+    assert!(!library_open(&shell, cx));
 }
 
 /// A visited page's trash removes its visits that day, and its row goes at once.

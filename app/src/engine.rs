@@ -661,7 +661,8 @@ impl Browser for Engine {
     }
 
     fn ask_again(&self, asked: SharedString, cx: &mut App) {
-        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
+        // The bar's ask reads the front window's Shell, which asks this inside its own update.
+        cx.defer(move |cx| with_overlays(move |cx| command_bar::ask_again(asked, cx), cx));
     }
 
     fn show_task(&self, agent: SharedString, _: &mut App) {
@@ -673,8 +674,8 @@ impl Browser for Engine {
         });
     }
 
-    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
-        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    fn keeps_picture(&self, tab: u64, url: &str, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture_at(tab, url))
     }
 
     fn card_pictured(
@@ -2187,16 +2188,6 @@ impl Browser for Engine {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
-        }
-    }
-
-    fn other_apps(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
-    }
-
-    fn set_other_apps(&self, on: bool, cx: &mut App) {
-        if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
         }
     }
 

@@ -1447,6 +1447,85 @@ mod tests {
             assert!(name.ends_with(place), "{name}");
         }
     }
+
+    /// Threads' Notify as Settings lays a setting out (its line_row), in the page's column at
+    /// Settings' least width: the window's, less the sidebar, the plane's margin and the page's
+    /// sides.
+    struct NotifyRow;
+
+    impl Render for NotifyRow {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            use crate::needs_you::{Notify, WHEN_TO_NOTIFY};
+            use crate::tokens::settings::form::{PANEL_MARGIN, SIDEBAR};
+            use crate::tokens::settings::{MIN_WIDTH, PAGE_X};
+            let look = Look::settings(true);
+            let choices = Notify::ALL.map(|notify| SharedString::from(notify.title()));
+            let a11y = window.is_a11y_active();
+            let track = segmented(&look, "notify", &choices, Some(0), a11y, |_, each| each);
+            let page = MIN_WIDTH - SIDEBAR - PANEL_MARGIN - 2. * PAGE_X;
+            div().w(px(page)).child(
+                frame()
+                    .child(text(&look, WHEN_TO_NOTIFY, None))
+                    .child(end([track.into_any_element()])),
+            )
+        }
+    }
+
+    /// At Settings' least width, every one of Notify's values is drawn whole, its segment as wide
+    /// as its words and inside the row, and an assistive app reads each whole. Where each was
+    /// drawn is read from what the assistive app is told, which a release build keeps too.
+    #[gpui::test]
+    fn every_notify_value_is_whole_at_the_least_width(cx: &mut gpui::TestAppContext) {
+        use crate::needs_you::Notify;
+        use crate::tokens::settings::form::{PANEL_MARGIN, SIDEBAR};
+        use crate::tokens::settings::{MIN_HEIGHT, MIN_WIDTH, PAGE_X};
+        use gpui::accesskit::Role;
+        let (_, cx) = cx.add_window_view(|_, _| NotifyRow);
+        cx.simulate_resize(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT)));
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let page = MIN_WIDTH - SIDEBAR - PANEL_MARGIN - 2. * PAGE_X;
+        let scale = cx.update(|window, _| f64::from(window.scale_factor()));
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let segments: Vec<(String, f32, f32)> = (tree.nodes.iter())
+            .filter(|(_, node)| node.role() == Role::RadioButton)
+            .map(|(_, node)| {
+                let at = node.bounds().expect("a segment with no bounds");
+                let name = node.label().unwrap_or_default().to_string();
+                (
+                    name,
+                    ((at.x1 - at.x0) / scale) as f32,
+                    (at.x1 / scale) as f32,
+                )
+            })
+            .collect();
+        let said: Vec<&str> = segments.iter().map(|(name, ..)| name.as_str()).collect();
+        assert_eq!(said, Notify::ALL.map(Notify::title));
+        for (words, width, right) in &segments {
+            let wide = cx.update(|window, _| {
+                let run = window.text_style().to_run(words.len());
+                let line = window.text_system().shape_line(
+                    words.clone().into(),
+                    px(SEGMENT_TEXT),
+                    &[run],
+                    None,
+                );
+                f32::from(line.width)
+            });
+            assert!(
+                *width + 0.5 >= wide + 2. * SEGMENT_X,
+                "{words} needs {wide} and has {width}"
+            );
+            assert!(
+                *right <= page - ROW_X + 0.5,
+                "{words} runs past its row, to {right}"
+            );
+        }
+    }
 }
 
 /// What an assistive app finds of a Settings view drawn in a test's window, once one asks: each
