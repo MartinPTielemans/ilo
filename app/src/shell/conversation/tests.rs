@@ -3257,6 +3257,47 @@ fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
     assert_eq!(size(&card(), cx), None, "a plate with no picture");
 }
 
+/// A kept card's picture that came back goes to the pass that frees pictures from the window's
+/// atlas once no card holds it: when its task is replied to and runs again, or when the card is
+/// removed. Every window is given the cards, so every window that drew it lets it go.
+#[gpui::test]
+fn a_kept_cards_picture_goes_when_its_card_does(cx: &mut TestAppContext) {
+    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+    let plate = crate::agents::kept::cards::Plate {
+        image: image.clone(),
+        size: (3, 2),
+    };
+    let kept = Card {
+        kept_picture: Some(plate),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(kept.clone(), cx);
+    // What the cards' change hands on, read before the next frame lets it go.
+    let freed = |cards: Vec<Card>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.stale_pictures.clear();
+            shell.set_task_cards(cards, cx);
+            (shell.stale_pictures.iter()).any(|stale| std::sync::Arc::ptr_eq(stale, &image))
+        })
+    };
+    let retitled = Card {
+        title: "Still kept".into(),
+        ..kept.clone()
+    };
+    assert!(
+        !freed(vec![retitled.clone()], cx),
+        "a card that still holds it"
+    );
+    let replied = Card {
+        kept_picture: None,
+        ..retitled.clone()
+    };
+    assert!(freed(vec![replied], cx), "a reply");
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![retitled], cx));
+    assert!(freed(Vec::new(), cx), "Remove or Remove All");
+}
+
 /// A picture the conversation takes goes to its task's kept card only if it could have been
 /// given to an agent both when it was asked and when it came: by the agents' rules, and not while
 /// the page uses the camera or the microphone, shares a screen, window or tab, or is captured. A
