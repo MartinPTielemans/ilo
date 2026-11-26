@@ -2150,7 +2150,7 @@ impl Browser for Recorder {
         self.record(format!("ask again {asked}"));
     }
 
-    fn keeps_picture(&self, tab: u64, _: &App) -> bool {
+    fn keeps_picture(&self, tab: u64, _: &str, _: &App) -> bool {
         self.keeps.borrow().contains(&tab)
     }
 

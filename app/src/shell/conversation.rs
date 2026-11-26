@@ -727,7 +727,9 @@ impl Shell {
     fn keeps_picture(&self, tab: u64, cx: &gpui::App) -> bool {
         let page = self.page(tab);
         let in_use = page.camera || page.microphone || page.sharing || page.shared;
-        !self.private && !in_use && self.browser.keeps_picture(tab, cx)
+        // The address goes with the question: this is asked inside the shell's own update, where
+        // nothing may read the shell for it.
+        !self.private && !in_use && self.browser.keeps_picture(tab, &page.url, cx)
     }
 
     /// Those of `tabs` whose picture taken now could be kept.

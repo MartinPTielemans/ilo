@@ -697,8 +697,8 @@ impl Browser for Engine {
         agents_core::update(|_, cx| cx.notify());
     }
 
-    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
-        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    fn keeps_picture(&self, tab: u64, url: &str, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture_at(tab, url))
     }
 
     fn card_pictured(
