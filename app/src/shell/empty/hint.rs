@@ -73,7 +73,10 @@ impl Shell {
     /// across, with no tasks under the field, as first run's exit lands its knot there: its top
     /// left. The page's frame comes from the sidebar's kept width and side, which first run's
     /// window doesn't draw, so nothing is drawn or measured for it.
-    pub(in crate::shell) fn landing_mark(&self, viewport: gpui::Size<gpui::Pixels>) -> Option<(f32, f32)> {
+    pub(in crate::shell) fn landing_mark(
+        &self,
+        viewport: gpui::Size<gpui::Pixels>,
+    ) -> Option<(f32, f32)> {
         let (frame, _) = self.page_frame(viewport);
         let (left, top) = (f32::from(frame.left()), f32::from(frame.top()));
         let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));

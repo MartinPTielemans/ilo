@@ -237,7 +237,7 @@ impl Switch {
 
 /// How long the exit takes where the host doesn't grow first run's window.
 #[cfg(test)]
-const END_FADE: f32 = exit::CROSS_FADE_EXIT;
+const END_FADE: f32 = crate::tokens::shell::onboarding::exit::CROSS_FADE;
 
 /// The account isn't signed in, only waiting perhaps for the sign-in window, as the core said last,
 /// or before it has said.
@@ -1379,6 +1379,7 @@ impl Shell {
         let glass = self.blurred;
         let still = crate::motion::still(cx);
         let landing = self.landing_mark(window.viewport_size());
+        let window_tint = self.window_tint();
         let onboarding = self.onboarding.as_mut()?;
         let exiting = onboarding.exit_clock(window.is_visible());
         let ended = exiting.is_some_and(|at| at >= onboarding.exit_length(still));
@@ -1550,9 +1551,10 @@ impl Shell {
         });
         let opacity = exit.as_ref().map_or(1., |exit| exit.card);
         let content_opacity = content_opacity * exit.as_ref().map_or(1., |exit| exit.content);
-        let exit_knot = exit.as_ref().and_then(|exit| exit.knot).map(|(size, x, y)| {
-            card::at(x, y).child(card::whole_knot(size, inks.text(1.)))
-        });
+        let exit_knot = exit
+            .as_ref()
+            .and_then(|exit| exit.knot)
+            .map(|(size, x, y)| card::at(x, y).child(card::whole_knot(size, inks.text(1.))));
         let (x, y, w, h, radius) = plate;
         let ends_entry = onboarding.entry.is_some();
         Some(
@@ -1575,7 +1577,9 @@ impl Shell {
                         .w(px(w))
                         .h(px(h))
                         .rounded(px(radius))
-                        .bg(inks.fill(glass))
+                        .bg(exit.as_ref().map_or(inks.fill(glass), |exit| {
+                            exit::crossed(inks.fill(glass), window_tint, exit.tint)
+                        }))
                         .border_1()
                         .border_color(inks.rim()),
                 )

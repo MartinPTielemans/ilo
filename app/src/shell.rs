@@ -172,7 +172,6 @@ mod undo;
 mod update_banner;
 
 pub use assets::Assets;
-pub use empty::field_typed;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
 pub use broom::Broom;
@@ -195,6 +194,7 @@ pub use commands::{
 pub use display_face::{display_text, display_text_weighted};
 pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::{Elsewhere, PlayReady};
+pub use empty::field_typed;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
