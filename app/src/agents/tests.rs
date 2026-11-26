@@ -8470,7 +8470,6 @@ mod tasks {
     /// you" lead it, which the card sets heavier.
     #[gpui::test]
     fn a_cards_status_says_how_far_its_task_has_got(cx: &mut TestAppContext) {
-        use crate::agents::task::status_lead;
         let (agents, browser) = ready(None, cx);
         let agent = start(&agents, "Use the coupon", cx);
         agents.update(cx, |agents, _| {
@@ -8478,7 +8477,7 @@ mod tasks {
         });
         let status = |cx: &mut TestAppContext| card_of(&agents, cx).status.to_string();
         assert_eq!(status(cx), "Thinking · no steps yet");
-        assert_eq!(status_lead(&status(cx)), 0);
+        assert_eq!(card_of(&agents, cx).lead, 0);
         browser
             .tabs
             .borrow_mut()
@@ -8505,7 +8504,7 @@ mod tasks {
             cx,
         );
         assert_eq!(status(cx), "Step 2 · Typed “SPRING10” in “Coupon”");
-        assert_eq!(status_lead(&status(cx)), "Step 2".len());
+        assert_eq!(card_of(&agents, cx).lead, "Step 2".len());
         browser
             .tabs
             .borrow_mut()
@@ -8522,18 +8521,14 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Needs you · Sign in, please", Dot::Waiting)
         );
-        assert_eq!(status_lead(&card.status), "Needs you".len());
+        assert_eq!(card.lead, "Needs you".len());
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
             ("Stopped after 3 steps", Dot::Ended)
         );
-        assert_eq!(
-            status_lead(&card.status),
-            0,
-            "a stopped card asks for nothing"
-        );
+        assert_eq!(card.lead, 0, "a stopped card asks for nothing");
     }
 
     /// A step that chose an option with a line break in it says it on one line, as the card's
@@ -13094,6 +13089,33 @@ mod sessions {
             assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
             assert!(nameless(&agents, cx), "{posing} passed as a name");
         }
+        // Nor is a name one of the browser's own words for a level or a state, in any case and
+        // however its words are joined: it has its kind's, as one posing as the browser has.
+        use crate::agents::task::{DRIVING, PAUSED, Word};
+        let levels = Tier::ALL.into_iter().map(Tier::label);
+        let states = Word::ALL.into_iter().map(Word::after_name);
+        let words: Vec<&str> = levels.chain(states).chain([DRIVING, PAUSED]).collect();
+        assert_eq!(words.len(), 11);
+        for word in words {
+            let joined = word.replace(' ', "-");
+            for posing in [word, &word.to_uppercase(), &word.to_lowercase(), &joined] {
+                hello(&agents, "mcp-client", "Zed", cx);
+                hello(&agents, "mcp-client", posing, cx);
+                assert_eq!(
+                    named(&agents, cx).0,
+                    Client::Other.name(),
+                    "{posing} passed"
+                );
+                // With no name of its own, as any app that gave none: Settings calls it this app.
+                assert!(nameless(&agents, cx), "{posing} passed as a name");
+            }
+        }
+        // A longer name with such a word in it is an agent's own.
+        for taken in ["Done Deals", "Working Title", "Paused Player 2"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+            assert!(!nameless(&agents, cx), "{taken} is a name of its own");
+        }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
         for taken in [
@@ -13440,6 +13462,22 @@ mod sessions {
         let card = cards(&agents, cx).remove(0);
         assert_eq!(card.dot, Dot::Waiting);
         assert!(card.question.is_some());
+    }
+
+    /// A session's status begins with its client's name, which is no count of steps and asks for
+    /// nothing whatever it reads as: how much of a status leads it is its maker's fact.
+    #[gpui::test]
+    fn a_clients_name_is_never_its_statuss_lead(cx: &mut TestAppContext) {
+        let (agents, _browser) = at_work(cx);
+        let key = cards(&agents, cx).remove(0).agent.to_string();
+        for name in ["Step 5", crate::agents::task::NEEDS_YOU] {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&key).unwrap().name = name.into()
+            });
+            let card = card(&agents, &key, cx);
+            assert!(card.status.starts_with(name), "{}", card.status);
+            assert_eq!((card.dot, card.lead), (Dot::Working, 0), "{name}");
+        }
     }
 
     /// What a `done` came to is a fact, which its caller logs by whatever its answer says: one

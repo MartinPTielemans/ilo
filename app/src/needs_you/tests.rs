@@ -63,6 +63,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }

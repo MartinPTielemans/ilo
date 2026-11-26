@@ -54,7 +54,7 @@ pub fn live(live: &Live) -> Option<String> {
     match live {
         Live::Working => None,
         Live::Refused | Live::Handed => None,
-        Live::Yours { site: None, .. } => Some("You're driving".into()),
+        Live::Yours { site: None, .. } => Some(crate::agents::task::DRIVING.into()),
         Live::Yours {
             site: Some(site), ..
         } => Some(format!("You're driving {site}")),
