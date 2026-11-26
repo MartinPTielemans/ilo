@@ -2598,6 +2598,28 @@ welcome-name = [122.0, 30.0, 36.0]
 welcome-line = 164.0
 welcome-column = [290.0, 198.0]
 welcome-not-now = 446.0
+# The line under the Welcome's button (Cancel while the sign-in window is open): its gap below the
+# button and between its parts. A small button: height, corners, padding and words' size.
+welcome-new = [16.0, 9.0]
+small-button = [24.0, 6.0, 9.0, 12.0]
+# The recovery words (§3.3): the plate's x, y, width and corners, its padding down and across, its
+# columns, its line and the words' size, and a number's width; then Copy's top and its note's.
+words-plate = [130.0, 112.0, 520.0, 12.0]
+words-padding = [14.0, 22.0]
+words-grid = [4.0, 22.0, 13.0, 26.0]
+words-copy = 292.0
+words-note = 330.0
+# Approve this Mac (§3.4): the heading's top, the code's top, size and line, the line under it
+# (Waiting…, or why no device added this one), and the buttons' row.
+approve-heading = 128.0
+approve-code = [204.0, 34.0, 40.0]
+approve-line = 256.0
+approve-buttons = 294.0
+# The recovery words' field, under Approve this Mac's heading: its top and height, corners and
+# padding, and the line under it.
+restore-field = [198.0, 36.0, 10.0, 12.0]
+# How long "Your Spaces are syncing." shows once another device has added this one, in seconds.
+syncing-hold = 0.9
 # The last step (§9): its knot's size and top, its heading's top, and its group's top and width.
 done-knot = [60.0, 64.0]
 done-heading = 140.0

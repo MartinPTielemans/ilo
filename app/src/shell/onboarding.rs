@@ -24,7 +24,7 @@ use gpui::{
 };
 
 use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
-use crate::account::{self, Account, AccountEvent, Status};
+use crate::account::{self, Account, AccountEvent, Problem, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
 use crate::product::PRODUCT;
@@ -150,11 +150,54 @@ impl Step {
 }
 
 /// What the computer is called in a line.
+/// A row across the card at `y`, its content centred.
+fn welcome_centred(y: f32) -> gpui::Div {
+    card::at(0., y).w(px(t::WIDTH)).flex().justify_center()
+}
+
+/// A row of buttons across the card at `y`, centred, the foot's gap between them.
+fn welcome_buttons(y: f32) -> gpui::Div {
+    welcome_centred(y).items_center().gap(px(t::FOOT_GAP))
+}
+
+/// The line under the Welcome's button, `gap` below it, its parts `between` apart.
+fn welcome_line(gap: f32, between: f32, inks: Inks) -> gpui::Div {
+    let [height, _, _, _] = t::SMALL_BUTTON;
+    div()
+        .mt(px(gap))
+        .min_h(px(height))
+        .flex()
+        .justify_center()
+        .items_center()
+        .gap(px(between))
+        .text_size(px(t::BUTTON_TEXT))
+        .text_color(inks.text_2())
+}
+
 fn here(os: Os) -> &'static str {
     match os {
         Os::Mac => "this Mac",
         _ => "this computer",
     }
+}
+
+/// What the Welcome shows of the account (v9 §3), each a cut inside the same card.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Welcome {
+    /// Sign in or sign up, or Not Now.
+    Form,
+    /// The sign-in window is open, where the address, the code and the passkey are the server's.
+    SigningIn,
+    /// A first device's recovery words, shown once.
+    Words,
+    /// Waiting for a signed-in device to add this one.
+    Approve,
+    /// No device is asked now: one declined, none answered in time, or the user stopped asking.
+    Again,
+    /// The recovery words' field.
+    Restore,
+    /// Another device added this one, which says so before going on.
+    Syncing,
 }
 
 /// A switch the card shows, each Settings' own.
@@ -257,6 +300,8 @@ pub(super) struct Onboarding {
     back_stop: gpui::FocusHandle,
     first_stop: gpui::FocusHandle,
     row_stop: gpui::FocusHandle,
+    /// The Welcome's Use Recovery Words, beside its other buttons.
+    words_stop: gpui::FocusHandle,
     /// The step that last took the keyboard as it came.
     focused_step: Option<Step>,
     /// Where the switches' rows and knobs are drawn (opt_in_frame).
@@ -302,6 +347,8 @@ pub(super) struct Onboarding {
     /// The account came back as one that exists (asking for its words or another device's
     /// approval), so the steps about a new profile's things are left out.
     returning: bool,
+    /// When another device added this one, while the Welcome says its Spaces are syncing.
+    syncing: Option<Instant>,
     /// The assistant step's rows follow the Agents, as a sign-in under way changes them.
     _assistants: Option<Subscription>,
     /// The assistants' rows the preview shows, as it has no Agents to read.
@@ -528,6 +575,7 @@ impl Shell {
             back_stop: cx.focus_handle().tab_stop(true),
             first_stop: cx.focus_handle().tab_stop(true),
             row_stop: cx.focus_handle().tab_stop(true),
+            words_stop: cx.focus_handle().tab_stop(true),
             focused_step: None,
             frames: Frames::default(),
             places: Places::default(),
@@ -552,7 +600,11 @@ impl Shell {
             keys: None,
             keyboard: false,
             account,
-            returning: false,
+            returning: matches!(
+                account::synced(cx).status,
+                Status::NeedsSecret | Status::Pairing
+            ),
+            syncing: None,
             _assistants: (crate::agents::global(cx)).map(|agents| {
                 cx.observe(&agents, |shell, _, cx| {
                     shell.onboarding_sign_in_looked(cx);
@@ -600,13 +652,15 @@ impl Shell {
     }
 
     /// Settings › Sync's view for the Welcome, following the account as the core says it is; none
-    /// in a build that names no server, or with the browser signed in already.
+    /// in a build that names no server, or with the browser syncing already. An account still
+    /// waiting for its words or another device's approval, as a ⌘Q there leaves it, has the
+    /// Welcome again, which goes on from there.
     fn signing(&mut self, cx: &mut Context<Self>) -> Option<Signing> {
         let synced = account::synced(cx);
         let host = self
             .browser
             .account_host()
-            .filter(|_| signed_out(&synced))?;
+            .filter(|_| synced.status != Status::On)?;
         account::bind_keys(cx);
         let view = cx.new(|cx| {
             let mut view = Account::new(host, cx).as_step();
@@ -615,7 +669,7 @@ impl Shell {
         });
         let events = cx.subscribe(&view, |shell, _, event, cx| match event {
             AccountEvent::Finished if shell.onboarding_on(Step::Account) => {
-                shell.onboarding_next(cx)
+                shell.onboarding_signed_in(cx)
             }
             AccountEvent::Finished => {}
         });
@@ -639,6 +693,65 @@ impl Shell {
         })
     }
 
+    /// The account is set up. One another device added says its Spaces are syncing for a moment
+    /// first (v9 §3.4); a first device goes on at once from its words.
+    fn onboarding_signed_in(&mut self, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        if !onboarding.returning {
+            return self.onboarding_next(cx);
+        }
+        let now = onboarding.clock.now();
+        onboarding.syncing = Some(now);
+        let hold = onboarding
+            .clock
+            .timer(Duration::from_secs_f32(t::SYNCING_HOLD));
+        cx.spawn(async move |shell, cx| {
+            hold.await;
+            shell
+                .update(cx, |shell, cx| {
+                    let held = (shell.onboarding.as_mut())
+                        .filter(|onboarding| onboarding.syncing == Some(now))
+                        .is_some_and(|onboarding| onboarding.syncing.take().is_some());
+                    if held && shell.onboarding_on(Step::Account) {
+                        shell.onboarding_next(cx);
+                    }
+                })
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// What the Welcome shows of the account, as its view says it is.
+    fn welcome_shows(&self, cx: &gpui::App) -> Welcome {
+        if (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.syncing.is_some()) {
+            return Welcome::Syncing;
+        }
+        let Some(view) = self.account_view() else {
+            return Welcome::Form;
+        };
+        let view = view.read(cx);
+        let state = view.state();
+        if view.keeping_words() {
+            return Welcome::Words;
+        }
+        if view.entering().is_some() {
+            return Welcome::Restore;
+        }
+        match state.status {
+            Status::SignedOut => Welcome::Form,
+            Status::SigningIn => Welcome::SigningIn,
+            Status::Pairing => Welcome::Approve,
+            // It asks the others as it shows, once.
+            Status::NeedsSecret if state.problem.is_none() && !view.asked() => Welcome::Approve,
+            Status::NeedsSecret => Welcome::Again,
+            Status::FirstDevice => Welcome::Words,
+            Status::On => Welcome::Syncing,
+        }
+    }
+
     fn account_view(&self) -> Option<Entity<Account>> {
         let signing = self.onboarding.as_ref()?.account.as_ref()?;
         Some(signing.view.clone())
@@ -658,11 +771,6 @@ impl Shell {
             && self
                 .account_view()
                 .is_some_and(|view| view.read(cx).keeping_words())
-    }
-
-    /// The account step's view is still asking to sign in, with nothing under way.
-    fn account_signed_out(&self, cx: &gpui::App) -> bool {
-        (self.account_view()).is_some_and(|view| view.read(cx).state().status == Status::SignedOut)
     }
 
     /// Help › Welcome: the card again from its first step, in its own window over this one.
@@ -845,13 +953,19 @@ impl Shell {
             }
             // Signed in, the view says so and the card goes on (signing); until then it stays.
             (Step::Account, _) => {
-                if let Some(view) = self.account_view()
-                    && view.read(cx).state().status == Status::SignedOut
-                {
-                    log!("browser: onboarding sign in via {how}");
-                    view.update(cx, |view, cx| view.sign_in(window, cx));
+                let Some(view) = self.account_view() else {
+                    return;
+                };
+                match self.welcome_shows(cx) {
+                    Welcome::Form => {
+                        log!("browser: onboarding sign in via {how}");
+                        view.update(cx, |view, cx| view.sign_in(window, cx));
+                    }
+                    Welcome::Words => view.update(cx, |view, cx| view.words_kept(cx)),
+                    Welcome::Restore => view.update(cx, |view, cx| view.keep_words(cx)),
+                    _ => {}
                 }
-                return;
+                return cx.notify();
             }
             // With nobody signed in the step has no main button, so ↩ does nothing there.
             (Step::Assistant, _) if !signed_in => return,
@@ -1128,7 +1242,7 @@ impl Shell {
         }
         let field = (event.context_stack.iter())
             .any(|context| context.contains("AccountField") || context.contains("TextInput"));
-        if field || self.keeping_words(cx) {
+        if field {
             return;
         }
         match (step, key.key.as_str()) {
@@ -1164,6 +1278,17 @@ impl Shell {
         use crate::agents::runner::Cli;
         use crate::agents::sign_in::Offer;
         match self.onboarding.as_ref().map(|onboarding| onboarding.step) {
+            // The sign-in window, or the wait for another device to add this one.
+            Some(Step::Account)
+                if matches!(
+                    self.welcome_shows(cx),
+                    Welcome::SigningIn | Welcome::Approve
+                ) =>
+            {
+                if let Some(view) = self.account_view() {
+                    view.update(cx, |view, cx| view.cancel(cx));
+                }
+            }
             Some(Step::Import) => {
                 if let Some(importing) = self.importing.as_ref()
                     && importing.view.read(cx).running().is_some()
@@ -1194,6 +1319,7 @@ impl Shell {
                 &onboarding.skip_stop,
                 &onboarding.back_stop,
                 &onboarding.row_stop,
+                &onboarding.words_stop,
             ]
             .iter()
             .any(|stop| stop.is_focused(window))
@@ -1207,7 +1333,10 @@ impl Shell {
             Step::Import => (self.import_guide(cx))
                 .and_then(|guide| guide.button)
                 .is_some_and(|words| !words.is_empty()),
-            Step::Account => self.account_signed_out(cx),
+            Step::Account => matches!(
+                self.welcome_shows(cx),
+                Welcome::Form | Welcome::Words | Welcome::Restore
+            ),
             Step::Assistant => self.assistants_signed_in(cx),
             _ => true,
         }
@@ -1476,7 +1605,7 @@ impl Shell {
         };
         let said = (title.clone(), line.clone());
         let body = match step {
-            Step::Account => self.welcome(inks, entering, cx),
+            Step::Account => self.welcome(inks, entering, window, cx),
             Step::Done => self.done(inks, first, cx),
             _ => {
                 let (controls, trail, skip, back) = self.step_parts(step, inks, window, cx);
@@ -1698,43 +1827,140 @@ impl Shell {
         card::main_button(control, Some(key.into()), inks)
     }
 
-    /// The Welcome (v9 §3): the knot, the name and its line, then Continue to sign in, the
-    /// account's own view once it's under way, and Not Now at the bottom.
-    fn welcome(&mut self, inks: Inks, entering: bool, cx: &mut Context<Self>) -> gpui::Div {
+    /// The Welcome (v9 §3): the knot, the name and its line, then the account as it is: the form
+    /// (Continue opens the sign-in window, where the address, the code and the passkey are the
+    /// server's page's), a first device's words, another device's approval, or the words' field;
+    /// Not Now at the bottom where the step can be passed.
+    fn welcome(
+        &mut self,
+        inks: Inks,
+        entering: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(view) = self.account_view() {
+            let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
+            view.update(cx, |view, cx| {
+                view.set_look(look, cx);
+                // Signed in, it asks nothing more (the devices' list is Settings').
+                if view.state().status != Status::On {
+                    view.showing(window, cx);
+                }
+            });
+        }
+        let shows = self.welcome_shows(cx);
+        let body = match shows {
+            Welcome::Form | Welcome::SigningIn | Welcome::Syncing => {
+                self.welcome_form(shows, inks, entering, cx)
+            }
+            Welcome::Words => self.welcome_words(inks, cx),
+            Welcome::Approve | Welcome::Again | Welcome::Restore => {
+                self.welcome_approve(shows, inks, cx)
+            }
+        };
+        let bottom = match shows {
+            Welcome::Words => Some(
+                self.main(Step::Account, "I've Saved Them".into(), inks, cx)
+                    .into_any_element(),
+            ),
+            Welcome::Form | Welcome::SigningIn | Welcome::Again | Welcome::Restore => {
+                Some(self.welcome_not_now(inks, cx).into_any_element())
+            }
+            Welcome::Approve | Welcome::Syncing => None,
+        };
+        let [_, foot_height] = t::FOOT;
+        div().size_full().child(body).children(bottom.map(|bottom| {
+            welcome_centred(t::WELCOME_NOT_NOW - foot_height / 2.)
+                .h(px(foot_height))
+                .items_center()
+                .child(bottom)
+        }))
+    }
+
+    /// Not Now: on without an account, closing a sign-in window still open, so nothing signs in
+    /// behind the card.
+    fn welcome_not_now(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        card::bare("onboarding-not-now", "Not Now".into(), inks)
+            .when(self.a11y, |control| named_button(control, "Not Now"))
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.skip_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if shell.welcome_shows(cx) == Welcome::SigningIn
+                    && let Some(view) = shell.account_view()
+                {
+                    view.update(cx, |view, cx| view.cancel(cx));
+                }
+                shell.onboarding_next(cx)
+            }))
+            .relative()
+            .children(self.place(Step::Account, "not-now"))
+    }
+
+    /// The form, its knot, name and line, and Continue; while the sign-in window is open, what to
+    /// do there and Cancel; once another device has added this one, that its Spaces are syncing.
+    fn welcome_form(
+        &self,
+        shows: Welcome,
+        inks: Inks,
+        entering: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
         let (name, line) = Step::Account.message(os);
+        let problem = (self.account_view())
+            .and_then(|view| view.read(cx).state().problem)
+            .filter(|_| shows == Welcome::Form);
+        let line: SharedString = match (shows, problem) {
+            (Welcome::Syncing, _) => "Your Spaces are syncing.".into(),
+            (_, Some(problem)) => account::problem_text(problem).into(),
+            _ => line,
+        };
         let [knot, knot_top] = t::WELCOME_KNOT;
         let [name_top, name_size, name_line] = t::WELCOME_NAME;
         let [_, line_size, line_line] = t::LINE;
         let [column, column_top] = t::WELCOME_COLUMN;
-        let centred = |y: f32| card::at(0., y).w(px(t::WIDTH)).flex().justify_center();
-        let signed_out = self.account_signed_out(cx);
-        let words = self.keeping_words(cx);
-        let continue_button = signed_out.then(|| {
-            card::welcome_button(self.main(Step::Account, "Continue".into(), inks, cx))
-                .into_any_element()
-        });
-        // The account's own view, once a sign-in is under way, as the card's own fields come.
-        let account = (!signed_out)
-            .then(|| self.account_view())
-            .flatten()
-            .map(|view| {
-                let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
-                view.update(cx, |view, cx| view.set_look(look, cx));
-                gpui::AnyView::from(view).into_any_element()
-            });
-        let not_now = (!words).then(|| {
-            card::bare("onboarding-not-now", "Not Now".into(), inks)
-                .when(self.a11y, |control| named_button(control, "Not Now"))
-                .when_some(
-                    self.step_stop(Step::Account, |o| &o.skip_stop),
-                    |control, stop| control.track_focus(&stop).focus_from_keys_only(),
-                )
-                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next(cx)))
-                .relative()
-                .children(self.place(Step::Account, "not-now"))
-        });
-        let [_, foot_height] = t::FOOT;
+        let [new_gap, new_words_gap] = t::WELCOME_NEW;
+        let [button_height, _, button_size] = t::WELCOME_BUTTON;
+        let column_items: Vec<AnyElement> = match shows {
+            // One sign-in window both signs in and makes an account (account.rs sign_in, the
+            // core's one call), so there's no Sign Up of its own.
+            Welcome::Form => vec![
+                card::welcome_button(self.main(Step::Account, "Continue".into(), inks, cx))
+                    .into_any_element(),
+            ],
+            Welcome::SigningIn => {
+                let cancel = card::bare("onboarding-cancel", "Cancel".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Cancel Sign In"))
+                    .when_some(
+                        self.step_stop(Step::Account, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(view) = shell.account_view() {
+                            view.update(cx, |view, cx| view.cancel(cx));
+                        }
+                    }))
+                    .relative()
+                    .children(self.place(Step::Account, "cancel"));
+                vec![
+                    div()
+                        .h(px(button_height))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(button_size))
+                        .text_color(inks.text_2())
+                        .child(account::FINISH_SIGN_IN)
+                        .into_any_element(),
+                    welcome_line(new_gap, new_words_gap, inks)
+                        .child(cancel)
+                        .into_any_element(),
+                ]
+            }
+            _ => Vec::new(),
+        };
         div()
             .size_full()
             .when(!entering, |welcome| {
@@ -1744,11 +1970,11 @@ impl Shell {
                 )
             })
             .child(
-                centred(name_top)
+                welcome_centred(name_top)
                     .child(display_text(name, name_size, name_line, cx).text_color(inks.text(1.))),
             )
             .child(
-                centred(t::WELCOME_LINE)
+                welcome_centred(t::WELCOME_LINE)
                     .text_size(px(line_size))
                     .line_height(px(line_line))
                     .text_color(inks.text_2())
@@ -1762,15 +1988,284 @@ impl Shell {
                     .flex_col()
                     .text_size(px(crate::tokens::text::BODY))
                     .text_color(inks.text(1.))
-                    .children(continue_button)
-                    .children(account),
+                    .children(column_items),
             )
-            .children(not_now.map(|not_now| {
-                centred(t::WELCOME_NOT_NOW - foot_height / 2.)
-                    .h(px(foot_height))
-                    .items_center()
-                    .child(not_now)
+    }
+
+    /// A first device's recovery words (v9 §3.3), shown once: in columns on a plate to write
+    /// down, Copy, and the note on where a copy went while it's there. Their main button is at
+    /// the bottom (welcome).
+    fn welcome_words(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(view) = self.account_view() else {
+            return div();
+        };
+        let now = cx.background_executor().now();
+        let (words, (copied, noted)) = {
+            let view = view.read(cx);
+            let words = view
+                .shown_words()
+                .map(<[String]>::to_vec)
+                .unwrap_or_default();
+            (words, view.copied(now))
+        };
+        let [x, y, width, radius] = t::WORDS_PLATE;
+        let [down, across] = t::WORDS_PADDING;
+        let [columns, line, size, number] = t::WORDS_GRID;
+        let columns = columns as usize;
+        let rows = words.len().div_ceil(columns);
+        let mono = crate::face::mono(&cx.text_system().all_font_names());
+        // Down each column, as they're written down.
+        let column = |c: usize| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .children((0..rows).filter_map(|r| {
+                    let index = c * rows + r;
+                    let word = words.get(index)?;
+                    Some(
+                        div()
+                            .h(px(line))
+                            .flex()
+                            .child(
+                                div()
+                                    .w(px(number))
+                                    .text_color(inks.text(t::TEXT_3))
+                                    .child(format!("{}", index + 1)),
+                            )
+                            .child(word.clone()),
+                    )
+                }))
+        };
+        let copy_words = if copied { "Copied" } else { "Copy" };
+        let copy = card::small("onboarding-copy", copy_words.into(), inks)
+            .when(self.a11y, |control| {
+                named_button(
+                    control,
+                    match copied {
+                        true => "Recovery Words Copied",
+                        false => "Copy Recovery Words",
+                    },
+                )
+            })
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.row_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if let Some(view) = shell.account_view() {
+                    view.update(cx, |view, cx| view.copy_words(cx));
+                }
             }))
+            .relative()
+            .children(self.place(Step::Account, "copy"));
+        let [_, line_size, line_line] = t::LINE;
+        div()
+            .size_full()
+            .child(card::heading(
+                (
+                    "Your recovery words".into(),
+                    "The only way back in if you lose every device. Shown once.".into(),
+                ),
+                true,
+                inks,
+                cx,
+            ))
+            .child(
+                card::at(x, y)
+                    .w(px(width))
+                    .rounded(px(radius))
+                    .bg(inks.field())
+                    .py(px(down))
+                    .px(px(across))
+                    .flex()
+                    .font_family(mono)
+                    .text_size(px(size))
+                    .line_height(px(line))
+                    .text_color(inks.text(1.))
+                    .children((0..columns).map(column)),
+            )
+            .child(welcome_centred(t::WORDS_COPY).child(copy))
+            .when(noted, |words| {
+                words.child(
+                    welcome_centred(t::WORDS_NOTE)
+                        .text_size(px(line_size))
+                        .line_height(px(line_line))
+                        .text_color(inks.text_2())
+                        .child(account::COPIED_NOTE),
+                )
+            })
+    }
+
+    /// A known account on a new device (v9 §3.4): Approve this Mac with the code a signed-in
+    /// device shows, while it waits; once none is asked, why, with Ask Again; and the recovery
+    /// words' field, Use Recovery Words' way instead.
+    fn welcome_approve(&self, shows: Welcome, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(view) = self.account_view() else {
+            return div();
+        };
+        let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
+        let (state, entering) = {
+            let view = view.read(cx);
+            (view.state().clone(), view.entering())
+        };
+        let [knot, knot_top] = t::WELCOME_KNOT;
+        let [code_top, code_size, code_line] = t::APPROVE_CODE;
+        let [_, line_size, line_line] = t::LINE;
+        let [column, _] = t::WELCOME_COLUMN;
+        let [gap, _] = t::WELCOME_NEW;
+        let title: SharedString = match shows {
+            Welcome::Restore => "Enter your recovery words".into(),
+            _ => format!("Approve {}", here(os)).into(),
+        };
+        let line: SharedString = match shows {
+            Welcome::Approve => "Check that a signed-in device shows:".into(),
+            _ => "".into(),
+        };
+        let said_line = |text: SharedString| {
+            welcome_centred(t::APPROVE_LINE)
+                .text_size(px(line_size))
+                .line_height(px(line_line))
+                .text_color(inks.text_2())
+                .child(text)
+        };
+        let use_words = card::bare("onboarding-use-words", "Use Recovery Words".into(), inks)
+            .when(self.a11y, |control| {
+                named_button(control, "Use Recovery Words")
+            })
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.words_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if let Some(view) = shell.account_view() {
+                    view.update(cx, |view, cx| view.enter_words(cx));
+                }
+            }))
+            .relative()
+            .children(self.place(Step::Account, "use-words"));
+        let mut parts: Vec<AnyElement> = Vec::new();
+        match shows {
+            Welcome::Approve => {
+                // The code once a device has answered, the build's blanks until then.
+                let code = match state.code.is_empty() {
+                    true => card::heading_text("––– –––", code_size, code_line, cx)
+                        .text_color(inks.text(t::TEXT_3)),
+                    false => {
+                        card::heading_text(account::grouped(&state.code), code_size, code_line, cx)
+                            .text_color(inks.text(1.))
+                    }
+                };
+                parts.push(welcome_centred(code_top).child(code).into_any_element());
+                parts.push(said_line("Waiting…".into()).into_any_element());
+                parts.push(
+                    welcome_buttons(t::APPROVE_BUTTONS)
+                        .child(use_words)
+                        .into_any_element(),
+                );
+            }
+            Welcome::Again => {
+                let why = state
+                    .problem
+                    .map_or(account::ASK_ANOTHER, account::problem_text);
+                let again = card::quiet("onboarding-ask-again", "Ask Again".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Ask Again"))
+                    .when_some(
+                        self.step_stop(Step::Account, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(view) = shell.account_view() {
+                            view.update(cx, |view, cx| view.ask_again(cx));
+                        }
+                    }))
+                    .relative()
+                    .children(self.place(Step::Account, "ask-again"));
+                parts.push(said_line(why.into()).into_any_element());
+                parts.push(
+                    welcome_buttons(t::APPROVE_BUTTONS)
+                        .child(again)
+                        .child(use_words)
+                        .into_any_element(),
+                );
+            }
+            Welcome::Restore => {
+                let [field_top, field_height, field_radius, field_inset] = t::RESTORE_FIELD;
+                let refused = entering.as_ref().is_some_and(|(_, refused)| *refused);
+                let why = match (refused, state.problem) {
+                    (true, _) => Some(account::REFUSED_WORDS),
+                    (false, Some(Problem::WrongWords)) => {
+                        Some(account::problem_text(Problem::WrongWords))
+                    }
+                    _ => None,
+                };
+                let field = entering.map(|(input, _)| {
+                    div()
+                        .h(px(field_height))
+                        .px(px(field_inset))
+                        .flex()
+                        .items_center()
+                        .rounded(px(field_radius))
+                        .bg(inks.field())
+                        .key_context("AccountField")
+                        .on_action(cx.listener(|shell, _: &account::Keep, _, cx| {
+                            let Some(view) = shell.account_view() else {
+                                return;
+                            };
+                            let field = view.read(cx).open_field();
+                            if crate::dismissal::submits(&field, cx) {
+                                view.update(cx, |view, cx| view.keep_words(cx));
+                            }
+                        }))
+                        .on_action(cx.listener(|shell, _: &account::Leave, window, cx| {
+                            let Some(view) = shell.account_view() else {
+                                return;
+                            };
+                            let field = view.read(cx).open_field();
+                            if crate::dismissal::Close::escape_from(&field, cx).is_some() {
+                                view.update(cx, |view, cx| view.leave_field(window, cx));
+                            }
+                        }))
+                        .text_size(px(crate::tokens::text::BODY))
+                        .text_color(inks.text(1.))
+                        .relative()
+                        .children(self.place(Step::Account, "words-field"))
+                        .child(input)
+                });
+                parts.push(
+                    card::at((t::WIDTH - column) / 2., field_top)
+                        .w(px(column))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .flex()
+                        .flex_col()
+                        .gap(px(gap / 2.))
+                        .children(field)
+                        .child(card::welcome_button(self.main(
+                            Step::Account,
+                            "Restore".into(),
+                            inks,
+                            cx,
+                        )))
+                        .into_any_element(),
+                );
+                parts.extend(why.map(|why| said_line(why.into()).into_any_element()));
+            }
+            _ => {}
+        }
+        div()
+            .size_full()
+            .child(
+                card::at((t::WIDTH - knot) / 2., knot_top)
+                    .child(card::whole_knot(knot, inks.text(1.))),
+            )
+            .child(card::heading_at(
+                (title, line),
+                true,
+                t::APPROVE_HEADING,
+                inks,
+                cx,
+            ))
+            .children(parts)
     }
 
     /// You're woven in (v9 §9): the knot whole, the heading, the default browser's row and Help
