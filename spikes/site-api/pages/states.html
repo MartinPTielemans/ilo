@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset=utf-8><title>States</title>
+<style>
+  :root { color-scheme: light dark; --line: #8883; --muted: #888; --bad: #c0392b; --ask: #b7791f; }
+  body { margin: 0; padding: 16px; font: 14px/1.45 system-ui, sans-serif; background: Canvas; }
+  main { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); max-width: 1100px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  h2 { font-size: 13px; font-weight: 600; margin: 0; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); }
+  footer { font-size: 12px; color: var(--muted); margin-top: auto; } footer a { color: inherit; cursor: pointer; text-decoration: underline; }
+  .state { padding: 10px; border-radius: 6px; } .broken { background: #c0392b22; color: var(--bad); } .signin { background: #b7791f22; color: var(--ask); }
+  .reading .card { opacity: .45; transition: opacity .15s; }
+</style></head>
+<body>
+<main>
+  <section class=card id=orders><h2>Your orders (the site's page)</h2><div class=body>…</div><footer></footer></section>
+  <section class=card id=feed><h2>Your orders (the site's data address)</h2><div class=body>…</div><footer></footer></section>
+  <section class=card id=buildings><h2>Tallest buildings, top 5</h2><div class=body>…</div><footer></footer></section>
+</main>
+<script>
+const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function card(id, answer, draw) {
+  const el = document.getElementById(id);
+  const body = el.querySelector('.body'), foot = el.querySelector('footer');
+  foot.textContent = '';
+  if (answer.state === 'ok') draw(body, answer.rows);
+  else if (answer.state === 'signin') body.innerHTML = `<div class="state signin">Needs you to sign in to ${new URL(answer.source).host}. ${answer.reason}</div>`;
+  else if (answer.state === 'refused') body.innerHTML = `<div class="state broken">Not allowed: ${answer.reason}</div>`;
+  else body.innerHTML = `<div class="state broken">Broken: the site has changed, so nothing is shown. ${answer.reason || ''}</div>`;
+  if (answer.source) {
+    const a = document.createElement('a');
+    a.textContent = new URL(answer.source).host;
+    a.onclick = () => siteApi.open(answer);
+    foot.append(`${answer.state === 'ok' ? 'Read' : 'Tried'} at ${time(answer.read_at)} from `, a);
+  }
+}
+const table = (cols) => (b, rows) => (b.innerHTML = `<table><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>${rows.slice(0, 5).map((r) => `<tr>${cols.map((c) => `<td>${r[c]}</td>`).join('')}</tr>`).join('')}</table>`);
+async function refresh() {
+  document.body.classList.add('reading');
+  const [orders, feed, buildings] = await Promise.all([siteApi.call('orders'), siteApi.call('orders-feed'), siteApi.call('buildings')]);
+  card('orders', orders, table(['order', 'item', 'qty', 'price']));
+  card('feed', feed, table(['order', 'item', 'qty', 'price']));
+  card('buildings', buildings, table(['name', 'city', 'height_m']));
+  document.body.classList.remove('reading');
+  document.body.dataset.refreshed = String(Number(document.body.dataset.refreshed || 0) + 1);
+}
+siteApi.onShown(refresh);
+</script>
+</body></html>

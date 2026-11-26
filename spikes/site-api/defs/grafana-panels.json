@@ -1,0 +1,7 @@
+{
+  "name": "grafana-panels",
+  "title": "A public Grafana dashboard's panels",
+  "site": "https://play.grafana.org",
+  "read": { "kind": "page", "path": "/", "allow": ["https://grafana-assets.grafana.net"], "response": "/api/ds/query", "rows": "results.A.frames", "fields": { "name": "schema.name" }, "timeout_ms": 20000 },
+  "shape": { "columns": { "name": "text" }, "min_rows": 1 }
+}

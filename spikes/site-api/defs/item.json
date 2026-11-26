@@ -1,0 +1,8 @@
+{
+  "name": "item",
+  "title": "One order (local test site), for the parameter tests",
+  "site": "http://127.0.0.1:8811",
+  "read": { "kind": "html", "path": "/items/{id}", "rows": "#item tr", "fields": { "id": ".id", "n": ".n" } },
+  "params": { "id": { "type": "string", "pattern": "^[A-Z]-\\d{4}$" } },
+  "shape": { "columns": { "id": "text", "n": "number" }, "min_rows": 1 }
+}

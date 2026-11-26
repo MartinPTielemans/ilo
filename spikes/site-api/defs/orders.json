@@ -1,0 +1,13 @@
+{
+  "name": "orders",
+  "title": "Your orders (local test site)",
+  "site": "http://127.0.0.1:8811",
+  "signin": "^/login",
+  "read": {
+    "kind": "html",
+    "path": "/orders",
+    "rows": "table#orders tbody tr",
+    "fields": { "order": "td:nth-child(1)", "item": "td:nth-child(2)", "qty": "td:nth-child(3)", "price": "td:nth-child(4)", "date": "td:nth-child(5)" }
+  },
+  "shape": { "columns": { "order": "text", "item": "text", "qty": "number", "price": "number", "date": "text" }, "min_rows": 1 }
+}

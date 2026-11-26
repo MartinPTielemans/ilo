@@ -1,0 +1,7 @@
+{
+  "name": "crates-stats-page",
+  "title": "crates.io in numbers, from the data its front page fetches",
+  "site": "https://crates.io",
+  "read": { "kind": "page", "path": "/", "response": "^https://crates\\.io/api/v1/summary$", "rows": "", "one": true, "fields": { "crates": "num_crates", "downloads": "num_downloads" } },
+  "shape": { "columns": { "crates": "number", "downloads": "number" }, "min_rows": 1 }
+}

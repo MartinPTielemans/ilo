@@ -1,0 +1,13 @@
+{
+  "name": "orders-feed",
+  "title": "Your orders, from the site's data address (local test site)",
+  "site": "http://127.0.0.1:8811",
+  "signin": "^/login",
+  "read": {
+    "kind": "json",
+    "path": "/api/orders.json",
+    "rows": "orders",
+    "fields": { "order": "id", "item": "item", "qty": "qty", "price": "price" }
+  },
+  "shape": { "columns": { "order": "text", "item": "text", "qty": "number", "price": "number" }, "min_rows": 1 }
+}

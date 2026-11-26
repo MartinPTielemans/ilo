@@ -1,0 +1,77 @@
+<!doctype html>
+<html><head><meta charset=utf-8><title>Dashboard</title>
+<style>
+  :root { color-scheme: light dark; --line: #8883; --muted: #888; --bad: #c0392b; --ask: #b7791f; --bar: #3b82f6; }
+  body { margin: 0; padding: 16px; font: 14px/1.45 system-ui, sans-serif; background: Canvas; }
+  main { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); max-width: 1100px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .wide { grid-column: span 3; } .two { grid-column: span 2; }
+  h2 { font-size: 13px; font-weight: 600; margin: 0; color: var(--muted); }
+  .num { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); } td.r, th.r { text-align: right; }
+  footer { font-size: 12px; color: var(--muted); margin-top: auto; } footer a { color: inherit; cursor: pointer; text-decoration: underline; }
+  .state { padding: 10px; border-radius: 6px; } .broken { background: #c0392b22; color: var(--bad); } .signin { background: #b7791f22; color: var(--ask); }
+  svg text { fill: currentColor; font-size: 11px; }
+  .reading .card { opacity: .45; transition: opacity .15s; }
+</style></head>
+<body>
+<main>
+  <section class=card id=crates><h2>Crates on crates.io</h2><div class=body>…</div><footer></footer></section>
+  <section class=card id=downloads><h2>Downloads of all crates</h2><div class=body>…</div><footer></footer></section>
+  <section class=card id=toptag><h2>Busiest hashtag today, mastodon.social</h2><div class=body>…</div><footer></footer></section>
+  <section class="card wide" id=tags><h2>Trending hashtags, posts today</h2><div class=body>…</div><footer></footer></section>
+  <section class="card wide" id=buildings><h2>Tallest buildings</h2><div class=body>…</div><footer></footer></section>
+</main>
+<script>
+const fmt = new Intl.NumberFormat('en');
+const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+// Every card says when its data was read and where from, or plainly why it has none.
+function card(id, answer, draw) {
+  const el = document.getElementById(id);
+  const body = el.querySelector('.body'), foot = el.querySelector('footer');
+  foot.textContent = '';
+  if (answer.state === 'ok') draw(body, answer.rows);
+  else if (answer.state === 'signin') body.innerHTML = `<div class="state signin">Needs you to sign in to ${new URL(answer.source).host}. ${answer.reason}</div>`;
+  else if (answer.state === 'refused') body.innerHTML = `<div class="state broken">Not allowed: ${answer.reason}</div>`;
+  else body.innerHTML = `<div class="state broken">Broken: the site has changed, so nothing is shown. ${answer.reason || ''}</div>`;
+  if (answer.source) {
+    const a = document.createElement('a');
+    a.textContent = new URL(answer.source).host;
+    a.onclick = () => siteApi.open(answer);
+    foot.append(`${answer.state === 'ok' ? 'Read' : 'Tried'} at ${time(answer.read_at)} from `, a);
+  }
+}
+
+function bars(body, rows) {
+  const w = 1040, row = 22, max = Math.max(...rows.map((r) => r.uses));
+  const svg = [`<svg width="100%" viewBox="0 0 ${w} ${rows.length * row}">`];
+  rows.forEach((r, i) => {
+    const len = (r.uses / max) * (w - 260);
+    svg.push(`<text x="0" y="${i * row + 15}">#${r.tag.slice(0, 28)}</text>`,
+      `<rect x="200" y="${i * row + 4}" width="${len}" height="14" rx="3" fill="var(--bar)"></rect>`,
+      `<text x="${206 + len}" y="${i * row + 15}">${fmt.format(r.uses)}</text>`);
+  });
+  body.innerHTML = svg.join('') + '</svg>';
+}
+
+async function refresh() {
+  document.body.classList.add('reading');
+  const [stats, tags, buildings] = await Promise.all([
+    siteApi.call('crates-stats'), siteApi.call('trending-tags', { limit: 10 }), siteApi.call('buildings'),
+  ]);
+  card('crates', stats, (b, rows) => (b.innerHTML = `<div class=num>${fmt.format(rows[0].crates)}</div>`));
+  card('downloads', stats, (b, rows) => (b.innerHTML = `<div class=num>${(rows[0].downloads / 1e9).toFixed(1)} billion</div>`));
+  card('toptag', tags, (b, rows) => (b.innerHTML = `<div class=num>#${rows[0].tag}</div><div>${fmt.format(rows[0].uses)} posts by ${fmt.format(rows[0].people)} people</div>`));
+  card('tags', tags, bars);
+  card('buildings', buildings, (b, rows) => {
+    b.innerHTML = `<table><thead><tr><th>Building</th><th>City</th><th>Country</th><th class=r>Height (m)</th><th class=r>Year</th></tr></thead><tbody>${
+      rows.slice(0, 12).map((r) => `<tr><td>${r.name}</td><td>${r.city}</td><td>${r.country}</td><td class=r>${r.height_m}</td><td class=r>${r.year}</td></tr>`).join('')}</tbody></table>`;
+  });
+  document.body.classList.remove('reading');
+  document.body.dataset.refreshed = String(Number(document.body.dataset.refreshed || 0) + 1);
+}
+siteApi.onShown(refresh);
+</script>
+</body></html>

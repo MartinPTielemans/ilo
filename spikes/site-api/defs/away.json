@@ -1,0 +1,7 @@
+{
+  "name": "away",
+  "title": "A page that redirects off its site (local test site), for the redirect test",
+  "site": "http://127.0.0.1:8811",
+  "read": { "kind": "html", "path": "/away", "rows": "tr", "fields": { "x": "td" } },
+  "shape": { "columns": { "x": "text" }, "min_rows": 1 }
+}

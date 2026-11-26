@@ -1,0 +1,5 @@
+{
+  "dashboard": ["buildings", "crates-stats", "trending-tags"],
+  "states": ["orders", "orders-feed", "buildings"],
+  "leak": ["orders"]
+}
