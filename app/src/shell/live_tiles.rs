@@ -175,6 +175,12 @@ impl LiveTiles {
         self.browser.task_picture(tab, request, cx);
     }
 
+    /// The requests out for the pictures tiles' ends asked for.
+    #[cfg(test)]
+    pub(super) fn asked_at_ends(&self) -> Vec<u64> {
+        self.asked.borrow().keys().copied().collect()
+    }
+
     /// The tab whose tile's end asked for the picture that answers `request`, if one did.
     pub(super) fn asked_at_end(&self, request: u64) -> Option<u64> {
         self.asked.borrow_mut().remove(&request)

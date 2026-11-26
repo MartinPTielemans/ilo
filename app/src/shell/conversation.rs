@@ -24,7 +24,7 @@ use gpui::{Role, accesskit::Live as Telling};
 use self::markdown::{Block, Inline};
 use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
 use super::{
-    NAV_RADIUS, SECONDARY, Shell, TITLE,
+    NAV_RADIUS, SECONDARY, Shell, TITLE, Trouble,
     agent_bar::stop_keys,
     browser::{Browser, Page},
     live_tiles::LiveTiles,
@@ -45,6 +45,7 @@ use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
+use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
@@ -58,11 +59,11 @@ use crate::tokens::shell::conversation::{
     CHIPS_BELOW, CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW,
     LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
-    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_RADIUS, PICTURE_RIM, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP,
-    REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
-    SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
-    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
+    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_CRASHED_WASH, PICTURE_EMPTY_GLYPH,
+    PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_RIM, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
+    REPLY_GAP, REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND,
+    SHIMMER_PERIOD, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP,
+    TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
     TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL,
     TRACE_RULE_X, TRACE_TITLE,
 };
@@ -230,6 +231,8 @@ pub struct TalkView {
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Where the glyph of each dead page's picture was drawn last, in the window.
+    crashed_drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
     /// Its pages, live in their pictures' places where the core can.
     tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
@@ -468,6 +471,7 @@ impl Shell {
                     pictures: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
+                    crashed_drawn: Rc::default(),
                     tiles: LiveTiles::new(self.browser.clone()),
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
@@ -1313,6 +1317,7 @@ impl TalkView {
     /// live page shows where it can (live_tiles.rs), at `drawn`.
     fn rail(&self, across: bool, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         self.drawn.borrow_mut().clear();
+        self.crashed_drawn.borrow_mut().clear();
         let palette = look.palette;
         let tabs = (self.shown.as_ref()).map_or_else(Vec::new, |shown| shown.tabs.clone());
         let high = RAIL_WIDTH * PICTURE_HEIGHT / PICTURE_WIDTH;
@@ -1348,6 +1353,9 @@ impl TalkView {
             // the one that needs the user at a handoff.
             let acting = mark.is_some_and(|mark| mark.outline);
             let pictured = image.is_some();
+            // A page that died stands as its last picture, washed, under the crash card's glyph:
+            // the state's, so both go once the page loads again, whoever loaded it.
+            let crashed = page.trouble == Trouble::Crashed;
             let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
                 |_, _, _| {},
@@ -1385,7 +1393,7 @@ impl TalkView {
                 })
             };
             // Until its picture comes the tile is blank but for its favicon.
-            let blank = (!pictured).then(|| {
+            let blank = (!pictured && !crashed).then(|| {
                 div()
                     .absolute()
                     .size_full()
@@ -1403,6 +1411,44 @@ impl TalkView {
                 .overflow_hidden()
                 .children(blank)
                 .child(paint)
+                .when(crashed, |picture| {
+                    let glyph_drawn = self.crashed_drawn.clone();
+                    let wash = Hsla {
+                        a: PICTURE_CRASHED_WASH,
+                        ..Hsla::from(palette.page)
+                    };
+                    picture.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(pictured, |over| over.bg(wash))
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_none()
+                                    .size(px(FAVICON_DRAWN))
+                                    .child(
+                                        canvas(
+                                            |_, _, _| {},
+                                            move |bounds, _, _, _| {
+                                                glyph_drawn.borrow_mut().push((tab, bounds))
+                                            },
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(super::trouble::CARD_GLYPH)
+                                            .size_full()
+                                            .text_color(palette.text(SECONDARY)),
+                                    ),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .absolute()
@@ -1481,6 +1527,9 @@ impl TalkView {
                     })
                     .child(said.label())
             });
+            // Spoken, a dead page's tile is its name, then the card's own heading.
+            let spoken =
+                (crashed && look.a11y).then(|| format!("{title}, {}", super::trouble::STOPPED));
             let head = div()
                 .h(px(RAIL_HEAD))
                 .w(px(RAIL_WIDTH))
@@ -1509,6 +1558,9 @@ impl TalkView {
                 .gap(px(SITE_GAP))
                 .opacity(opacity)
                 .cursor_pointer()
+                .when_some(spoken, |tile, spoken| {
+                    tile.role(Role::Button).aria_label(spoken)
+                })
                 .child(head)
                 .child(picture)
                 .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
@@ -3458,6 +3510,7 @@ impl Render for TalkView {
         });
         if !pages {
             self.drawn.borrow_mut().clear();
+            self.crashed_drawn.borrow_mut().clear();
             self.tiles.end_all(cx);
         }
         let column = div().size_full().flex().child(column).children(rail);

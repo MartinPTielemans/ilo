@@ -21,7 +21,7 @@ use super::{
 };
 
 /// Ours, as neither Arc nor Dia was recorded with a page that broke: one line, one button.
-const STOPPED: &str = "This page stopped";
+pub(super) const STOPPED: &str = "This page stopped";
 pub const RELOAD: &str = "Reload";
 pub const NOT_RESPONDING: &str = "Not responding";
 pub const WAIT: &str = "Wait";
@@ -29,6 +29,9 @@ use crate::tokens::shell::trouble::BUTTON_INSET;
 use crate::tokens::shell::trouble::LINE;
 use crate::tokens::shell::trouble::WORDS_SIZE;
 use crate::tokens::text;
+/// Lucide's triangle-alert, the card's glyph: a dead page's small tile in a thread's rail has it
+/// in the card's stead.
+pub(super) const CARD_GLYPH: &str = "icons/triangle-alert.svg";
 /// Lucide's circle-alert, in the speaker's place in the row.
 pub(super) const MARK: &str = "icons/circle-alert.svg";
 

@@ -16,7 +16,7 @@ use crate::agents::task::{
 };
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
-use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::shell::{Command, Folders, Page, Shell, Trouble, recorder::Recorder};
 use crate::text_input::TextInput;
 use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
 use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
@@ -3479,4 +3479,133 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
     let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
     assert_eq!(held, 0, "a picture no card shows is still held");
+}
+
+/// Tab 30's page as the core reports it with `trouble`.
+fn page_in(trouble: Trouble) -> Page {
+    Page {
+        url: "https://skyscanner.net/".into(),
+        trouble,
+        ..Page::default()
+    }
+}
+
+/// A page that died stands in the rail under the crash card's glyph, in its picture's middle
+/// (#3433). Its tile stays the core's, which hides it and shows it again: nothing here ends it or
+/// pictures it anew, so no page is asked to draw there, and a click still shows the page large,
+/// where the card is. Once the page loads again, whoever loaded it, the glyph goes and the tile
+/// is the live one it was.
+#[gpui::test]
+fn a_rail_tile_whose_page_died_has_the_cards_glyph_until_it_loads_again(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    let glyph = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let drawn = view.crashed_drawn.borrow();
+            drawn.iter().find(|(tab, _)| *tab == 30).map(|(_, at)| *at)
+        })
+    };
+    let asked = |did: &[String], what: &str| did.iter().any(|line| line.starts_with(what));
+    let did = draw(cx);
+    assert!(asked(&did, "tile 30 at "), "not live in the rail: {did:?}");
+    assert_eq!(glyph(cx), None, "a live page's tile has the glyph");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, page_in(Trouble::Crashed), cx)
+    });
+    let did = draw(cx);
+    let (_, tile) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    let at = glyph(cx).expect("a dead page's tile has no glyph");
+    // To the half point either way, as the glyph is laid out on whole points and a tile isn't.
+    let off = at.center() - tile.center();
+    assert!(
+        off.x.abs() <= px(0.5) && off.y.abs() <= px(0.5),
+        "not in its picture's middle: {at:?} in {tile:?}"
+    );
+    assert!(
+        !asked(&did, "tile 30 at ")
+            && !asked(&did, "end tile 30")
+            && !asked(&did, "task picture 30"),
+        "a dead page's tile was moved, ended or pictured: {did:?}"
+    );
+
+    cx.simulate_click(tile.center(), Modifiers::none());
+    let did = draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30))),
+        "a click on a dead page's tile didn't show it large"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.crash_cards.contains_key(&30)),
+        "shown large, the dead page has no card"
+    );
+    assert!(!asked(&did, "end tile 30"), "the tile ended: {did:?}");
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(
+        glyph(cx).is_some(),
+        "back in the rail, still dead, no glyph"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, page_in(Trouble::Fine), cx)
+    });
+    let did = draw(cx);
+    assert_eq!(
+        glyph(cx),
+        None,
+        "the glyph stayed on a page that loaded again"
+    );
+    assert!(
+        !asked(&did, "end tile 30"),
+        "loaded again, its tile ended: {did:?}"
+    );
+}
+
+/// The picture a dead page's tile ends on comes back empty, as there's no page to picture
+/// (#3433): the rail keeps the one it had, which the wash and the glyph stand over.
+#[gpui::test]
+fn an_empty_picture_at_a_dead_tiles_end_leaves_the_one_the_rail_had(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let request = picture_request(&shell, 30, cx);
+    let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let held = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let held = view.pictures.iter().find(|(tab, ..)| *tab == 30);
+            held.and_then(|(.., picture)| picture.as_ref().map(PagePicture::size))
+        })
+    };
+    assert_eq!(held(cx), Some((2., 2.)));
+
+    shell.update(cx, |shell, cx| {
+        shell.set_page(30, page_in(Trouble::Crashed), cx)
+    });
+    let tiles = view.read_with(cx, |view, _| view.tiles.clone());
+    cx.update(|_, cx| tiles.end_all(cx));
+    let asked = tiles.asked_at_ends();
+    assert_eq!(asked.len(), 1, "the tile's end asked for no picture");
+    shell.update(cx, |shell, cx| shell.page_pictured(asked[0], None, cx));
+    assert_eq!(
+        held(cx),
+        Some((2., 2.)),
+        "an empty picture took the place of the one the rail had"
+    );
 }
