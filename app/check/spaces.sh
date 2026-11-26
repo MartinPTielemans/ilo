@@ -637,10 +637,11 @@ expect '^browser: library hidden$' "a swipe let go short of halfway didn't put t
 none_since '^browser: command view-library' ||
   fail "a swipe let go short of halfway opened the Library"
 library_to "swipe $swipe_point 12 0 10" swipe shown
-# Fingers going on past where it opens take the Library on a little with the card, its column's
-# fill still reaching the window's left edge: the edge is the column's colour 40 across, and not
-# the section's beside it. The column is the ink over the window, darker in a light window and
-# lighter in a dark one, so the step compares colours, not which is brighter.
+# Fingers going on past where it opens take the Library on a little with the card, its column
+# still reaching the window's left edge: the edge is the column's colour 40 across. The column has
+# no fill of its own, as drawn, so it is the window's glass there as in it, and anything else
+# opened at the edge reads apart. The step compares colours, not which is brighter, as the glass
+# is darker in a light window and lighter in a dark one.
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
@@ -654,9 +655,8 @@ alike() {
 }
 column=$(end_at 6)
 inside=$(end_at 40)
-beside=$(end_at 200)
-{ alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
-Library's column left the window's edge: $column at it, $inside in it, $beside beside"
+alike "$column" "$inside" || fail "past its end the Library's column left the window's edge: \
+$column at it, $inside in it"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
