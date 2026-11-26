@@ -245,6 +245,14 @@ impl Wall {
         self.started
     }
 
+    /// The folder it holds and when it went up, for a check of it after the wall is gone.
+    pub fn walked_in(&self) -> Option<WalkedIn> {
+        Some(WalkedIn {
+            folder: self.folder.clone()?,
+            started: self.started,
+        })
+    }
+
     /// Where the assistant inside keeps its temporary files, which its start is told (runner.rs).
     pub fn tmp(&self) -> Option<&Path> {
         self.tmp.as_deref()
@@ -544,12 +552,33 @@ impl Walked {
 }
 
 /// What the walk at a walled run's end found, for its task's line and that line's buttons alone,
-/// with the wall it was walked in, which Delete Links removes them from. It stays in memory: what
+/// with the folder it was walked in, which Delete Links removes them from. It stays in memory: what
 /// it lists is the user's own folder's layout.
 #[derive(Clone)]
 pub struct Found {
     pub walked: std::sync::Arc<Walked>,
-    pub wall: std::sync::Arc<Wall>,
+    pub folder: WalkedIn,
+}
+
+/// The folder a walk read and when its wall went up: all a check's buttons need of the wall, which
+/// a check never holds, so what ends with the wall (its listener) ends with the run.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WalkedIn {
+    folder: Granted,
+    started: SystemTime,
+}
+
+impl std::fmt::Debug for WalkedIn {
+    /// Never the folder, as what holds one may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalkedIn").finish_non_exhaustive()
+    }
+}
+
+impl WalkedIn {
+    pub fn root(&self) -> &Path {
+        self.folder.root()
+    }
 }
 
 impl std::fmt::Debug for Found {
@@ -563,10 +592,9 @@ impl std::fmt::Debug for Found {
 }
 
 impl PartialEq for Found {
-    /// The same walk, of the same wall.
+    /// The same walk, of the same folder.
     fn eq(&self, other: &Found) -> bool {
-        std::sync::Arc::ptr_eq(&self.walked, &other.walked)
-            && std::sync::Arc::ptr_eq(&self.wall, &other.wall)
+        std::sync::Arc::ptr_eq(&self.walked, &other.walked) && self.folder == other.folder
     }
 }
 
@@ -596,12 +624,12 @@ pub fn links_outside(_: &Wall) -> Walked {
 /// made, with the target the walk read, still leading out. No task can ask for it, and where the
 /// folder keeps no change time to trust, the list was every leaving link, and it deletes none.
 #[cfg(unix)]
-pub fn remove_links(wall: &Wall, links: &[LeavingLink]) -> Removed {
-    self::links::remove(wall, links)
+pub fn remove_links(folder: &WalkedIn, links: &[LeavingLink]) -> Removed {
+    self::links::remove(folder, links)
 }
 
 #[cfg(not(unix))]
-pub fn remove_links(_: &Wall, links: &[LeavingLink]) -> Removed {
+pub fn remove_links(_: &WalkedIn, links: &[LeavingLink]) -> Removed {
     Removed {
         removed: 0,
         left: links.len(),
@@ -1076,17 +1104,7 @@ mod tests {
         assert_eq!(wall.folder(), None);
         assert!(wall.watch_with(|_| ()).is_none(), "no folder, no watch");
         assert_eq!(links_outside(&wall), Walked::default());
-        let link = LeavingLink {
-            path: PathBuf::from("a"),
-            target: PathBuf::from("/b"),
-        };
-        assert_eq!(
-            remove_links(&wall, &[link]),
-            Removed {
-                removed: 0,
-                left: 1
-            }
-        );
+        assert_eq!(wall.walked_in(), None, "no folder, nothing to check");
     }
 
     /// The folder panel is the one place a folder is granted, so no other source file makes one.

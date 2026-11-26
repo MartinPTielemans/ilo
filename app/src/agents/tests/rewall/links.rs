@@ -22,7 +22,7 @@ fn found(walked: Walked) -> Found {
     let wall = Wall::granted_for_test(Granted::for_test());
     Found {
         walked: Arc::new(walked),
-        wall: Arc::new(wall),
+        folder: wall.walked_in().unwrap(),
     }
 }
 
@@ -257,7 +257,7 @@ fn delete_links_removes_exactly_the_listed_links(cx: &mut TestAppContext) {
     };
     let found = Found {
         walked: Arc::new(walked),
-        wall: Arc::new(wall),
+        folder: wall.walked_in().unwrap(),
     };
     run.said(&agent, Out::Links(found), cx);
     let [line] = checked(&run, &agent, cx).try_into().unwrap();

@@ -16,7 +16,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::{Granted, LeavingLink, Removed, Stop, Walked, Wall};
+use super::{Granted, LeavingLink, Removed, Stop, Walked, WalkedIn, Wall};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Limits {
@@ -112,7 +112,7 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
     };
     let slack = trust(&root);
     walked.every_leaving = slack.is_none();
-    let since = since(wall, slack);
+    let since = since(wall.started(), slack);
     let began = Instant::now();
     let mut seen = 0;
     // Names read so far, each within the budget: no directory is read past what's left of it.
@@ -228,28 +228,28 @@ fn same_device(root: &libc::stat, folder: &libc::stat) -> bool {
     root.st_dev == folder.st_dev
 }
 
-fn since(wall: &Wall, slack: Option<Duration>) -> SystemTime {
+fn since(started: SystemTime, slack: Option<Duration>) -> SystemTime {
     let slack = slack.unwrap_or(Duration::ZERO);
-    wall.started().checked_sub(slack).unwrap_or(UNIX_EPOCH)
+    started.checked_sub(slack).unwrap_or(UNIX_EPOCH)
 }
 
 /// Between its checks and the unlink, an entry swapped in under the same name in the same folder
 /// would be removed in the link's place: never a folder, and never anything outside the folder. A
 /// touch of the user's own link during the task, a change of its mode or times or a hard link to
 /// it, makes it the task's by its change time; Delete then removes that link, never its target.
-pub(super) fn remove(wall: &Wall, links: &[LeavingLink]) -> Removed {
+pub(super) fn remove(folder: &WalkedIn, links: &[LeavingLink]) -> Removed {
     #[cfg(target_os = "macos")]
     let _policy = dataless::left_in_the_cloud();
-    remove_with(wall, links, filesystem_slack)
+    remove_with(folder, links, filesystem_slack)
 }
 
-fn remove_with(wall: &Wall, links: &[LeavingLink], trust: Trust) -> Removed {
-    let root = wall.folder.as_ref().and_then(|granted| {
-        let (path, root) = (granted.root(), open_granted(granted).ok()?);
+fn remove_with(folder: &WalkedIn, links: &[LeavingLink], trust: Trust) -> Removed {
+    let root = (|| {
+        let (path, root) = (folder.folder.root(), open_granted(&folder.folder).ok()?);
         // A list of every leaving link is the user's own links too, so it deletes none.
         let slack = trust(&root)?;
-        Some((path, root, since(wall, Some(slack))))
-    });
+        Some((path, root, since(folder.started, Some(slack))))
+    })();
     let mut removed = Removed::default();
     for link in links {
         let gone = root

@@ -1016,7 +1016,9 @@ fn a_walled_run_with_a_folder_answers_with_its_links_after_the_sweep() {
     let Out::Links(found) = event.out else {
         panic!("no links after the sweep");
     };
-    assert!(Arc::ptr_eq(&found.wall, &wall));
+    assert_eq!(found.folder.root(), folder);
+    // Nothing of the answer holds the wall, so what ends with it, its listener, ends with the run.
+    assert_eq!(Arc::strong_count(&wall), 1);
     let paths: Vec<_> = found.walked.links.iter().map(|link| &link.path).collect();
     assert_eq!(paths, [&PathBuf::from("out")]);
     // Its Debug, which a log may print, counts.

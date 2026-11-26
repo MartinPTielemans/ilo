@@ -470,13 +470,13 @@ fn reaped(walled: Option<Arc<Wall>>, run: u32, answer: Option<(String, Unbounded
     if let Some(swept) = swept {
         tell(Out::Swept(swept));
     }
-    if wall.folder().is_none() {
+    let Some(folder) = wall.walked_in() else {
         return;
-    }
+    };
     let walked = links_outside(&wall);
     if walked.any() {
         let walked = Arc::new(walked);
-        tell(Out::Links(Found { walked, wall }));
+        tell(Out::Links(Found { walked, folder }));
     }
 }
 

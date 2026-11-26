@@ -134,7 +134,7 @@ impl Agents {
     /// read. The user's own folder's layout, which only that press is given.
     pub fn link_to_reveal(&self, key: &str, line: usize) -> Option<PathBuf> {
         let (checked, x11) = of_line(self.task(key)?, line)?;
-        let (walked, folder) = (&checked.found.walked, checked.found.wall.folder()?);
+        let (walked, folder) = (&checked.found.walked, checked.found.folder.root());
         if !x11 {
             return walked.links.first().map(|link| folder.join(&link.path));
         }
@@ -167,8 +167,9 @@ impl Agents {
         };
         let checked = &mut task.links[at / 2];
         checked.deleted = true;
-        let Found { walked, wall } = checked.found.clone();
-        let removing = cx.background_spawn(async move { wall::remove_links(&wall, &walked.links) });
+        let Found { walked, folder } = checked.found.clone();
+        let removing =
+            cx.background_spawn(async move { wall::remove_links(&folder, &walked.links) });
         let key = key.to_string();
         cx.spawn(async move |agents, cx| {
             let removed = removing.await;

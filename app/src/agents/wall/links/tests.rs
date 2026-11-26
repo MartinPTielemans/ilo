@@ -290,7 +290,7 @@ fn delete_removes_only_the_listed_links() {
     let only = [walked.links[0].clone()];
 
     assert_eq!(
-        remove_with(&wall, &only, exact),
+        remove_with(&wall.walked_in().unwrap(), &only, exact),
         Removed {
             removed: 1,
             left: 0
@@ -324,7 +324,7 @@ fn a_link_changed_since_the_walk_is_left() {
     folders.link("sub", "elsewhere/sub");
 
     assert_eq!(
-        remove_with(&wall, &walked.links, exact),
+        remove_with(&wall.walked_in().unwrap(), &walked.links, exact),
         Removed {
             removed: 0,
             left: 4
@@ -356,7 +356,7 @@ fn delete_takes_nothing_the_walk_could_not_have_listed() {
         link(""),
     ];
     assert_eq!(
-        remove_with(&wall, &named, exact),
+        remove_with(&wall.walked_in().unwrap(), &named, exact),
         Removed {
             removed: 0,
             left: 4
@@ -447,7 +447,7 @@ fn delete_takes_nothing_from_a_folder_put_in_the_granted_ones_place() {
     folders.swap();
     folders.link("away", &folders.outside);
     assert_eq!(
-        remove_with(&wall, &walked.links, exact),
+        remove_with(&wall.walked_in().unwrap(), &walked.links, exact),
         Removed {
             removed: 0,
             left: 1
@@ -538,7 +538,7 @@ fn with_no_change_time_to_trust_every_leaving_link_is_listed_and_delete_takes_no
     assert!(walked.every_leaving);
     assert_eq!(listed(&walked), ["away", "users"]);
     assert_eq!(
-        remove_with(&wall, &walked.links, untrusted),
+        remove_with(&wall.walked_in().unwrap(), &walked.links, untrusted),
         Removed {
             removed: 0,
             left: 2
