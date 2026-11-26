@@ -1404,14 +1404,15 @@ impl Shell {
                 self.show_hint(cx);
             }
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| {
-                    if let Some(handle) = first_run {
-                        shell.browser.end_first_run(handle.into(), cx);
-                    }
-                    if !quit {
-                        shell.run(Command::NewTab, "onboarding", cx);
-                    }
-                })
+                // Outside the shell's update, as the host draws the browser window, and with it
+                // the shell, before putting it on screen.
+                if let Some(handle) = first_run {
+                    let browser = shell.read(cx).browser.clone();
+                    browser.end_first_run(handle.into(), cx);
+                }
+                if !quit {
+                    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
+                }
             });
             #[cfg(test)]
             exit::DRAWN.with_borrow_mut(|drawn| {

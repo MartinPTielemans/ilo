@@ -1,9 +1,10 @@
 //! First run's exit (first-run v9 §10) and the hint it leaves under the landing field.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Entity, EntityInputHandler as _, Modifiers, TestAppContext, VisualTestContext, point, px, size,
+    AppContext as _, Entity, EntityInputHandler as _, Modifiers, TestAppContext,
+    VisualContext as _, VisualTestContext, point, px, size,
 };
 
 use super::super::card::KNOTS;
@@ -168,6 +169,26 @@ fn a_grown_exits_last_frame_is_the_grown_card(cx: &mut TestAppContext) {
     let [_, to_radius] = x::CORNERS;
     let whole = (0., 0., GROWN.0, GROWN.1, to_radius);
     assert_eq!(plates().last(), Some(&Some(whole)), "the frame it ends on");
+}
+
+/// First run's end reaches the host with the shell free to draw, so the Mac's host can draw the
+/// browser window before it puts it on screen, and the window comes drawn rather than blank.
+#[gpui::test]
+fn the_browser_window_can_draw_as_first_run_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    let window = cx.window_handle();
+    let drew = Rc::new(Cell::new(false));
+    let drawn = drew.clone();
+    *host.first_run_end.borrow_mut() = Some(Box::new(move |cx| {
+        cx.update_window(window, |_, window, cx| window.draw_and_present(cx))
+            .unwrap();
+        drawn.set(true);
+    }));
+    pressed_and_grown(&shell, cx, &host);
+    later(&shell, cx, x::GROW);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    assert!(drew.get(), "the browser window drew as first run ended");
+    assert!(host.take().contains(&"first run ended".to_string()));
 }
 
 #[gpui::test]
