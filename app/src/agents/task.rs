@@ -4190,7 +4190,7 @@ impl Agents {
                             did.text = url;
                         }
                         // The site is a host or a kind of page, never the assistant's words.
-                        None => (did.site, did.page) = ("page".into(), page::clip(url, 60)),
+                        None => (did.site, did.page) = ("page".into(), page::cut(url, 60)),
                     }
                     if tool == "open_tab" {
                         did.tab = None;
@@ -4203,12 +4203,12 @@ impl Agents {
                 let shows = element.as_ref().is_some_and(page::Element::shows_typed);
                 // What may show is cut at its most, as a chosen option is, never dropped whole.
                 if tool == "type" && shows {
-                    did.text = page::clip(&page::one_line(&typed), tools::TYPED_SHOWN);
+                    did.text = page::cut(&page::one_line(&typed), tools::TYPED_SHOWN);
                 }
             }
             "select" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
-                did.text = page::clip(&page::one_line(&string("option")), tools::TYPED_SHOWN);
+                did.text = page::cut(&page::one_line(&string("option")), tools::TYPED_SHOWN);
             }
             "press_key" => did.target = string("key"),
             "request" => did.target = super::request::described(arguments),
@@ -4232,7 +4232,7 @@ impl Agents {
                     (true, true, None) => String::new(),
                 };
             }
-            "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
+            "check" => did.target = format!("“{}”", page::cut(&string("text"), 40)),
             "list_tabs" | "ask" => {
                 (did.site, did.tab, did.page) = (String::new(), None, String::new())
             }
@@ -5024,7 +5024,7 @@ fn tense(step: &Traced) -> tools::Tense {
 fn address(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let rest = rest.strip_prefix("www.").unwrap_or(rest);
-    page::clip(rest.strip_suffix('/').unwrap_or(rest), 60)
+    page::cut(rest.strip_suffix('/').unwrap_or(rest), 60)
 }
 
 /// A duration in whole seconds as a trace says it, in the units the app's other times have:
@@ -5568,8 +5568,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         says: match tools::product_words(
             &step.did,
             step.ended.is_none(),
-            step.error.is_some(),
-            step.stopped(),
+            step.kind.is_some_and(tools::Kind::refused),
             waits(step),
         ) {
             false => step.did.says.clone(),
@@ -5675,11 +5674,28 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             _ => String::new(),
         },
     };
+    // Done with some or all failed, it says so in TS2's shape with the count (TS5), and the why
+    // they share.
+    let failed_on = (steps.iter()).filter(|(_, step)| step.error.is_some() && step.ended.is_some());
+    let whys: Vec<String> = failed_on
+        .map(|(_, step)| tools::reason(step.kind))
+        .collect();
+    let why = match whys.iter().all(|why| *why == whys[0]) {
+        true => whys.first().cloned().unwrap_or_default(),
+        false => String::new(),
+    };
+    let account = (running == 0 && failed > 0)
+        .then(|| tools::group_failed(&did, failed, count, &why))
+        .flatten();
+    let (title, description) = match account {
+        Some(account) => (account, String::new()),
+        None => (tools::group_title(&did, count, tense), description),
+    };
     TraceStep {
         key,
         glyph: tools::step_glyph(&did.tool),
         kind: tools::StepKind::of(&did),
-        title: tools::group_title(&did, count, tense).into(),
+        title: title.into(),
         description: description.into(),
         running: running > 0,
         failed: failed > 0,

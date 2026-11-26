@@ -412,7 +412,8 @@ impl Motion {
 
     /// Steps changed from `was`: one that came rises, and one that finished says so, its title
     /// crossfading to its past tense, then its note fading in. A step the assistant spoke to keeps
-    /// its words, and its account at the right fades in in its new tense.
+    /// its words, and its account at the right fades in in its new tense. With motion reduced, a
+    /// step changes to its new words and colours at once, with no fade (TS7).
     fn steps_changed<'a>(
         &mut self,
         was: impl Iterator<Item = &'a TraceStep>,
@@ -425,6 +426,9 @@ impl Motion {
                 _ = self.came.insert(Key::Step(step.key), now);
                 continue;
             };
+            if self.still {
+                continue;
+            }
             let ((old_title, old_note), (title, note)) = (step_words(old), step_words(step));
             if old_title != title {
                 let was = Was {

@@ -3832,7 +3832,12 @@ impl TraceLine {
         let lit = opens && !matches!(self.shimmers, Some(Some(_)));
         LineInks {
             words,
-            note: palette.gray(TRACE_NOTE),
+            // Under Reduce Motion the step under way holds whole at the title's ink, its account
+            // too, in place of the shimmer (TS7).
+            note: match self.shimmers {
+                Some(None) => palette.text(TITLE),
+                _ => palette.gray(TRACE_NOTE),
+            },
             glyph: match ilos {
                 true => palette.text(MARK_INK),
                 false => palette.glyph(TRACE_GLYPH_ALPHA),

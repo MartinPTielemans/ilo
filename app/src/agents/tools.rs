@@ -1235,6 +1235,25 @@ fn in_tense<'a>(tense: Tense, now: &'a str, done: &'a str, failed: &'a str) -> &
     }
 }
 
+/// A turn's same step on several tabs that failed on `failed` of its `pages` (TS5): "Couldn't
+/// click on 10 pages: not found", or on some, "Couldn't click on 1 of 10 pages: not found", with
+/// no reason when they share none. None for a step whose failure isn't that shape, as one that
+/// didn't see what it looked for (TS4), which keeps its line.
+pub fn group_failed(did: &Did, failed: usize, pages: usize, reason: &str) -> Option<String> {
+    let verb = words(did, Tense::Failed, false);
+    if !verb.starts_with("Couldn't ") || permission_stopped(&did.tool, &did.site).is_some() {
+        return None;
+    }
+    let on = match failed == pages {
+        true => format!("{pages} pages"),
+        false => format!("{failed} of {pages} pages"),
+    };
+    Some(match reason.is_empty() {
+        true => format!("{verb} on {on}"),
+        false => format!("{verb} on {on}: {reason}"),
+    })
+}
+
 /// A turn's same step on `pages` tabs, as one line: "Opened 10 pages", "Clicked “Closed” on 10
 /// pages".
 pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
@@ -1315,23 +1334,24 @@ const JUDGED_FIRST: [&str; 6] = [
     "run_steps",
 ];
 
-/// Whether a step's line keeps the product's words whatever the assistant sent for it: the one
-/// list (window-and-threads.md, Whose words, limit b). That's a step that changes something
-/// beyond its page (an order or a payment, a message sent, a request that may change something,
-/// a file saved, a sign-in, a bank's site, a tab closed or thrown away, a fenced site), one a page
-/// permission stopped, and one that failed or was refused (`failed`), stopped, or waits on the
-/// user (`waiting`). An act under way that ilo hasn't judged yet keeps them until it has, so one
-/// that turns out to be an order never showed as anything else; a step ilo never judges, such as
-/// a scroll, is the assistant's from the start.
-pub fn product_words(did: &Did, running: bool, failed: bool, stopped: bool, waiting: bool) -> bool {
+/// Whether a step's line is the product's account alone, whatever the assistant sent for it: the
+/// one list (window-and-threads.md, Whose words, limit b, as TS3 has it). That's a step that
+/// changes something beyond its page (an order or a payment, a message sent, a request that may
+/// change something, a file saved, a sign-in, a bank's site, a tab closed or thrown away, a fenced
+/// site), one a page permission stopped, one that was `refused`, and one that waits on the user
+/// with a product's button on its row (`waiting`). A step that failed or was stopped keeps the
+/// assistant's words, since its account at the right says so. An act under way that ilo hasn't
+/// judged yet keeps the account alone until it has, so one that turns out to be an order never
+/// showed as anything else; a step ilo never judges, such as a scroll, is the assistant's from
+/// the start.
+pub fn product_words(did: &Did, running: bool, refused: bool, waiting: bool) -> bool {
     let beyond = match did.judged {
         Judged::Refusable(why) => why != Why::Act,
         Judged::Not => running && JUDGED_FIRST.contains(&did.tool.as_str()),
         Judged::Page => false,
     };
     beyond
-        || failed
-        || stopped
+        || refused
         || waiting
         || OWN_WORDS.contains(&did.tool.as_str())
         || permission_stopped(&did.tool, &did.site).is_some()
@@ -1410,6 +1430,17 @@ pub enum Kind {
     StillLoading,
     DidntShow,
     Yours,
+}
+
+impl Kind {
+    /// Whether the step was refused, by the user, the thread's access or the browser's own
+    /// rules, rather than tried and failed: its line is the product's account alone (TS3).
+    pub fn refused(self) -> bool {
+        matches!(
+            self,
+            Kind::SaidNo | Kind::Outside | Kind::Password | Kind::NotWebPage | Kind::Yours
+        )
+    }
 }
 
 /// Why a step failed, in a few words, from its call's kind: "not found", "it's yours".
@@ -1593,7 +1624,7 @@ mod note_tests {
             judged,
             ..Did::default()
         };
-        let own = |did: &Did, running: bool| product_words(did, running, false, false, false);
+        let own = |did: &Did, running: bool| product_words(did, running, false, false);
         assert!(own(&did("click", Judged::Not), true), "not judged yet");
         assert!(
             !own(&did("scroll", Judged::Not), true),
@@ -1633,14 +1664,14 @@ mod note_tests {
         let camera = format!("{PERMISSION}camera");
         assert!(own(&did(&camera, Judged::Page), false), "a page permission");
         let plain = did("navigate", Judged::Page);
+        assert!(product_words(&plain, false, true, false), "refused");
         assert!(
-            product_words(&plain, false, true, false, false),
-            "failed or refused"
-        );
-        assert!(product_words(&plain, false, false, true, false), "stopped");
-        assert!(
-            product_words(&plain, true, false, false, true),
+            product_words(&plain, true, false, true),
             "waiting on the user"
+        );
+        assert!(
+            !product_words(&plain, false, false, false),
+            "failed or stopped, it keeps the assistant's words"
         );
     }
 

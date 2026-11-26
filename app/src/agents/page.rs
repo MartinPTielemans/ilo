@@ -1130,10 +1130,20 @@ pub fn quoted(text: &str, chars: usize) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// `text` in ilo's curly quotes, cut at `chars` characters, as plain text in one paragraph
-/// (`request::plain`), so nothing in it can close ilo's quote or move ilo's words after it.
+/// `text` at most `most` characters long, the "…" that says it was cut among them, as every clip
+/// in a trace counts (TS6).
+pub fn cut(text: &str, most: usize) -> String {
+    match text.chars().nth(most) {
+        Some(_) => format!("{}…", text.chars().take(most - 1).collect::<String>()),
+        None => text.into(),
+    }
+}
+
+/// `text` in ilo's curly quotes, cut to `chars` characters with its "…" (`cut`), as plain text in
+/// one paragraph (`request::plain`), so nothing in it can close ilo's quote or move ilo's words
+/// after it.
 pub fn curly(text: &str, chars: usize) -> String {
-    format!("“{}”", clip(&super::request::plain(text), chars))
+    format!("“{}”", cut(&super::request::plain(text), chars))
 }
 
 /// How many characters of what a field holds its line shows: enough to check a form's answers,
@@ -2561,5 +2571,13 @@ mod tests {
     fn a_name_is_clipped() {
         assert_eq!(clip("Example", 3), "Exa…");
         assert_eq!(clip("Ex", 3), "Ex");
+    }
+
+    /// A trace's clip counts its "…" (TS6): what's cut is as long as the most it may be.
+    #[test]
+    fn a_traces_clip_counts_its_ellipsis() {
+        assert_eq!(cut("Example", 4), "Exa…");
+        assert_eq!(cut("Exam", 4), "Exam");
+        assert_eq!(curly("Kestrel 14 Pro", 8), "“Kestrel…”");
     }
 }

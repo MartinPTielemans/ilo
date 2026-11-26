@@ -9765,6 +9765,20 @@ mod tasks {
         for (did, reason, account) in accounts {
             assert_eq!(failed_account(&did, reason), account, "{did:?}");
         }
+        // On several tabs, with the count (TS5), and whole where it didn't see (TS4).
+        use crate::agents::tools::group_failed;
+        let click = did("click", "“Closed”", "");
+        let on_all = group_failed(&click, 10, 10, "not found");
+        assert_eq!(
+            on_all.as_deref(),
+            Some("Couldn't click on 10 pages: not found")
+        );
+        let on_some = group_failed(&click, 1, 10, "");
+        assert_eq!(on_some.as_deref(), Some("Couldn't click on 1 of 10 pages"));
+        assert_eq!(
+            group_failed(&did("check", "“Sold out”", ""), 2, 2, ""),
+            None
+        );
     }
 
     /// What a step acted on is the page's words, quoted and clipped (TS2), or with no name, what
@@ -9777,7 +9791,7 @@ mod tasks {
         assert_eq!(named("", "link"), "a link");
         assert_eq!(named("", "image"), "an image");
         let long = named("The quick brown fox jumps over the lazy dog", "link");
-        assert_eq!(long, "“The quick brown fox jumps over t…”");
+        assert_eq!(long, "“The quick brown fox jumps over …”");
     }
 
     /// The stretch under way is an open trace with what the agent said along the way in it; its
@@ -10179,7 +10193,7 @@ mod tasks {
                 .collect::<Vec<_>>()
         );
 
-        // One tab's click failed: the line says how many, and the tab's says why.
+        // One tab's click failed: the line says on how many and why (TS5), and the tab's says why.
         let last = trace.last_mut().unwrap();
         (last.ended, last.error, last.kind) = (
             Some(at(7)),
@@ -10188,7 +10202,7 @@ mod tasks {
         );
         let clicks = lines(&trace).pop().unwrap();
         let said = (clicks.title.as_ref(), clicks.description.as_ref());
-        assert_eq!(said, ("Clicked “Closed” on 10 pages", "1 failed"));
+        assert_eq!(said, ("Couldn't click on 1 of 10 pages: not found", ""));
         let Opens::Steps(tabs) = &clicks.opens else {
             panic!()
         };

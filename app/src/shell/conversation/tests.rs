@@ -4091,6 +4091,41 @@ fn a_failed_line_wears_no_red() {
     }
 }
 
+/// Under Reduce Motion the step under way holds whole at the title's ink, the assistant's words
+/// and the account alike, in place of the shimmer (TS7); done, it's back in text-2.
+#[test]
+fn a_still_step_under_way_holds_at_the_titles_ink() {
+    use super::{TITLE, TraceLine};
+    use crate::palette::{Palette, Tone};
+    use crate::tokens::shell::conversation::TRACE_NOTE;
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let line = || {
+            TraceLine::new(
+                Fold::Step(1),
+                "Picking 16 GB".into(),
+                "Choosing “16 GB”".into(),
+            )
+        };
+        let still = TraceLine {
+            shimmers: Some(None),
+            ..line()
+        }
+        .inks(&palette);
+        assert_eq!(
+            (still.words, still.note),
+            (palette.text(TITLE), palette.text(TITLE)),
+            "{tone:?}"
+        );
+        let done = line().inks(&palette);
+        assert_eq!(
+            done.note,
+            palette.gray(TRACE_NOTE),
+            "{tone:?}: done, the account in text-2"
+        );
+    }
+}
+
 /// The user's message wraps inside the panel's column beside a page, never wider than it, so none
 /// of it leaves the panel; the stage's measure wouldn't fit there.
 #[test]
