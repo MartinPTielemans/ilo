@@ -134,6 +134,9 @@ pub struct Launch {
     pub helpers: bool,
     /// The wall it starts inside (#4101), or None for a start that asked for none.
     pub wall: Option<Arc<Wall>>,
+    /// What Codex's commands may read under its own sandbox (codex.rs): the folder the user
+    /// granted and ilo's copies of the files attached, which a task with pages alone has none of.
+    pub reads: Vec<PathBuf>,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.

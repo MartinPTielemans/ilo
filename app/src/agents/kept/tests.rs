@@ -69,6 +69,7 @@ fn launch() -> Launch {
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
         wall: None,
+        reads: Vec::new(),
     }
 }
 

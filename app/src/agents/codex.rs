@@ -4,6 +4,7 @@
 //! may run.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::process::ChildStdin;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -16,6 +17,13 @@ const INITIALIZE: u64 = 1;
 const THREAD: u64 = 2;
 /// Turns' requests count up from here.
 const TURNS: u64 = 100;
+
+/// The permission profile of ilo's own that a thread's commands run under, by its id, never shown.
+pub const PROFILE: &str = "ilo-thread";
+/// The oldest Codex whose thread/start takes a named profile and answers which one is active: the
+/// one they were read from (rust-v0.172.0, app-server-protocol/src/protocol/v2/thread.rs:99-102,
+/// 225-229). An older one could take the thread without the profile and never say so.
+pub const OLDEST: [u32; 3] = [0, 172, 0];
 
 /// The thread, the turn under way, and the messages that wait for either.
 #[derive(Default)]
@@ -151,6 +159,16 @@ pub fn read(
             }];
         }
         match id {
+            // Too old to say which profile it took, or not saying the one asked for: no thread
+            // starts, and the task ends as one whose program stopped.
+            INITIALIZE if !fits(message.pointer("/result/userAgent").and_then(Value::as_str)) => {
+                inner.starting = false;
+                return vec![Out::Gone("Codex is older than its floor".into())];
+            }
+            THREAD if !holds(message) => {
+                inner.starting = false;
+                return vec![Out::Gone("Codex didn't take the thread's profile".into())];
+            }
             INITIALIZE => {
                 _ = write_line(stdin, &json!({ "method": "initialized" }));
                 _ = write_line(
@@ -330,8 +348,8 @@ fn searched(item: &Value) -> Vec<Out> {
 /// The thread's settings: the browser's server as its tools, every feature of Codex's own off,
 /// and none of the user's MCP servers, each turned off by name as config.toml lists them. A model
 /// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
-/// files, network or shell, from which only a patch tool the read-only sandbox refuses and the
-/// browser server's resources are reachable; Codex has no setting that removes it.
+/// files, network or shell, from which only a patch tool the profile refuses and the browser
+/// server's resources are reachable; Codex has no setting that removes it.
 pub fn thread_params(launch: &Launch) -> Value {
     let mut config = Map::new();
     for feature in FEATURES_OFF {
@@ -360,6 +378,7 @@ pub fn thread_params(launch: &Launch) -> Value {
         };
         config.insert(format!("mcp_servers.{key}.enabled"), json!(false));
     }
+    config.insert(format!("permissions.{PROFILE}"), profile(&launch.reads));
     let mut env = Map::new();
     env.insert(super::bridge::TOKEN.into(), json!(launch.server.token));
     // Under approvalPolicy never Codex refuses an MCP call it would ask about; the browser asks
@@ -394,7 +413,9 @@ pub fn thread_params(launch: &Launch) -> Value {
         "cwd": launch.dir.to_string_lossy(),
         "approvalPolicy": "never",
         "approvalsReviewer": "user",
-        "sandbox": "read-only",
+        // In place of the read-only sandbox, which lets a command read the whole disk; Codex
+        // takes a profile or a sandbox, never both.
+        "permissions": PROFILE,
         "ephemeral": true,
         "developerInstructions": launch.instructions,
     });
@@ -402,6 +423,42 @@ pub fn thread_params(launch: &Launch) -> Value {
         params["model"] = json!(model);
     }
     params
+}
+
+/// What a thread's commands may do, as Codex's own sandbox holds them: read `reads` and nothing
+/// else, write nowhere, and no network. Codex can't take away its command tool, so this is what
+/// bounds it. The root's deny is the default the narrower reads reopen
+/// (codex-rs/protocol/src/permissions.rs:1836 at rust-v0.172.0); with no read, a command can't
+/// even load its own program. What Codex itself reads, and the browser's server, aren't commands.
+fn profile(reads: &[PathBuf]) -> Value {
+    let mut filesystem = Map::new();
+    filesystem.insert(":root".into(), json!("deny"));
+    for read in reads {
+        filesystem.insert(read.to_string_lossy().into_owned(), json!("read"));
+    }
+    json!({ "filesystem": filesystem, "network": { "enabled": false } })
+}
+
+/// Whether the `userAgent` Codex answers initialize with, `<originator>/<version> (…)`
+/// (codex-rs/login/src/auth/default_client.rs:152-166 at rust-v0.172.0), names OLDEST or newer.
+pub fn fits(agent: Option<&str>) -> bool {
+    let version = (agent.and_then(|agent| agent.split_whitespace().next()))
+        .and_then(|first| first.rsplit_once('/'))
+        .map(|(_, version)| version);
+    let parts: Option<Vec<u32>> = version.and_then(|version| {
+        (version.split(['.', '-', '+']).take(3))
+            .map(|part| part.parse().ok())
+            .collect()
+    });
+    parts.is_some_and(|parts| parts.len() == 3 && parts[..] >= OLDEST[..])
+}
+
+/// Whether Codex's answer to thread/start says the thread runs under PROFILE.
+pub fn holds(answer: &Value) -> bool {
+    answer
+        .pointer("/result/activePermissionProfile/id")
+        .and_then(Value::as_str)
+        == Some(PROFILE)
 }
 
 /// Codex's features that would give the model anything but the browser's tools.
