@@ -128,20 +128,20 @@ else
   ../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
 
   # The pointer resting on next names it and its key in the tooltip, hung off its glyph as the
-  # header's buttons' are, and the click on it ends the tooltip. The bar is 20 in from the page's
-  # corner, and the button 2 under its top and 28 tall, so its middle is at 36 and the tooltip's
-  # top 7 under that, at 43.
-  send move $((content - 320 + 252)) 36
+  # header's buttons' are, and the click on it ends the tooltip. The bar is 16 down, twice the
+  # card's inset of 8, and the button 2 under its top and 28 tall, so its middle is at 32 and the
+  # tooltip's top 7 under that, at 39.
+  send move $((content - 320 + 252)) 32
   next_keys=⌘G
   [ "$(uname)" = Darwin ] || next_keys=Ctrl+G
   expect "^browser: tooltip shown Next $next_keys\$" \
     "resting on the find bar's next didn't show Next and $next_keys"
-  expect '^browser: tooltip at [0-9.]* 43 ' "the find bar's tooltip didn't hang off its next's glyph"
+  expect '^browser: tooltip at [0-9.]* 39 ' "the find bar's tooltip didn't hang off its next's glyph"
   expect '^browser: tooltip window shown$' "the find bar's next's tooltip didn't fade in"
   ../tools/window-screenshot.sh "$pid" "$out/find-tooltip.png" || fail "no window to capture"
 
   # The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
-  send click $((content - 320 + 252)) 36
+  send click $((content - 320 + 252)) 32
   expect '^browser: tooltip hidden$' "a click on the find bar's next didn't end its tooltip"
   expect_find "$first" "open 2 of 3 apple" \
     "a click on the find bar's next didn't go to the next match"

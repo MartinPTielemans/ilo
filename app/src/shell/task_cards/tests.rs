@@ -12,6 +12,7 @@ use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, 
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
+use crate::tokens::shell::task_card::{FROM_LINE, GAP};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
@@ -334,6 +335,70 @@ fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
     }
 }
 
+/// An outside app's card has its line from the kind of its connection alone, a session with no
+/// task's token, and a task's never does, whatever either is named. The name, however long or made
+/// of whatever state words, moves nothing and changes no rim, mark or button.
+#[test]
+fn an_outside_apps_line_comes_from_its_connection_alone() {
+    let long = "Flights ".repeat(25);
+    let names = [
+        "Flights",
+        "Needs you",
+        "Done · 13:31",
+        "Working",
+        "Claude",
+        "",
+        long.as_str(),
+    ];
+    let forms = [
+        Form::Working,
+        Form::Waits,
+        Form::DoneUnseen,
+        Form::Ended,
+        Form::WorkingLine,
+        Form::DoneLine,
+        Form::EndedLine,
+    ];
+    for name in names {
+        for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
+            let task = Card {
+                name: name.into(),
+                ..paged(1, dot, &[30])
+            };
+            let session = Card {
+                replies: false,
+                ..task.clone()
+            };
+            let short = Card {
+                name: "Flights".into(),
+                ..session.clone()
+            };
+            for form in forms {
+                let (theirs, ours) = (look(&task, form, true), look(&session, form, true));
+                assert!(!theirs.from && ours.from, "{name:?} {form:?}");
+                assert_eq!(
+                    Look {
+                        from: false,
+                        ..ours
+                    },
+                    theirs,
+                    "{name:?} {form:?}"
+                );
+                assert_eq!(
+                    super::room(&session, form, 1),
+                    super::room(&short, form, 1),
+                    "{form:?}"
+                );
+                // A whole card makes room for the line over its first row; a folded one carries
+                // only the mark, in its one line.
+                let more = super::room(&session, form, 1) - super::room(&task, form, 1);
+                let line = FROM_LINE + GAP;
+                assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
+            }
+        }
+    }
+}
+
 /// Whether a card's line says its status in its word's place is a fact its maker set, never read
 /// off the status: words that begin as ilo's own fuller forms do, a session's client named as a
 /// state among them, leave the line at the word.
@@ -386,6 +451,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -396,6 +462,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: true,
                 button: true,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -409,6 +476,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: true,
+                from: false,
             },
             "{status}"
         );
@@ -1515,4 +1583,113 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
+}
+
+/// The shown thread's card joins its stage, on the stage's ground rather than the sidebar's: its
+/// title still reads there at 4.5:1, Dark and Light, on every theme.
+#[test]
+fn the_joined_cards_title_reads_on_its_stage() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::{Appearance, Theme};
+    let mut palettes = vec![Palette::default()];
+    for appearance in Appearance::ALL {
+        for step in 0..24 {
+            let angle = step as f32 * std::f32::consts::TAU / 24.;
+            for distance in [0., 0.35, 0.7, 1.] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(distance * angle.cos(), distance * angle.sin())
+                };
+                palettes
+                    .extend([Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(&theme), tone)));
+            }
+        }
+    }
+    for palette in &palettes {
+        let stage = super::super::conversation::stage_fill(palette);
+        let ground = gpui::Rgba { a: 1., ..stage };
+        let ink = gpui::Rgba::from(super::super::title_ink(palette, true));
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(
+            ratio >= 4.5,
+            "the joined card's title is {ratio:.2}:1 on {stage:?}"
+        );
+    }
+}
+
+/// The shown thread's card is one shape with its stage (spec-thread-stage, the join): it takes the
+/// stage's fill, has no outline of its own and reaches the sidebar's edge. A card not shown keeps
+/// its state's outline, and a waiting one shown gives up its rim and has it back once another
+/// thread is shown.
+#[gpui::test]
+fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+    use super::card::Framed;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
+    let two = vec![
+        paged(2, Dot::Waiting, &[1020]),
+        paged(1, Dot::Working, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two);
+    still(cx);
+    tick(5.);
+    draw(&shell, cx);
+    let framed = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let card = (shell.task_cards.iter())
+                .find(|card| card.agent.as_ref() == agent)
+                .expect("its card");
+            let space = shell.shown_space().expect("a Space shown");
+            let placed = (space.placed.iter())
+                .find(|placed| placed.agent.as_ref() == agent)
+                .expect("its place");
+            shell.card_framed(card, placed.form, shell.task_list.unseen.contains(agent))
+        })
+    };
+    let rim = Framed::Outlined {
+        outline: RIM,
+        width: RIM_WIDTH,
+    };
+    let outline = Framed::Outlined {
+        outline: OUTLINE,
+        width: OUTLINE_WIDTH,
+    };
+    assert_eq!(framed(&shell, "task-2", cx), rim);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let show = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        let at = (shell.read_with(cx, |shell, _| shell.task_plate_drawn(agent)))
+            .expect("its card")
+            .origin
+            + gpui::point(gpui::px(24.), gpui::px(8.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        draw(shell, cx);
+    };
+    show(&shell, "task-2", cx);
+    assert_eq!(
+        shell
+            .read_with(cx, |shell, _| shell.talk_agent())
+            .as_deref(),
+        Some("task-2")
+    );
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let (edge, plate) = shell.read_with(cx, |shell, _| {
+        (
+            shell.width(),
+            shell.task_plate_drawn("task-2").expect("its card"),
+        )
+    });
+    assert_eq!(
+        f32::from(plate.right()),
+        edge,
+        "the joined card's right end"
+    );
+    let joined = crate::shell::join::JOINED.take().expect("the card's join");
+    let palette = shell.read_with(cx, |shell, _| shell.palette);
+    let stage = crate::shell::conversation::stage_fill(&palette);
+    assert_eq!(joined.fill, gpui::Hsla::from(stage));
+    assert_eq!(joined.line, plate);
+    show(&shell, "task-1", cx);
+    assert_eq!(framed(&shell, "task-1", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-2", cx), rim);
 }

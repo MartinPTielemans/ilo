@@ -101,8 +101,8 @@ send layout
 view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
 ../tools/window-screenshot.sh "$pid" "$out/filled-library.png" || fail "no window to capture"
-[ "$view" = "417,8 ${docked#* }" ] ||
-  fail "after the page's full screen the Library left the page at $view, over its list, not at 417"
+[ "$view" = "644,8 ${docked#* }" ] ||
+  fail "after the page's full screen the Library left the page at $view, over its list, not at 644"
 send key escape
 expect '^browser: library hidden$' "escape didn't close the Library"
 exec 3>&-

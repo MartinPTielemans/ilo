@@ -9,8 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
-    HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP,
+    ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH,
+    FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item,
+    SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
 };
 use crate::agents::task::{ArchivedTask, Card, Dot, Word};
 use crate::shell::recorder::Recorder;
@@ -127,6 +128,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let items = &shell.library.as_ref().unwrap().items;
         let named = items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("tab {}", shell.archive[*index].id),
             Item::Task(index) => shell.archived_tasks[*index].agent.to_string(),
             _ => "other".to_string(),
@@ -146,7 +148,7 @@ fn row(row: usize) -> gpui::Point<gpui::Pixels> {
 
 fn filter(cx: &mut VisualTestContext) {
     let filter = point(
-        px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + ARCHIVE_WIDTH - SEARCH_RIGHT - FILTER_PAD_RIGHT - FILTER_CHEVRON / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());

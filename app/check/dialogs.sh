@@ -719,7 +719,8 @@ if windows && [ "$background_dialog" = "the foreground away" ]; then
   send key l cmd shift
   expect '^browser: command view-library via ' "Ctrl+Shift+L didn't open the Library"
   expect '^browser: library shown$' "Ctrl+Shift+L didn't show the Library"
-  send click $page_point
+  # The page beside the Library, which is 644 wide.
+  send click 744 400
   [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "a click on the page beside the Library didn't give it the keyboard: $focus"
   rm -f "$out/site/held.go" "$out/front"

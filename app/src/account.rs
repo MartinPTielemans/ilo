@@ -22,13 +22,15 @@ use gpui::{
 
 use crate::dialog::{Question, Return, Tone};
 use crate::settings_rows::{
-    Look, SLIDE, button, detailed_row, group, named_button, ring, stop_switch,
+    Look, SLIDE, button, detailed_row, end, frame, group, named_button, ring, stop_switch,
+    text as row_text,
 };
 use crate::text_input::TextInput;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+use crate::tokens::settings::sync;
 use crate::tokens::settings::{
-    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
-    STATUS_DOT, STATUS_DOT_GAP, WORD_GAP, WORD_NUMBER, WORD_SPACE, WORDS_COLUMNS,
+    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_X, STATUS_DOT,
+    STATUS_DOT_GAP, WORD_GAP, WORD_NUMBER, WORD_SPACE, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -1208,22 +1210,54 @@ impl Account {
 
     /// Signed in: the account, its devices, and the way to see the words again.
     fn signed_in(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
         let sign_out = self.button("sign-out", "Sign Out", cx, |account, window, cx| {
             account.sign_out(window, cx)
         });
-        let account = div().px(px(ROW_X)).py(px(PADDING)).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(END_GAP))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.state.email.clone())
-                        .child(self.status_line(cx)),
-                )
-                .child(div().flex_none().child(sign_out)),
+        // The address's first letter on a round tile, as the drawing has the account (S6).
+        let initial: String = (self.state.email.chars().next())
+            .map(|first| first.to_uppercase().collect())
+            .unwrap_or_default();
+        let tile = div()
+            .flex_none()
+            .size(px(sync::TILE))
+            .rounded_full()
+            .bg(look.control)
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(sync::TILE_TEXT))
+            .font_weight(FontWeight::MEDIUM)
+            .child(initial);
+        let account = div()
+            .min_h(px(sync::ACCOUNT))
+            .px(px(ROW_X))
+            .py(px(PADDING))
+            .flex()
+            .items_center()
+            .gap(px(sync::TILE_GAP))
+            .child(tile)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().truncate().child(self.state.email.clone()))
+                    .child(self.status_line(cx)),
+            )
+            .child(div().flex_none().ml(px(END_GAP)).child(sign_out));
+        // Today's path to the words, with its own question first, from the drawn row.
+        let show = self.button_said(
+            "show-words",
+            "Show…",
+            "Show Recovery Words…",
+            cx,
+            |account, window, cx| account.show_recovery_words(window, cx),
+        );
+        let words = detailed_row(
+            look,
+            "Recovery words",
+            "The only way back in if you lose every device.",
+            Some(show.into_any_element()),
         );
 
         let removable: Vec<_> = (self.devices.iter().flatten())
@@ -1232,10 +1266,8 @@ impl Account {
             .collect();
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
-                true => div()
-                    .text_color(self.look.detail)
-                    .child("This device")
-                    .into_any_element(),
+                // Where another's ✕ is, so the names and ends line up.
+                true => div().flex_none().w(px(sync::CLOSE_BOX)).into_any_element(),
                 false => {
                     let id = device.id.clone();
                     let remove =
@@ -1244,8 +1276,8 @@ impl Account {
                             cx.notify();
                         };
                     let spoken = format!("Remove {}", device.name);
-                    // From the keys, the keyboard goes on to the Remove of the device that takes
-                    // its place (list_keys' rule).
+                    // From the keys, the keyboard goes on to the ✕ of the device that takes its
+                    // place (list_keys' rule).
                     let (gone, listed) = (device.id.clone(), removable.clone());
                     let hand_on = move |_: &mut Self,
                                         click: &gpui::ClickEvent,
@@ -1254,70 +1286,106 @@ impl Account {
                         let keys = click.is_keyboard();
                         crate::list_keys::removing(&gone, &listed, Named::ByRow, keys, window, cx)
                     };
-                    self.button_said(
-                        format!("remove {}", device.id),
-                        "Remove",
-                        spoken,
-                        cx,
-                        remove,
-                    )
-                    .on_click(cx.listener(hand_on))
-                    .into_any_element()
+                    let name = format!("remove {}", device.id);
+                    let hovered = look.control;
+                    div()
+                        .id(SharedString::from(name.clone()))
+                        .when(self.a11y, |close| named_button(close, spoken))
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(look.ink))
+                        .relative()
+                        .flex_none()
+                        .size(px(sync::CLOSE_BOX))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .hover(move |close| close.bg(hovered))
+                        .child(
+                            svg()
+                                .path("icons/x.svg")
+                                .size(px(sync::CLOSE))
+                                .text_color(look.detail),
+                        )
+                        .child(self.place(name))
+                        .on_click(
+                            cx.listener(move |account, _, window, cx| remove(account, window, cx)),
+                        )
+                        .on_click(cx.listener(hand_on))
+                        .into_any_element()
                 }
             };
+            // What the account knows of each: its system, and this one said so.
+            let said = match device.current {
+                true => SharedString::from("This device"),
+                false => device.os.clone(),
+            };
             div()
-                .min_h(px(ROW_HEIGHT))
+                .min_h(px(sync::DEVICE))
                 .px(px(ROW_X))
                 .py(px(PADDING))
                 .flex()
                 .items_center()
+                .gap(px(sync::DEVICE_GAP))
+                .child(
+                    svg()
+                        .flex_none()
+                        .path(device_glyph(&device.os))
+                        .size(px(sync::DEVICE_GLYPH))
+                        .text_color(look.detail),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(div().truncate().child(device.name.clone()))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(text::SMALL))
-                                .text_color(self.look.detail)
-                                .child(device.os.clone()),
-                        ),
+                        .truncate()
+                        .child(device.name.clone()),
                 )
-                .child(div().flex_none().ml(px(END_GAP)).child(control))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(text::SMALL))
+                        .text_color(look.detail)
+                        .child(said),
+                )
+                .child(control)
         });
         let devices: Vec<gpui::Div> = devices.collect();
+        // Named alone, as drawn: what each switch syncs is its name.
         let chosen = [
-            detailed_row(
-                &self.look,
-                "Settings",
-                "Ad blocking, Peek, Little Windows and more. What's this computer's own stays here.",
-                Some(self.choice(Choice::Settings, cx)),
-            ),
-            detailed_row(
-                &self.look,
-                "Extensions",
-                "Those from the Chrome Web Store install on your other devices too.",
-                Some(self.choice(Choice::Extensions, cx)),
-            ),
+            frame()
+                .child(row_text(look, "Settings", None))
+                .child(end([self.choice(Choice::Settings, cx)])),
+            frame()
+                .child(row_text(look, "Extensions", None))
+                .child(end([self.choice(Choice::Extensions, cx)])),
         ];
+        let always = div()
+            .flex()
+            .items_baseline()
+            .justify_between()
+            .gap(px(END_GAP))
+            .child(header(look, "What syncs", false))
+            .child(
+                div()
+                    .mb(px(HEADING_BOTTOM))
+                    .px(px(ROW_X))
+                    .text_size(px(text::SMALL))
+                    .text_color(look.detail)
+                    .child("Spaces, tabs, bookmarks and passwords always do"),
+            );
         div()
             .flex()
             .flex_col()
-            .child(group(&self.look, [account]))
-            .child(header(&self.look, "Also sync", false))
-            .child(group(&self.look, chosen))
+            .child(group(look, [account, words]))
+            .child(always)
+            .child(group(look, chosen))
             .when(!devices.is_empty(), |section| {
                 section
-                    .child(header(&self.look, "Devices", false))
-                    .child(group(&self.look, devices))
+                    .child(header(look, "Devices", false))
+                    .child(group(look, devices))
             })
-            .child(div().mt(px(BUTTONS_TOP)).flex().child(self.button(
-                "show-words",
-                "Show Recovery Words…",
-                cx,
-                |account, window, cx| account.show_recovery_words(window, cx),
-            )))
             .child(self.delete_group(cx))
     }
 
@@ -1564,6 +1632,17 @@ fn header(look: &Look, title: &'static str, first: bool) -> gpui::Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(look.heading)
         .child(title)
+}
+
+/// A device's glyph on its row: a phone for a phone's system, else the laptop.
+fn device_glyph(os: &str) -> &'static str {
+    match ["iOS", "iPadOS", "Android"]
+        .iter()
+        .any(|phone| os.starts_with(phone))
+    {
+        true => "icons/device-phone.svg",
+        false => "icons/device-laptop.svg",
+    }
 }
 
 /// A grey line under a box.

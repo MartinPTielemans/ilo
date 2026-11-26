@@ -442,16 +442,8 @@ modal-rim = 0xffff_ff26
 modal-shadow = 0x0000_008f
 modal-shadow-y = 24.0
 modal-shadow-blur = 64.0
-# A menu's glass (#4090) lies on two shadows of its own, wider than a popover's: one close under its
-# edge and one wide, fainter in the light look. Its outline is the levels' own.
-menu-contact = 0x0000_0033
-menu-contact-y = 2.0
-menu-contact-blur = 6.0
-menu-shadow = 0x0000_0061
-menu-shadow-y = 16.0
-menu-shadow-blur = 40.0
-light-menu-contact = 0x0000_000f
-light-menu-shadow = 0x0000_002e
+# A menu's glass (#4090) lies on [floating]'s shadows, wider than a popover's, under the levels'
+# own outline.
 # How far a window that draws a popover's shadow itself reaches past what it holds, at least the
 # popover's `Level::reach` below it; a test holds every such window to it.
 window-margin = 40.0
@@ -572,8 +564,6 @@ arrow-foot-radius = 3.5
 radius = 20.0
 # The card's top is this far under the middle of the icon the arrow points at.
 below-icon = 25.0
-# Grey at 0.565 over the blur: lighter than the command bar's fill, as Arc's is.
-fill = 0x4848_4890
 # Emoji | Icon, 14.5 under the card's top, with the trash button 7 after it, the two centred; with
 # no icon to remove, Emoji | Icon is centred alone (Arc 1.170 cap).
 segments-top = 14.5
@@ -834,10 +824,26 @@ large-from = 40.0
 ghost = 0.22
 reveal = 1.5
 
+[floating]
+# One fill for everything that floats (the lead, 25 Nov): a menu, the downloads plate and the
+# pickers' card. It lies at its own alpha over the host's material whatever the Transparency level,
+# which changes the window's glass only, and opaque where the host has none. Its rim, 1 pt inside
+# its edge, and its two shadows, wide and close, are the same in both looks.
+fill = 0x3030_36eb
+light-fill = 0xf6f5_f1eb
+rim = 0xffff_ff1a
+light-rim = 0x0000_001f
+shadow = 0x0000_0080
+shadow-y = 22.0
+shadow-blur = 54.0
+contact = 0x0000_0040
+contact-y = 4.0
+contact-blur = 12.0
+
 [menu]
-# ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of the palette's
-# overlay fills, frosted where the host blurs under it, in glass (#4090): a light from the top,
-# a rim inside and the outline outside, and a wide shadow ([elevation] menu-*).
+# ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of [floating]'s fill,
+# frosted where the host blurs under it, in glass (#4090): a light from the top, the floating rim
+# inside and the outline outside, and the floating shadows.
 row = 24.0
 # A row's corner, and the panel's concentric with it, PADDING out: 7 + 5.
 row-radius = 7.0
@@ -885,9 +891,6 @@ edge = 8.0
 # How far a menu a control opens lies off the control's plate, so the plate shows whole beside it
 # (ours, #3148; the Space menu opens at the pointer, on its dot). Where a menu opens is #4108's.
 from-control = 4.0
-# The panel's rim, inside its edge, which reads in both looks; the menu's edge is never fainter
-# than this and the outline ([elevation]), as a dark menu's fill is near a dark window's (#4090).
-dark-rim = 0xffff_ff1f
 # The glass's light: white from the top, `top-light` at the edge to `top-light-end` at
 # `top-light-stop` of the way down and on to the bottom, and a line of it just under the top
 # edge in the dark look. The light look's inner rim is white, inside its Ink rim.
@@ -899,13 +902,15 @@ light-top-light-end = 0xffff_ff24
 light-inner-rim = 0xffff_ffb8
 top-light-stop = 0.46
 dark-label = 0xf3f0_e8eb
-# Shortcuts and chevrons.
-dark-secondary = 0xf3f0_e88c
+# Shortcuts and chevrons, at the least alpha that holds 4.5:1 on [floating]'s dark fill and down
+# its glass's light.
+dark-secondary = 0xf3f0_e89a
 dark-line = 0xf3f0_e81a
 dark-disabled = 0xf3f0_e861
-# A destructive item's label: Delete Space, a folder or a profile, Delete from Archive.
-dark-destructive = 0xf07a_63ff
-light-rim = 0x1616_1824
+# A destructive item's label: Delete Space, a folder or a profile, Delete from Archive. The dark
+# look's red is 0xf07a63 taken towards the label's ink only as far as 4.5:1 on [floating]'s dark
+# fill needs.
+dark-destructive = 0xf192_7eff
 light-label = 0x1616_18e6
 light-secondary = 0x1616_189e
 light-line = 0x1616_181a
@@ -1604,6 +1609,20 @@ tile-body-line = 17.0
 note-top = 10.0
 note-x = 4.0
 
+[settings.sync]
+# Sync & Import's account row, 56 tall, the account's initial on a round tile 28 across, 12
+# before the address; a device's row 44, its glyph 16 and 10 before its name, its ✕ 12 on a
+# 26 plate, and the current device's empty slot as wide.
+account = 56.0
+tile = 28.0
+tile-text = 13.0
+tile-gap = 12.0
+device = 44.0
+device-glyph = 16.0
+device-gap = 10.0
+close = 12.0
+close-box = 26.0
+
 [shell]
 # The docked sidebar's width at first, where the card starts.
 sidebar-width = 228.0
@@ -2065,11 +2084,15 @@ little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
-# the window shows, its pointer, Lucide's mouse-pointer-2, in the mark's Signal green with the
-# name of its Space beside it, and a Signal ring round the element, outset from its box, with the
-# ref the agent named it by in a chip on the ring's top left.
-color = 0x0e9f55
-text = 0xffffff
+# the window shows, its pointer, Lucide's mouse-pointer-2, in `primary` with the name of its Space
+# beside it, and a `primary` ring round the element, outset from its box, with the ref the agent
+# named it by in a chip on the ring's top left; the ring round a page a thread drives is the same.
+# `primary` is the text colour, never green; the chips' words and the pointer's outline, which
+# reads it on any page, are `on-primary`, the other look's ink.
+primary = 0xf3f0e8
+light-primary = 0x161618
+on-primary = 0x161618
+light-on-primary = 0xf3f0e8
 pointer = 20.0
 label-size = 11.0
 label-height = 18.0
@@ -2083,24 +2106,17 @@ tag-inset = 5.0
 tag-radius = 6.0
 
 [shell.task-area]
-# Ours (Agent task), as Arc and Dia have no tasks: a task's page watched in the page area has its
-# strip under it, not over it, as GPUI can't draw over a page. The strip is this tall at the
-# card's foot, the page's bottom edge this far up from the card's, and its back, words and chips
-# this far apart. The back is a chevron in a close button's box, on a plate under the pointer; the
-# words say who works and what it does; the chips are the toast's, its key after its words.
-strip = 40.0
-page-room = 46.0
-# Its chips are quiet while the agent works, and only when it waits on the user is the answer it
-# waits for, Hand Back, the one primary, in the Space's accent, its key in the accent's label at
-# this (#1080). The card's glyph leads the words, `gap` from back and from them.
-primary-key = 0.75
-gap = 10.0
-back = 26.0
-back-glyph = 16.0
-# Standing on one of its pages with the conversation beside it (#4095), the conversation is a panel
-# this wide at the card's right, at most half the card, and this far from the page.
-beside = 360.0
-beside-gap = 10.0
+# Ours (Agent task), as Arc and Dia have no tasks. A task's page is watched one way, standing on it
+# with the conversation beside it (#4095): the conversation is a panel this wide at the card's
+# left, between the sidebar and the page, and the page its own shape this far to its right. The
+# panel holds what a strip under the page would, as GPUI can't draw over a page.
+beside = 300.0
+beside-gap = 8.0
+# In a narrow window the page keeps this much, the least a page lays out in usably, and the panel
+# gives way down to its least; narrower still, both give way in proportion. Proposed, for the
+# lead's call.
+page-least = 320.0
+beside-least = 200.0
 
 [shell.assets]
 # Every Lucide outline's stroke, in its 24 grid: 1.5 pt in a 16 pt box, 1.3 at 14 and 1.69 at 18.
@@ -2290,8 +2306,10 @@ key-reach = 4.0
 
 [shell.library]
 # Where the card's left edge goes while the Library is open: the Library's right edge, which is
-# this for Downloads and Archived Tabs and `spaces_width` for Spaces.
-library-width = 533.0
+# this for every section but Spaces, which takes `spaces_width`. As drawn, 644: the 228 column and a
+# 416 list beside it, with no line between them (the lead, 25 Nov), the list narrower in a narrow
+# window (archive-least).
+library-width = 644.0
 # The Library's colours are alphas of the palette's ink (palette.rs), plates in Paper's terms.
 # The column of sections, as wide as the sidebar it takes (the drawing's 228), with no fill or edge
 # of its own, as drawn: its rows sit on the window as the sidebar's do.
@@ -2378,13 +2396,12 @@ plus-after = 37.0
 # Ours: a tab dragged over another Space's card rings it in that card's accent, this wide, inside
 # its edge (Arc's isn't recorded).
 card-drop-ring = 2.0
-# The search field, on the window buttons' row over the list, 4 in from the column's edge as Arc's
-# is. It runs 289, to 11 short of the Library's edge, but while the archive holds a Little ilo tab,
-# when Arc's Filter button, 73 wide and 220 in from the column's edge, takes its end and the field
-# stops 8 before it (ours).
-search-x = 4.0
-search-top = 10.0
-search-width = 289.0
+# The search field, as drawn: the list's padding is 8 over it and to its left and 16 to its right,
+# and it fills what that leaves, but while there's something to filter, when the Filter takes its
+# end and the field stops 8 before it.
+search-x = 8.0
+search-top = 8.0
+search-right = 16.0
 search-height = 36.0
 search-radius = 12.0
 # Inside it, as drawn: the magnifier 14 square, 12 in, and the text 8 after it.
@@ -2392,15 +2409,23 @@ search-glyph = 14.0
 search-glyph-x = 12.0
 search-text-x = 34.0
 search-placeholder = 0.56
-filter-x = 220.0
-filter-width = 73.0
 filter-gap = 8.0
-# History's Filter button is at least Arc's width, and grows from its end to fit what it filters
-# to with this much either side of its label.
-filter-pad = 12.0
-# The archive's list, beside the column.
+# The Filter, as drawn: what it filters to, then a chevron 10 square, 6 after it, 12 in on the left
+# and 10 on the right, so it grows from its end to fit its choice.
+filter-pad-left = 12.0
+filter-pad-right = 10.0
+filter-chevron = 10.0
+filter-chevron-gap = 6.0
+# The list, beside the column: the library's width less the column's.
 archive-top = 56.0
-archive-width = 304.0
+archive-width = 416.0
+# In a narrow window the list gives way, down to this, so the page keeps page-least beside the
+# Library; the column never does, so the Library is never under 532 (the lead, 26 Nov). The
+# window has no least width today.
+archive-least = 304.0
+# What the page keeps beside the Library before the list gives way. Proposed: [shell.task-area]
+# page-least's 320, the least a page lays out in usably.
+page-least = 320.0
 # A day's heading is a row of 36, as drawn, after rows as at the list's top: its small semibold
 # line, 14, at the row's foot, 8 over the rows under it.
 heading-x = 12.0
@@ -2772,16 +2797,11 @@ rim = 0.5
 # button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
 # lists this many downloads, newest first.
 count = 4
-# The floating level's fill, as a menu's, over the window's own look, and the window's inner line
-# along the whole of its outline, which is the plate and the button's box under it as one
-# shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
-# tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
-# panel's, the near bottom one square where it runs into the button. The fill and the line are the
-# drawing's floating fill and rim, held here until a menu takes the same: then one source for both.
-fill = 0x3030_36eb
-light-fill = 0xf6f5_f1eb
-rim = 0xffff_ff1a
-light-rim = 0x0000_001f
+# [floating]'s fill over the window's own look, and its rim along the whole of its outline, which
+# is the plate and the button's box under it as one shape; its shadows lie round it. On the sidebar
+# the fill alone is nearly the sidebar's own tone, so the line and the shadow are what lift it. Its
+# top corners and its far bottom one are a panel's, the near bottom one square where it runs into
+# the button.
 # The line's width. It's drawn half of this inside the outline, so all of it lies on the plate.
 line = 1.0
 radius = 16.0
@@ -3014,18 +3034,40 @@ chip-end = 6.0
 # A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
 # corners and fill to a row's hover plate.
 ghost-radius = 6.0
-# Ours, from the approved drawing of the task's view: the task's pages stand in a rail down the
-# page area's right edge beside the conversation's column, each tile this wide (about a sixth of
-# the window), `rail-gap` from the next and from the column. Where the area is narrower than
-# `rail-breakpoint`, the column at its least and the rail no longer both fit, and the rail falls
-# to one row of tiles under the header, scrolling sideways. A tile's head line is `rail-head` tall,
-# its favicon `rail-favicon`, the word's dot `rail-dot` across.
-rail-width = 196.0
-rail-gap = 12.0
-rail-breakpoint = 760.0
-rail-head = 20.0
-rail-favicon = 12.0
+# The thread's stage (spec-thread-stage.md): its pages run down a rail at the page area's right,
+# `rail-edge` from its top, foot and right, beside the conversation's column, tiles `rail-gap`
+# apart. Where the area is narrower than `rail-breakpoint`, the column at its width and the rail
+# with the column's inset each side no longer both fit, and the rail goes; the pages fall to one
+# row of tiles under the head, scrolling sideways, so each stays a click away. A tile is a head
+# (the page's icon, its title, and its state at the right) over its live picture, cut at
+# `tile-picture`; on a plate with an inner line. The page the assistant is on has the stronger
+# line and the ring before its word, in the text's ink. Light's plate and line are the ink at the drawing's strength (light-values.md),
+# Proposed.
+rail-width = 280.0
+rail-gap = 8.0
+rail-edge = 8.0
+rail-breakpoint = 848.0
+rail-head = 32.0
+rail-head-x = 10.0
+rail-head-gap = 7.0
+rail-favicon = 14.0
+rail-title = 12.0
+rail-title-line = 15.0
+rail-word = 11.0
+rail-word-line = 15.0
 rail-dot = 6.0
+tile-radius = 10.0
+tile-picture = 136.0
+tile-fill = 0x1616184d
+light-tile-fill = 0x16161811
+tile-line = 0xffffff14
+light-tile-line = 0x00000014
+tile-line-on = 0xf3f0e880
+light-tile-line-on = 0x16161880
+tile-ring = 12.0
+tile-ring-stroke = 1.8
+# The ring's track under its turning quarter: the ink at this (light-values.md's ring track).
+ring-track = 0.2
 
 [shell.task.motion]
 # Seconds, on the motion's ease, and points: the design file has no motion, so tools/design-sync.md
@@ -3047,6 +3089,8 @@ title = 0.2
 chips = 0.18
 chips-delay = 0.12
 chips-stagger = 0.05
+# The running ring's quarter goes round once in this, the Cast card's turn.
+ring-turn = 1.0
 chips-rise = 4.0
 # The status's highlight sweeps in `shimmer`, linear.
 shimmer = 1.8
@@ -3151,6 +3195,16 @@ pause-top = 5.6
 pause-bottom = 10.4
 pause-left = 6.3
 pause-right = 9.7
+# An outside app's card (spec-thread-card, "An outside app's card, told from a thread's"): a line
+# over row 1, `from-line` tall and a `gap` above it, of the product's mark, `from-mark` square in
+# the glyph's column, stroked `from-stroke` in the ink at `from-ink`, then the app's name in small
+# type, text-3, one line, its rows' inset from the inner left edge. Folded, the mark sits
+# `from-mark-gap` before the page's icon, at the line's right.
+from-line = 14.0
+from-mark = 12.0
+from-stroke = 1.2
+from-ink = 0.6
+from-mark-gap = 6.0
 
 [shell.task-card.motion]
 # Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. The ring
@@ -3165,17 +3219,21 @@ turn = 1.4
 # which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
 # page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
 # field at its foot is as tall as the URL field's row, and the lines meet a clean edge above it.
-column = 640.0
+column = 520.0
 inset = 24.0
-top = 16.0
+top = 30.0
 # The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
 # 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
 # the toast's 0.6 read 3.75:1 (#1080).
 chip-key = 0.68
-title-line = 20.0
-meta-line = 15.0
-meta-gap = 1.0
-header-bottom = 14.0
+# The stage's head (spec-thread-stage.md): the thread's title at `title-size` on `title-line`,
+# semibold, then `meta-gap` under it the line of who works on it at the body size on `meta-line` in
+# text-2, and the log `header-bottom` under the head.
+title-size = 20.0
+title-line = 26.0
+meta-line = 16.0
+meta-gap = 2.0
+header-bottom = 22.0
 # A task's pages are pictured at the page's own shape, this size's (#1080), and drawn on its rail at
 # the rail's width ([shell.task]). The pictures are taken at twice this size, when the agent acts.
 picture-width = 326.0
@@ -3190,7 +3248,9 @@ site-gap = 3.0
 # this size.
 picture-empty-glyph = 16.0
 # The agent's text, at body, and the gap under each block.
-text-line = 20.0
+text-line = 21.0
+# The words the user and the assistant wrote, at this size on `text-line`.
+text = 14.0
 block-gap = 14.0
 # Its Markdown: paragraphs this far apart and a list's items closer, each item's marker in a column
 # of its own so its lines wrap under its text, and a list in a list in by that column. Bold is
@@ -3201,14 +3261,25 @@ item-gap = 4.0
 list-marker = 18.0
 code-fill = 0.08
 link-line = 1.0
-link-underline = 0.4
+link-underline = 0.35
+# Under an answer, `answer-foot-top` down: a row `answer-foot` high, its parts `answer-foot-gap`
+# apart: the copy glyph, then the time it finished, both in text-3 (spec-thread-stage.md).
+answer-foot-top = 10.0
+answer-foot = 20.0
+answer-foot-gap = 8.0
+copy-glyph = 14.0
+answer-time = 12.0
+answer-time-line = 16.0
+text-3 = 0xf3f0e86b
+light-text-3 = 0x16161880
 # The user's message: its plate's padding, its share of the column at most.
-bubble-top = 7.0
-bubble-bottom = 8.0
-bubble-x = 12.0
-bubble-width = 0.8
-radius = 12.0
-bubble-fill = 0.08
+bubble-top = 10.0
+bubble-bottom = 10.0
+bubble-x = 14.0
+bubble-most = 380.0
+radius = 14.0
+bubble-fill = 0x1616184d
+light-bubble-fill = 0x16161811
 # The page chip in the first message, over its text: its words on the text's column, the plate
 # hanging out by its padding less 2.
 page-chip-height = 20.0
@@ -3218,28 +3289,48 @@ page-chip-favicon = 12.0
 page-chip-gap = 5.0
 page-chip-below = 5.0
 page-chip-fill = 0.08
-# The work between two messages, as a trace: a summary line, "Working · 5 steps" or "Worked for
-# 41s · 8 steps", and a chevron, right while folded and down while open. Open, its steps nest under
-# it, each a line of its glyph, its title in secondary and, fainter, what it took from 1 s or why
-# it failed. A line that opens has its own chevron and, under the pointer, a plate hanging outside
-# its text, which then goes to the title's colour. A rule runs down the open trace, in from the
-# column's edge. The step under way shimmers: a band of the full ink sweeps across its title, a
-# pass each period, from wherever the floor text keeps puts the title, as the card's status does.
-# A failed step's line is the find bar's red: its glyph, its title and why.
+# The work between two messages (spec-thread-stage.md › The log): one flat running log, a quiet
+# line per step. A stretch is a fold: its head `fold-head` tall, at work its word in the text's
+# ink at medium, the time counting up in text-2, and a chevron down; done, one phrase in text-2,
+# the icons of the pages it visited, `fold-icons-gap` apart, and a chevron right, and it closes by
+# itself. Under the head, its lines `stretch-gap` apart: an icon slot, the words at `trace-text` on
+# `trace-text-line`, and at the right why a step failed. A step is its kind's glyph, past tense in
+# text-2; the step under way wears the ring, present tense in the text's ink. Each joins the line
+# above with a short connector in the ink at `connector-ink`, under the middle of the icon slot.
+# A failed step is as quiet as any other, a cross for its glyph: never red.
 trace-line = 26.0
-trace-glyph = 14.0
-trace-glyph-alpha = 0.38
-trace-gap = 8.0
-trace-title = 0.55
-trace-note = 0.38
-trace-chevron = 10.0
+page-line = 28.0
+fold-head = 28.0
+fold-gap = 6.0
+fold-done-gap = 8.0
+fold-icon = 14.0
+fold-icons-gap = 4.0
+stretch-gap = 4.0
+trace-text = 13.0
+trace-text-line = 16.0
+trace-glyph = 16.0
+trace-glyph-alpha = 0.55
+trace-gap = 10.0
+trace-title = 0.6
+trace-note = 0.6
+trace-chevron = 12.0
 trace-hover = 0.06
 trace-hang = 6.0
-trace-indent = 22.0
-trace-rule = 1.0
-trace-rule-fill = 0.1
-trace-rule-x = 7.0
+step-ring = 14.0
+step-ring-stroke = 1.6
+connector-width = 1.0
+connector-height = 6.0
+connector-x = 7.5
+connector-above = 3.0
+connector-ink = 0.2
 trace-below = 12.0
+# What the assistant itself says in a trace, an opened thought and its note on a step, has one form
+# (spec-thread-stage.md, spec-held-abilities.md part 5): text-2 behind a rule `said-rule` wide at
+# the ink's `said-ink`, `said-gap` before the words; a note is `says-top` under its step's line.
+said-rule = 1.0
+said-ink = 0.2
+said-gap = 8.0
+says-top = 2.0
 # What a line opens to, under its title: a thought's or an error's text, or the page it saw.
 open-top = 2.0
 open-below = 6.0
@@ -3253,49 +3344,149 @@ shimmer-band = 0.3
 # The question's answers, and the result's Open, under its text.
 chips-top = 10.0
 chips-below = 16.0
-# The reply field: the ink at `reply-fill` with a hairline of it at `reply-rim` inside its edge, so
-# it reads as a field (#1080), and the key that sends it in a chip at its end, the command bar's
-# hint key, `reply-key-end` in from it.
+# The composer's fill, the field's: the ink at `reply-fill` (#1080). Where a thread takes no reply,
+# its line stands `reply-height` high in the composer's place.
 reply-height = 34.0
-reply-inset = 12.0
 reply-fill = 0.1
-reply-rim = 0.14
-reply-key-end = 7.0
-reply-bottom = 16.0
+reply-bottom = 20.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:
 # the window's material under them is the system's, so no fade's colour can match it.
 lines-below = 16.0
 
+# The composer at the column's foot (spec-thread-stage.md): in the field's fill (`reply-fill`) at
+# `composer-radius`, with a 1 px inner line of white at `composer-rim`, no blur, no shadow. The field
+# is `composer-field` high for a line, `composer-field-x` in, its words `composer-text` on
+# `composer-line`; under it the row of choices, the bar's own (command_bar/choices.rs), `composer-row`
+# high with `composer-row-under` of it under the items, `composer-row-x` in, `composer-row-gap`
+# apart; its round button `composer-round`, its arrow `composer-arrow`, Stop's square
+# `composer-square` at `composer-square-radius`.
+composer-radius = 16.0
+composer-rim = 0.05
+composer-field = 44.0
+composer-field-x = 16.0
+composer-text = 14.0
+composer-line = 21.0
+composer-row = 46.0
+composer-row-under = 6.0
+composer-row-x = 8.0
+composer-row-gap = 2.0
+composer-round = 30.0
+composer-arrow = 14.0
+composer-square = 10.0
+composer-square-radius = 2.0
+
 [shell.conversation.ilo]
 # Ours (#4086, no asks; the owner's dev build tunes these): what ilo itself says in a task's
 # conversation, drawn as the trace's lines are, flat and unboxed. An ilo line is the trace's line
-# with ilo's mark before its words, both at `ink` of the full ink; what it says more is under its
-# words, and its buttons, the conversation's page chips, under that, with a note under a button
-# that needs one. A name it takes from a page, the button it stopped at or a site, is cut to
-# `quoted-chars` and drawn in the title's ink, apart from ilo's words. A refusal repeated is one
+# with ilo's mark at `glyph` before its words, the mark in its own ink and the words at `ink` of
+# the full ink, the text's (spec-thread-stage.md, ilo's own line); what it says more is under its
+# words; a held step's reason, buttons and note are set as below. A name it takes from a page,
+# the button it stopped at or a site, is cut to `quoted-chars` and drawn in the title's ink, apart
+# from ilo's words. A refusal repeated is one
 # line, its count at its end in the trace's note ink.
-glyph = 13.0
-ink = 0.8
+glyph = 16.0
+ink = 1.0
 quoted-chars = 40.0
 text-top = 1.0
 text-line = 17.0
-buttons-top = 9.0
-buttons-gap = 6.0
 note-top = 8.0
 note-ink = 0.6
 below = 12.0
+# A held step (spec-thread-stage.md, screen 6): under its line, `held-top` down, a column `held-gap`
+# apart: the reason at `held-reason`/`held-reason-line` in text-2, the buttons `held-buttons-gap`
+# apart, each `held-button` high, `held-button-x` at each side, at `held-button-radius`, words at
+# `held-button-text`/`held-button-text-line`, the first on `primary` with `on-primary` words, the
+# second on `button`; then the quiet line at `held-note`/`held-note-line` in text-3. Under the
+# pointer a button shows at `held-button-hover`.
+held-top = 6.0
+held-gap = 10.0
+held-reason = 13.0
+held-reason-line = 19.0
+held-buttons-gap = 8.0
+held-button = 26.0
+held-button-x = 11.0
+held-button-radius = 8.0
+held-button-text = 12.0
+held-button-text-line = 16.0
+held-button-hover = 0.88
+held-primary = 0xf3f0e8ff
+light-held-primary = 0x161618ff
+held-on-primary = 0x161618ff
+light-held-on-primary = 0xf3f0e8ff
+held-button-fill = 0xf3f0e81a
+light-held-button-fill = 0x1616181a
+held-note = 12.0
+held-note-line = 16.0
 # A button that widens what the agent may do takes no press for this long, in seconds, after its
 # line comes or moves under the pointer, as Chromium's permission prompts do: an agent decides when
 # such a line comes, and the user's press may have been meant for what was there before.
 arm = 0.5
-# The live line is the trace's step under way, on the page the task stands on, with Take over at
-# the column's end.
-# The composer's row under the reply field: the task's access on a chip, which opens its menu, and
-# Stop at the row's end.
-composer-top = 6.0
-composer-chevron = 10.0
-composer-chevron-gap = 4.0
+
+[shell.conversation.panel]
+# The panel beside a page (spec-thread-stage.md, screens 5 and 6), standing in the stage's header
+# and rail. Its head is `head` high, `head-left` and `head-right` in, `head-gap` apart: the
+# thread's title at the body size on `title-line`, at semibold, the scale's weight nearest the
+# drawing's 590; then the thread's pages as buttons `pages-gap` apart, each `page` square at
+# `page-radius`, the page's icon at `page-icon`. The page shown wears `page-plate`, a page the user
+# hasn't been to is at `unvisited`. Left of them, while the page shown plays or is muted, its
+# speaker, a `speaker` glyph in the icon ink on a button the pages' size. The log is under it, its text `body-x` in and `body-top` down,
+# and the reply field and its row are `foot` in from the panel's sides and foot. Over the field,
+# `foot-gap` above it, the page's row for the page shown: `row` high, `row-left` in, `row-gap`
+# apart. While the thread works on it, the step's ring, the live line at `live`/`live-line` in
+# text-2, then Take Over as a held step's second button; while the user holds it, the live line and
+# Hand Back; once the thread has ended with it, Open alone. An outside app's session, which has no
+# composer here, has Stop at its right end in the composer's round button's form.
+head = 50.0
+head-left = 16.0
+head-right = 10.0
+head-gap = 8.0
+title-line = 18.0
+pages-gap = 2.0
+page = 28.0
+page-radius = 8.0
+page-icon = 14.0
+speaker = 16.0
+page-plate = 0xf3f0e838
+light-page-plate = 0x16161838
+unvisited = 0.55
+body-x = 16.0
+body-top = 6.0
+foot = 12.0
+foot-gap = 8.0
+row = 28.0
+row-left = 4.0
+row-gap = 8.0
+live = 12.0
+live-line = 16.0
+# The composer, reduced: `composer-radius`, the field `composer-field` high and `composer-field-x`
+# in, its words `composer-text` on `composer-line`; the row `composer-row` high, `composer-row-x` in,
+# the level `composer-level-x` in at `composer-level`/`composer-level-line`, the model in text-2
+# without its mark, the round button `composer-round` with Stop's square at `composer-square`. The
+# drawing gives no arrow or space under the row here: `composer-arrow` is the stage's less one, by
+# the round button's, and the row keeps the stage's `composer-row-under`. Its corner is the stage
+# composer's, `radius.panel`, where the drawing has 14: a corner is one of the four.
+composer-radius = 16.0
+composer-field = 38.0
+composer-field-x = 12.0
+composer-text = 13.0
+composer-line = 18.0
+composer-row = 40.0
+composer-row-x = 6.0
+composer-level-x = 7.0
+composer-level = 12.0
+composer-level-line = 16.0
+composer-round = 28.0
+composer-arrow = 13.0
+composer-square = 9.0
+# The user's message, reduced: `bubble-most` wide at most, its words wrapping inside it, which
+# leaves the body's column room at its left; `bubble-y` and `bubble-x` round them at
+# `bubble-text`/`bubble-line`.
+bubble-most = 232.0
+bubble-y = 8.0
+bubble-x = 12.0
+bubble-text = 13.0
+bubble-line = 18.0
 
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it

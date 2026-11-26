@@ -105,8 +105,6 @@ pub(super) struct Motion {
     swaps: HashMap<Fold, Was>,
     /// When each step finished, which its note fades in after.
     notes: HashMap<usize, Instant>,
-    /// Each trace's count of steps before it changed, by its key.
-    counts: HashMap<usize, (SharedString, Instant)>,
     status: Option<(SharedString, Instant)>,
     stop: Option<Instant>,
     /// The traces folding as their turn ended, by their keys.
@@ -392,15 +390,9 @@ impl Motion {
                 self.came.insert(Key::Aside(trace.key, index), now);
             }
         }
-        // Its count rolls while it counts the same thing, and its line crossfades as what it
-        // counts changes: to its helpers as the first comes, and back to its steps as it ends.
-        let ((count, of), (counts, now_of)) = (was.counted(), trace.counted());
-        if count != counts && of == now_of && trace.took.is_none() {
-            self.counts
-                .insert(trace.key, (count.to_string().into(), now));
-        }
-        if was.took != trace.took || of != now_of {
-            let (title, note) = was.summary();
+        // Its fold's words crossfade as its stretch ends, from Weaving to Woven in.
+        if was.took != trace.took {
+            let (title, note) = super::fold_words(was, now);
             self.swaps.insert(
                 Fold::Trace(trace.key),
                 Was {
@@ -485,10 +477,6 @@ impl Motion {
         eased(since + Duration::from_secs_f32(SWAP), now, FADE)
     }
 
-    pub(super) fn count(&self, trace: usize) -> Option<&(SharedString, Instant)> {
-        self.counts.get(&trace)
-    }
-
     pub(super) fn status(&self) -> Option<&(SharedString, Instant)> {
         self.status.as_ref()
     }
@@ -522,7 +510,6 @@ impl Motion {
         });
         self.swaps.retain(|_, was| !over(was.since, CROSSFADE));
         self.notes.retain(|_, since| !over(*since, SWAP + FADE));
-        self.counts.retain(|_, (_, since)| !over(*since, ROLL));
         self.status = self.status.take().filter(|(_, since)| !over(*since, ROLL));
         self.stop = self.stop.filter(|since| !over(*since, RISE));
         self.folded
@@ -550,7 +537,6 @@ impl Motion {
         !self.came.is_empty()
             || !self.swaps.is_empty()
             || !self.notes.is_empty()
-            || !self.counts.is_empty()
             || self.status.is_some()
             || self.stop.is_some()
             || !self.folded.is_empty()

@@ -109,6 +109,8 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // Stop's square in a thread's composer's round button, which rounds a glyph, not a corner.
+    "shell.conversation.composer-square-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
@@ -151,6 +153,14 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // A thread's stage, at the drawing's values (spec-thread-stage.md): the rail's tiles, and the
+    // user's message, rounder than a row as the drawing's bubble is.
+    "shell.task.tile-radius",
+    "shell.conversation.radius",
+    // A held step's buttons, at the drawing's 8.
+    "shell.conversation.ilo.held-button-radius",
+    // The page buttons in the panel beside a page, at the drawing's 8.
+    "shell.conversation.panel.page-radius",
     // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
     "theme-panel.segment-frame-radius",
     "theme-panel.segment-radius",

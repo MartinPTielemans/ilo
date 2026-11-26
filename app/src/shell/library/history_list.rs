@@ -117,7 +117,7 @@ impl History {
 }
 
 /// The calendar day of `at`, in milliseconds since the Unix epoch, where the user is.
-fn day(at: f64) -> Option<NaiveDate> {
+pub(super) fn day(at: f64) -> Option<NaiveDate> {
     Local
         .timestamp_millis_opt(at as i64)
         .single()

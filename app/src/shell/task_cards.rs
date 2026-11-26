@@ -45,8 +45,8 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
-    LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH,
+    GLYPH_GAP, ICON, LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -233,7 +233,11 @@ fn room(card: &Card, form: Form, lines: usize) -> f32 {
         _ => 0.,
     };
     let third = if third > 0. { GAP + third } else { 0. };
-    2. * PADDING + TITLE_LINE + GAP + second + third + UNDER
+    let from = match card::outside(card) {
+        true => FROM_LINE + GAP,
+        false => 0.,
+    };
+    2. * PADDING + from + TITLE_LINE + GAP + second + third + UNDER
 }
 
 /// How many lines a card's `finding` takes in a list `width` wide, at most FINDING_LINES: what

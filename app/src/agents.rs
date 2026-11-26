@@ -1794,7 +1794,12 @@ impl Agents {
         }
     }
 
-    fn call(&mut self, call: Call, cx: &mut Context<Self>) {
+    fn call(&mut self, mut call: Call, cx: &mut Context<Self>) {
+        // The assistant's word on its step goes out of the call before anything reads it, and
+        // only to its step in the trace. Only the product's own threads, a helper's calls among
+        // them, may say one: anyone else's is dropped unread.
+        let noted = is_task(&call.agent) && tools::NOTED.contains(&call.tool.as_str());
+        let says = tools::take_note(noted, &mut call.arguments);
         // A token's agent is always one the user connected, or a task of theirs.
         if !self.may_call(&call.agent) {
             _ = call
@@ -1844,7 +1849,7 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
-        self.trace_call(&call, cx);
+        self.trace_call(&call, says, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
         self.live.insert(call.agent.clone());
@@ -2536,9 +2541,14 @@ impl Agents {
 
     /// Starts the run's next step, which answers it through `advance`.
     fn next_step(&mut self, mut run: Run, cx: &mut Context<Self>) {
-        let Some(step) = run.steps.pop_front() else {
+        let Some(mut step) = run.steps.pop_front() else {
             return;
         };
+        // Each step's word goes out of it before anything reads it, and only to its trace line,
+        // where its action may carry one outside a run too.
+        let action = (step.get("action").and_then(Value::as_str)).unwrap_or_default();
+        let noted = is_task(&run.agent) && tools::NOTED.contains(&action);
+        let says = tools::take_note(noted, &mut step);
         // A step took the tab to a fenced site: the run stops there, saying nothing of its page.
         if let Some(site) = self.came_to(run.tab, cx) {
             let stopped = fence::run_stopped(run.done.len() + 1, run.tab, &site);
@@ -2553,7 +2563,15 @@ impl Agents {
             .to_string();
         let (reply, answer) = mpsc::channel();
         run.step = answer;
-        self.trace_step(&run.agent, run.connection, run.call, run.tab, &step, cx);
+        self.trace_step(
+            &run.agent,
+            run.connection,
+            run.call,
+            run.tab,
+            &step,
+            says,
+            cx,
+        );
         if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }

@@ -12,18 +12,20 @@ use super::glyph::{self, Mark, MarkInks, State};
 use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
-use crate::shell::conversation::words;
+use crate::shell::conversation::{stage_fill, words};
+use crate::shell::join::join;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
-use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, COUNT_LINE, DONE_LINE, DOT, FILL, GAP,
-    GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_AROUND, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT,
-    OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3,
-    TEXT_3_LIGHT, TITLE_LINE, UNDER, UNVISITED,
+    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, COUNT_LINE, DONE_LINE, DOT, FILL,
+    FROM_INK, FROM_LINE, FROM_MARK, FROM_MARK_GAP, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP,
+    LINE_AROUND, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING,
+    RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
+    UNVISITED,
 };
+use crate::tokens::shell::{DIVIDER, FAVICON_DRAWN};
 use crate::tokens::text;
 
 /// A waiting card's second line: the site of the page it waits on and the state's word (words
@@ -106,6 +108,15 @@ pub(super) struct Look {
     pub(super) rim: bool,
     pub(super) button: bool,
     pub(super) dot: bool,
+    /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
+    pub(super) from: bool,
+}
+
+/// Whether `card` is an outside app's session rather than a thread: from the kind of its connection
+/// alone, a session with no task's token, which is also why the user doesn't reply to it here.
+/// Nothing the app says, its name included, decides it.
+pub(super) fn outside(card: &Card) -> bool {
+    !card.replies
 }
 
 /// What `card` in `form` shows of its task's state. An ended task has today's glyph, which isn't a
@@ -116,6 +127,23 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
         rim: form == Form::Waits,
         button: form == Form::Waits && !card.pages.is_empty(),
         dot: form == Form::DoneUnseen,
+        from: outside(card),
+    }
+}
+
+/// A card's frame: one shape with its stage, or closed in its outline at `outline` of the ink,
+/// `width` wide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Framed {
+    Joined,
+    Outlined { outline: f32, width: f32 },
+}
+
+/// The room a card's outline takes, the rim's for a waiting one, kept whether it is drawn or not.
+fn rim_width(rim: bool) -> f32 {
+    match rim {
+        true => RIM_WIDTH,
+        false => OUTLINE_WIDTH,
     }
 }
 
@@ -213,16 +241,26 @@ impl Shell {
         let Some(placed) = placed else {
             return block.into_any_element();
         };
-        let block = block.h(px(placed.room)).px(px(PLATE_INSET));
+        let block = block.h(px(placed.room));
         if n == SLOT {
-            return block.child(self.slot_plate()).into_any_element();
+            return (block.px(px(PLATE_INSET)))
+                .child(self.slot_plate())
+                .into_any_element();
         }
         let Some(card) = self
             .task_cards
             .iter()
             .find(|card| card.agent == placed.agent)
         else {
-            return block.into_any_element();
+            return block.px(px(PLATE_INSET)).into_any_element();
+        };
+        let unseen = self.task_list.unseen.contains(&card.agent);
+        let framed = self.card_framed(card, placed.form, unseen);
+        // The shown thread's card runs to the sidebar's edge, where it meets its stage.
+        let block = match (framed, self.right) {
+            (Framed::Joined, false) => block.pl(px(PLATE_INSET)),
+            (Framed::Joined, true) => block.pr(px(PLATE_INSET)),
+            (Framed::Outlined { .. }, _) => block.px(px(PLATE_INSET)),
         };
         let now = clock();
         let coming = self.task_list.coming.get(&card.agent);
@@ -232,11 +270,7 @@ impl Shell {
             true => self.card_line(card, placed.form),
             false => self.card_whole(card, placed.form, cx),
         };
-        let unseen = self.task_list.unseen.contains(&card.agent);
-        let (outline, width) = match look(card, placed.form, unseen).rim {
-            true => (RIM, RIM_WIDTH),
-            false => (OUTLINE, OUTLINE_WIDTH),
-        };
+        let width = rim_width(look(card, placed.form, unseen).rim);
         let height = placed.room
             - if placed.form.line() {
                 2. * LINE_AROUND
@@ -244,18 +278,39 @@ impl Shell {
                 UNDER
             };
         let agent = card.agent.clone();
-        let name: SharedString = format!("{}, {}", card.title, self.said(card, placed.form)).into();
+        // An outside app's name, after the title, then what the card says of its state.
+        let from = outside(card).then(|| format!("{}, ", card.name));
+        let name: SharedString = format!(
+            "{}, {}{}",
+            card.title,
+            from.unwrap_or_default(),
+            self.said(card, placed.form)
+        )
+        .into();
+        let tip = (outside(card) && placed.form.line()).then(|| card.name.clone());
         let frame = div()
             .id(("task-plate", n))
             .relative()
             .h(px(height))
             .when(placed.form.line(), |frame| frame.mt(px(LINE_AROUND)))
             .rounded(px(RADIUS))
-            .border(px(width))
-            .border_color(Hsla::from(self.palette.ink).opacity(outline))
-            .bg(self.palette.plate(FILL))
             .opacity(opacity)
             .cursor_pointer();
+        // Joined, the card's own outline gives way to the stage's line round the shape, in the
+        // same width of room, so nothing inside it moves.
+        let frame = match framed {
+            Framed::Joined => {
+                let stage = stage_fill(&self.palette);
+                let line = self.palette.on_fill(stage).faint(DIVIDER);
+                // Placed from the frame's corner: left to itself it starts inside the room.
+                let shape = join(stage.into(), Some(line), self.right, RADIUS);
+                (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
+            }
+            Framed::Outlined { outline, width } => frame
+                .border(px(width))
+                .border_color(Hsla::from(self.palette.ink).opacity(outline))
+                .bg(self.palette.plate(FILL)),
+        };
         let drawn = drawn_listener(
             &self.task_list.plates_drawn,
             &self.task_list.rested,
@@ -267,11 +322,35 @@ impl Shell {
             .child(drawn)
             .child(body)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .when_some(tip, |frame, tip| {
+                frame.on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                    let drawn = shell.task_list.plates_drawn.borrow().get(&n).copied();
+                    let tip = drawn.filter(|_| *hovered).map(|frame| {
+                        let anchor = crate::tooltip::Anchor::under(frame, shell.viewport);
+                        (crate::tooltip::Tip::named(tip.clone()), anchor)
+                    });
+                    shell.hover_tip(tip, cx);
+                }))
+            })
             .on_click(cx.listener(move |shell, _, _, cx| {
                 log!("browser: command show-task via task card");
                 shell.show_group(agent.clone(), cx)
             }));
         block.child(frame).into_any_element()
+    }
+
+    /// How `card` in `form` is framed: joined to its stage while its thread is the one shown and
+    /// the stage starts at the sidebar's edge, in either of the thread's forms, and otherwise in
+    /// its state's outline, the waiting one's rim.
+    pub(super) fn card_framed(&self, card: &Card, form: Form, unseen: bool) -> Framed {
+        if self.joins_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
+            return Framed::Joined;
+        }
+        let rim = look(card, form, unseen).rim;
+        Framed::Outlined {
+            outline: if rim { RIM } else { OUTLINE },
+            width: rim_width(rim),
+        }
     }
 
     /// What a card says of its state to the screen reader, after its title.
@@ -311,6 +390,46 @@ impl Shell {
             .bg(self.palette.plate(TILE).opacity(fill))
             .children(dashes)
             .child(drawn)
+    }
+
+    /// The product's mark for an outside app's session, in the ink at `from-ink`.
+    fn from_mark(&self) -> impl IntoElement + use<> {
+        let colour = Hsla::from(self.palette.ink).opacity(FROM_INK);
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
+        )
+        .flex_none()
+        .size(px(FROM_MARK))
+    }
+
+    /// An outside app's line over a whole card's first row: the product's mark in the glyph's
+    /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
+    /// an ellipsis.
+    fn from_line(&self, card: &Card, text_3: Hsla) -> impl IntoElement + use<> {
+        div()
+            .h(px(FROM_LINE))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(GLYPH))
+                    .flex()
+                    .justify_center()
+                    .child(self.from_mark()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .ml(px(GLYPH_GAP))
+                    .truncate()
+                    .text_size(px(text::SMALL))
+                    .line_height(px(FROM_LINE))
+                    .text_color(text_3)
+                    .child(card.name.clone()),
+            )
     }
 
     /// A card's title on its line: one line, cut with an ellipsis.
@@ -391,12 +510,14 @@ impl Shell {
             }
         };
         let third = self.card_third(card, form, text_3, cx);
+        let from = outside(card).then(|| self.from_line(card, text_3));
         div()
             .size_full()
             .p(px(PADDING - width))
             .flex()
             .flex_col()
             .gap(px(GAP))
+            .children(from)
             .child(first)
             .child(div().pl(px(GLYPH + GLYPH_GAP)).child(second))
             .children(third.map(|third| div().pl(px(GLYPH + GLYPH_GAP)).child(third)))
@@ -564,6 +685,18 @@ impl Shell {
             .then(|| self.working_page(card))
             .flatten()
             .map(|tab| self.card_icon(tab, 1.));
+        // An outside app's mark at the right, before the page's icon; its name is the line's
+        // tooltip and spoken label, not drawn.
+        let from = outside(card).then(|| self.from_mark());
+        let end = (from.is_some() || on.is_some()).then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(FROM_MARK_GAP))
+                .children(from)
+                .children(on)
+        });
         div()
             .size_full()
             .px(px(LINE_X - OUTLINE_WIDTH))
@@ -572,7 +705,7 @@ impl Shell {
             .gap(px(GLYPH_GAP))
             .child(self.card_mark(card.dot, false))
             .child(self.card_title(card, weight))
-            .children(on)
+            .children(end)
             .into_any_element()
     }
 
