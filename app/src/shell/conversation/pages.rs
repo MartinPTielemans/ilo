@@ -19,8 +19,11 @@ pub(crate) struct Page<'a> {
     /// Its tab, from the first of its steps that names one: going to a page in a new tab names
     /// none, the steps after it do.
     pub tab: Option<u64>,
-    /// The site it went to or was on, which its line says while its tab has no title.
+    /// The site it went to or was on, which its line says while it has no title.
     pub site: SharedString,
+    /// The title the page had as its last step to see one ran, or empty: its line keeps the page
+    /// it was, though its tab has gone on to another.
+    pub title: SharedString,
     pub steps: Vec<&'a TraceStep>,
 }
 
@@ -50,12 +53,16 @@ pub(crate) fn paged(items: &[TraceItem]) -> Vec<Paged<'_>> {
                 if !on.went && (page.tab.is_none() || on.tab.is_none() || page.tab == on.tab) =>
             {
                 page.tab = page.tab.or(on.tab);
+                if !on.title.is_empty() {
+                    page.title = on.title.clone();
+                }
                 page.steps.push(step);
             }
             _ => paged.push(Paged::Page(Page {
                 key: step.key,
                 tab: on.tab,
                 site: on.site.clone(),
+                title: on.title.clone(),
                 steps: vec![step],
             })),
         }
@@ -118,6 +125,7 @@ mod tests {
             page: page.map(|(tab, site, went)| OnPage {
                 tab,
                 site: site.to_string().into(),
+                title: "".into(),
                 went,
             }),
             says: "".into(),

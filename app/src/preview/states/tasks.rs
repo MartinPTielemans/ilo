@@ -407,6 +407,10 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         page: Some(OnPage {
             tab: (key != 0).then_some(FIRST_TASK + 200),
             site: "tickets.example".into(),
+            title: match key {
+                0 => "".into(),
+                _ => WORKING_PAGES[0].0.into(),
+            },
             went: key == 0,
         }),
         says: "".into(),
@@ -521,6 +525,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             page: Some(OnPage {
                 tab: (key != 0).then_some(pages[0].0),
                 site: site(pages[0].2),
+                title: match key {
+                    0 => "".into(),
+                    _ => pages[0].1.into(),
+                },
                 went: key == 0,
             }),
             says: "".into(),
