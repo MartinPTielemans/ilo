@@ -2277,7 +2277,7 @@ fn esc_or_cancel_stops_an_import_back_at_its_kinds(cx: &mut TestAppContext) {
     }
 }
 
-/// A profile that hasn't opened stops the knot's lap and says so in the view's own words where
+/// A profile that hasn't opened stops the knot's lap and says the browser is taking too long where
 /// the kinds were, with Try Again, which a click or ↩ presses; Cancel still stops it.
 #[gpui::test]
 fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
@@ -2287,15 +2287,22 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     waited(cx, crate::import::STALL.as_secs_f32());
-    let said = view.read_with(cx, |view, _| view.guide().title);
-    assert_eq!(said, "Work hasn't opened.");
-    let Bringing::Running { stalled, .. } = brought(&view, cx).state else {
-        panic!("still running");
-    };
+    let bring = brought(&view, cx);
+    assert!(
+        matches!(
+            bring.state,
+            Bringing::Running {
+                stalled: Some(_),
+                ..
+            }
+        ),
+        "still running, stalled"
+    );
+    let name = bring.browsers[bring.picked.unwrap()].0.clone();
     assert_eq!(
-        stalled.as_deref(),
-        Some("Work hasn't opened."),
-        "the view's sentence"
+        super::bring::bring_held(&bring),
+        Some(format!("{name} is taking too long.")),
+        "in the failure's place"
     );
     assert!(!asks_for_frames(&shell, cx), "the knot stopped its lap");
     assert!(

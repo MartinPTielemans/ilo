@@ -568,21 +568,14 @@ impl Shell {
         inks: Inks,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let name = (bring.picked)
-            .and_then(|at| bring.browsers.get(at))
-            .map_or(String::new(), |(name, _)| name.clone());
+        if let Some(said) = bring_held(bring) {
+            return vec![self.bring_again(said, inks, cx)];
+        }
         let chips = match &bring.state {
             Bringing::Kinds(chips) => chips.clone(),
-            Bringing::Running {
-                stalled: Some(said),
-                ..
-            } => return vec![self.bring_again(said.to_string(), inks, cx)],
             Bringing::Running { chips, .. } => chips.clone(),
-            Bringing::Reading => Vec::new(),
-            Bringing::NoAccess => return vec![self.bring_notice(&name, inks, cx)],
-            Bringing::Unread => {
-                return vec![self.bring_again(format!("Couldn't read {name}."), inks, cx)];
-            }
+            Bringing::Reading | Bringing::Unread => Vec::new(),
+            Bringing::NoAccess => return vec![self.bring_notice(&picked_name(bring), inks, cx)],
         };
         let running = matches!(bring.state, Bringing::Running { .. });
         let motion = self.onboarding.as_ref().map(|o| &o.bring);
@@ -771,7 +764,7 @@ impl Shell {
 
     /// What keeps the import from going on, `said`, with Try Again: a browser that couldn't be
     /// read, which reads it again, another still to be picked; or a run whose profile hasn't
-    /// opened, in the view's own words, which asks it again.
+    /// opened, which asks it again.
     fn bring_again(&self, said: String, inks: Inks, cx: &mut Context<Self>) -> AnyElement {
         let [_, centre, ..] = t::BRING_CHIP;
         let [_, size, height] = t::LINE;
@@ -962,4 +955,24 @@ fn tile_place(at: usize) -> &'static str {
     .get(at)
     .copied()
     .unwrap_or("tile")
+}
+
+/// The browser picked, by name.
+fn picked_name(bring: &Bring) -> String {
+    (bring.picked)
+        .and_then(|at| bring.browsers.get(at))
+        .map_or(String::new(), |(name, _)| name.clone())
+}
+
+/// What keeps the import from going on, in the failure's place: a browser that couldn't be read,
+/// or a run whose profile is taking too long (FR20; v9 draws no stall).
+pub(super) fn bring_held(bring: &Bring) -> Option<String> {
+    let name = picked_name(bring);
+    match &bring.state {
+        Bringing::Running {
+            stalled: Some(_), ..
+        } => Some(format!("{name} is taking too long.")),
+        Bringing::Unread => Some(format!("Couldn't read {name}.")),
+        _ => None,
+    }
 }
