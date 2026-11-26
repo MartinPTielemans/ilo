@@ -341,6 +341,22 @@ pub fn leave(cx: &mut App) {
     }
 }
 
+/// Opens the name field, as the menu's Rename does, and types `text` there without keeping it:
+/// for the browser window's tests, which can't reach the card's layout.
+#[cfg(test)]
+pub(crate) fn rename_for_test(text: &str, cx: &mut gpui::TestAppContext) {
+    let window = cx.update(|cx| cx.global::<BoostEditorWindow>().0);
+    let mut cx = gpui::VisualTestContext::from_window(window.into(), cx);
+    (window.update(&mut cx.cx, |editor, window, cx| {
+        window.activate_window();
+        editor.choose(Item::Rename, window, cx)
+    }))
+    .unwrap();
+    cx.run_until_parked();
+    cx.simulate_input(text);
+    cx.run_until_parked();
+}
+
 /// The site the editor shows for, if it shows.
 pub fn open_for(cx: &App) -> Option<String> {
     let editor = cx.try_global::<BoostEditorWindow>()?.0.read(cx).ok()?;

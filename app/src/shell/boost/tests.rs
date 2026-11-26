@@ -481,6 +481,26 @@ fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
     assert!(card(&shell, cx).is_some(), "Zap brought no card back");
 }
 
+/// A name typed in the Boost editor and left there is kept as the mouse's back button takes the
+/// editor away, as a press outside would keep it.
+#[gpui::test]
+fn the_back_button_keeps_the_name_typed_in_the_editor(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    press(&shell, 0.25, LAST, cx);
+    crate::boost_editor::rename_for_test("Quiet news", &mut cx.cx);
+    host.take();
+    let back = gpui::MouseButton::Navigate(gpui::NavigationDirection::Back);
+    cx.simulate_mouse_down(point(px(60.), px(300.)), back, Modifiers::none());
+    cx.run_until_parked();
+    let open = cx.update(|_, cx| crate::boost_editor::open_for(cx));
+    assert_eq!(open, None, "the back button left the editor open");
+    let file = folder.boost("example.com").expect("the name made no file");
+    assert!(file.contains("Quiet news"), "{file}");
+}
+
 /// Window › View Boosts… opens Library › Boosts. Settings' switch off takes it away and on gives
 /// it back, and an agent's Space has none.
 #[gpui::test]

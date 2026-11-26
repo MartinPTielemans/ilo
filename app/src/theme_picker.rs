@@ -446,6 +446,22 @@ pub fn open_for(cx: &App) -> Option<u64> {
         .map(|editing| editing.space)
 }
 
+/// Opens the value field, as a press in it does, and types `text` there without keeping it: for
+/// the browser window's tests, which can't reach the panel's layout.
+#[cfg(test)]
+pub(crate) fn type_value_for_test(text: &str, cx: &mut gpui::TestAppContext) {
+    let window = cx.update(|cx| cx.global::<ThemePickerWindow>().0);
+    let mut cx = gpui::VisualTestContext::from_window(window.into(), cx);
+    (window.update(&mut cx.cx, |picker, window, cx| {
+        window.activate_window();
+        picker.type_value(window, cx)
+    }))
+    .unwrap();
+    cx.run_until_parked();
+    cx.simulate_input(text);
+    cx.run_until_parked();
+}
+
 /// The panel, for the window it opens over to watch whether it still shows.
 pub fn entity(cx: &App) -> Option<Entity<ThemePicker>> {
     cx.try_global::<ThemePickerWindow>()?.0.entity(cx).ok()
