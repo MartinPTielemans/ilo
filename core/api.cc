@@ -924,6 +924,20 @@ void bc_file_field_drop(bc_id field) {
   browser_core::AgentFileField::Drop(field);
 }
 
+bool bc_file_field_put(bc_id field, const char* const* paths, size_t count) {
+  if (!paths && count) {
+    return false;
+  }
+  std::vector<std::string> files;
+  for (size_t i = 0; i < count; ++i) {
+    if (!paths[i] || !*paths[i]) {
+      return false;
+    }
+    files.emplace_back(paths[i]);
+  }
+  return browser_core::AgentFileField::Put(field, std::move(files));
+}
+
 bc_id bc_agent_open_tab(const char* agent, const char* url) {
   const GURL target(url ? url : "");
   if (!agent || !*agent || !target.SchemeIsHTTPOrHTTPS()) {

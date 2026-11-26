@@ -2212,6 +2212,21 @@ BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
 // drops its fields itself.
 BC_EXPORT void bc_file_field_drop(bc_id field);
 
+// The app puts the |count| files at |paths| (UTF-8), its own copies of files a thread of its own
+// was given, into |field|, from BC_AGENT_PAGE_FILE_FIELD's answer, as DevTools'
+// DOM.setFileInputFiles puts them, with no dialog. The app has checked them against its rules for
+// files first: the core takes them as the app's, and a folder among them puts none. Only into the
+// same node, in the same document of the same frame, from the same origin, in a tab still in the
+// Space of the agent whose field it was, that the user doesn't hold, as bc_file_field_choose puts
+// the user's, and more than one only into a field that takes several. Then file_field_done, once,
+// from a task of its own: BC_FILE_FIELD_PUT with |count|, or BC_FILE_FIELD_LEFT if the field left
+// before the files went in, or BC_FILE_FIELD_NONE for a folder. Returns false, with no answer, for
+// a field it doesn't know or one already chosen or put for, for no files or several into a field
+// that takes one, and for a field whose frame has another document or origin by then, whose tab
+// left that agent's Space, or that the user holds. The app's: agents get none, and no name or path
+// of a file is logged.
+BC_EXPORT bool bc_file_field_put(bc_id field, const char* const* paths, size_t count);
+
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
 // one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is: a
