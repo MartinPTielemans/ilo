@@ -8,9 +8,12 @@
 # The pack's headers are first brought from the engine patches its engine was built with to the
 # branch's, so a core change that needs a new or changed patch is checked with it (#2747); one whose
 # headers don't apply fails as needing an engine with that patch, not as a compile error.
-# Not checked: a file the branch adds in platform/, which may be another OS's, a changed .mojom or
-# .proto (the pack has the engine's generated headers), a BUILD.gn change to a target's flags, and
-# the link.
+# The pack holds the engine's generated headers, so its engine must have generated them from the
+# core's .mojom and .proto files and its mojom() and proto_library() targets as the branch has them:
+# the newest pack that did is taken, and with none the job fails as needing a newer pack, as it does
+# for a patch that changes or drops what the engine generates from (#4347).
+# Not checked: a file the branch adds in platform/, which may be another OS's, a BUILD.gn change to
+# a target's flags or to a generator target other than those, and the link.
 name: Core Mac syntax
 
 on:
@@ -22,6 +25,7 @@ on:
       - engine/core_syntax.py
       - engine/series
       - engine/patches/**
+      - engine/pins.ini
       - .github/workflows/core-mac-syntax.yml
   # A push runs it only for commits new to the repo; this runs it on any ref.
   workflow_dispatch:
@@ -52,30 +56,84 @@ jobs:
             engine/series
             engine/patches
 
-      # The newest unexpired pack of pins.ini's major, from the newest Engine on macOS run that has
-      # one: a run of this repository's own engine-mac.yml, dispatched here. None yet means no Mac
-      # engine has been built since the packs began: nothing to check.
+      # The newest unexpired pack of pins.ini's major whose engine generated its headers from the
+      # core's .mojom and .proto files, and core/BUILD.gn's mojom() and proto_library() targets, as
+      # this branch has them, from a run of this repository's own engine-mac.yml, dispatched here.
+      # Lines of work that changed them differently each need a pack of their own, so a newer pack
+      # of another line is passed over (#4347). With packs but none that matches, or none whose
+      # commit could be fetched to compare, the branch needs a newer one: the job fails saying so,
+      # as a pass on the stale headers would mean nothing. Only when every Engine on macOS run was
+      # looked at and none packed one is there nothing to check. A failed call fails the job.
       - id: find
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail
           version=$(git config -f engine/pins.ini chromium.version)
           major=${version%%.*}
-          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=30" --jq '
+          case $major in
+            '' | *[!0-9]*)
+              echo "::error::engine/pins.ini's chromium.version, '$version', names no Chromium major."
+              exit 1
+              ;;
+          esac
+          # The core's generator targets, as a commit's core/BUILD.gn has them: their options change
+          # what the engine generates with no .mojom or .proto changed.
+          targets() {
+            git show "$1:core/BUILD.gn" | awk '
+              /^[[:space:]]*(mojom|proto_library)\(/ { on = 1 }
+              on { print; depth += gsub(/\{/, "{") - gsub(/\}/, "}"); if (depth <= 0 && /\}/) on = 0 }'
+          }
+          ours=$(targets HEAD)
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=100")
+          total=$(jq .total_count <<<"$runs")
+          listed=$(jq '.workflow_runs | length' <<<"$runs")
+          ids=$(jq -r '
             .workflow_runs[]
             | select(.path == ".github/workflows/engine-mac.yml" and .event == "workflow_dispatch"
                 and .head_repository.full_name == $ENV.GITHUB_REPOSITORY)
-            | .id'); do
-            name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
-              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-core-$major.\"))) | .name" | tail -1)
-            if [ -n "$name" ]; then
-              sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .head_sha)
+            | .id' <<<"$runs")
+          newest='' newest_sha='' newest_changes='' unfetched=''
+          for id in $ids; do
+            artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100")
+            name=$(jq -r --arg prefix "engine-mac-core-$major." '
+              .artifacts[] | select((.expired | not) and (.name | startswith($prefix))) | .name' \
+              <<<"$artifacts" | tail -1)
+            [ -n "$name" ] || continue
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .head_sha)
+            # Its commit's trees alone, which the diff of names needs.
+            git fetch -q --depth=1 --filter=blob:none --no-tags origin "$sha" || {
+              unfetched="$unfetched $id"
+              continue
+            }
+            # What the engine generates the core's headers from. Other BUILD.gn changes aren't
+            # among them: a branch that adds a file changes it, and the check takes an added file
+            # with the core's flags.
+            names=$(git diff --no-renames --name-only "$sha" HEAD -- core)
+            changes=$(grep -E '\.(mojom|proto|pdl|idl|json5)$' <<<"$names" || true)
+            built=$(targets "$sha")
+            [ "$built" = "$ours" ] ||
+              changes=$(printf '%s\n' "$changes" "core/BUILD.gn's generator targets" | grep -v '^$')
+            if [ -z "$changes" ]; then
               printf 'run=%s\nname=%s\nsha=%s\n' "$id" "$name" "$sha" >> "$GITHUB_OUTPUT"
               echo "Checking against run $id's $name, built at $sha." | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
+            [ -n "$newest" ] || { newest=$id newest_sha=$sha newest_changes=$(paste -sd ',' - <<<"$changes" | sed 's/,/, /g'); }
           done
-          echo "::notice::No Engine on macOS run has packed the core's headers for Chromium $major yet, so nothing is checked."
+          if [ -n "$newest" ]; then
+            gap="This branch's core needs a newer pack: since run $newest's, built at $newest_sha, it changes $newest_changes, and no Engine on macOS run has packed headers generated from them as this branch has them. So the core can't be checked here until an Engine on macOS run on a commit with them finishes."
+          elif [ -n "$unfetched" ]; then
+            gap="Engine on macOS runs$unfetched packed the core's headers for Chromium $major, but their commits couldn't be fetched to compare with this branch's core, so it can't be checked here."
+          elif [ "$listed" -lt "$total" ]; then
+            gap="None of the newest $listed of $total Engine on macOS runs packed the core's headers for Chromium $major, and older ones aren't looked at, so this branch's core can't be checked here until an Engine on macOS run finishes."
+          else
+            echo "::notice::No Engine on macOS run has packed the core's headers for Chromium $major yet, so nothing is checked."
+            exit 0
+          fi
+          echo "::error::$gap"
+          echo "$gap" >> "$GITHUB_STEP_SUMMARY"
+          exit 3
       - if: steps.find.outputs.run != ''
         uses: actions/download-artifact@v4
         with:

@@ -22,9 +22,10 @@ check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each cor
   compiled, as the branch has it, with the build's own flags, against the runner's SDK. The engine
   dir is the engine/ the packed engine was built from: its series and patches. Given it, the pack's
   headers are first brought to the branch's own patches, as engine/tree.sh brings a tree, so a core
-  change that needs a new engine patch is checked with it (#2747). A file whose target's packed
-  flags find no header it includes is checked again with the core's flags, as the branch may have
-  given its target a dependency the pack's build files don't have yet (#3868).
+  change that needs a new engine patch is checked with it (#2747). A branch whose patches change
+  what the engine generates headers from exits 3, as needing a newer pack (#4347). A file whose
+  target's packed flags find no header it includes is checked again with the core's flags, as the
+  branch may have given its target a dependency the pack's build files don't have yet (#3868).
 check --platform linux <pack dir> <checkout> <engine dir>: the same against a Linux pack, with
   each file its build compiled, tests included. Where the pack can't stand for the engine, as the
   branch needs an engine patch the packed headers don't take or changes what the engine generates
@@ -45,7 +46,8 @@ HEADER = re.compile(r"\.(h|hh|hpp|inc|def|ipp)$")
 CLANG = "third_party/llvm-build/Release+Asserts"
 OUT = "out/Release"
 LINUX_OUT = "out/Default"
-# A Linux check's exit when the pack can't stand for the engine, for a full compile instead.
+# A check's exit when the pack can't stand for the engine: on Linux for a full compile instead, on
+# the Mac as needing a newer pack (#4347).
 FALL_BACK = 3
 # Packed whole, whatever their names: libc++'s headers have none, and clang's are its own.
 WHOLE = [
@@ -332,8 +334,9 @@ def engine_patches(src, checkout, built, mac=True):
     """Brings the pack's headers from the series the engine was built with to the branch's: the
     headers' part of each patch from the first that differs is taken out, last first, and the
     branch's from there are put in. Returns the summary's lines, an error when one can't be, and
-    the branch's patches whose change to what the engine generates headers from isn't the engine's,
-    which the pack can't follow."""
+    the patches, the branch's or the engine's, whose change to what the engine generates headers
+    from differs between the two, which the pack can't follow. A patch renamed with the same change
+    to them, or the series's changes to them in another order, is no difference."""
     pins = open(os.path.join(checkout, "engine/pins.ini")).read()
     major = int(re.search(r"^\s*version\s*=\s*(\d+)\.", pins, re.M).group(1))
 
@@ -349,10 +352,15 @@ def engine_patches(src, checkout, built, mac=True):
     had, wants = headers(built), headers(os.path.join(checkout, "engine"))
     # What the build generates from, where it differs from the engine's: the pack can't follow it.
     generated = {name: g for name, _, g in had}
-    unpacked = [
-        f"{name} ({', '.join(path for path, _ in g)})"
-        for name, _, g in wants
-        if g and generated.get(name) != g
+    wanted = {name: g for name, _, g in wants}
+
+    def generators(patches):
+        return sorted(hunk for _, _, g in patches for hunk in g)
+
+    unpacked = [] if generators(had) == generators(wants) else [
+        f"{name} ({', '.join(path for path, _ in wanted.get(name) or generated[name])})"
+        for name in dict.fromkeys([*wanted, *generated])
+        if wanted.get(name, []) != generated.get(name, [])
     ]
     had = [(name, text) for name, text, _ in had if text]
     wants = [(name, text) for name, text, _ in wants if text]
@@ -418,6 +426,15 @@ def check(pack_dir, checkout, built=None, linux=False):
         print(f"::error::{error}")
         summary("\n\n".join([*engine_lines, error]))
         return 1
+    # The Mac has no tree to compile in instead, and a check on headers the branch's patches would
+    # generate otherwise means nothing, so it fails as needing a newer pack (#4347).
+    if unpacked:
+        gap = (
+            f"{engine_lines[-1]} So this branch's core needs a newer pack from an engine with them."
+        )
+        print(f"::error::{gap}")
+        summary("\n\n".join([*engine_lines[:-1], gap]))
+        return FALL_BACK
     out_dir = os.path.join(src, LINUX_OUT if linux else OUT)
     core = os.path.join(os.path.abspath(checkout), "core")
     if not os.path.lexists(os.path.join(src, "browser_core")):
