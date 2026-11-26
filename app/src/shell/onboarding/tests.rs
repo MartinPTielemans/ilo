@@ -2534,3 +2534,5 @@ fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
     assert!(placed("just-the-browser", cx).is_none());
     assert!(placed("main", cx).is_some(), "Next");
 }
+
+mod exit;
