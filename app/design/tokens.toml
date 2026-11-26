@@ -3420,10 +3420,8 @@ page-chip-fill = 0.08
 # lines `stretch-gap` apart, flat at one indent: an icon slot, the words at `trace-text` on
 # `trace-text-line`. A step is its kind's glyph, the assistant's words on it in text-2, and the
 # product's account at the right in text-2; a step with no words of the assistant's is its account
-# alone. The step under way shimmers, with no ring. A helper's line joins the one above with a
-# short connector in the ink at `connector-ink`, under the middle of the icon slot, and its step
-# under way wears the ring after its words. A failed step is as quiet as any other, a cross for
-# its glyph and its reason in its account: never red.
+# alone. The step under way shimmers, with no ring. A failed step is as quiet as any other, a cross
+# for its glyph and its reason in its account: never red.
 trace-line = 26.0
 fold-head = 28.0
 fold-gap = 6.0
@@ -3440,20 +3438,24 @@ trace-hover = 0.06
 trace-hang = 6.0
 step-ring = 14.0
 step-ring-stroke = 1.6
-connector-width = 1.0
-connector-height = 6.0
-connector-x = 7.5
-connector-above = 3.0
-connector-ink = 0.2
+# A helper's row (screen 4c), `helper-above` under the one before it with nothing between them:
+# its knot at `trace-glyph` in the icon slot, `trace-gap` before its name at `trace-text` on
+# `helper-name-line` in the text's ink; under the name at its indent, `helper-quiet-top` below the
+# name's top, one quiet line at `helper-quiet-text` on `helper-quiet-line`, the step it's on as a
+# step's line says it. Done, its knot stands at `knot-done`.
+helper-above = 4.0
+helper-name-line = 16.0
+helper-quiet-top = 20.0
+helper-quiet-text = 12.0
+helper-quiet-line = 17.0
+knot-done = 0.6
 trace-below = 12.0
-# What the assistant itself says in a trace, an opened thought and its note on a helper's step, has
-# one form (spec-thread-stage.md, spec-held-abilities.md part 5): text-2 behind a rule `said-rule`
-# wide at the ink's `said-ink`, `said-gap` before the words; a note is `says-top` under the
-# helper's line. Its note on one of the task's own steps leads that step's line instead.
+# What the assistant itself says in a trace, an opened thought, has one form (spec-thread-stage.md,
+# spec-held-abilities.md part 5): text-2 behind a rule `said-rule` wide at the ink's `said-ink`,
+# `said-gap` before the words. Its note on a step leads that step's line instead.
 said-rule = 1.0
 said-ink = 0.2
 said-gap = 8.0
-says-top = 2.0
 # What a line opens to, under its title: a thought's or an error's text, or the page it saw.
 open-top = 2.0
 open-below = 6.0

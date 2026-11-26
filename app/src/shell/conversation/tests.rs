@@ -639,9 +639,8 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
     );
 }
 
-/// While its task works every page says Working, where each reads `page_mark`: the rail's tile and
-/// the card's helper lines. A page that has
-/// finished loading, or that the task isn't in, is still Working: Done comes only with the task.
+/// While its task works every page says Working, where each reads `page_mark`: the rail's tile.
+/// A page that has finished loading, or that the task isn't in, is still Working: Done comes only with the task.
 #[gpui::test]
 fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppContext) {
     let mut working = card();
@@ -677,11 +676,6 @@ fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppCont
         [30, 31].map(|tab| view.said_logged.borrow().get(&tab).copied())
     });
     assert_eq!(tiles, [Some("Working"); 2], "the rail's tiles");
-    let helpers = shell.read_with(cx, |shell, _| {
-        let pages = shell.helper_pages(&"task-1".into(), vec![30, 31]);
-        pages.iter().map(|page| page.word).collect::<Vec<_>>()
-    });
-    assert_eq!(helpers, ["Working"; 2], "the card's helper lines");
 }
 
 /// A tile whose word turns to Needs you is brought into sight once, where the rail holds more
@@ -2974,62 +2968,46 @@ fn helper(step: TraceStep) -> TraceItem {
     }
 }
 
-/// A helper its task named says that name on its line, and its page's word after it, as the
-/// page's row in the sidebar ends: not its step, and nothing it found. Its page's favicon stands
-/// in its step's glyph's place, which a page without one keeps. One its task gave no name has
-/// its step's line.
+/// A helper its task named says that name on its line after ilo's knot (screen 4c): not its step,
+/// its page's word or favicon, and nothing it found. The knot is whole while its step is under way
+/// and quieter once it isn't. One its task gave no name has its step's line.
 #[test]
-fn a_named_helpers_line_says_its_name_and_its_pages_word() {
+fn a_named_helpers_line_says_its_name_after_the_knot() {
     use super::{HelperPage, helper_line};
-    use crate::shell::task_cards::PageWord;
-    let reading = step(10, "Reading shop.example", true);
     let name = gpui::SharedString::from("Northwick Home price");
-    for word in [PageWord::Working, PageWord::Done, PageWord::Paused] {
-        let page = HelperPage {
-            tab: 30,
-            title: "Lamps".into(),
-            favicon: None,
-            word: word.label(),
-        };
-        let line = helper_line(&reading, &name, Some(&page)).expect("named");
-        assert_eq!(
-            line.text(),
-            format!("Northwick Home price {}", word.label())
-        );
-        assert_eq!(
-            (line.glyph, line.icon.is_some()),
-            (Some(reading.glyph), false)
-        );
-    }
-    let favicon = std::sync::Arc::new(gpui::Image::empty());
     let page = HelperPage {
         tab: 30,
-        title: "".into(),
-        favicon: Some(favicon),
-        word: PageWord::Working.label(),
+        title: "Lamps".into(),
     };
-    let line = helper_line(&reading, &name, Some(&page)).expect("named");
-    assert_eq!((line.glyph, line.icon.is_some()), (None, true));
+    for running in [true, false] {
+        let reading = step(10, "Reading shop.example", running);
+        let line = helper_line(&reading, &name, Some(&page)).expect("named");
+        assert_eq!(line.text(), "Northwick Home price");
+        assert_eq!((line.glyph, line.knot), (None, Some(running)));
+    }
     // A page that's gone leaves the name alone.
+    let reading = step(10, "Reading shop.example", true);
     let line = helper_line(&reading, &name, None).expect("named");
     assert_eq!(line.text(), "Northwick Home price");
-    assert!(helper_line(&reading, &"".into(), Some(&page)).is_none());
+    // With no name and an untitled page, nothing to be known by.
+    let untitled = HelperPage {
+        tab: 30,
+        title: "".into(),
+    };
+    assert!(helper_line(&reading, &"".into(), Some(&untitled)).is_none());
 }
 
 /// A started helper its task gave no name has no empty line: its row appears with its first
-/// words, its page's title once it has a page with one, said as a name is with the page's word
-/// after it. Until then it draws nothing, and its stretch's count alone shows it. One with a step
-/// and no titled page has its step's line.
+/// words, its page's title once it has a page with one, said as a name is. Until then it draws
+/// nothing, and its stretch's count alone shows it. One with a step and no titled page has its
+/// step's line.
 #[test]
 fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
     use super::{HelperPage, HelperRow, helper_row};
-    use crate::shell::task_cards::PageWord;
     let none = gpui::SharedString::default();
     let page = |title: &'static str| HelperPage {
         tab: 30,
         title: title.into(),
-        favicon: None,
-        word: PageWord::Working.label(),
     };
     // Started, with no step yet: its line has no words of its own.
     let began = step(10, "", true);
@@ -3045,7 +3023,7 @@ fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
         let HelperRow::Known(line) = helper_row(on, &none, Some(&titled)) else {
             panic!("its page has a title");
         };
-        assert_eq!(line.text(), "Lamps · Northwick Home Working");
+        assert_eq!(line.text(), "Lamps · Northwick Home");
     }
     // Its count is its stretch's, with or without a line.
     let trace = Trace {

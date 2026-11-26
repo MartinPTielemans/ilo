@@ -64,17 +64,17 @@ use crate::tokens::shell::conversation::{
     CHIPS_TOP, CODE_FILL, COLUMN, COMPOSER_ARROW, COMPOSER_FIELD, COMPOSER_FIELD_X, COMPOSER_LINE,
     COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
     COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
-    CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK, CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH,
-    FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, INSET, ITEM_GAP, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3,
-    LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
-    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
-    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK,
-    SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING,
-    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TITLE_SIZE, TOP,
-    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
-    TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH,
-    TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    COPY_GLYPH, FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, HELPER_ABOVE, HELPER_NAME_LINE,
+    HELPER_QUIET_LINE, HELPER_QUIET_TEXT, HELPER_QUIET_TOP, INSET, ITEM_GAP, KNOT_DONE,
+    LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP,
+    META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL,
+    PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP,
+    PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
+    REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK, SAID_RULE, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
+    SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE,
+    TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA,
+    TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
+    TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -2357,19 +2357,16 @@ impl TalkView {
                 TraceItem::Helper { step, name, tab } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
                     match helper_row(step, name, page) {
-                        HelperRow::Known(mut line) => {
-                            // At its right, the step it's at, with the ring.
-                            if step.running && !step.title.is_empty() {
-                                line.note = step.title.clone();
-                                line.ring_after = Some(self.turned(look, cx));
-                            }
-                            line.joined_above = true;
-                            self.crossfade(Fold::Step(step.key), &mut line, look);
-                            let line = trace_line(look, line).into_any_element();
-                            let line = risen(line, self.motion.came(Key::Step(step.key)), look);
-                            // Its step's note is under its own line, never the task's.
-                            let says = self.says(step, TRACE_GLYPH + TRACE_GAP, look);
-                            nest.child(line).children(says)
+                        HelperRow::Known(line) => {
+                            // Under its name, the step it's on, or done its last, as a step's
+                            // line says it, with no lines between it and the row before.
+                            let row = div()
+                                .flex_none()
+                                .pt(px(HELPER_ABOVE))
+                                .child(trace_line(look, line))
+                                .children(self.quiet_line(step, look));
+                            let row = row.into_any_element();
+                            nest.child(risen(row, self.motion.came(Key::Step(step.key)), look))
                         }
                         HelperRow::Step => nest.children(self.step_line(step, true, look, cx)),
                         HelperRow::Nothing => nest,
@@ -2537,12 +2534,7 @@ impl TalkView {
         let open = opens && self.is_open(fold, false);
         let (title, note) = step_words(step);
         let mut line = TraceLine::new(fold, title, note);
-        // Heard, the account comes first, and the words are the assistant's, never the product's.
-        if !step.says.is_empty() {
-            let name = (self.shown.as_ref()).map_or("".into(), |shown| shown.name.clone());
-            let says = words::says(&name, step.says.as_ref());
-            line.heard = Some(format!("{}, {says}", step.title));
-        }
+        line.heard = self.heard(step);
         line.glyph = glyph.then_some(step.glyph);
         line.failed = step.failed;
         line.chevron = opens.then(|| self.chevron(fold, open, look));
@@ -2610,27 +2602,35 @@ impl TalkView {
         std::iter::once(line).chain(sub).chain(opened).collect()
     }
 
-    /// The assistant's own word on why it took a helper's `step`, one line under the helper's own
-    /// line from `under`, as the assistant's, and heard as theirs. None for a step with none.
-    fn says(&self, step: &TraceStep, under: f32, look: &Look) -> Option<gpui::AnyElement> {
+    /// What a screen reader hears for `step`'s line when the assistant spoke to it: its account,
+    /// then whose words those are, never the product's.
+    fn heard(&self, step: &TraceStep) -> Option<String> {
         (!step.says.is_empty()).then(|| {
-            let name =
-                (self.shown.as_ref()).map_or(SharedString::default(), |shown| shown.name.clone());
-            div()
-                .id(("conversation-says", step.key))
-                .when(look.a11y, |says| {
-                    says.role(Role::Label)
-                        .aria_label(words::says(&name, step.says.as_ref()))
-                })
-                .pl(px(under))
-                .pt(px(SAYS_TOP))
-                .child(
-                    assistant_words(look.palette, step.says.words())
-                        .whitespace_nowrap()
-                        .truncate(),
-                )
-                .into_any_element()
+            let name = (self.shown.as_ref()).map_or("".into(), |shown| shown.name.clone());
+            format!("{}, {}", step.title, words::says(&name, step.says.as_ref()))
         })
+    }
+
+    /// A helper's quiet line under its name: its `step` as a step's line says it, at the name's
+    /// indent, shimmering while it's under way. A helper's line never opens. None before its
+    /// first step has words.
+    fn quiet_line(&self, step: &TraceStep, look: &Look) -> Option<gpui::AnyElement> {
+        let (title, note) = step_words(step);
+        if title.is_empty() {
+            return None;
+        }
+        let mut line = TraceLine::new(Fold::Step(step.key), title, note);
+        line.heard = self.heard(step);
+        line.quiet = true;
+        line.shimmers = step.running.then(|| look.shimmer(self.made));
+        self.crossfade(Fold::Step(step.key), &mut line, look);
+        line.note_alpha = line.note_alpha.min(self.motion.note(step.key, look.now));
+        let quiet = div()
+            .flex_none()
+            .pl(px(TRACE_GLYPH + TRACE_GAP))
+            .pt(px(HELPER_QUIET_TOP - HELPER_NAME_LINE))
+            .child(trace_line(look, line));
+        Some(quiet.into_any_element())
     }
 
     /// What was asked, with its page, and the lines after it, then the answers to the question it
@@ -3753,8 +3753,11 @@ struct LineInks {
 struct TraceLine {
     key: LineKey,
     glyph: Option<&'static str>,
-    /// A page's favicon, in its glyph's place: a helper's line's (#4102).
-    icon: Option<Arc<Image>>,
+    /// A helper's name line (screen 4c): ilo's knot in its glyph's place, whole while the helper
+    /// works and quieter once it's done, its words in the text's ink.
+    knot: Option<bool>,
+    /// A helper's quiet line under its name, in the quiet line's size.
+    quiet: bool,
     /// ilo's mark, the first word of its title, and the display face's family it's set in, which
     /// makes it one of ilo's lines: its glyph and words in ilo's ink and size, its words wrapping
     /// under its mark.
@@ -3771,10 +3774,6 @@ struct TraceLine {
     /// What a screen reader hears for it, where that isn't its words in their order: a step the
     /// assistant spoke to, its account and then whose words those are.
     heard: Option<String>,
-    /// It joins the line above it with a connector, as a step under its page does.
-    joined_above: bool,
-    /// A helper's step under way, at its right: the ring after its words, this far round.
-    ring_after: Option<f32>,
     /// A stretch's fold head, and whether its stretch is at work: its word then in the text's
     /// ink at medium, else in text-2.
     head: Option<bool>,
@@ -3793,7 +3792,8 @@ impl TraceLine {
         TraceLine {
             key: key.into(),
             glyph: None,
-            icon: None,
+            knot: None,
+            quiet: false,
             mark: None,
             highlights: Vec::new(),
             words_drawn: None,
@@ -3803,8 +3803,6 @@ impl TraceLine {
             chevron: None,
             shimmers: None,
             heard: None,
-            joined_above: false,
-            ring_after: None,
             head: None,
             alpha: 1.,
             note_alpha: 1.,
@@ -3821,7 +3819,7 @@ impl TraceLine {
         let ilos = self.mark.is_some();
         let words = match self.shimmers {
             _ if ilos => palette.text(ILO_INK),
-            _ if self.head == Some(true) => palette.text(TITLE),
+            _ if self.head == Some(true) || self.knot.is_some() => palette.text(TITLE),
             Some(None) => palette.text(TITLE),
             // At the shimmer's peak, which each part fades down from.
             Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
@@ -3877,7 +3875,7 @@ impl TraceLine {
 
 /// What a helper's item draws.
 enum HelperRow {
-    /// Its own line: the words it's known by, then its page's word.
+    /// Its own row: the words it's known by, and under them the step it's on.
     Known(TraceLine),
     /// Its step's line, as it's known by no words of its own.
     Step,
@@ -3894,11 +3892,10 @@ fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) 
     }
 }
 
-/// The line of a helper known by words of its own (#4102): the name its task gave it, or with
-/// none its page's title, as the page's row in the sidebar says it. Its page's word follows, as
-/// that row ends, and its page's favicon stands in its step's glyph's place, which a page without
-/// one keeps. Nothing on it is the helper's own text or what it found. None for one with neither
-/// a name nor a titled page.
+/// The name line of a helper known by words of its own (screen 4c): the name its task gave it,
+/// or with none its page's title, as the page's row in the sidebar says it, after ilo's knot.
+/// Nothing on it is the helper's own text or what it found. None for one with neither a name nor
+/// a titled page.
 fn helper_line(
     step: &TraceStep,
     name: &SharedString,
@@ -3908,10 +3905,10 @@ fn helper_line(
         false => name.clone(),
         true => (page.map(|page| page.title.clone())).filter(|title| !title.is_empty())?,
     };
-    let word = page.map_or("", |page| page.word);
-    let mut line = TraceLine::new(Fold::Step(step.key), known, word.into());
-    line.icon = page.and_then(|page| page.favicon.clone());
-    line.glyph = line.icon.is_none().then_some(step.glyph);
+    let mut line = TraceLine::new(LineKey::Helper(step.key), known, "".into());
+    // Whole while its step is under way: the trace has no word yet for a helper at work between
+    // its steps, which comes with its time.
+    line.knot = Some(step.running);
     Some(line)
 }
 
@@ -3970,6 +3967,8 @@ enum LineKey {
     Ilo(usize),
     /// The split's line over a run of helpers, by the first one's key.
     Split(usize),
+    /// A helper's name line, by its step's key, which its quiet line under it is.
+    Helper(usize),
 }
 
 impl From<Fold> for LineKey {
@@ -3988,7 +3987,8 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let TraceLine {
         key,
         glyph,
-        icon,
+        knot,
+        quiet,
         mark,
         highlights,
         words_drawn,
@@ -3998,8 +3998,6 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         chevron,
         shimmers,
         heard,
-        joined_above,
-        ring_after,
         head,
         alpha,
         note_alpha,
@@ -4021,6 +4019,10 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         LineKey::Split(key) => (
             ("trace-split", key).into(),
             format!("trace-split-{key}").into(),
+        ),
+        LineKey::Helper(key) => (
+            ("trace-helper", key).into(),
+            format!("trace-helper-{key}").into(),
         ),
         LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
         LineKey::Fold(Fold::Step(key)) => (
@@ -4048,6 +4050,12 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .path(path)
             .size(px(size))
             .text_color(color)
+            .into_any_element()
+    });
+    // Still until the knot's motion lands with the sign's floors: whole at work, quiet once done.
+    let knot_drawn = knot.map(|working| {
+        crate::product::mark(TRACE_GLYPH, &palette)
+            .opacity(if working { 1. } else { KNOT_DONE })
             .into_any_element()
     });
     // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
@@ -4150,45 +4158,30 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
             false => line
                 .relative()
-                .h(px(if head.is_some() {
-                    FOLD_HEAD
-                } else {
-                    TRACE_LINE
+                .h(px(match (head, knot, quiet) {
+                    (Some(_), ..) => FOLD_HEAD,
+                    (_, Some(_), _) => HELPER_NAME_LINE,
+                    (.., true) => HELPER_QUIET_LINE,
+                    _ => TRACE_LINE,
                 }))
                 .when(head.is_some(), |line| line.gap(px(FOLD_GAP)))
                 .ml(px(-TRACE_HANG))
                 .px(px(TRACE_HANG))
                 .items_center()
                 .whitespace_nowrap()
-                .text_size(px(TRACE_TEXT))
-                .line_height(px(TRACE_TEXT_LINE)),
-        })
-        .when(joined_above, |line| {
-            line.child(
-                div()
-                    .absolute()
-                    .left(px(TRACE_HANG + CONNECTOR_X - CONNECTOR_WIDTH / 2.))
-                    .top(px((TRACE_LINE - TRACE_GLYPH) / 2.
-                        - CONNECTOR_ABOVE
-                        - CONNECTOR_HEIGHT))
-                    .w(px(CONNECTOR_WIDTH))
-                    .h(px(CONNECTOR_HEIGHT))
-                    .bg(palette.text(CONNECTOR_INK)),
-            )
+                .text_size(px(if quiet { HELPER_QUIET_TEXT } else { TRACE_TEXT }))
+                .line_height(px(match (knot, quiet) {
+                    (Some(_), _) => HELPER_NAME_LINE,
+                    (_, true) => HELPER_QUIET_LINE,
+                    _ => TRACE_TEXT_LINE,
+                })),
         })
         .when(opens, |line| {
             line.cursor_pointer()
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
         .children(glyph.map(first))
-        .children(icon.map(|icon| {
-            first(
-                img(icon)
-                    .flex_none()
-                    .size(px(TRACE_GLYPH))
-                    .into_any_element(),
-            )
-        }))
+        .children(knot_drawn)
         .map(|line| {
             let note = noted.then(|| {
                 first(
@@ -4213,15 +4206,6 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 false => line.child(title).children(note),
             }
         })
-        .children(ring_after.map(|turned| {
-            ring::ring(
-                STEP_RING,
-                STEP_RING_STROKE,
-                turned,
-                palette.text(RING_TRACK),
-                palette.text(TITLE),
-            )
-        }))
         .children(chevron)
 }
 
@@ -4266,12 +4250,10 @@ struct Look {
 }
 
 /// What a helper's line shows of its page: its title, which a helper its task gave no name is
-/// known by, its favicon, and the word its row in the sidebar ends with.
+/// known by.
 struct HelperPage {
     tab: u64,
     title: SharedString,
-    favicon: Option<Arc<Image>>,
-    word: &'static str,
 }
 
 impl Look {
@@ -4304,18 +4286,16 @@ impl Shell {
             .and_then(|tab| tab.favicon.clone())
     }
 
-    /// What `agent`'s task's helpers' lines show of their pages, `tabs`: each one's favicon and
-    /// its word, as the task's group in the sidebar has them. None for a task with no card.
+    /// What `agent`'s task's helpers' lines show of their pages, `tabs`: each one's title. None
+    /// for a task with no card.
     fn helper_pages(&self, agent: &SharedString, tabs: Vec<u64>) -> Vec<HelperPage> {
-        let Some(card) = self.task_cards.iter().find(|card| card.agent == *agent) else {
+        if !self.task_cards.iter().any(|card| card.agent == *agent) {
             return Vec::new();
-        };
+        }
         let page = |tab: u64| HelperPage {
             tab,
             title: (self.tabs.get(&tab))
                 .map_or_else(SharedString::default, |tab| tab.title.clone()),
-            favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
-            word: self.page_word(card, tab).label(),
         };
         tabs.into_iter().map(page).collect()
     }
