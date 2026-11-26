@@ -2520,6 +2520,26 @@ impl Agents {
         }
     }
 
+    /// Whether `agent_name` is the kind's name because the app gave none of its own, or gave one
+    /// treated as none: a fact `hello` keeps, never read from the name's words.
+    pub fn nameless(&self, agent: &str) -> bool {
+        if self.task(agent).is_some() {
+            return false;
+        }
+        let session = (self.tasks.tasks.iter()).find(|task| {
+            task.state == task::State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        let connection = match session {
+            Some(task) => task.session.as_ref().map(|session| session.connection),
+            None => (self.tasks.names.keys())
+                .filter(|(each, _)| each == agent)
+                .map(|(_, on)| *on)
+                .max(),
+        };
+        self.nameless_on(agent, connection)
+    }
+
     /// Starts the run's next step, which answers it through `advance`.
     fn next_step(&mut self, mut run: Run, cx: &mut Context<Self>) {
         let Some(step) = run.steps.pop_front() else {
