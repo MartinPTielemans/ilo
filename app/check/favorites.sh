@@ -849,13 +849,14 @@ expect "^browser: today $r\( \|\$\)" "Remove from Favorites didn't put the tab a
 expect '^browser: tiles settled$' "the 12 tiles didn't settle"
 expect '^browser: rows settled$' "the rows didn't settle under the 12 tiles"
 twelve=$(favorites)
-# Three rows of tiles take the Space's rows 165 down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 165))
+# Three rows of tiles, 40 tall and 8 apart, and the block's 4 under them, take the Space's rows
+# 140 down.
+send click 100 $(($(row 0 | cut -d' ' -f2) + 140))
 expect "^browser: selected $r\( in .*\)\{0,1\}\$" "a click on Today's top row didn't show the tab taken out"
 send key d cmd
 expect "^browser: pinned $r\$" "⌘D didn't pin the tab taken out of the favorites"
 expect '^browser: rows settled$' "the rows didn't settle after ⌘D"
-pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 165))"
+pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 140))"
 post rightclick $pinned_full
 expect "^browser: menu shown $(cased 'Unpin Tab, Add to Favorites (disabled), ')" \
   "with 12 favorites, a pinned tab's menu didn't dim Add to Favorites"
