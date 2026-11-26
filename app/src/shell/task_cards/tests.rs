@@ -1672,14 +1672,19 @@ fn the_joined_cards_title_reads_on_its_stage() {
     }
 }
 
-/// The shown thread's card is one shape with its stage (spec-thread-stage, the join): it takes the
-/// stage's fill, has no outline of its own and reaches the sidebar's edge. A card not shown keeps
-/// its state's outline, and a waiting one shown gives up its rim and has it back once another
-/// thread is shown.
+/// The shown thread's card is a shape of its own in its stage's colour (spec-sidebar, "Thread,
+/// shown"): it takes the stage's fill, has no outline of its own, is inset at both sides and has
+/// four round corners, with a hairline of light round it on a dark stage and none on a light one.
+/// A card not shown keeps its state's outline, and a waiting one shown gives up its rim and has
+/// it back once another thread is shown.
 #[gpui::test]
-fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut TestAppContext) {
     use super::card::Framed;
-    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
+    use crate::palette::Tone;
+    use crate::shell::own_shape::OWN_SHAPE;
+    use crate::theme::Appearance;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RADIUS, RIM, RIM_WIDTH};
+    use crate::tokens::shell::{DIVIDER, PLATE_INSET};
     let two = vec![
         paged(2, Dot::Waiting, &[1020]),
         paged(1, Dot::Working, &[1010]),
@@ -1726,25 +1731,47 @@ fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
             .as_deref(),
         Some("task-2")
     );
-    assert_eq!(framed(&shell, "task-2", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Own);
     assert_eq!(framed(&shell, "task-1", cx), outline);
-    let (edge, plate) = shell.read_with(cx, |shell, _| {
-        (
-            shell.width(),
-            shell.task_plate_drawn("task-2").expect("its card"),
-        )
-    });
-    assert_eq!(
-        f32::from(plate.right()),
-        edge,
-        "the joined card's right end"
-    );
-    let joined = crate::shell::join::JOINED.take().expect("the card's join");
-    let palette = shell.read_with(cx, |shell, _| shell.palette);
-    let stage = crate::shell::conversation::stage_fill(&palette);
-    assert_eq!(joined.fill, gpui::Hsla::from(stage));
-    assert_eq!(joined.line, plate);
+    for appearance in [Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        OWN_SHAPE.set(None);
+        draw(&shell, cx);
+        let own = OWN_SHAPE.take().expect("the card's own shape");
+        let (edge, plate, palette) = shell.read_with(cx, |shell, _| {
+            (
+                shell.width(),
+                shell.task_plate_drawn("task-2").expect("its card"),
+                shell.palette,
+            )
+        });
+        assert_eq!(f32::from(plate.left()), PLATE_INSET, "{appearance:?}");
+        assert_eq!(
+            f32::from(plate.right()),
+            edge - PLATE_INSET,
+            "{appearance:?}: the shown card's right end"
+        );
+        let stage = crate::shell::conversation::stage_fill(&palette);
+        assert_eq!(own.fill, gpui::Hsla::from(stage), "{appearance:?}");
+        assert_eq!(own.shape, plate, "{appearance:?}");
+        assert_eq!(
+            own.corners,
+            gpui::Corners::all(gpui::px(RADIUS)),
+            "{appearance:?}"
+        );
+        let on = palette.on_fill(stage);
+        let line = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER));
+        assert_eq!(own.outline, line, "{appearance:?}");
+        assert_eq!(
+            own.outline.is_some(),
+            appearance == Appearance::Dark,
+            "{appearance:?}"
+        );
+    }
     show(&shell, "task-1", cx);
-    assert_eq!(framed(&shell, "task-1", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-1", cx), Framed::Own);
     assert_eq!(framed(&shell, "task-2", cx), rim);
 }
