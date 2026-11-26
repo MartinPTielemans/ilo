@@ -3465,6 +3465,16 @@ row-left = 4.0
 row-gap = 8.0
 live = 12.0
 live-line = 16.0
+# The way back on a tab the user handed the thread (spec-held-abilities.md, part 1): after the
+# row's button, and at the right end of the page's tile head in the rail, whose right padding is
+# then `way-back-head-right`. A `way-back` box at `way-back-radius`, the tab-return glyph at
+# `way-back-glyph` in the text at `way-back-ink`, Dark and Light alike, on `held-button-fill` (the
+# stage's `button`) under the pointer.
+way-back = 22.0
+way-back-radius = 6.0
+way-back-glyph = 14.0
+way-back-ink = 0.7
+way-back-head-right = 6.0
 # The composer, reduced: `composer-radius`, the field `composer-field` high and `composer-field-x`
 # in, its words `composer-text` on `composer-line`; the row `composer-row` high, `composer-row-x` in,
 # the level `composer-level-x` in at `composer-level`/`composer-level-line`, the model in text-2

@@ -158,6 +158,9 @@ pub struct Conversation {
     pub tabs: Vec<(u64, SharedString)>,
     /// The tab the agent is on while it works, whose picture has the Signal ring.
     pub on: Option<u64>,
+    /// Those of its pages that are tabs the user handed it, in the order handed, which each have
+    /// the way back.
+    pub handed: Vec<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
     /// What the live line over the reply field says of it, read where its card's word is, so the
@@ -1355,6 +1358,7 @@ impl Agents {
             lines,
             tabs,
             on,
+            handed: self.handed_order(agent),
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
             live,
             open: open_label(&self.open_tabs(task, cx)),

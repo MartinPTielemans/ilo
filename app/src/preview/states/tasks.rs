@@ -444,6 +444,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             (FIRST_TASK + 203, "maps.example".into()),
         ],
         on: Some(FIRST_TASK + 200),
+        handed: Vec::new(),
         stoppable: true,
         live: Default::default(),
         open: None,

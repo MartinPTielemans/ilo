@@ -188,6 +188,15 @@ impl Shell {
             Some(title) => with_translate(items, title),
             None => items,
         };
+        // A tab the user handed the thread shown has the way back first, as the thread's own act
+        // on the tab rather than one of the page's.
+        let returns = (self.talk.as_ref())
+            .filter(|talk| talk.hands(tab, cx))
+            .map(|talk| talk.agent.clone());
+        let items = match returns.is_some() {
+            true => with_return(items),
+            false => items,
+        };
         let commands: Vec<i32> = items.iter().map(|item| item.command).collect();
         // Over the page, so in the window even while the sidebar is hidden.
         self.context_menu_in(
@@ -196,7 +205,16 @@ impl Shell {
             false,
             Box::new(move |chosen, shell, cx| {
                 let command = chosen.and_then(|at| commands.get(at).copied());
-                // The app's own row, which the core knows nothing of.
+                // The app's own rows, which the core knows nothing of.
+                if command == Some(RETURN_TAB)
+                    && let Some(agent) = returns.clone()
+                {
+                    shell.browser.close_page_menu(tab, None, cx);
+                    log!("browser: command return-tab via page menu");
+                    let action = crate::agents::task::TaskAction::ReturnTab(tab);
+                    shell.browser.task(agent, action, cx);
+                    return;
+                }
                 if command == Some(TRANSLATE) {
                     shell.browser.close_page_menu(tab, None, cx);
                     shell.run_translate_row(tab, cx);
@@ -212,6 +230,31 @@ impl Shell {
 /// The command of the page menu's translation row, which the app runs itself: none of the core's,
 /// which are Chrome's ids above 0 and its own just below, as BC_PAGE_MENU_PREVIEW_LINK is.
 const TRANSLATE: i32 = i32::MIN;
+
+/// The command of the way back's row on a tab the user handed a thread, which the app runs
+/// itself, as it does the translation row.
+const RETURN_TAB: i32 = i32::MIN + 1;
+
+/// `items` under the way back's row (Z34) and a line, each submenu's rows still under their own.
+fn with_return(items: Vec<PageMenuItem>) -> Vec<PageMenuItem> {
+    let row = PageMenuItem {
+        command: RETURN_TAB,
+        title: super::conversation::words::RETURN_TAB.into(),
+        parent: None,
+        enabled: true,
+        checked: false,
+    };
+    let line = PageMenuItem {
+        command: 0,
+        title: SharedString::default(),
+        ..row.clone()
+    };
+    let moved = (items.into_iter()).map(|item| PageMenuItem {
+        parent: item.parent.map(|parent| parent + 2),
+        ..item
+    });
+    [row, line].into_iter().chain(moved).collect()
+}
 
 /// Chrome's page items, for where the translation row goes.
 const VIEW_SOURCE: i32 = 35002;
