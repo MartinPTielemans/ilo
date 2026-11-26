@@ -1,8 +1,9 @@
-//! The agent's pointer over the page (ours, #365): as an agent clicks or types in a page the window
-//! shows, in its own Space, its pointer glides to the element with its Space's name beside it, and
-//! a Signal ring goes round the element with the ref the agent named it by. The window over the
-//! page draws it (`Shell::over_page`), which the mouse goes through, so the user's own pointer and
-//! clicks are never in its way, and it goes a moment after the agent's last action.
+//! The agent's pointer at an element of the page (ours, #365): as an agent clicks or types in a
+//! page the window shows, in its own Space, the pointer is at the element, and it goes a moment
+//! after the agent's last action. Nothing of it is drawn: the thread's card and the panel beside
+//! the page say the agent is at work. Its life and its two lines stay until the checks that read
+//! them are redesigned, and its draw below stays unreached until then.
+#![allow(dead_code)]
 
 use std::time::Duration;
 use std::time::Instant;
@@ -79,21 +80,15 @@ impl Shell {
             f32::from(element.size.width),
             f32::from(element.size.height)
         );
+        // Its one end, which asks for no frame, as nothing of it is drawn.
         let going = cx.spawn(async move |shell, cx| {
             cx.background_executor()
-                .timer(Duration::from_secs_f32(GLIDE + HOLD))
-                .await;
-            if shell.update(cx, |_, cx| cx.notify()).is_err() {
-                return;
-            }
-            cx.background_executor()
-                .timer(Duration::from_secs_f32(FADE))
+                .timer(Duration::from_secs_f32(GLIDE + HOLD + FADE))
                 .await;
             shell
-                .update(cx, |shell, cx| {
+                .update(cx, |shell, _| {
                     shell.agent_pointer = None;
                     log!("browser: agent pointer gone");
-                    cx.notify();
                 })
                 .ok();
         });
@@ -106,7 +101,6 @@ impl Shell {
             since,
             _going: going,
         });
-        cx.notify();
     }
 
     /// Whether the agent's pointer is over the page the window shows.
@@ -118,14 +112,12 @@ impl Shell {
     }
 
     /// What the window over the page draws: Add Split View's targets while a tab or a link is
-    /// dragged over it, the agent's pointer, and a new download's icon on its way to the Library
-    /// button.
+    /// dragged over it, and a new download's icon on its way to the Library button.
     pub fn over_page(&self, window: &mut Window, cx: &App) -> AnyElement {
         div()
             .size_full()
             .relative()
             .child(self.drop_targets(window))
-            .children(self.agent_pointer_drawn(window, cx))
             .children(self.download_flight_drawn(window, cx))
             .into_any_element()
     }
