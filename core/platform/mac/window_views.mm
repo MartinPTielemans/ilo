@@ -103,9 +103,10 @@
 
 // Through the pages a switch is leaving, as if they had gone: they only stand in for the pages it
 // shows until those draw. The strip along the sidebar's side is the UI's, over a page that reaches
-// it too, in full screen as well (page_edge_strips.h). The app marks a right-side sidebar by laying
-// the window's title bar out right to left (host.mm's PlaceTitlebarSide), which the core reads as
-// the sidebar's side; a Little ilo window has no strip, as macOS resizes the window itself.
+// it too, in full screen as well (page_edge_strips.h). The app lays each browser window's title bar
+// out on its sidebar's side, right to left for one on the right and left to right otherwise, under
+// an Arabic or Hebrew system too (host.mm's PlaceTitlebarSide), which the core reads as the
+// sidebar's side; a Little ilo window has no strip, as macOS resizes the window itself.
 - (NSView*)hitTest:(NSPoint)point {
   NSPoint local = [self convertPoint:point fromView:self.superview];
   const browser_core::EdgeSides sides = browser_core::SidebarEdge(
