@@ -8760,6 +8760,69 @@ mod sessions {
         assert!(card(&agents, &second, cx).open.is_empty());
     }
 
+    /// A page another connection still works in stays out of its opener's ended card (#3837):
+    /// that card doesn't offer it, and its going doesn't close it but makes it the other's page.
+    /// Kept, once the other connection ends too, the opener's card offers it again, as its page.
+    #[gpui::test]
+    fn an_ended_card_leaves_a_page_another_connection_works_in(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let answer = call_as(&agents, 3, "open_tab", json!({ "url": "example.org" }), cx);
+        page_done(&agents, &browser, answer, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let at = std::time::Instant::now();
+        let looked = call_on(&agents, 2, 4, "snapshot", json!({ "tab": 30 }), at, cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 4, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+
+        closed(&agents, 1, cx);
+        let ended = card(&agents, &first, cx);
+        assert_eq!(ended.dot, Dot::Done);
+        assert_eq!(ended.open, vec![(20, "example.com".into())]);
+        assert_eq!(card(&agents, &second, cx).dot, Dot::Working);
+        let open = |browser: &Made| browser.tabs.borrow().iter().any(|tab| tab.0 == 30);
+
+        // A card that goes closes its pages but that one.
+        agents.update(cx, |agents, cx| agents.drop_task(&first, cx));
+        assert!(open(&browser), "the page the second works in closed");
+        assert!(!browser.tabs.borrow().iter().any(|tab| tab.0 == 20));
+        // It's the second's page now: its card offers it once it ends, and no other card does.
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        assert_eq!(
+            card(&agents, &second, cx).open,
+            vec![(30, "example.org".into())]
+        );
+        let offered = (cards(&agents, cx).iter())
+            .filter(|card| card.open.iter().any(|(tab, _)| *tab == 30))
+            .count();
+        assert_eq!(offered, 1, "offered by {offered} cards");
+
+        // Again, with the opener's card kept.
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let answer = call_as(&agents, 3, "open_tab", json!({ "url": "example.org" }), cx);
+        page_done(&agents, &browser, answer, shop_tree(), cx);
+        answered(&agents, 3, cx);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let looked = call_on(&agents, 2, 4, "snapshot", json!({ "tab": 30 }), at, cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 4, cx);
+        closed(&agents, 1, cx);
+        assert_eq!(card(&agents, &first, cx).open.len(), 1);
+        // The other connection ends: the page is its opener's to open again.
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        assert_eq!(
+            card(&agents, &first, cx).open,
+            vec![(20, "example.com".into()), (30, "example.org".into())]
+        );
+    }
+
     /// One connection closing ends its own card alone: the other's works on, and its question
     /// stays up for the user.
     #[gpui::test]
