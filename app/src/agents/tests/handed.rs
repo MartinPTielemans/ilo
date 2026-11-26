@@ -8,7 +8,8 @@ use crate::agents::kept::cards;
 use crate::agents::kept::log::Record;
 use crate::agents::runner::{Cli, Out};
 use crate::agents::task::handed::{self, Picked, Waiting};
-use crate::agents::task::{Start, State, TaskAction};
+use crate::agents::task::ilo::IloKind;
+use crate::agents::task::{AskedOn, Line, Start, State, TaskAction};
 
 /// The user's Space, and a thread's, the first the browser makes.
 const USERS: u64 = 1;
@@ -1829,11 +1830,15 @@ fn kept_log(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<Record> {
 /// What the page on a handed tab calls its one button, in the page's own words.
 const PAYS: &str = "Pay for both seats";
 
-/// `agent` calls `tool` on `tab`'s first element, and the core answers what it was asked of the
-/// page with the page's tree: its own name and its one button.
+/// `agent` calls `tool` on `tab`, a look at the whole page or an act on its first element, and
+/// the core answers what it was asked of the page with the page's tree: its own name and its one
+/// button.
 fn acts(run: &Run, agent: &str, tool: &str, tab: u64, cx: &mut TestAppContext) {
     let asked = run.browser.pages.borrow().len();
-    let arguments = json!({ "tab": tab, "ref": "e1", "key": "Tab" });
+    let arguments = match tool {
+        "snapshot" => json!({ "tab": tab }),
+        _ => json!({ "tab": tab, "ref": "e1", "key": "Tab" }),
+    };
     _ = call(&run.agents, agent, tool, arguments, cx);
     cx.run_until_parked();
     let Some(request) =
@@ -1909,6 +1914,131 @@ fn a_handed_tab_gone_before_the_end_is_kept_by_its_site_alone(cx: &mut TestAppCo
             assert!(!text.contains(of_the_tab), "{}", path.display());
         }
     }
+}
+
+/// A page the user was on as they asked, which no thread was handed.
+const ASKED_ON: (&str, &str) = ("Morning headlines", "https://news.example/today");
+
+/// The user asks `asked` on the page ASKED_ON, at Look only, with the chips of `tabs`.
+fn asks_on(run: &Run, tabs: &[u64], cx: &mut TestAppContext) -> String {
+    let page = AskedOn {
+        title: ASKED_ON.0.into(),
+        url: ASKED_ON.1.into(),
+    };
+    let start = Start {
+        tier: crate::agents::tier::Tier::Look,
+        tabs: Picked::of_chips(USERS, tabs.to_vec()),
+        ..Start::default()
+    };
+    let started = (run.agents).update(cx, |agents, cx| {
+        agents.start_task(Cli::Claude, ASKED, Some(page), USERS, start, cx)
+    });
+    cx.run_until_parked();
+    run.ran(1);
+    started.expect("started")
+}
+
+/// What the thread's conversation says each step ilo stopped was doing, as its panel draws it.
+fn stopped_doing(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+    (run.agents).read_with(cx, |agents, cx| {
+        let talk = agents.conversation(agent, cx).expect("its conversation");
+        let lines = talk.lines.iter().filter_map(|line| match line {
+            Line::Ilo(line) => match &line.kind {
+                IloKind::Stopped { doing, .. } => Some(doing.to_string()),
+                _ => None,
+            },
+            _ => None,
+        });
+        lines.collect()
+    })
+}
+
+/// What a kept log stores of the page asked on, and of ilo's own lines.
+fn chips_and_ilo(log: &[Record]) -> (Vec<&str>, Vec<&str>) {
+    let chips = log.iter().filter_map(|record| match record {
+        Record::Chip(chip) => Some(chip.as_str()),
+        _ => None,
+    });
+    let ilo = log.iter().filter_map(|record| match record {
+        Record::Ilo(words) => Some(words.as_str()),
+        _ => None,
+    });
+    (chips.collect(), ilo.collect())
+}
+
+/// In a thread the user handed a tab, the page they asked on is kept by its site alone, as
+/// nothing says whether it was that tab: its chip reads back as the site, and no file under the
+/// profile has its title.
+#[gpui::test]
+fn the_page_asked_on_is_kept_by_its_site_in_a_thread_handed_a_tab(cx: &mut TestAppContext) {
+    let run = run("handed-log-asked", cx);
+    let agent = asks_on(&run, &[TRAINS.0], cx);
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx);
+    let (chips, _) = chips_and_ilo(&log);
+    assert_eq!(chips, ["news.example"]);
+    for (path, text) in run.files() {
+        for of_a_page in [ASKED_ON.0, "/today", TRAINS.1, "/trains"] {
+            assert!(!text.contains(of_a_page), "{}", path.display());
+        }
+    }
+}
+
+/// A step ilo stopped on a tab the user handed is kept by its kind alone: the panel's line names
+/// the button it was stopped at, in the page's words, and no file under the profile has them or
+/// the page's title.
+#[gpui::test]
+fn a_step_stopped_on_a_handed_tab_is_kept_without_the_pages_words(cx: &mut TestAppContext) {
+    let run = run("handed-log-stopped", cx);
+    let agent = asks_on(&run, &[TRAINS.0], cx);
+    acts(&run, &agent, "snapshot", TRAINS.0, cx);
+    acts(&run, &agent, "click", TRAINS.0, cx);
+    let doing = stopped_doing(&run, &agent, cx);
+    assert!(
+        matches!(doing.as_slice(), [doing] if doing.contains(PAYS)),
+        "{doing:?}"
+    );
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx);
+    let (_, ilo) = chips_and_ilo(&log);
+    assert_eq!(ilo.len(), 1, "{ilo:?}");
+    for (path, text) in run.files() {
+        for of_the_page in [PAYS, TRAINS.1, "/trains"] {
+            assert!(!text.contains(of_the_page), "{}", path.display());
+        }
+    }
+}
+
+/// A thread never handed a tab keeps what it kept before: the page asked on by its title, and a
+/// step ilo stopped on a page of its own as its line says it.
+#[gpui::test]
+fn a_thread_never_handed_a_tab_keeps_its_chip_and_its_stopped_line(cx: &mut TestAppContext) {
+    let run = run("handed-log-never", cx);
+    let agent = asks_on(&run, &[], cx);
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(&run.agents, &agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    let own = (run.agents).read_with(cx, |agents, _| {
+        let space = agents.task(&agent).unwrap().space;
+        let tabs = run.browser.tabs.borrow();
+        let tab = tabs.iter().rev().find(|tab| tab.1 == space);
+        tab.expect("its page").0
+    });
+    acts(&run, &agent, "snapshot", own, cx);
+    acts(&run, &agent, "click", own, cx);
+    let doing = stopped_doing(&run, &agent, cx);
+    assert!(
+        matches!(doing.as_slice(), [doing] if doing.contains(PAYS)),
+        "{doing:?}"
+    );
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx);
+    let (chips, ilo) = chips_and_ilo(&log);
+    assert_eq!(chips, [ASKED_ON.0]);
+    assert!(
+        matches!(ilo.as_slice(), [ilo] if ilo.contains(&doing[0])),
+        "{ilo:?}"
+    );
 }
 
 /// A page of the thread's own keeps its title in the log as before, beside a tab the user handed

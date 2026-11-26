@@ -209,6 +209,11 @@ impl Sends {
         self.users.contains(&tab)
     }
 
+    /// Whether the thread was ever handed a tab of the user's.
+    pub(super) fn had_users(&self) -> bool {
+        !self.users.is_empty()
+    }
+
     /// Whether a reply with `tabs` to the thread at work waits for the turn under way to end: one
     /// with a tab of the user's does, as nothing is handed mid-turn, unless the thread
     /// `waits_on_user` then; and so does any sent while one waits, which goes after it.

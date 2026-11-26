@@ -12,6 +12,7 @@ use super::ilo::{IloKind, IloLine};
 use super::{Line, OnPage, Opens, Task, Trace, TraceItem, TraceStep};
 use crate::agents::Agents;
 use crate::agents::kept::log::Record;
+use crate::agents::lines::STOPS;
 use crate::agents::tools;
 use crate::shell::conversation::pages::{Paged, paged};
 use crate::shell::conversation::words;
@@ -23,10 +24,12 @@ impl Agents {
             return Vec::new();
         };
         // The page the user asked on, as the chip over what they asked; one the agent was kept from,
-        // by its site alone.
+        // by its site alone. So is it in a thread the user ever handed a tab: the page asked on may
+        // be that tab, and nothing here says which tab it was.
         let chip = (talk.page.as_ref()).map(|asked| {
             let site = super::super::site(&asked.url);
-            match self.kept_from(task, None, &site, cx) || asked.title.is_empty() {
+            let users = task.sends.had_users();
+            match users || self.kept_from(task, None, &site, cx) || asked.title.is_empty() {
                 true => site,
                 false => asked.title.to_string(),
             }
@@ -75,7 +78,7 @@ impl Agents {
                 Line::Step(step) => records.push(self.on_its_page(task, step, cx)),
                 Line::Thinking { .. } => {}
                 Line::Ilo(line) if logged(&line.kind) => {
-                    records.push(Record::Ilo(words::stored(&line.kind, &task.name)))
+                    records.push(Record::Ilo(ilo_stored(task, line)))
                 }
                 Line::Ilo(_) => {}
             }
@@ -263,6 +266,37 @@ pub(crate) fn drawn(records: &[Record]) -> Drawn {
     }
     close(&mut trace, &mut drawn.lines);
     drawn
+}
+
+/// ilo's line as the log stores it (`words::stored`). Of a stop on a tab the user handed the
+/// thread, the step it stopped is said by its kind and the page's site alone, as a step there is,
+/// never by what the page calls what it was stopped at; one whose step wasn't traced, by no words
+/// of the step.
+fn ilo_stored(task: &Task, line: &IloLine) -> String {
+    let users = match &line.kind {
+        IloKind::Stopped {
+            tab,
+            why,
+            tier,
+            count,
+            ..
+        } if task.sends.was_users(*tab) => {
+            let stop = (line.key.checked_sub(STOPS)).and_then(|at| task.stops.get(at));
+            let (site, kind) = stop.map_or_else(Default::default, |stop| {
+                (stop.site.clone(), stop.kind.clone())
+            });
+            Some(IloKind::Stopped {
+                tab: *tab,
+                at: site.into(),
+                doing: kind.into(),
+                why: *why,
+                tier: *tier,
+                count: *count,
+            })
+        }
+        _ => None,
+    };
+    words::stored(users.as_ref().unwrap_or(&line.kind), &task.name)
 }
 
 /// The glyph of the step that went to a page, which no line draws.

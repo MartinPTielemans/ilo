@@ -209,9 +209,18 @@ impl Agents {
         };
         // The refused call came as a step of its own task before it was judged, so the line names
         // it as it is under way.
-        let doing = (self.acting_task(&act.agent, act.connection, act.call))
+        let (doing, kind) = (self.acting_task(&act.agent, act.connection, act.call))
             .and_then(|task| task.trace.iter().rfind(|step| step.call == act.call))
-            .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
+            .map(|step| {
+                // Its kind and the site alone, with none of the page's own words.
+                let bare = tools::Did {
+                    tool: step.did.tool.clone(),
+                    site: tier::plain(&site),
+                    ..Default::default()
+                };
+                let now = |did| lowered(&tools::step_title(did, tools::Tense::Now));
+                (now(&step.did), now(&bare))
+            })
             .unwrap_or_default();
         let key = self.judged_task(&act).map(|task| task.agent.clone());
         if let Some(task) = key.as_deref().and_then(|key| self.task_mut(key)) {
@@ -223,6 +232,7 @@ impl Agents {
                     at: at.clone(),
                     site: tier::plain(&site),
                     doing,
+                    kind,
                     why,
                     tier,
                     count: 1,

@@ -20,7 +20,7 @@ use super::{Agents, site};
 
 /// Where the keys of the task's refusals' lines and of its other lines start, apart from the
 /// keys of its steps below and of the helpers' and the kept task's lines above.
-const STOPS: usize = usize::MAX / 8;
+pub(super) const STOPS: usize = usize::MAX / 8;
 const PLACED: usize = usize::MAX / 4;
 /// Where the keys of the lines of the walls that weren't put up start: two to each, as a start
 /// without a folder and without attached files says each on a line.

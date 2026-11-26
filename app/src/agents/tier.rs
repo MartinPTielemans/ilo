@@ -219,6 +219,9 @@ pub struct Stop {
     pub site: String,
     /// The refused step's under-way phrase, its first letter lowered (`IloKind::Stopped`).
     pub doing: String,
+    /// The same phrase with nothing of the page in it but its site: what a kept log stores of a
+    /// stop on a tab the user handed the thread (log_of.rs). Empty where its step isn't traced.
+    pub kind: String,
     pub why: Why,
     pub tier: Tier,
     pub count: u32,
