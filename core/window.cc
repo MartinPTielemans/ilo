@@ -875,6 +875,13 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
 // static
 void Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
+  // An agent's tab no window shows is never brought to one by its page, as its Space would then
+  // show in the user's window.
+  if (IsAgentTab(contents) && !Showing(tab)) {
+    fprintf(stderr, "browser: agent's tab %llu refused focus (page)\n",
+            static_cast<unsigned long long>(tab));
+    return;
+  }
   // A tab the window shows already stays as it is: a notification's click brings its tab forward,
   // and the page's own window.focus() in its click handler then asks again (#685).
   if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {
