@@ -86,6 +86,9 @@ pub struct MenuEntry {
     pub offer: bool,
     /// Whether it leaves the menu for a page of its own, with the out arrow after its title.
     pub out: bool,
+    /// What it does each time it's chosen, where choosing it leaves the menu open with it
+    /// highlighted, as one of several things picked together. Its check is as this last answered.
+    pub stays: Option<crate::menu::Stays>,
 }
 
 impl MenuEntry {
@@ -123,6 +126,7 @@ impl MenuEntry {
             kept: false,
             offer: false,
             out: false,
+            stays: None,
         }
     }
 
@@ -150,6 +154,14 @@ impl MenuEntry {
     /// With the out arrow (`out`).
     pub fn out(self) -> Self {
         MenuEntry { out: true, ..self }
+    }
+
+    /// Chosen as often as the user likes while the menu stays open (`stays`).
+    pub fn stays(self, chosen: impl Fn(&mut App) -> bool + 'static) -> Self {
+        MenuEntry {
+            stays: Some(std::rc::Rc::new(chosen)),
+            ..self
+        }
     }
 
     /// A heading over the items after it, in the platform's case.
