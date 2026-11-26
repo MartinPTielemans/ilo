@@ -601,9 +601,9 @@ expect '^browser: history pointed closed [0-9][0-9]*$' \
   "the pointer on History's first row, the tab ⌘W closed, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-closed.png" || fail "no window to capture"
 # The run's closed tabs come first, newest first, so its visited pages can start low on the list:
-# each row the window shows, down to its foot.
+# each row the window shows, 34 apart, down to its foot.
 visited_y=
-for y in 167 223 279 335 391 447 503 559 615 671 727; do
+for y in $(seq 145 34 723); do
   send move 300 $y
   expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
     "the pointer on History's row at y $y didn't point at it"
@@ -661,7 +661,7 @@ archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f
 send move 300 71
 closed_y=
 rows=
-for y in 111 167 223 279 335 391 447 503 559 615 671 727; do
+for y in $(seq 111 34 723); do
   send move 300 $y
   expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
     "the pointer on History's row at y $y didn't point at it"
