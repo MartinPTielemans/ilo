@@ -6,16 +6,17 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use super::tier::Tier;
 use super::wall::Granted;
 
-/// Where a file is: one the user attached, which the assistant gets as ilo's copy, or in the folder
-/// the user granted.
+/// Where a file is: one the user attached, which the assistant gets as ilo's copy, in a folder
+/// the user granted, or outside both, where only the product's own file tools reach (road B).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Place {
     Attached,
     Folder,
+    Outside,
 }
 
 impl Place {
-    pub const ALL: [Place; 2] = [Place::Attached, Place::Folder];
+    pub const ALL: [Place; 3] = [Place::Attached, Place::Folder, Place::Outside];
 }
 
 /// What is done to a file or a folder.
@@ -46,14 +47,154 @@ impl Op {
     ];
 }
 
-/// Whether a task at `tier` may do `op` to a file in `place`: Look only reads, Work on pages also
-/// makes and changes, Full access also deletes and moves, and attached files are only read.
+/// Whether a task at `tier` may do `op` to a file in `place` without asking: Look only reads, Work
+/// on pages also makes and changes, Full access also deletes and moves, and attached files are
+/// only read. Outside the folders only Full access goes ahead; `decide` says what Work asks.
 pub fn allows(tier: Tier, place: Place, op: Op) -> bool {
     match (place, op) {
+        (Place::Outside, _) => tier == Tier::Full,
         (_, Op::Read | Op::Search) => true,
         (Place::Attached, _) => false,
         (Place::Folder, Op::Make | Op::Change) => tier >= Tier::Work,
         (Place::Folder, Op::Delete | Op::Move | Op::Replace) => tier == Tier::Full,
+    }
+}
+
+/// How a folder of the thread's is listed: one it may change as its level allows, or one it only
+/// reads (Settings › Folders' "Read" row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Row {
+    Change,
+    Read,
+}
+
+/// A folder of the thread's, as the user picked it in the system's panel: `Granted` is made by
+/// the panel alone, so a folder reaches this list by the user's pick and no other road.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Listed {
+    root: PathBuf,
+    pub row: Row,
+}
+
+impl std::fmt::Debug for Listed {
+    /// Its row and never its path (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Listed").field("row", &self.row).finish()
+    }
+}
+
+impl Listed {
+    pub fn of(picked: &Granted, row: Row) -> Listed {
+        Listed {
+            root: picked.root().to_path_buf(),
+            row,
+        }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(root: PathBuf, row: Row) -> Listed {
+        Listed { root, row }
+    }
+}
+
+/// Where a real path is, as the path floor found it, before the level is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum At {
+    /// On the never list: no level reaches it (F1).
+    Never,
+    /// A place the system guards with a prompt of its own, outside every folder the user picked
+    /// (F3). Never reached, so the system never asks.
+    Guarded,
+    Attached,
+    Folder(Row),
+    Outside,
+}
+
+/// Why a file act wasn't done, one for each of the table's refusals (F1–F10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    Never,
+    Guarded,
+    /// The thread's level doesn't allow it there; the lowest that would allow or ask it (F6).
+    Needs(Tier),
+    /// A change to one of ilo's copies of the attached files, which are only read (F6b).
+    Attached,
+    /// A change, delete or move of a file with another name, which would reach it there too (F7).
+    OtherNames,
+    /// The file isn't the one the user was asked about (F2), found at the act.
+    Changed,
+    /// The path didn't resolve: a folder on the way is gone, or a file stands for one (F8).
+    Gone,
+    /// A pipe, device or socket, or too many links in a row, never opened (F8b).
+    NotOpened,
+    /// A file only in the cloud, which a read never downloads (F9).
+    Cloud,
+    /// A write over the cap (F10).
+    TooLarge,
+    /// read_file on a file that isn't text (F10b).
+    NotText,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    /// Only the user's press on the ask goes ahead (Work on pages, outside its folders).
+    Ask,
+    Refuse(Refused),
+}
+
+/// What a thread at `tier` does when its assistant asks for `op` at `at`, the one place a file act
+/// is decided: the never list, then the place, then the level, then the folder's row. A file with
+/// another name (`other_names`) is read, never changed, deleted or moved, at any level.
+pub fn decide(tier: Tier, at: At, op: Op, other_names: bool) -> Decision {
+    let reads = matches!(op, Op::Read | Op::Search);
+    match at {
+        At::Never => return Decision::Refuse(Refused::Never),
+        At::Guarded => return Decision::Refuse(Refused::Guarded),
+        At::Attached if !reads => return Decision::Refuse(Refused::Attached),
+        _ => {}
+    }
+    let Some(decided) = by_level(tier, at, op) else {
+        let needs = (Tier::ALL.into_iter())
+            .find(|&above| above > tier && by_level(above, at, op).is_some())
+            .unwrap_or(Tier::Full);
+        return Decision::Refuse(Refused::Needs(needs));
+    };
+    match other_names && !reads && op != Op::Make {
+        true => Decision::Refuse(Refused::OtherNames),
+        false => decided,
+    }
+}
+
+/// Whether `tier` goes ahead or asks for `op` at `at`, or None where the level refuses it.
+fn by_level(tier: Tier, at: At, op: Op) -> Option<Decision> {
+    let table = |place| allows(tier, place, op).then_some(Decision::Allow);
+    match at {
+        At::Never | At::Guarded => None,
+        At::Attached => table(Place::Attached),
+        At::Folder(Row::Change) => table(Place::Folder),
+        At::Folder(Row::Read) => match (op, tier) {
+            (Op::Read | Op::Search, _) => Some(Decision::Allow),
+            (_, Tier::Look) => None,
+            // A change in a folder it only reads is asked as one outside it would be.
+            (_, Tier::Work) => outside(tier, op),
+            (_, Tier::Full) => table(Place::Folder),
+        },
+        At::Outside => outside(tier, op),
+    }
+}
+
+/// Outside the folders: Full access goes ahead, Work on pages asks to read, make or change and
+/// refuses the rest, and Look only refuses all.
+fn outside(tier: Tier, op: Op) -> Option<Decision> {
+    match (tier, op) {
+        (Tier::Full, _) => Some(Decision::Allow),
+        (Tier::Work, Op::Read | Op::Search | Op::Make | Op::Change) => Some(Decision::Ask),
+        _ => None,
     }
 }
 
@@ -142,9 +283,11 @@ impl Given {
     /// for one is then the wall for the other. True of a task with none, and of one whose files
     /// are attached copies alone, which every level only reads.
     pub fn same_rules(&self, from: Tier, to: Tier) -> bool {
+        // A wall holds no place outside the folders: the product's own tools reach there.
         let has = |place| match place {
             Place::Attached => self.attached.is_some(),
             Place::Folder => self.folder.is_some(),
+            Place::Outside => false,
         };
         (Place::ALL.into_iter().filter(|&place| has(place))).all(|place| {
             Op::ALL
@@ -165,6 +308,13 @@ pub struct Never {
     /// The cloud drives' roots where the system names them, as Windows does OneDrive's, whose
     /// name may be a business's.
     clouds: Vec<PathBuf>,
+    /// The places the system guards with a prompt of its own (the Mac's Desktop, Documents,
+    /// Downloads, cloud drives and volumes), reached only under a folder the user picked.
+    guarded: Vec<PathBuf>,
+    /// Whether the system's names are the same whatever their case, as the Mac's and Windows'
+    /// are by default, so the never list is read so too. Refusing a name a case-sensitive disk
+    /// holds apart only refuses more.
+    folded: bool,
 }
 
 impl Never {
@@ -188,17 +338,131 @@ impl Never {
             .filter(|folder| !folder.is_empty())
             .map(PathBuf::from)
             .collect();
+        if cfg!(target_os = "macos") {
+            never.guarded = never.mac_guarded();
+        }
         never
     }
 
     pub fn of(home: PathBuf, ilo: Vec<PathBuf>, task: Option<PathBuf>) -> Never {
-        let clouds = Vec::new();
         Never {
             home,
             ilo,
             task,
-            clouds,
+            clouds: Vec::new(),
+            guarded: Vec::new(),
+            folded: cfg!(any(windows, target_os = "macos")),
         }
+    }
+
+    /// A path as the never list compares it.
+    fn fold(&self, path: &Path) -> PathBuf {
+        match self.folded {
+            true => PathBuf::from(path.to_string_lossy().to_lowercase()),
+            false => key(path),
+        }
+    }
+
+    /// The Mac's places that only a system prompt opens to an app the user didn't pick them in.
+    fn mac_guarded(&self) -> Vec<PathBuf> {
+        let mut guarded: Vec<PathBuf> = [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Library/Mobile Documents",
+            "Library/CloudStorage",
+        ]
+        .map(|folder| self.home.join(folder))
+        .to_vec();
+        guarded.push(PathBuf::from("/Volumes"));
+        guarded
+    }
+
+    /// The never roots the path floor compares by identity as it walks, so a second name for one
+    /// (its case changed, a firmlink, a bind mount) is refused as the first is: every whole but the
+    /// two a path goes on through, the folder of homes, which holds the user's own, and the
+    /// system's /run, which holds Linux's volumes.
+    pub fn by_identity(&self) -> Vec<PathBuf> {
+        let homes = self.home.parent().filter(|homes| *homes != Path::new("/"));
+        (self.whole().into_iter())
+            .filter(|whole| Some(whole.as_path()) != homes && whole != Path::new("/run"))
+            .collect()
+    }
+
+    fn library(&self) -> PathBuf {
+        self.home.join("Library")
+    }
+
+    /// Where `real`, a path the path floor resolved, is for a thread with `folders` and ilo's
+    /// copies of its attached files at `attached`. The never list wins over every folder, and
+    /// `~/Library` is never reached but inside a folder the user picked there.
+    pub fn at(&self, real: &Path, folders: &[Listed], attached: Option<&Path>) -> At {
+        let folded = &self.fold(real);
+        let real = &key(real);
+        let inside = |root: &Path| real.starts_with(key(root));
+        let folded_in = |root: &Path| folded.starts_with(self.fold(root));
+        if attached.is_some_and(inside) {
+            return At::Attached;
+        }
+        let never = !real.is_absolute() || real.components().any(|part| part.as_os_str() == "..");
+        if never || self.in_whole(real) {
+            return At::Never;
+        }
+        // The deepest folder holding it says its row.
+        let folder = (folders.iter().filter(|folder| inside(folder.root())))
+            .max_by_key(|folder| folder.root().components().count());
+        match folder {
+            Some(folder) => At::Folder(folder.row),
+            // iCloud Drive and the cloud drives are in `~/Library`, guarded by the system, and
+            // reached by a folder the user adds there (F3), so the rest of it is never.
+            None if self.guarded.iter().any(|place| folded_in(place)) => At::Guarded,
+            None if folded_in(&self.library()) => At::Never,
+            None => At::Outside,
+        }
+    }
+
+    /// The folder the ask's middle button would allow for a file in `parent`, if it's one ilo
+    /// would grant: never inside `~/Library`, nor one `never_grantable` refuses.
+    pub fn ask_folder(&self, parent: &Path) -> Option<PathBuf> {
+        let library = self.fold(parent).starts_with(self.fold(&self.library()));
+        let refused = library || never_grantable(parent, self);
+        (!refused).then(|| parent.to_path_buf())
+    }
+
+    /// Whether `path`, in `key`'s form, is inside one of the wholes: another user's home is, the
+    /// user's own isn't, and a volume Linux mounts under the system's /run isn't.
+    fn in_whole(&self, path: &Path) -> bool {
+        if self.in_photos(path) {
+            return true;
+        }
+        let (path, home) = (&self.fold(path), &self.fold(&self.home));
+        let on_a_volume = MOUNTS.iter().any(|(mounts, _)| path.starts_with(mounts));
+        self.whole().iter().any(|whole| {
+            let whole = &self.fold(whole);
+            let system_mount = on_a_volume && whole == Path::new("/run");
+            let inside = path.starts_with(whole) && !system_mount;
+            match home.parent() == Some(whole.as_path()) {
+                true => inside && !path.starts_with(home),
+                false => inside,
+            }
+        })
+    }
+
+    /// Whether `path` is a photo library under `~/Pictures` or inside one: a bundle the Photos app
+    /// keeps, under whatever name the user gave it.
+    fn in_photos(&self, path: &Path) -> bool {
+        let pictures = self.fold(&self.home.join("Pictures"));
+        let Ok(under) = self
+            .fold(path)
+            .strip_prefix(&pictures)
+            .map(Path::to_path_buf)
+        else {
+            return false;
+        };
+        under.components().any(|part| {
+            let name = part.as_os_str().to_string_lossy();
+            name.to_lowercase().ends_with(".photoslibrary")
+        })
     }
 
     /// Folders refused as themselves only, as each holds the user's whole work: the home folder
@@ -215,6 +479,11 @@ impl Never {
                 "iCloud Drive",
                 "pCloud Drive",
                 "Box",
+                // The Mac's: every app's cloud folders, iCloud Drive's root, and where the cloud
+                // drives keep theirs.
+                "Library/Mobile Documents",
+                "Library/Mobile Documents/com~apple~CloudDocs",
+                "Library/CloudStorage",
             ]
             .map(|drive| home.join(drive)),
         );
@@ -223,8 +492,9 @@ impl Never {
     }
 
     /// Folders refused with all inside them, and any folder holding one: the system's, other users'
-    /// homes, the user's keys and sign-ins, the assistants' own, every
-    /// browser's profiles, ilo's and the task's own.
+    /// homes, the user's keys and sign-ins, the assistants' own, every browser's profiles, every
+    /// app's settings, ilo's and the task's own. `~/Library` isn't one, as a folder the user
+    /// picked inside it is reached; `at` keeps the rest of it out.
     fn whole(&self) -> Vec<PathBuf> {
         let home = &self.home;
         let mut folders: Vec<PathBuf> = [
@@ -261,8 +531,48 @@ impl Never {
         .to_vec();
         folders.extend(
             [
-                // The Mac's: its keychains, cloud drives, apps' data and every browser's profiles.
-                "Library",
+                // The Mac's, inside `~/Library`, refused even in a folder the user picked there:
+                // keychains and sign-ins, the system's own stores, what runs at login, other
+                // apps' walled data, password managers', every browser's profiles and the
+                // assistants' own.
+                "Library/Keychains",
+                "Library/Preferences",
+                "Library/Cookies",
+                "Library/HTTPStorages",
+                "Library/Accounts",
+                "Library/Mail",
+                "Library/Messages",
+                "Library/Safari",
+                "Library/Calendars",
+                "Library/Suggestions",
+                "Library/Biome",
+                "Library/LaunchAgents",
+                "Library/Containers",
+                "Library/Group Containers",
+                // Each named as well, so each is refused by its own name and not only as part of
+                // other apps' walled data.
+                "Library/Containers/com.apple.Notes",
+                "Library/Group Containers/group.com.apple.notes",
+                "Library/Containers/com.apple.mail",
+                "Library/Containers/com.apple.iChat",
+                "Library/Containers/com.apple.AddressBook",
+                "Library/Containers/com.apple.Safari",
+                "Library/Application Support/com.apple.TCC",
+                "Library/Application Support/AddressBook",
+                "Library/Application Support/CallHistoryDB",
+                "Library/Application Support/Knowledge",
+                "Library/Application Support/MobileSync",
+                "Library/Application Support/1Password",
+                "Library/Application Support/Bitwarden",
+                "Library/Application Support/Google",
+                "Library/Application Support/Chromium",
+                "Library/Application Support/Firefox",
+                "Library/Application Support/Arc",
+                "Library/Application Support/BraveSoftware",
+                "Library/Application Support/Microsoft Edge",
+                "Library/Application Support/Vivaldi",
+                "Library/Application Support/com.operasoftware.Opera",
+                "Library/Application Support/Claude",
                 // The user's own apps, which run outside any wall.
                 "Applications",
                 // Keys and sign-ins.
@@ -274,6 +584,23 @@ impl Never {
                 ".pki",
                 ".netrc",
                 ".docker",
+                ".docker/config.json",
+                // Shells' and tools' histories, which hold what was typed, passwords among it.
+                ".zsh_history",
+                ".zhistory",
+                ".zsh_sessions",
+                ".bash_history",
+                ".bash_sessions",
+                ".sh_history",
+                ".history",
+                ".local/share/fish/fish_history",
+                ".python_history",
+                ".node_repl_history",
+                ".psql_history",
+                ".mysql_history",
+                ".sqlite_history",
+                ".lesshst",
+                ".irb_history",
                 ".kube",
                 ".config/gcloud",
                 ".azure",
@@ -283,6 +610,9 @@ impl Never {
                 ".claude.json",
                 ".codex",
                 ".config/claude",
+                // Every app's settings and data on Linux, sign-ins among them.
+                ".config",
+                ".local/share",
                 // Browsers' profiles on Linux.
                 ".mozilla",
                 ".config/google-chrome",
@@ -381,28 +711,18 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
     if never.themselves().iter().any(|own| key(own) == *folder) {
         return true;
     }
-    // A volume's root, and the folder volumes are mounted in, are refused; a folder on the volume
-    // isn't, though Linux mounts some under the system's /run.
-    let mut on_a_volume = false;
-    for (mounts, depth) in MOUNTS {
-        if let Ok(under) = folder.strip_prefix(mounts) {
-            if under.components().count() <= depth {
-                return true;
-            }
-            on_a_volume = true;
-        }
+    // Each cloud drive the system keeps in its own folder has its root there.
+    let drives = key(&never.library().join("CloudStorage"));
+    if folder.parent() == Some(drives.as_path()) {
+        return true;
     }
-    let home = &key(&never.home);
-    never.whole().iter().any(|whole| {
-        let whole = &key(whole);
-        let system_mount = on_a_volume && whole == Path::new("/run");
-        let inside = folder.starts_with(whole) && !system_mount;
-        let holds = whole.starts_with(folder);
-        match home.parent() == Some(whole.as_path()) {
-            true => holds || (inside && !folder.starts_with(home)),
-            false => holds || inside,
-        }
-    })
+    // A volume's root, and the folder volumes are mounted in, are refused.
+    let volume_root = MOUNTS.iter().any(|(mounts, depth)| {
+        (folder.strip_prefix(mounts)).is_ok_and(|under| under.components().count() <= *depth)
+    });
+    volume_root
+        || never.in_whole(folder)
+        || (never.whole().iter()).any(|whole| key(whole).starts_with(folder))
 }
 
 /// The path the panel gave, its links resolved, as the folder is checked and granted by it.
@@ -507,6 +827,183 @@ pub mod words {
     /// Settings › Agents' group of every folder a live task holds.
     pub const FOLDERS_IN_USE: &str = "Folders in use";
 
+    use super::{Op, Refused};
+    use crate::product::PRODUCT;
+
+    /// The verb a file step's words name an act by.
+    pub fn verb(op: Op) -> &'static str {
+        match op {
+            Op::Read | Op::Search => "read",
+            Op::Make => "make",
+            Op::Change => "change",
+            Op::Delete => "delete",
+            Op::Move | Op::Replace => "move",
+        }
+    }
+
+    /// A file's name as a step names it (TS2): in quotes, cut in the middle past 32 characters.
+    pub fn quoted(name: &str) -> String {
+        const MOST: usize = 32;
+        let chars: Vec<char> = name.chars().collect();
+        let name: String = match chars.len() > MOST {
+            true => {
+                let head = (MOST - 1) / 2;
+                let tail = MOST - 1 - head;
+                let (start, end) = (&chars[..head], &chars[chars.len() - tail..]);
+                start.iter().chain(['…'].iter()).chain(end).collect()
+            }
+            false => name.into(),
+        };
+        format!("\u{201c}{name}\u{201d}")
+    }
+
+    /// F1–F10, a refused act's line in the thread's trace (TS2's form). Only F3's has a button,
+    /// `ADD_FOLDER`, which opens the system's folder panel at the file's folder.
+    pub fn refused(op: Op, file: &str, why: Refused) -> String {
+        let reason = match why {
+            Refused::Never => format!("{PRODUCT} keeps it from threads"),
+            Refused::Changed => format!("it changed after {PRODUCT} asked you"),
+            Refused::Guarded => "add its folder first".into(),
+            Refused::Needs(level) => format!("needs {}", level.label()),
+            Refused::Attached => "attached files are only read".into(),
+            Refused::OtherNames => "it's also saved in another place".into(),
+            Refused::Gone => "it isn't there".into(),
+            Refused::NotOpened => format!("{PRODUCT} doesn't open this kind of file"),
+            Refused::Cloud => "it isn't downloaded".into(),
+            Refused::TooLarge => "it's over 1 MB".into(),
+            Refused::NotText => "it isn't text".into(),
+        };
+        format!("{}: {reason}", failed(op, file))
+    }
+
+    /// F12's failed line with no reason the table names.
+    pub fn failed(op: Op, file: &str) -> String {
+        format!("Couldn't {} {}", verb(op), quoted(file))
+    }
+
+    /// F1a–F10c, what the assistant is told of a refused act; `folder` is the file's folder's
+    /// name, which F3a names.
+    pub fn told(why: Refused, folder: &str) -> String {
+        match why {
+            Refused::Never => {
+                format!("Not done: {PRODUCT} never gives this path to a task. Go on without it.")
+            }
+            Refused::Changed => "Not done: the file changed after the user was asked. Read it \
+                                 again before you ask again."
+                .into(),
+            Refused::Guarded => format!(
+                "Not done: the user has to add this file's folder to the thread first. Go on \
+                 without it, or ask them to add \u{201c}{folder}\u{201d}."
+            ),
+            Refused::Needs(level) => format!(
+                "Not done: this needs {}, which only the user can set. Go on without it, or tell \
+                 them why you need it.",
+                level.label()
+            ),
+            Refused::Attached => {
+                "Not done: an attached file is only for reading. Go on without changing it.".into()
+            }
+            Refused::OtherNames => "Not done: this file also exists under another name \
+                                    elsewhere, so it can only be read. Go on without changing it."
+                .into(),
+            Refused::Gone => {
+                "Not done: there's nothing at this path. List its folder to find the right name."
+                    .into()
+            }
+            Refused::NotOpened => format!(
+                "Not done: this isn't a regular file or folder, and {PRODUCT} doesn't open it."
+            ),
+            Refused::Cloud => format!(
+                "Not done: this file isn't downloaded to this computer, and {PRODUCT} doesn't \
+                 download it. Ask the user to download it, or go on without it."
+            ),
+            Refused::TooLarge => "Not done: one write can be at most 1 MB.".into(),
+            Refused::NotText => {
+                "Not done: read_file reads only text, and this file isn't text.".into()
+            }
+        }
+    }
+
+    /// F11, a list cut at its 500 entries: the done line's tail, and what's added to the answer.
+    pub fn listed_first(folder: &str) -> String {
+        format!("Looked in {} \u{b7} first 500", quoted(folder))
+    }
+    pub const LISTED_FIRST_TOLD: &str =
+        "Only the first 500 entries are listed. Search the folder to find something specific.";
+
+    /// F11b, a search stopped at its limit.
+    pub fn searched_early(folder: &str) -> String {
+        format!("Searched in {} \u{b7} stopped early", quoted(folder))
+    }
+    pub const SEARCHED_EARLY_TOLD: &str = "The search stopped at its limit before it covered the \
+                                           whole folder. Search a smaller folder or a narrower \
+                                           pattern.";
+
+    /// What a file tool's step did, by the names F12's lines take.
+    #[derive(Clone, Copy, Debug)]
+    pub enum Step<'a> {
+        Read(&'a str),
+        List(&'a str),
+        Search(&'a str),
+        MakeFile(&'a str),
+        /// A file written over or edited.
+        Change(&'a str),
+        MakeFolder(&'a str),
+        /// To another folder, `to`.
+        Move {
+            file: &'a str,
+            to: &'a str,
+        },
+        /// In the same folder.
+        Rename {
+            old: &'a str,
+            new: &'a str,
+        },
+        Trash(&'a str),
+    }
+
+    /// F12, a file tool's step line while it's doing and once it's done; a failed one is
+    /// `failed` or `refused`.
+    pub fn step(step: Step, done: bool) -> String {
+        let q = quoted;
+        match (step, done) {
+            (Step::Read(file), false) => format!("Reading {}", q(file)),
+            (Step::Read(file), true) => format!("Read {}", q(file)),
+            (Step::List(folder), false) => format!("Looking in {}", q(folder)),
+            (Step::List(folder), true) => format!("Looked in {}", q(folder)),
+            (Step::Search(folder), false) => format!("Searching in {}", q(folder)),
+            (Step::Search(folder), true) => format!("Searched in {}", q(folder)),
+            (Step::MakeFile(name) | Step::MakeFolder(name), false) => format!("Making {}", q(name)),
+            (Step::MakeFile(name) | Step::MakeFolder(name), true) => format!("Made {}", q(name)),
+            (Step::Change(file), false) => format!("Changing {}", q(file)),
+            (Step::Change(file), true) => format!("Changed {}", q(file)),
+            (Step::Move { file, .. }, false) | (Step::Rename { old: file, .. }, false) => {
+                format!("Moving {}", q(file))
+            }
+            (Step::Move { file, to }, true) => format!("Moved {} to {}", q(file), q(to)),
+            (Step::Rename { old, new }, true) => format!("Renamed {} to {}", q(old), q(new)),
+            (Step::Trash(file), false) => format!("Moving {} to the {TRASH}", q(file)),
+            // XT1.
+            (Step::Trash(file), true) => format!("Moved {} to the {TRASH}", q(file)),
+        }
+    }
+
+    /// Where a delete goes, as each system names it (XT1).
+    const TRASH: &str = match cfg!(windows) {
+        true => "Recycle Bin",
+        false => "Trash",
+    };
+
+    /// F5, a change past the undo's cap: its account says it can't be undone.
+    pub fn past_undo(op: Op, file: &str) -> String {
+        let done = match op {
+            Op::Delete => "Deleted",
+            Op::Move | Op::Replace => "Moved",
+            _ => "Changed",
+        };
+        format!("{done} {} \u{b7} can't be undone", quoted(file))
+    }
+
     /// X4, where the panel gave a folder ilo never gives.
     pub fn never_given(folder: &str) -> String {
         format!(
@@ -582,6 +1079,18 @@ mod tests {
         "/Users/sam/Applications",
         "/opt",
         "/opt/homebrew",
+        "/Users/sam/Library/Application Support",
+        "/Users/sam/Library/LaunchAgents",
+        "/Users/sam/Library/Group Containers/2BUA8C4S2C.com.1password",
+        "/Users/sam/Library/Containers/com.apple.mail",
+        "/Users/sam/Library/Mobile Documents",
+        "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs",
+        "/Users/sam/Library/CloudStorage",
+        "/Users/sam/Library/CloudStorage/GoogleDrive-sam",
+        "/Users/sam/.config",
+        "/Users/sam/.config/fish",
+        "/Users/sam/.local/share",
+        "/Users/sam/.local/share/fonts",
     ];
 
     #[cfg(windows)]
@@ -639,6 +1148,10 @@ mod tests {
         "/media/sam/Backup/Photos",
         "/run/media/sam/Backup/Photos",
         "/srv/site",
+        "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip",
+        "/Users/sam/Library/CloudStorage/Dropbox/Trip",
+        "/Users/sam/Library/Fonts",
+        "/Users/sam/.local/bin",
     ];
 
     #[cfg(windows)]
@@ -760,7 +1273,7 @@ mod tests {
     #[test]
     fn every_level_reads_and_searches_both_places() {
         for tier in Tier::ALL {
-            for place in Place::ALL {
+            for place in [Place::Attached, Place::Folder] {
                 assert!(allows(tier, place, Op::Read) && allows(tier, place, Op::Search));
             }
         }
@@ -806,6 +1319,536 @@ mod tests {
                 assert!(attached.same_rules(from, to));
                 assert_eq!(folder.same_rules(from, to), from == to, "{from:?} {to:?}");
             }
+        }
+    }
+
+    const OPS: [Op; 7] = Op::ALL;
+
+    /// Each cell of `decide` for a file with one name, as one letter per op in `Op::ALL`'s order:
+    /// A goes ahead, ? asks; refused, N by the never list, G as the system's, a as an attached
+    /// file, and w or f as needing Work on pages or Full access.
+    #[test]
+    fn decide_reads_never_place_level_and_row_in_turn() {
+        let read = At::Folder(Row::Read);
+        let folder = At::Folder(Row::Change);
+        let cells = [
+            (At::Never, ["NNNNNNN", "NNNNNNN", "NNNNNNN"]),
+            (At::Guarded, ["GGGGGGG", "GGGGGGG", "GGGGGGG"]),
+            (At::Attached, ["AAaaaaa", "AAaaaaa", "AAaaaaa"]),
+            (folder, ["AAwwfff", "AAAAfff", "AAAAAAA"]),
+            (read, ["AAwwfff", "AA??fff", "AAAAAAA"]),
+            (At::Outside, ["wwwwfff", "????fff", "AAAAAAA"]),
+        ];
+        for (at, by_tier) in cells {
+            for (tier, row) in Tier::ALL.into_iter().zip(by_tier) {
+                let got: String = (OPS.iter())
+                    .map(|&op| match decide(tier, at, op, false) {
+                        Decision::Allow => 'A',
+                        Decision::Ask => '?',
+                        Decision::Refuse(Refused::Needs(Tier::Work)) => 'w',
+                        Decision::Refuse(Refused::Needs(Tier::Full)) => 'f',
+                        Decision::Refuse(Refused::Never) => 'N',
+                        Decision::Refuse(Refused::Guarded) => 'G',
+                        Decision::Refuse(Refused::Attached) => 'a',
+                        Decision::Refuse(other) => panic!("{other:?}"),
+                    })
+                    .collect();
+                assert_eq!(got, row, "{at:?} at {tier:?}");
+            }
+        }
+    }
+
+    /// A refusal by the level names the lowest level that would go ahead or ask, so going to it
+    /// does what the line says.
+    #[test]
+    fn a_level_refusal_names_the_lowest_level_that_would_do_it() {
+        let places = [At::Folder(Row::Change), At::Folder(Row::Read), At::Outside];
+        for tier in Tier::ALL {
+            for at in places {
+                for op in OPS {
+                    let Decision::Refuse(Refused::Needs(needs)) = decide(tier, at, op, false)
+                    else {
+                        continue;
+                    };
+                    assert!(needs > tier, "{at:?} {tier:?} {op:?}");
+                    assert!(
+                        !matches!(decide(needs, at, op, false), Decision::Refuse(_)),
+                        "{at:?} {tier:?} {op:?}"
+                    );
+                    for between in Tier::ALL.into_iter().filter(|t| *t > tier && *t < needs) {
+                        assert!(matches!(
+                            decide(between, at, op, false),
+                            Decision::Refuse(_)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_file_with_another_name_is_read_and_never_changed_deleted_or_moved() {
+        let places = [At::Folder(Row::Change), At::Folder(Row::Read), At::Outside];
+        for tier in Tier::ALL {
+            for at in places {
+                for op in OPS {
+                    let one = decide(tier, at, op, false);
+                    let two = decide(tier, at, op, true);
+                    let writes = !matches!(op, Op::Read | Op::Search | Op::Make);
+                    match (writes, one) {
+                        (true, Decision::Allow | Decision::Ask) => {
+                            assert_eq!(
+                                two,
+                                Decision::Refuse(Refused::OtherNames),
+                                "{at:?} {tier:?}"
+                            )
+                        }
+                        _ => assert_eq!(two, one, "{at:?} {tier:?} {op:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn listed(root: &str, row: Row) -> Listed {
+        Listed {
+            root: PathBuf::from(root),
+            row,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn on_a_mac() -> Never {
+        let mut never = never();
+        never.guarded = never.mac_guarded();
+        never.folded = true;
+        never
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_library_is_never_reached_but_in_a_folder_picked_there() {
+        let never = on_a_mac();
+        let fonts = [listed("/Users/sam/Library/Fonts", Row::Change)];
+        let at = |path: &str, folders: &[Listed]| never.at(Path::new(path), folders, None);
+        for path in [
+            "/Users/sam/Library",
+            "/Users/sam/Library/Preferences/com.example.plist",
+            "/Users/sam/library/keychains/login.keychain-db",
+        ] {
+            assert_ne!(at(path, &fonts), At::Outside, "{path}");
+            assert_ne!(at(path, &[]), At::Outside, "{path}");
+        }
+        assert_eq!(
+            at("/Users/sam/Library/Preferences/a.plist", &fonts),
+            At::Never
+        );
+        assert_eq!(
+            at("/Users/sam/Library/Fonts/Inter.ttf", &fonts),
+            At::Folder(Row::Change)
+        );
+        // Listed for its own sake: never, even inside a folder the user picked.
+        for (picked, path) in [
+            (
+                "/Users/sam/Library",
+                "/Users/sam/Library/Keychains/login.keychain-db",
+            ),
+            (
+                "/Users/sam/Library/Keychains",
+                "/Users/sam/Library/Keychains/login.keychain-db",
+            ),
+            (
+                "/Users/sam/Library",
+                "/Users/sam/Library/LaunchAgents/run.plist",
+            ),
+            (
+                "/Users/sam/Library/Application Support",
+                "/Users/sam/Library/Application Support/Google/Chrome/Default/Cookies",
+            ),
+            (
+                "/Users/sam/Library/Application Support",
+                "/Users/sam/Library/Application Support/ilo/Default",
+            ),
+        ] {
+            let folders = [listed(picked, Row::Change)];
+            assert_eq!(at(path, &folders), At::Never, "{path} in {picked}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_guarded_place_is_reached_only_under_a_folder_picked_there() {
+        let never = on_a_mac();
+        let trip = [listed("/Users/sam/Documents/Trip", Row::Change)];
+        let at = |path: &str| never.at(Path::new(path), &trip, None);
+        assert_eq!(
+            at("/Users/sam/Documents/Trip/plan.md"),
+            At::Folder(Row::Change)
+        );
+        for path in [
+            "/Users/sam/Documents/taxes.pdf",
+            "/Users/sam/Desktop/note.txt",
+            "/Users/sam/Downloads/a.zip",
+            "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/a.txt",
+            "/Users/sam/Library/CloudStorage/Dropbox/a.txt",
+            "/Volumes/Backup/a.txt",
+        ] {
+            assert_eq!(at(path), At::Guarded, "{path}");
+        }
+        assert_eq!(at("/Users/sam/code/site/index.html"), At::Outside);
+        // Elsewhere nothing is guarded by the system, so outside is outside.
+        let elsewhere = super::tests::never();
+        let at = |path: &str| elsewhere.at(Path::new(path), &[], None);
+        assert_eq!(at("/Users/sam/Documents/taxes.pdf"), At::Outside);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn where_a_path_is_from_the_never_list_its_folders_and_its_copies() {
+        let never = on_a_mac();
+        let folders = [
+            listed("/Users/sam/code", Row::Read),
+            listed("/Users/sam/code/site", Row::Change),
+        ];
+        let attached = Path::new("/srv/ilo/Tasks/task-1/Attached");
+        let at = |path: &str| never.at(Path::new(path), &folders, Some(attached));
+        assert_eq!(at("/Users/sam/code/notes.md"), At::Folder(Row::Read));
+        assert_eq!(
+            at("/Users/sam/code/site/index.html"),
+            At::Folder(Row::Change)
+        );
+        assert_eq!(at("/srv/ilo/Tasks/task-1/Attached/a.txt"), At::Attached);
+        assert_eq!(at("/Users/sam/notes.md"), At::Outside);
+        assert_eq!(at("/run/media/sam/Backup/Photos/a.jpg"), At::Outside);
+        for path in [
+            "/srv/ilo/Tasks/task-1/config.json",
+            "/srv/ilo/Tasks/task-2/Attached/a.txt",
+            "/Users/sam/.ssh/id_ed25519",
+            "/Users/sam/.config/fish/config.fish",
+            "/Users/sam/.local/share/keyrings/login.keyring",
+            "/Users/kim/notes.md",
+            "/etc/hosts",
+            "/proc/self/environ",
+            "/Users/sam/code/../.ssh/id_ed25519",
+            "code/notes.md",
+        ] {
+            assert_eq!(at(path), At::Never, "{path}");
+        }
+        // A folder picked on the never list doesn't open it.
+        let ssh = [listed("/Users/sam/.ssh", Row::Change)];
+        let ssh_at = never.at(Path::new("/Users/sam/.ssh/id_ed25519"), &ssh, None);
+        assert_eq!(ssh_at, At::Never);
+    }
+
+    /// woven's own store of the user's keys and sign-ins is in its profile (a 0600 file in a dev
+    /// build) or the Keychain (prod), and the vendors' programs keep theirs in their homes: never
+    /// reached, whatever folder the user picked around them.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_account_store_keychains_and_vendor_homes_are_never_reached() {
+        let here = Never::here(None);
+        let profile = PathBuf::from(crate::profile_dir());
+        let around = [Listed::for_test(
+            profile.parent().unwrap().into(),
+            Row::Change,
+        )];
+        for store in [profile.join("accounts"), profile.clone()] {
+            assert_eq!(
+                here.at(&store, &around, None),
+                At::Never,
+                "{}",
+                store.display()
+            );
+        }
+        let never = on_a_mac();
+        let home = [
+            listed("/Users/sam", Row::Change),
+            listed("/Users/sam/Library", Row::Change),
+        ];
+        for path in [
+            "/Users/sam/Library/Keychains/login.keychain-db",
+            "/Users/sam/Library/Application Support/ilo/Default/accounts",
+            "/Users/sam/.claude/.credentials.json",
+            "/Users/sam/.claude.json",
+            "/Users/sam/.codex/auth.json",
+            "/Users/sam/.config/claude/settings.json",
+            "/Users/sam/.aws/credentials",
+            "/Users/sam/.config/gcloud/credentials.db",
+        ] {
+            assert_eq!(never.at(Path::new(path), &home, None), At::Never, "{path}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_identity_set_holds_every_whole_but_those_a_path_goes_on_through() {
+        let never = never();
+        let roots = never.by_identity();
+        for whole in [
+            "/Users/sam/.ssh",
+            "/Users/sam/.config",
+            "/Users/sam/Library/Keychains",
+            "/Users/sam/Library/Application Support/ilo",
+            "/srv/ilo/Tasks",
+            "/System",
+        ] {
+            assert!(roots.contains(&PathBuf::from(whole)), "{whole}");
+        }
+        for through in ["/Users", "/run", "/Users/sam", "/Users/sam/Library", "/"] {
+            assert!(!roots.contains(&PathBuf::from(through)), "{through}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_asks_folder_is_never_in_the_library_nor_one_never_given() {
+        let never = on_a_mac();
+        let ask = |parent: &str| never.ask_folder(Path::new(parent));
+        assert_eq!(
+            ask("/Users/sam/code/site").as_deref(),
+            Some(Path::new("/Users/sam/code/site"))
+        );
+        for parent in [
+            "/Users/sam/Library/Fonts",
+            "/Users/sam/Library",
+            "/Users/sam",
+            "/Users/sam/Dropbox",
+            "/",
+            "/Volumes/Backup",
+        ] {
+            assert_eq!(ask(parent), None, "{parent}");
+        }
+    }
+
+    #[test]
+    fn file_words_name_the_product_and_cut_a_long_name_in_the_middle() {
+        use super::words::*;
+        let long = "Island Ferries timetable for the whole summer.pdf";
+        let cut = quoted(long);
+        assert_eq!(cut.chars().count(), 32 + 2, "{cut}");
+        assert!(
+            cut.starts_with("\u{201c}Island") && cut.ends_with("summer.pdf\u{201d}"),
+            "{cut}"
+        );
+        assert_eq!(quoted("plan.md"), "\u{201c}plan.md\u{201d}");
+        let product = crate::product::PRODUCT;
+        for (why, reason) in [
+            (Refused::Never, format!("{product} keeps it from threads")),
+            (
+                Refused::Changed,
+                format!("it changed after {product} asked you"),
+            ),
+            (Refused::Guarded, "add its folder first".into()),
+            (Refused::Needs(Tier::Work), "needs Work on pages".into()),
+            (Refused::Needs(Tier::Full), "needs Full access".into()),
+            (Refused::Attached, "attached files are only read".into()),
+            (
+                Refused::OtherNames,
+                "it's also saved in another place".into(),
+            ),
+            (Refused::Gone, "it isn't there".into()),
+            (
+                Refused::NotOpened,
+                format!("{product} doesn't open this kind of file"),
+            ),
+            (Refused::Cloud, "it isn't downloaded".into()),
+            (Refused::TooLarge, "it's over 1 MB".into()),
+            (Refused::NotText, "it isn't text".into()),
+        ] {
+            let line = refused(Op::Change, "plan.md", why);
+            assert_eq!(
+                line,
+                format!("Couldn't change \u{201c}plan.md\u{201d}: {reason}")
+            );
+            let told = told(why, "Trip");
+            assert!(told.starts_with("Not done: "), "{told}");
+        }
+        assert!(told(Refused::Guarded, "Trip").contains("\u{201c}Trip\u{201d}"));
+        assert!(told(Refused::Needs(Tier::Full), "Trip").contains("needs Full access,"));
+        assert_eq!(
+            refused(Op::Move, "plan.md", Refused::Guarded),
+            "Couldn't move \u{201c}plan.md\u{201d}: add its folder first"
+        );
+        assert_eq!(
+            past_undo(Op::Delete, "plan.md"),
+            "Deleted \u{201c}plan.md\u{201d} \u{b7} can't be undone"
+        );
+        assert_eq!(
+            listed_first("Trip"),
+            "Looked in \u{201c}Trip\u{201d} \u{b7} first 500"
+        );
+        assert_eq!(
+            searched_early("Trip"),
+            "Searched in \u{201c}Trip\u{201d} \u{b7} stopped early"
+        );
+    }
+
+    /// F12: each tool's line while doing and done, a search kept apart from the web's by `in`.
+    #[test]
+    fn each_file_tools_step_says_what_it_does_and_did() {
+        use super::words::{Step, step};
+        let q = |name: &str| format!("\u{201c}{name}\u{201d}");
+        let (plan, trip) = (q("plan.md"), q("Trip"));
+        for (each, doing, done) in [
+            (
+                Step::Read("plan.md"),
+                format!("Reading {plan}"),
+                format!("Read {plan}"),
+            ),
+            (
+                Step::List("Trip"),
+                format!("Looking in {trip}"),
+                format!("Looked in {trip}"),
+            ),
+            (
+                Step::Search("Trip"),
+                format!("Searching in {trip}"),
+                format!("Searched in {trip}"),
+            ),
+            (
+                Step::MakeFile("plan.md"),
+                format!("Making {plan}"),
+                format!("Made {plan}"),
+            ),
+            (
+                Step::Change("plan.md"),
+                format!("Changing {plan}"),
+                format!("Changed {plan}"),
+            ),
+            (
+                Step::MakeFolder("Trip"),
+                format!("Making {trip}"),
+                format!("Made {trip}"),
+            ),
+            (
+                Step::Move {
+                    file: "plan.md",
+                    to: "Trip",
+                },
+                format!("Moving {plan}"),
+                format!("Moved {plan} to {trip}"),
+            ),
+            (
+                Step::Rename {
+                    old: "plan.md",
+                    new: "old.md",
+                },
+                format!("Moving {plan}"),
+                format!("Renamed {plan} to {}", q("old.md")),
+            ),
+        ] {
+            assert_eq!(step(each, false), doing);
+            assert_eq!(step(each, true), done);
+        }
+        #[cfg(not(windows))]
+        {
+            let trash = Step::Trash("plan.md");
+            assert_eq!(step(trash, false), format!("Moving {plan} to the Trash"));
+            assert_eq!(step(trash, true), format!("Moved {plan} to the Trash"));
+        }
+    }
+
+    /// The lead's list (26 Nov): each is refused by its own name, inside a folder the user picked
+    /// around it, and not only as part of a wider rule.
+    #[cfg(not(windows))]
+    #[test]
+    fn each_named_secret_is_refused_by_name_inside_a_picked_folder() {
+        let never = on_a_mac();
+        let picked = [
+            listed("/Users/sam", Row::Change),
+            listed("/Users/sam/Library", Row::Change),
+            listed("/Users/sam/Pictures", Row::Change),
+        ];
+        let named = never.whole();
+        for (path, by_name) in [
+            ("Library/Mail/V10/INBOX.mbox", "Library/Mail"),
+            ("Library/Messages/chat.db", "Library/Messages"),
+            ("Library/Calendars/Calendar.sqlitedb", "Library/Calendars"),
+            (
+                "Library/Application Support/AddressBook/AddressBook-v22.abcddb",
+                "Library/Application Support/AddressBook",
+            ),
+            ("Library/Safari/History.db", "Library/Safari"),
+            (
+                "Library/Group Containers/group.com.apple.notes/NoteStore.sqlite",
+                "Library/Group Containers/group.com.apple.notes",
+            ),
+            (
+                "Library/Containers/com.apple.Notes/Data",
+                "Library/Containers/com.apple.Notes",
+            ),
+            (
+                "Library/Containers/com.example.App/Data",
+                "Library/Containers",
+            ),
+            (
+                "Library/Group Containers/2BUA8C4S2C.com.1password/x",
+                "Library/Group Containers",
+            ),
+            ("Library/Accounts/Accounts4.sqlite", "Library/Accounts"),
+            ("Library/Cookies/Cookies.binarycookies", "Library/Cookies"),
+            ("Library/Keychains/login.keychain-db", "Library/Keychains"),
+            (
+                "Library/LaunchAgents/com.example.plist",
+                "Library/LaunchAgents",
+            ),
+            (
+                "Library/Preferences/com.apple.finder.plist",
+                "Library/Preferences",
+            ),
+            (".ssh/id_ed25519", ".ssh"),
+            (".gnupg/private-keys-v1.d/a.key", ".gnupg"),
+            (".aws/credentials", ".aws"),
+            (".config/gh/hosts.yml", ".config/gh"),
+            (".netrc", ".netrc"),
+            (".docker/config.json", ".docker/config.json"),
+            (".zsh_history", ".zsh_history"),
+            (".bash_history", ".bash_history"),
+            (".zsh_sessions/A1.history", ".zsh_sessions"),
+            (".python_history", ".python_history"),
+            (".psql_history", ".psql_history"),
+        ] {
+            let path = Path::new("/Users/sam").join(path);
+            assert_eq!(
+                never.at(&path, &picked, None),
+                At::Never,
+                "{}",
+                path.display()
+            );
+            let root = Path::new("/Users/sam").join(by_name);
+            assert!(named.contains(&root), "{} listed by name", root.display());
+        }
+        for library in [
+            "Pictures/Photos Library.photoslibrary/database/Photos.sqlite",
+            "Pictures/Photos Library.photoslibrary",
+            "Pictures/Old/Trip 2019.photoslibrary/originals/a.heic",
+        ] {
+            let path = Path::new("/Users/sam").join(library);
+            assert_eq!(never.at(&path, &picked, None), At::Never, "{library}");
+            assert!(never_grantable(&path, &never), "{library}");
+        }
+        let photo = Path::new("/Users/sam/Pictures/Trip/a.heic");
+        assert_eq!(never.at(photo, &picked, None), At::Folder(Row::Change));
+        // And what the lead's change opens: iCloud Drive and the cloud drives, by a folder
+        // picked inside them.
+        for (folder, file) in [
+            (
+                "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip",
+                "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip/plan.md",
+            ),
+            (
+                "/Users/sam/Library/CloudStorage/Dropbox/Trip",
+                "/Users/sam/Library/CloudStorage/Dropbox/Trip/plan.md",
+            ),
+        ] {
+            assert!(!never_grantable(Path::new(folder), &never), "{folder}");
+            let trip = [listed(folder, Row::Change)];
+            assert_eq!(
+                never.at(Path::new(file), &trip, None),
+                At::Folder(Row::Change)
+            );
+            assert_eq!(never.at(Path::new(file), &[], None), At::Guarded, "{file}");
         }
     }
 
