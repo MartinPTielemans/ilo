@@ -377,8 +377,11 @@ pub struct TraceStep {
 pub struct OnPage {
     /// Its tab, or None for the page a step opened, whose tab the steps after it name.
     pub tab: Option<u64>,
-    /// Its site, which the page's line says while its tab has no title.
+    /// Its site, which the page's line says while it has no title.
     pub site: SharedString,
+    /// The title the page had as the step ran, or empty if it had none yet: its line says the
+    /// page as it was, not what its tab went on to.
+    pub title: SharedString,
     /// Whether the step went to it: opened it or navigated to it, which starts a page's steps
     /// and has no line of its own unless it failed or is under way.
     pub went: bool,
@@ -4267,9 +4270,8 @@ impl Agents {
         };
         let tab = (tab.or_else(|| tools::tab_argument(arguments).ok().flatten()))
             .or_else(|| self.current.get(&(agent.into(), connection)).copied());
-        let url = tab
-            .map(|tab| self.browser.tab(tab, cx).url.to_string())
-            .unwrap_or_default();
+        let on_tab = tab.map(|tab| self.browser.tab(tab, cx)).unwrap_or_default();
+        let url = on_tab.url.to_string();
         let element = (arguments.get("ref").and_then(Value::as_str).zip(tab))
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
         let named = |element: &page::Element| match element.name.trim().is_empty() {
@@ -4282,6 +4284,11 @@ impl Agents {
             site: on,
             tab,
             page,
+            // A step going somewhere new has no title yet: the one its tab has is the page it left.
+            title: match tool {
+                "open_tab" | "navigate" => String::new(),
+                _ => on_tab.title.to_string(),
+            },
             ..Default::default()
         };
         match tool {
@@ -4340,7 +4347,8 @@ impl Agents {
             }
             "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
             "list_tabs" | "ask" => {
-                (did.site, did.tab, did.page) = (String::new(), None, String::new())
+                (did.site, did.tab, did.page, did.title) =
+                    (String::new(), None, String::new(), String::new())
             }
             _ => {}
         }
@@ -5705,6 +5713,7 @@ fn on_page(did: &tools::Did) -> Option<OnPage> {
     (went || on_tab).then(|| OnPage {
         tab: did.tab,
         site: did.site.clone().into(),
+        title: did.title.clone().into(),
         went,
     })
 }

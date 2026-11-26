@@ -4023,6 +4023,7 @@ fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
             page: Some(OnPage {
                 tab,
                 site: site.to_string().into(),
+                title: "".into(),
                 went,
             }),
             ..step(key, &format!("step {key}"), running)

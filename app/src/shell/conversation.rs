@@ -2619,9 +2619,12 @@ impl TalkView {
         let fold = Fold::Page(page.key);
         let open = self.is_open(fold, current);
         let head = look.page_head(page.tab);
-        let title = (head.map(|head| head.title.clone()))
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| page.site.clone());
+        // The title its steps saw, never the tab's now: a tab that went on to another page would
+        // head every page it was with the last one's.
+        let title = match page.title.is_empty() {
+            true => page.site.clone(),
+            false => page.title.clone(),
+        };
         let mut line = TraceLine::new(fold, title, "".into());
         line.page = Some(current);
         line.icon = head.and_then(|head| head.favicon.clone());

@@ -229,6 +229,7 @@ pub(crate) fn drawn(records: &[Record]) -> Drawn {
                     let on = OnPage {
                         tab: None,
                         site: title.clone(),
+                        title: SharedString::default(),
                         went: true,
                     };
                     let went = step(key, log_glyph(), "", "", false, Some(on));
@@ -246,6 +247,7 @@ pub(crate) fn drawn(records: &[Record]) -> Drawn {
                 let on = page.clone().map(|site| OnPage {
                     tab: None,
                     site,
+                    title: SharedString::default(),
                     went: false,
                 });
                 let line = step(key, *glyph, words, came, *failed, on);
