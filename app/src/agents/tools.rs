@@ -942,6 +942,7 @@ pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
         "cast" => "casting to a device",
         "extension_install" => "installing an extension",
         "app_install" => "installing itself as an app",
+        "digital_identity" => "asking for a digital ID",
         _ => {
             return Some(format!(
                 "{PRODUCT} stopped a permission request from {site}"
