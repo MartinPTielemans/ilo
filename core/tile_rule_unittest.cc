@@ -136,53 +136,77 @@ TEST(TileRule, ACardAWindowOrThePageGoingTakesAParkedPage) {
   EXPECT_FALSE(tiles.Parked(1));
 }
 
-TEST(TileRule, APageInAWindowsPaneOrALiveTileIsInSight) {
-  // Which page that dies is called crashed and gets the card: one the user sees (#3433).
+TEST(TileRule, APageInAWindowsPaneOrATileLiveOrParkedKeepsCrashed) {
+  // Which page that dies is called crashed and gets the card, and nothing loads it again by
+  // itself (#3433).
   TileRule tiles;
   // A window's pane.
-  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/true));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, /*window_shows=*/true));
   // Neither a pane nor a tile.
-  EXPECT_FALSE(tiles.InSight(1, /*window_shows=*/false));
+  EXPECT_FALSE(tiles.KeepsCrashed(1, /*window_shows=*/false));
   // A live tile.
   tiles.Show(1, &kView, true, false, true);
-  EXPECT_TRUE(tiles.InSight(1, false));
-  EXPECT_FALSE(tiles.InSight(2, false));
-  // A parked tile, which draws nothing.
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
+  EXPECT_FALSE(tiles.KeepsCrashed(2, false));
+  // A parked tile, which draws nothing, but whose tile keeps its sign in the app.
   tiles.End(1);
-  EXPECT_FALSE(tiles.InSight(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
 }
 
-TEST(TileRule, ATileThatEndsIsOutOfSightUnlessAWindowOrAnotherTileHasItsPage) {
-  // The way out for a page that died in its tile: out of sight, it's unloaded.
+TEST(TileRule, TwoDeadTilesStayCrashedWhenOneIsWatched) {
+  // Two tiles whose pages died. One is watched, and the app ends the other's tile, which parks
+  // it: its page stays crashed, and its tile keeps its sign, until a reload.
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  tiles.Show(2, &kOtherView, true, false, true);
+  tiles.End(2);
+  tiles.Show(1, &kOtherView, true, false, true);
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(2, false));
+  // And the other way round.
+  tiles.End(1);
+  tiles.Show(2, &kView, true, false, true);
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(2, false));
+}
+
+TEST(TileRule, APageNoWindowOrTileHasIsUnloadedIfItDied) {
+  // The way out for a page that died in its tile: once no window, tile or park has it, it's
+  // unloaded.
   TileRule tiles;
   tiles.Show(1, &kView, true, false, true);
   // Moved to another view, it's a tile still.
   tiles.Show(1, &kOtherView, true, false, true);
-  EXPECT_TRUE(tiles.InSight(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
   // Parked, and a tile again.
   tiles.End(1);
-  EXPECT_FALSE(tiles.InSight(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
   tiles.Show(1, &kView, true, false, true);
-  EXPECT_TRUE(tiles.InSight(1, false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, false));
   // A window takes it: its pane has the page.
   tiles.Left(1);
-  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/true));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, /*window_shows=*/true));
   // The window lets go of it, and no tile has it.
-  EXPECT_FALSE(tiles.InSight(1, /*window_shows=*/false));
+  EXPECT_FALSE(tiles.KeepsCrashed(1, /*window_shows=*/false));
+  // Parked, and then gone from the park, as out of the agent's Space.
+  tiles.Show(1, &kView, true, false, true);
+  tiles.End(1);
+  tiles.Left(1);
+  EXPECT_FALSE(tiles.KeepsCrashed(1, false));
   // A card takes a tile's page.
   tiles.Show(1, &kView, true, false, true);
   tiles.ShowInCard(1);
-  EXPECT_FALSE(tiles.InSight(1, false));
+  EXPECT_FALSE(tiles.KeepsCrashed(1, false));
 }
 
-TEST(TileRule, APageAWindowLetsGoOfIsInSightOnceATileHasIt) {
+TEST(TileRule, APageAWindowLetsGoOfKeepsCrashedOnceATileHasIt) {
   // A page that died in a window's pane and is handed back with no reload stays crashed in the
   // tile that takes it, and is unloaded if none does.
   TileRule tiles;
-  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/true));
-  EXPECT_FALSE(tiles.InSight(1, /*window_shows=*/false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, /*window_shows=*/true));
+  EXPECT_FALSE(tiles.KeepsCrashed(1, /*window_shows=*/false));
   EXPECT_EQ(tiles.Show(1, &kView, true, /*window_shows=*/false, true), Shown::kNew);
-  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/false));
+  EXPECT_TRUE(tiles.KeepsCrashed(1, /*window_shows=*/false));
 }
 
 TEST(TileRule, OnlyATilesPageIsParked) {
