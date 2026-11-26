@@ -601,8 +601,18 @@ pub(crate) fn stand_in(
     looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    stand_in_with(looked, Vec::new(), cx)
+}
+
+/// As `stand_in`, with `found` the clients whose files the stat finds on the made-up computer.
+pub(crate) fn stand_in_with(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    found: Vec<Client>,
+    cx: &mut App,
+) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
     let configs = Arc::new(Configs::default());
     *configs.looked.lock().unwrap() = looked;
+    *configs.found.lock().unwrap() = found;
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let number = NEXT.fetch_add(1, Ordering::SeqCst);
     let folder = std::env::temp_dir().join(format!("agents-in-{}-{number}", std::process::id()));
