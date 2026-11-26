@@ -1,9 +1,10 @@
 //! A kept thread's log as its card's folder stores it at the thread's Done (kept/log.rs): the
 //! conversation as the panel draws it closed, line for line, by the panel's own grouping and
 //! words, so what comes back is what was there. Left out by rule, not by size: a file's or a
-//! folder's chip, anything of a page an agent was kept from but its site, the words a step opens
-//! to, the assistant's note on a step, and a thought. What was typed into a field is in a step's
-//! words only where `page::Element::shows_typed` let the step draw it.
+//! folder's chip, anything of a page an agent was kept from but its site, and the same of a tab
+//! the user handed the thread, the words a step opens to, the assistant's note on a step, and a
+//! thought. What was typed into a field is in a step's words only where
+//! `page::Element::shows_typed` let the step draw it.
 
 use gpui::{App, SharedString};
 
@@ -82,19 +83,30 @@ impl Agents {
         records
     }
 
-    /// A step's record, judged by the page it names, if any.
+    /// A step's record, judged by the page it names, if any. The same step on several tabs is one
+    /// line, which names what it clicked or typed in: where one of them is a tab the user handed
+    /// the thread, it's judged as on that tab.
     fn on_its_page(&self, task: &Task, step: &TraceStep, cx: &App) -> Record {
-        let kept_from =
-            (step.page.as_ref()).is_some_and(|page| self.kept_from(task, page.tab, &page.site, cx));
+        let users = |step: &TraceStep| {
+            let tab = step.page.as_ref().and_then(|page| page.tab);
+            tab.is_some_and(|tab| task.sends.was_users(tab))
+        };
+        let kept_from = (step.page.as_ref())
+            .is_some_and(|page| self.kept_from(task, page.tab, &page.site, cx))
+            || matches!(&step.opens, Opens::Steps(each) if each.iter().any(users));
         self.step_of(task, step, kept_from)
     }
 
     /// Whether the agent was kept from the page on `tab` at `site`: a site the user put off limits,
-    /// a page off the web or another Space's, or a page a session's agent is kept from now.
+    /// a page off the web or another Space's, or a page a session's agent is kept from now. A tab
+    /// the user handed the thread is kept as one is, by its site alone, held still or gone back:
+    /// it is theirs, and its title and what is on it are never kept (handed.rs, `Sends::users`).
     fn kept_from(&self, task: &Task, tab: Option<u64>, site: &str, cx: &App) -> bool {
         self.fence_of(site).is_some()
             || tab.is_some_and(|tab| {
-                self.withheld(&task.agent, tab) || self.off_limits(&task.agent, tab, cx).is_some()
+                task.sends.was_users(tab)
+                    || self.withheld(&task.agent, tab)
+                    || self.off_limits(&task.agent, tab, cx).is_some()
             })
     }
 

@@ -189,9 +189,26 @@ pub(in crate::agents) struct Sends {
     /// The tabs that went back to the user as the thread was last no longer under way, each with
     /// the site it came back on: what their next reply to it shows picked again.
     came_back: Vec<(u64, Option<String>)>,
+    /// The tabs that were ever the user's in this thread: each from its give on, through its
+    /// return or its close, to the thread's own end. What the thread keeps reads it (log_of.rs),
+    /// so a tab of the user's is kept by its site alone after it has gone back too. Never
+    /// stored or logged, and no tool's or MCP answer and no page reads it.
+    users: Vec<u64>,
 }
 
 impl Sends {
+    /// `tab`, one of the user's, was handed to the thread.
+    fn gave(&mut self, tab: u64) {
+        if !self.users.contains(&tab) {
+            self.users.push(tab);
+        }
+    }
+
+    /// Whether `tab` was ever the user's in this thread, held still or long gone back.
+    pub(super) fn was_users(&self, tab: u64) -> bool {
+        self.users.contains(&tab)
+    }
+
     /// Whether a reply with `tabs` to the thread at work waits for the turn under way to end: one
     /// with a tab of the user's does, as nothing is handed mid-turn, unless the thread
     /// `waits_on_user` then; and so does any sent while one waits, which goes after it.
@@ -354,6 +371,10 @@ impl Agents {
             agent: agent.clone(),
             tab,
         });
+        // It stays the user's in what the thread keeps, after it has gone back too.
+        if let Some(task) = self.task_mut(&agent) {
+            task.sends.gave(tab);
+        }
         self.note_page(&agent, (0, tab), HANDED, &site, "");
         cx.notify();
         true

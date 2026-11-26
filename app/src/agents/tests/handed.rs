@@ -4,6 +4,8 @@
 
 use super::kept::Run;
 use super::*;
+use crate::agents::kept::cards;
+use crate::agents::kept::log::Record;
 use crate::agents::runner::{Cli, Out};
 use crate::agents::task::handed::{self, Picked, Waiting};
 use crate::agents::task::{Start, State, TaskAction};
@@ -1812,6 +1814,132 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
             assert!(!text.contains(of_the_tab), "{name} keeps {of_the_tab}");
         }
     }
+}
+
+/// The log `agent`'s thread kept at its Done, as its card's folder holds it.
+fn kept_log(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<Record> {
+    cx.run_until_parked();
+    let card = (run.agents).read_with(cx, |agents, _| {
+        let kept = agents.tasks.kept.of(agent).expect("nothing kept");
+        kept.card.clone()
+    });
+    cards::read_log(&run.profile.join(cards::FOLDER), &card).expect("a log")
+}
+
+/// What the page on a handed tab calls its one button, in the page's own words.
+const PAYS: &str = "Pay for both seats";
+
+/// `agent` calls `tool` on `tab`'s first element, and the core answers what it was asked of the
+/// page with the page's tree: its own name and its one button.
+fn acts(run: &Run, agent: &str, tool: &str, tab: u64, cx: &mut TestAppContext) {
+    let asked = run.browser.pages.borrow().len();
+    let arguments = json!({ "tab": tab, "ref": "e1", "key": "Tab" });
+    _ = call(&run.agents, agent, tool, arguments, cx);
+    cx.run_until_parked();
+    let Some(request) =
+        (run.browser.pages.borrow().get(asked..)).and_then(|new| new.last().map(|page| page.1))
+    else {
+        return;
+    };
+    let tree = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Fares" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "button" }, "name": { "value": PAYS },
+          "backendDOMNodeId": 31 },
+    ]});
+    (run.agents).update(cx, |agents, cx| {
+        agents.page_done(request, tree.to_string(), None, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// The pages a kept log names, in its order.
+fn pages(log: &[Record]) -> Vec<&str> {
+    let pages = log.iter().filter_map(|record| match record {
+        Record::Page(page) => Some(page.as_str()),
+        _ => None,
+    });
+    pages.collect()
+}
+
+/// A tab the user handed is theirs in what the thread keeps after it has gone back too: one
+/// returned and one closed before the thread's Done are each in its log by the site alone, and a
+/// step in one by the product's own words for its kind, as on a page the thread was kept from.
+#[gpui::test]
+fn a_handed_tab_gone_before_the_end_is_kept_by_its_site_alone(cx: &mut TestAppContext) {
+    let run = run("handed-log-gone", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    run.ran(1);
+    // The same step on both is one line, which would name what it clicked, and a kind of step on
+    // one alone has that page's line over it.
+    for tool in ["snapshot", "click"] {
+        acts(&run, &agent, tool, TRAINS.0, cx);
+        acts(&run, &agent, tool, SEATS.0, cx);
+    }
+    acts(&run, &agent, "press_key", SEATS.0, cx);
+    press_return(&run, &agent, SEATS.0, cx);
+    _ = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    for tab in [TRAINS.0, SEATS.0] {
+        let held = (run.agents).read_with(cx, |agents, _| agents.is_handed(&agent, tab));
+        assert!(!held, "{tab} is still the thread's");
+    }
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx);
+    let pages = pages(&log);
+    for site in ["example.com", "tickets.example"] {
+        assert!(pages.contains(&site), "{site} of {pages:?}");
+    }
+    for page in pages {
+        assert!(!page.contains(' ') && !page.contains('/'), "{page}");
+    }
+    let mut steps = 0;
+    for record in &log {
+        if let Record::Step { words, came, .. } = record {
+            assert!(!words.contains("example"), "{words}");
+            assert!(came.is_empty(), "{came}");
+            steps += 1;
+        }
+    }
+    assert!(
+        steps >= 4,
+        "{steps} steps of looks, clicks, a key and a close"
+    );
+    for (path, text) in run.files() {
+        for of_the_tab in [TRAINS.1, SEATS.1, "/trains", "/seats", PAYS] {
+            assert!(!text.contains(of_the_tab), "{}", path.display());
+        }
+    }
+}
+
+/// A page of the thread's own keeps its title in the log as before, beside a tab the user handed
+/// it, which is there by its site.
+#[gpui::test]
+fn a_threads_own_page_keeps_its_title_beside_a_handed_tab(cx: &mut TestAppContext) {
+    let run = run("handed-log-own", cx);
+    let agent = send(&run, ASKED, USERS, &[SEATS.0], cx).expect("started");
+    run.ran(1);
+    acts(&run, &agent, "snapshot", SEATS.0, cx);
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(&run.agents, &agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    let (own, title) = (run.agents).read_with(cx, |agents, cx| {
+        let space = agents.task(&agent).unwrap().space;
+        let tabs = run.browser.tabs.borrow();
+        let tab = tabs
+            .iter()
+            .rev()
+            .find(|tab| tab.1 == space && tab.0 != SEATS.0);
+        let tab = tab.expect("its page").0;
+        (tab, agents.browser.tab(tab, cx).title)
+    });
+    assert!(!title.is_empty());
+    acts(&run, &agent, "press_key", own, cx);
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx);
+    let pages = pages(&log);
+    assert!(pages.contains(&title.as_ref()), "{title} of {pages:?}");
+    assert!(pages.contains(&"tickets.example"), "{pages:?}");
+    assert!(!pages.contains(&SEATS.1), "{pages:?}");
 }
 
 /// The composer offers a tab, and keeps its chip, only while the app would hand it: the user's
