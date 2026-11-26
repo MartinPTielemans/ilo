@@ -8,7 +8,7 @@ use gpui::{
     StyleRefinement, div, point, prelude::*, px, rgb, svg,
 };
 
-use super::{Shell, Step, display_text, with_alpha};
+use super::{Shell, Step, with_alpha};
 use crate::product::drawn_mark_path;
 use crate::tokens::shell::onboarding::card as t;
 
@@ -114,8 +114,8 @@ pub(super) fn at(x: f32, y: f32) -> gpui::Div {
 }
 
 /// The step's heading and its line, at the column's start or centred over the card.
-/// The headings' weight in the display face: v9's semibold, medium until the face has its 600.
-const HEADING_WEIGHT: FontWeight = FontWeight::MEDIUM;
+/// The headings' weight in the display face: v9's semibold, the face's 600.
+const HEADING_WEIGHT: FontWeight = FontWeight::SEMIBOLD;
 
 /// A heading's `title` in the display face at the headings' weight, a line `height` tall.
 pub(super) fn heading_text(
@@ -124,7 +124,7 @@ pub(super) fn heading_text(
     height: f32,
     cx: &mut App,
 ) -> gpui::Div {
-    display_text(title, size, height, cx).font_weight(HEADING_WEIGHT)
+    crate::shell::display_text_weighted(title, size, height, HEADING_WEIGHT, cx)
 }
 
 pub(super) fn heading(
