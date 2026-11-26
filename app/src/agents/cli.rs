@@ -32,10 +32,15 @@ pub const LINK: &str = env!("PRODUCT_NAME");
 /// The agent file's name in the profile directory.
 pub const FILE: &str = concat!(env!("PRODUCT_NAME"), "-command");
 
-/// The link's and the agent file's names from before the command took the product's name, which
-/// Add Again takes away when they're still the command's.
+/// The command's name from before it took the product's: its link's, and its agent file's with
+/// "-command", which Add Again takes away when they're still the command's.
 pub const OLD_LINK: &str = env!("APP_NAME");
-const OLD_FILE: &str = concat!(env!("APP_NAME"), "-command");
+
+/// Whether the command's name `new` is another than its `old` one. A build whose name and product
+/// are one has nothing old to take away: its old link and file are the ones Add just wrote.
+pub fn renamed(old: &str, new: &str) -> bool {
+    old != new
+}
 
 /// The folder Add puts the link in, as the row names it.
 pub const FOLDER_SHOWN: &str = "~/.local/bin";
@@ -228,6 +233,8 @@ pub struct Install {
     pub file: PathBuf,
     pub linked: bool,
     pub store: bool,
+    /// The command's name before it took the product's (OLD_LINK), for Add Again.
+    pub old: String,
 }
 
 /// What Add says when the folder has an `ilo` of another program's, which it leaves.
@@ -262,6 +269,7 @@ impl Install {
             file,
             linked: false,
             store,
+            old: OLD_LINK.into(),
         }
     }
 
@@ -277,19 +285,28 @@ impl Install {
 
     /// The agent file from before the command took the product's name, beside this one.
     fn old_file(&self) -> PathBuf {
-        self.file.with_file_name(OLD_FILE)
+        self.file.with_file_name(format!("{}-command", self.old))
+    }
+
+    /// The command had another name before, whose link and file are others than these.
+    fn renamed(&self) -> bool {
+        renamed(&self.old, LINK)
     }
 
     /// The agent file Add wrote, or the one from before the command took the product's name, whose
     /// folders and PATH entry Add Again carries over for Remove to take back.
     fn written(&self) -> Option<Agent> {
-        Agent::read(&self.file).or_else(|| Agent::read(&self.old_file()))
+        Agent::read(&self.file)
+            .or_else(|| (self.renamed()).then(|| Agent::read(&self.old_file()))?)
     }
 
     /// Takes away what Add made before the command took the product's name, once Add Again has
     /// written the new: the old link, only while it's still the command's, and the old agent file.
     fn take_old(&self) {
-        let old = self.folder.join(OLD_LINK);
+        if !self.renamed() {
+            return;
+        }
+        let old = self.folder.join(&self.old);
         if self.linked && is_ours(&old) {
             _ = std::fs::remove_file(old);
         }
@@ -1037,6 +1054,7 @@ mod tests {
             file: agent_file(&temp.0.join("profile")),
             linked: true,
             store: false,
+            old: OLD_LINK.into(),
         }
     }
 
@@ -1151,6 +1169,30 @@ mod tests {
             install.remove().unwrap();
             std::fs::remove_file(&old_link).unwrap();
         }
+    }
+
+    /// In a build whose name and product are one, the old link and file are the ones Add writes:
+    /// Add leaves them, Add again too, and Remove takes back exactly what Add made.
+    #[test]
+    fn with_one_name_add_takes_nothing_old() {
+        assert!(renamed(OLD_LINK, "another"));
+        assert!(!renamed(LINK, LINK));
+        let temp = Temp::new("one-name");
+        let install = Install {
+            old: LINK.into(),
+            ..install(&temp)
+        };
+        std::fs::create_dir_all(install.file.parent().unwrap()).unwrap();
+        let before = contents(&temp.0);
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added(), "the link and the agent file stayed");
+        assert_eq!(install.old_file(), install.file);
+        let made = contents(&temp.0);
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added(), "and stay as Add runs again");
+        assert_eq!(contents(&temp.0), made);
+        install.remove().unwrap();
+        assert_eq!(contents(&temp.0), before);
     }
 
     /// The agent file holds the token, so only the user may read it, though a file left there

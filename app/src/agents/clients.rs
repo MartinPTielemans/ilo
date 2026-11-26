@@ -256,6 +256,7 @@ fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
         file,
         linked: super::bridge::flatpak_id().is_none(),
         store: false,
+        old: super::cli::OLD_LINK.into(),
     })
 }
 

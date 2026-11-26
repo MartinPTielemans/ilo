@@ -1561,7 +1561,10 @@ impl Agents {
         let entry = self.entry(&token);
         // Connect Again takes the server's old name out of the client's config first. The
         // command's Add takes its old link and file away itself (cli::Install).
-        let old = (self.is_stale(client) && client != Client::Command).then(old_server_name);
+        // A build whose name and product are one adds under the same name, so takes none out.
+        let old = (self.is_stale(client) && client != Client::Command)
+            .then(old_server_name)
+            .filter(|old| cli::renamed(old, &server_name()));
         self.connecting = Some(client);
         self.failed = None;
         cx.notify();
