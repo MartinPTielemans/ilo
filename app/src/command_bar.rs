@@ -85,6 +85,9 @@ use crate::tokens::command_bar::TITLE_X;
 use crate::tokens::command_bar::{
     FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X, MARK,
 };
+use crate::tokens::command_bar::{
+    REST_GAP, REST_HEIGHT, REST_LEFT, REST_LINE, REST_RIGHT, REST_TEXT,
+};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
@@ -107,13 +110,14 @@ use crate::tokens::command_bar::HOVERED;
 use crate::tokens::command_bar::LINE_COLOR;
 use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
-use crate::tokens::command_bar::SELECTED_DIM;
+use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
     CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
     FOOT_TEXT,
 };
+use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
@@ -437,6 +441,15 @@ const SEARCH_MODELS: &str = "Search models";
 /// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
 /// `{assistant}'s default`.
 const DEFAULT_ROW: &str = "Default";
+/// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
+fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
+    let (plate, kind) = match palette.tone {
+        palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
+        palette::Tone::Light => (LIGHT_CHOSEN, LIGHT_CHOSEN_KIND),
+    };
+    (palette.plate(plate), palette.on_overlay(kind))
+}
+
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
@@ -1632,12 +1645,6 @@ fn mode_chip(
 /// Where the centred panel's top is, down a browser window `height` tall.
 pub fn centered_top(height: f32) -> f32 {
     height / 2. - ABOVE_MIDDLE
-}
-
-/// Where the middle of the centred bar's input row is, down a browser window `height` tall: the
-/// height the composer page's field rests at, so ⌘T's bar opens on it.
-pub fn centered_row_middle(height: f32) -> f32 {
-    centered_top(height) + HEIGHT / 2.
 }
 
 /// How tall the bar's window is with `rows` suggestions listed: the input, and under it, with its
@@ -3036,14 +3043,16 @@ impl CommandBar {
         taken
     }
 
-    /// The selected row's fill and its label, and the chip's in a site search: the site's own
-    /// colour, made to read on the bar, where it has one, else the Space's accent.
-    fn accent(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
-        let (fill, label) = match self.site.as_ref().and_then(|site| site.color) {
-            Some(color) => palette.site_accent(gpui::rgb(color)),
-            None => (palette.accent, palette.accent_label),
-        };
-        (fill.into(), label.into())
+    /// The mode chip's fill and its label: in a site search with a colour of its own, that colour,
+    /// made to read on the bar, else a chip's plate and the ink.
+    fn site_chip(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
+        match self.site.as_ref().and_then(|site| site.color) {
+            Some(color) => {
+                let (fill, label) = palette.site_accent(gpui::rgb(color));
+                (fill.into(), label.into())
+            }
+            None => (palette.plate(CHIP), palette.ink.into()),
+        }
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -3109,9 +3118,11 @@ impl CommandBar {
             true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
             false => 0.,
         };
-        foot + match self.over_field {
-            true => field_height(rows),
-            false => height(rows),
+        foot + match (self.surface, self.over_field) {
+            // At rest the input is the resting bar's, its rows as ⌘T's.
+            (Surface::InPlace, _) => height(rows) - HEIGHT + REST_HEIGHT,
+            (_, true) => field_height(rows),
+            (_, false) => height(rows),
         }
     }
 
@@ -3376,13 +3387,9 @@ impl CommandBar {
     /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
     /// out: ✕ closes and trash removes (ux-principles, the owner, #1394). It's the arrow's tile, so
     /// the two read as one kind.
-    fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn remove_button(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (tile, color) = match selected {
-            true => (label, accent),
-            false => (palette.plate(ARROW_TILE), palette.on_overlay(ARROW)),
-        };
+        let (tile, color) = (palette.plate(ARROW_TILE), palette.on_overlay(ARROW));
         div()
             .id(("remove", index))
             .when(self.a11y, |button| {
@@ -3898,8 +3905,9 @@ impl CommandBar {
                 text: palette.on_overlay(TITLE),
                 dim: palette.on_overlay(DIM),
                 plate: palette.plate(CHIP),
-                primary: palette.accent.into(),
-                on_primary: palette.accent_label.into(),
+                // `primary`, the ink, with `on-primary` on it.
+                primary: palette.ink.into(),
+                on_primary: palette.on_fill(palette.ink).ink.into(),
             },
             a11y: self.a11y,
             level: (tier, level),
@@ -3987,32 +3995,21 @@ impl CommandBar {
         let selected = index == self.selected;
         let thread = row.starts_thread();
         let end = self.end(row);
-        // The selected row keeps its accent under the pointer.
+        // The selected row keeps its plate under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (title, dim) = match selected {
-            true => (label, label.opacity(SELECTED_DIM)),
-            false => (palette.on_overlay(TITLE), palette.on_overlay(DIM)),
+        // The selected row differs only by its plate, `shown`, and its kind in text-2: no accent,
+        // so its title, glyphs and chips are any row's in both tones.
+        let title = palette.on_overlay(TITLE);
+        let dim = match selected {
+            true => chosen(&palette).1,
+            false => palette.on_overlay(DIM),
         };
-        // The icon sits on a tile of the accent's label in the selected row, and a command's on a
-        // faint one in the rest.
-        let glyph = match selected {
-            true => accent,
-            false => palette.on_overlay(ROW_GLYPH),
-        };
-        let tile = match (selected, row.kind()) {
-            (true, _) => Some(label),
-            (false, Kind::Command) => Some(palette.plate(CHIP)),
-            _ => None,
-        };
-        // What a Space's mark is ringed against: the selected row's tile, else the panel, which a
-        // command's faint tile hardly changes.
-        let tile_behind = if selected {
-            label
-        } else {
-            Hsla::from(palette.overlay)
-        };
+        let glyph = palette.on_overlay(ROW_GLYPH);
+        // A command's icon sits on a faint tile.
+        let tile = matches!(row.kind(), Kind::Command).then(|| palette.plate(CHIP));
+        // What a Space's mark is ringed against: the panel, which a faint plate hardly changes.
+        let tile_behind = Hsla::from(palette.overlay);
         let icon = div()
             .size(px(ICON_BOX))
             .mr(px(TITLE_X - ICON_BOX_X - ICON_BOX))
@@ -4027,12 +4024,9 @@ impl CommandBar {
                 Icon::Mark => Some(product::mark(MARK, &palette).into_any_element()),
                 _ => self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)),
             });
-        // A key's chip: the accent's label with the accent on it on the selected row.
+        // A key's chip, on every row alike.
         let chip = |text: SharedString| {
-            let (fill, text_color) = match selected {
-                true => (label, accent),
-                false => (palette.plate(CHIP), dim),
-            };
+            let (fill, text_color) = (palette.plate(CHIP), dim);
             div()
                 .h(px(ICON_BOX))
                 .flex_none()
@@ -4064,7 +4058,7 @@ impl CommandBar {
             .pr(px(ROW_END))
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
-            .when(selected, |line| line.bg(accent))
+            .when(selected, |line| line.bg(chosen(&palette).0))
             .when(hovered, |line| line.bg(palette.plate(HOVERED)))
             // Arc keeps the plate under the pointer as the keys move the selection.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
@@ -4099,25 +4093,16 @@ impl CommandBar {
                         .items_center()
                         .justify_center()
                         .rounded(px(CHIP_RADIUS))
-                        .bg(if selected {
-                            label
-                        } else {
-                            palette.plate(ARROW_TILE)
-                        })
+                        .bg(palette.plate(ARROW_TILE))
                         .child(
                             svg()
                                 .path(glyph)
                                 .size(px(END_GLYPH))
-                                .text_color(if selected {
-                                    accent
-                                } else {
-                                    palette.on_overlay(ARROW)
-                                }),
+                                .text_color(palette.on_overlay(ARROW)),
                         )
                 });
-                let tint = if selected { label } else { dim };
                 let end = if tile.is_some() { 7. } else { bare_end() };
-                let label = div().flex_none().mr(px(end)).text_color(tint);
+                let label = div().flex_none().mr(px(end)).text_color(dim);
                 line.child(div().flex_1())
                     .child(label.child(said))
                     .children(tile)
@@ -4128,24 +4113,22 @@ impl CommandBar {
             // Another computer's tab ends with that computer's name, as an agent's row with its
             // model.
             .when(!row.computer.is_empty(), |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1()).child(
                     div()
                         .flex_none()
                         .ml(px(HINT_GAP))
-                        .text_color(tint)
+                        .text_color(dim)
                         .child(row.computer.clone()),
                 )
             })
             // New Thread ends with its kind and ⇥, which grows the bar as a click does.
             .when(thread, |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
                             .mr(px(HINT_KEY_GAP))
-                            .text_color(tint)
+                            .text_color(dim)
                             .child(THREAD_KIND),
                     )
                     .child(chip(hint_key("tab", shell::OFF_THE_MAC).into()))
@@ -4153,7 +4136,7 @@ impl CommandBar {
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
                 line.when(end.is_none(), |line| line.child(div().flex_1()))
-                    .child(self.remove_button(index, selected, cx))
+                    .child(self.remove_button(index, cx))
             })
     }
 }
@@ -4256,11 +4239,7 @@ impl CommandBar {
         let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
         let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
         // A site search with a colour of its own is in it.
-        let colored = self.site.as_ref().is_some_and(|site| site.color.is_some());
-        let (fill, label) = match colored {
-            true => self.accent(&palette),
-            false => (palette.plate(CHIP), palette.ink.into()),
-        };
+        let (fill, label) = self.site_chip(palette);
         Some(mode_chip(fill, label, favicon, name))
     }
 
@@ -4397,18 +4376,37 @@ impl Render for CommandBar {
             .enumerate()
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
-        let (radius, input_height, list_top, level) = match self.over_field {
-            true => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
-            false => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
+        let (radius, input_height, list_top, level) = match (in_place, self.over_field) {
+            (true, _) => (
+                crate::tokens::radius::PANEL,
+                REST_HEIGHT,
+                LIST_TOP,
+                Level::Modal,
+            ),
+            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
+            (false, false) => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
         };
         // Over the field the input's icon and text are in the rows' columns.
-        let (icon_x, icon, text_x, text_size) = match self.over_field {
-            true => {
+        let (icon_x, icon, text_x, text_size) = match (in_place, self.over_field) {
+            (true, _) => (
+                REST_LEFT,
+                INPUT_ICON,
+                REST_LEFT + INPUT_ICON + REST_GAP,
+                REST_TEXT,
+            ),
+            (false, true) => {
                 let icon_x = LIST_X + ICON_BOX_X + (ICON_BOX - ICON_SIZE) / 2.;
                 (icon_x, ICON_SIZE, LIST_X + TITLE_X, FIELD_INPUT_TEXT)
             }
-            false => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
+            (false, false) => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
         };
+        let (input_end, input_line) = match in_place {
+            true => (REST_RIGHT, REST_LINE),
+            false => (HINT_END, INPUT_LINE),
+        };
+        // At rest with nothing under it the bar is a field in its page: the field's plate and the
+        // resting rim, no shadow. Its rows and the composer float over the cards, as ⌘T's do.
+        let bare = in_place && rows.is_empty() && self.ask.is_none();
         // One device pixel, which a 0.5 pt line isn't on a 1× display, where it doesn't draw.
         let hairline = 1. / window.scale_factor();
         let edge = |inset: f32, width: f32, color: Hsla| {
@@ -4423,67 +4421,78 @@ impl Render for CommandBar {
                 .border_color(color)
         };
         let palette = palette::current(cx);
-        // The placeholder and the accent follow the Space's, which may have changed since it opened.
+        // The placeholder follows the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
             input.set_colors(
                 palette.on_overlay(PLACEHOLDER),
-                palette.accent.into(),
-                palette.selection(),
+                palette.ink.into(),
+                palette.plate(FIELD_SELECTION),
             );
             input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
-        let panel = self
-            .with_keys(div(), cx)
-            .relative()
-            .size_full()
-            .overflow_hidden()
-            .rounded(px(radius))
-            .bg(palette.overlay)
-            .text_color(palette.ink)
-            // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-            .font_weight(FontWeight::MEDIUM)
-            .text_size(px(text::BODY))
-            .child(
-                div()
-                    .h(px(input_height))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .pl(px(icon_x))
-                    .pr(px(HINT_END))
-                    .gap(px(text_x - icon_x - icon))
-                    .text_size(px(text_size))
-                    .line_height(px(INPUT_LINE))
-                    .child(self.input_icon(cx))
-                    .children(self.mode_chip(&palette))
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .children(self.site_hint(cx)),
-            )
-            .when(!rows.is_empty() && !self.over_field, |bar| {
-                bar.child(
+        let panel =
+            self.with_keys(div(), cx)
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .rounded(px(radius))
+                .bg(match bare {
+                    true => palette
+                        .ground_plate(crate::palette::Ground::Field, crate::palette::FIELD_PLATE),
+                    false => palette.overlay.into(),
+                })
+                .text_color(palette.ink)
+                // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(text::BODY))
+                .child(
                     div()
-                        .h(px(hairline))
-                        .mx(px(LINE_INSET))
+                        .h(px(input_height))
                         .flex_none()
-                        .bg(palette.faint(LINE_COLOR)),
+                        .flex()
+                        .items_center()
+                        .pl(px(icon_x))
+                        .pr(px(input_end))
+                        .gap(px(text_x - icon_x - icon))
+                        .text_size(px(text_size))
+                        .line_height(px(input_line))
+                        .child(self.input_icon(cx))
+                        .children(self.mode_chip(&palette))
+                        .child(div().flex_1().min_w_0().child(self.input.clone()))
+                        .children(self.site_hint(cx)),
                 )
-            })
-            .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
-            .when(self.ask.is_some(), |bar| {
-                bar.child(self.choices(cx))
-                    .child(
+                .when(!rows.is_empty() && !self.over_field, |bar| {
+                    bar.child(
                         div()
                             .h(px(hairline))
                             .mx(px(LINE_INSET))
                             .flex_none()
                             .bg(palette.faint(LINE_COLOR)),
                     )
-                    .child(self.foot(cx))
-            })
-            .children(self.a11y.then(|| self.announcer()))
-            // The modal level's rim in the palette's ink; its outline and shadow are the host's,
-            // round the window, or on Windows round it in the window.
-            .child(edge(0., 1., Level::Modal.rim_in(&palette)));
+                })
+                .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
+                .when(self.ask.is_some(), |bar| {
+                    bar.child(self.choices(cx))
+                        .child(
+                            div()
+                                .h(px(hairline))
+                                .mx(px(LINE_INSET))
+                                .flex_none()
+                                .bg(palette.faint(LINE_COLOR)),
+                        )
+                        .child(self.foot(cx))
+                })
+                .children(self.a11y.then(|| self.announcer()))
+                // The modal level's rim in the palette's ink; its outline and shadow are the host's,
+                // round the window, or on Windows round it in the window.
+                .child(edge(
+                    0.,
+                    1.,
+                    match bare {
+                        true => Level::Resting.rim_in(&palette),
+                        false => Level::Modal.rim_in(&palette),
+                    },
+                ));
         // At rest no window is round it: it casts the level's shadow on its page itself, and is
         // as tall as what it shows, over what the page has under it.
         if in_place {
@@ -4491,7 +4500,7 @@ impl Render for CommandBar {
                 .w_full()
                 .h(px(self.drawn_height()))
                 .font_family(crate::face::UI)
-                .child(panel.shadow(Level::Modal.shadow()))
+                .child(panel.when(!bare, |panel| panel.shadow(Level::Modal.shadow())))
                 .into_any_element();
         }
         // The browser's shortcuts work here too, below the bar's own keys.
