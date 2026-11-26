@@ -5274,7 +5274,8 @@ fn sign_drawn(
     view: &Entity<super::TalkView>,
     cx: &mut VisualTestContext,
 ) -> Option<(super::Sign, gpui::Bounds<gpui::Pixels>)> {
-    view.read_with(cx, |view, _| view.sign_drawn.get())
+    let drawn = view.read_with(cx, |view, _| view.sign_drawn.get());
+    drawn.map(|(sign, _, bounds)| (sign, bounds))
 }
 
 /// The sign says working while the thread's step or turn is under way, waiting while it waits on
@@ -5349,4 +5350,84 @@ fn the_sign_stands_over_the_composers_right_corner_in_the_stage_and_beside_a_pag
     placed(cx, "in the stage");
     hand_off(&shell, &view, cx);
     placed(cx, "beside a page");
+}
+
+/// The gap in the sign's cord as it was drawn last, if it was drawn moving.
+fn sign_gap(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) -> Option<(f32, f32)> {
+    view.read_with(cx, |view, _| view.sign_drawn.get())
+        .and_then(|(_, gap, _)| gap)
+}
+
+/// A thread at work, its turn under way with no step: nothing shimmers, and the sign alone moves.
+fn working_alone() -> Conversation {
+    conversation(0)
+}
+
+/// While the thread works, a gap of its share of the cord travels round it, a lap in its time at
+/// an even pace, from where the cord starts as the work does.
+#[test]
+fn the_working_gap_travels_round_the_cord_at_an_even_pace() {
+    use super::sign::{Sign, gap};
+    use crate::tokens::shell::conversation::sign::{LAP, WORKING_GAP};
+    for (gone, at) in [
+        (0., 0.),
+        (LAP / 4., 0.25),
+        (LAP / 2., 0.5),
+        (LAP, 0.),
+        (LAP * 1.75, 0.75),
+    ] {
+        let (was, length) = gap(Sign::Working, gone);
+        assert!((was - at).abs() < 1e-4, "{gone} s in: at {was}, not {at}");
+        assert_eq!(length, WORKING_GAP, "{gone} s in");
+    }
+}
+
+/// The working sign moves on the shimmer's clock, which it keeps going with nothing else moving,
+/// and asks for no frame with motion reduced, where it stands whole and still, or while its window
+/// isn't shown.
+#[gpui::test]
+fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::sign::WORKING_GAP;
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(working_alone()), cx)
+    });
+    redraw(&shell, &view, cx);
+    let pending =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.breath.pending());
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "something shimmers"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(super::Sign::Working)
+    );
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "with motion reduced the sign moves"
+    );
+    assert!(!pending(cx), "with motion reduced the sign asks for frames");
+
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    redraw(&shell, &view, cx);
+    let (_, length) = sign_gap(&view, cx).expect("the working sign doesn't move");
+    assert_eq!(length, WORKING_GAP);
+    assert!(pending(cx), "the working sign isn't on the shimmer's clock");
+
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        redraw(&shell, &view, cx);
+    }
+    // The sidebar's card of a thread at work keeps the shimmer's clock by itself, so what the sign
+    // asks for is read from the sign: drawn still, it asks for no frame.
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "the sign moves in a window not shown"
+    );
 }

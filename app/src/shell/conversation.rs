@@ -272,9 +272,11 @@ pub struct TalkView {
     /// as it lands, and the view.
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// The sign over the composer and where it was drawn last, and where the composer was, for a
-    /// test.
-    sign_drawn: Rc<Cell<Option<(Sign, Bounds<Pixels>)>>>,
+    /// The sign over the composer, and since when it has said so, which its motion runs from.
+    sign_since: Option<(Sign, Instant)>,
+    /// The sign and the gap in its cord as it was drawn last, and where, and where the composer
+    /// was, for a test.
+    sign_drawn: Rc<Cell<Option<(Sign, Option<(f32, f32)>, Bounds<Pixels>)>>>,
     composer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where an outside app's line was drawn last in the panel's head, for a test.
     from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -509,6 +511,7 @@ impl Shell {
                     made: Instant::now(),
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
+                    sign_since: None,
                     sign_drawn: Rc::default(),
                     composer_drawn: Rc::default(),
                     from_drawn: Rc::default(),
@@ -2957,8 +2960,18 @@ impl TalkView {
     /// What stands in the reply field's place, with the sign over its right corner while the
     /// thread works or waits on the user. The sign takes no press: it is drawn over the lines'
     /// foot, which keep theirs.
-    fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn composer(
+        &self,
+        look: &Look,
+        gap: Option<(f32, f32)>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let sign = self.shown.as_ref().and_then(Sign::of);
+        let mark = crate::product::mark(SIGN_SIZE, &look.palette);
+        let mark = match gap {
+            Some((at, gap)) => mark.path(crate::product::gapped_mark_path(at, gap)),
+            None => mark,
+        };
         let (drawn, composer) = (self.sign_drawn.clone(), self.composer_drawn.clone());
         div()
             .relative()
@@ -2978,10 +2991,10 @@ impl TalkView {
                     .absolute()
                     .right(px(SIGN_RIGHT))
                     .top(px(-(SIGN_SIZE + SIGN_ABOVE)))
-                    .child(crate::product::mark(SIGN_SIZE, &look.palette))
+                    .child(mark)
                     .child(
                         canvas(
-                            move |bounds, _, _| drawn.set(Some((sign, bounds))),
+                            move |bounds, _, _| drawn.set(Some((sign, gap, bounds))),
                             |_, _, _, _| {},
                         )
                         .absolute()
@@ -4685,9 +4698,23 @@ impl Render for TalkView {
         // and the shimmer, which moves while a step is under way and never while one waits on the
         // user, on the loading dots' clock, as each frame draws the whole window again (#1700).
         let shimmers = self.moving(still);
+        // The sign moves from when it came to say what it says, only while it's drawn in a window
+        // the system shows and motion isn't reduced, on the shimmer's clock: no frame is asked for
+        // it otherwise.
+        let sign = self.shown.as_ref().and_then(Sign::of);
+        if self.sign_since.map(|(was, _)| was) != sign {
+            self.sign_since = sign.map(|sign| (sign, now));
+        }
+        let composed = self.replies || !look.standing;
+        let gap = (self.sign_since)
+            .filter(|(sign, _)| *sign == Sign::Working)
+            .filter(|_| composed && !still && window.is_visible())
+            .map(|(sign, since)| sign::gap(sign, now.duration_since(since).as_secs_f32()));
         if !self.folding.is_empty() || busy {
             window.request_animation_frame();
-        } else if shimmers && let Some(shell) = self.shell.upgrade() {
+        } else if (shimmers || gap.is_some())
+            && let Some(shell) = self.shell.upgrade()
+        {
             shell.read(cx).breath.keep();
             cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
@@ -4794,7 +4821,7 @@ impl Render for TalkView {
             // beside its page: its user talks to it in its own app.
             .children(
                 (self.replies || !standing)
-                    .then(|| shut(foot(on_column(self.composer(&look, cx))))),
+                    .then(|| shut(foot(on_column(self.composer(&look, gap, cx))))),
             );
         let rail = (pages && !across && !standing).then(|| {
             div()

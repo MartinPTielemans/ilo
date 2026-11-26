@@ -3,6 +3,7 @@
 //! else. Which of the two is read from the thread's own state as the app holds it, never from what
 //! an assistant says.
 use crate::agents::task::{Conversation, Live};
+use crate::tokens::shell::conversation::sign::{LAP, WORKING_GAP};
 
 /// What the sign says of its thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,5 +23,15 @@ impl Sign {
             Live::Working => Self::Working,
             Live::Refused | Live::Handed | Live::Yours { .. } | Live::Asked => Self::Waiting,
         })
+    }
+}
+
+/// Where the gap in the sign's cord is `gone` seconds into its state: how far along the cord it
+/// starts and how much of the cord it leaves out, each a fraction of the cord.
+pub(crate) fn gap(sign: Sign, gone: f32) -> (f32, f32) {
+    match sign {
+        // At an even pace, from where the cord starts.
+        Sign::Working => ((gone / LAP).fract(), WORKING_GAP),
+        Sign::Waiting => (0., 0.),
     }
 }
