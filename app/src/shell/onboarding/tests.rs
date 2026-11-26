@@ -788,6 +788,32 @@ fn the_tidy_bar_sets_its_time_as_next_goes_on(cx: &mut TestAppContext) {
     }
 }
 
+/// No blank plane is ever shown: a split step whose picture isn't in draws no plane, its column
+/// centred in the card as Bring your stuff's is, in either look.
+#[gpui::test]
+fn a_step_without_its_picture_draws_no_plane(cx: &mut TestAppContext) {
+    for light in [false, true] {
+        let (shell, cx, host) = first_window(cx);
+        host.threads.set(Some(true));
+        host.archive_after.set(Some(DAY / 2.));
+        started(&shell, cx);
+        shell.update(cx, |shell, cx| {
+            shell.onboarding.as_mut().unwrap().light = Some(light);
+            cx.notify();
+        });
+        for to in [Step::Assistant, Step::Space, Step::Tidy] {
+            on_to(&shell, cx, to);
+            assert!(!to.split(), "{to:?}'s picture isn't in");
+            assert_eq!(placed("plane", cx), None, "{to:?}, light {light}: no plane");
+            let column = placed("column", cx).expect("the column is drawn");
+            assert!(
+                (f32::from(column.center().x) - t::WIDTH / 2.).abs() < 0.5,
+                "{to:?}, light {light}: the column is centred, at {column:?}"
+            );
+        }
+    }
+}
+
 /// A click on the bar puts it at the stop nearest.
 #[gpui::test]
 fn a_click_on_the_tidy_bar_picks_the_stop_nearest(cx: &mut TestAppContext) {

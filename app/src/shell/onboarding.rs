@@ -136,10 +136,15 @@ impl Step {
         (title, line)
     }
 
-    /// The split steps: controls in a column at the left, the picture's plane at the right.
+    /// The split steps: controls in a column at the left, the picture's plane at the right. Only a
+    /// step whose picture is in, so no blank plane is ever shown: v9 splits Assistant, Space and
+    /// Tidy, and until each one's picture lands its own column is centred as Bring your stuff's is.
     fn split(self) -> bool {
-        matches!(self, Step::Assistant | Step::Space | Step::Tidy)
+        Self::PICTURED.contains(&self)
     }
+
+    /// The steps whose picture is in; none has landed yet.
+    const PICTURED: &[Step] = &[];
 }
 
 /// What the computer is called in a line.
@@ -1459,16 +1464,20 @@ impl Shell {
                     Step::Space => t::SPACE_EDITOR[0],
                     _ => t::BODY_TOP,
                 };
+                let column = match step.split() {
+                    true => span.1 - span.0,
+                    false => card::column(step),
+                };
                 let body = match step.split() {
-                    true => card::at(span.0, top).w(px(span.1 - span.0)),
-                    false => {
-                        card::at((t::WIDTH - t::CENTRED_COLUMN) / 2., top).w(px(t::CENTRED_COLUMN))
-                    }
+                    true => card::at(span.0, top).w(px(column)),
+                    false => card::at((t::WIDTH - column) / 2., top).w(px(column)),
                 };
                 let [foot_top, _] = t::FOOT;
                 div()
                     .size_full()
-                    .children(step.split().then(|| card::plane(inks)))
+                    .children(step.split().then(|| {
+                        (card::plane(inks).relative()).children(self.place(step, "plane"))
+                    }))
                     .child(card::heading((title, line), !step.split(), inks, cx))
                     .child(
                         body.h(px(foot_top - top - t::FOOT_GAP))
@@ -1477,6 +1486,7 @@ impl Shell {
                             .flex_col()
                             .text_size(px(crate::tokens::text::BODY))
                             .text_color(inks.text(1.))
+                            .children(self.place(step, "column"))
                             .child(controls),
                     )
                     .children(over)
