@@ -310,8 +310,28 @@ pub(super) fn knot(size: f32, fraction: f32, ink: Rgba) -> gpui::Svg {
         .text_color(ink)
 }
 
+/// The card's sheet and rim at `plate`: x, y, width, height and corners.
+pub(super) fn plate(plate: super::exit::Plate, fill: Rgba, rim: Rgba) -> gpui::Div {
+    let (x, y, w, h, radius) = plate;
+    at(x, y)
+        .w(px(w))
+        .h(px(h))
+        .rounded(px(radius))
+        .bg(fill)
+        .border_1()
+        .border_color(rim)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many whole knots have been drawn, for a test of what a frame draws.
+    pub(super) static KNOTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// The mark whole, `size` across.
 pub(super) fn whole_knot(size: f32, ink: Rgba) -> gpui::Svg {
+    #[cfg(test)]
+    KNOTS.set(KNOTS.get() + 1);
     svg()
         .path(crate::product::mark_path(size))
         .size(px(size))

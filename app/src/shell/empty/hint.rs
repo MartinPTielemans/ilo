@@ -5,10 +5,9 @@
 use gpui::{App, Context, div, prelude::*, px};
 
 use super::super::{Command, Shell, commands::ShellHandle, keys::user_keys};
-use super::composer::{group_top, mark_top};
 use crate::command_bar;
 use crate::tokens::command_bar::HEIGHT as BAR_HEIGHT;
-use crate::tokens::shell::empty::{HINT_GAP, MARK_SIZE, WORDS_SIZE};
+use crate::tokens::shell::empty::{HINT_GAP, WORDS_SIZE};
 
 /// What the hint says after the new tab's key.
 const BRINGS_IT_BACK: &str = "brings this back anywhere.";
@@ -67,21 +66,6 @@ impl Shell {
     /// the card's frame whose top is `card_top`.
     pub(in crate::shell) fn opened_bar_top(&self, card_top: f32) -> f32 {
         command_bar::centered_top(f32::from(self.viewport.height)) - card_top
-    }
-
-    /// Where the empty page's mark sits over its landing field in a browser window `viewport`
-    /// across, with no tasks under the field, as first run's exit lands its knot there: its top
-    /// left. The page's frame comes from the sidebar's kept width and side, which first run's
-    /// window doesn't draw, so nothing is drawn or measured for it.
-    pub(in crate::shell) fn landing_mark(
-        &self,
-        viewport: gpui::Size<gpui::Pixels>,
-    ) -> Option<(f32, f32)> {
-        let (frame, _) = self.page_frame(viewport);
-        let (left, top) = (f32::from(frame.left()), f32::from(frame.top()));
-        let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
-        let mark = mark_top(group_top(height, false, false), false)?;
-        Some((left + (width - MARK_SIZE) / 2., top + mark))
     }
 }
 

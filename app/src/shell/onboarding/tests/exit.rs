@@ -6,10 +6,13 @@ use gpui::{
     Entity, EntityInputHandler as _, Modifiers, TestAppContext, VisualTestContext, point, px, size,
 };
 
+use super::super::card::KNOTS;
+use super::super::exit::{DRAWN, Plate};
 use super::{END_FADE, Step, card, first_window, kept, kept_dir, later, on_to, started, step};
 use crate::shell::browser::Browser as _;
 use crate::shell::recorder::Recorder;
 use crate::shell::{Command, Shell};
+use crate::theme::Appearance;
 use crate::tokens::shell::onboarding::card as t;
 use crate::tokens::shell::onboarding::exit as x;
 
@@ -20,7 +23,30 @@ fn at_the_end(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext
     on_to(&shell, cx, Step::Done);
     host.take();
     crate::heard::listen();
+    DRAWN.take();
     (shell, cx, host)
+}
+
+/// The window the host grew first run's to in these tests.
+const GROWN: (f32, f32) = (1200., 800.);
+
+/// The last step's Start Browsing pressed where the host grows first run's window, and grown.
+fn pressed_and_grown(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    host.grows_first_run.set(true);
+    cx.simulate_keystrokes("enter");
+    // The host grows the window as it answers.
+    cx.simulate_resize(size(px(GROWN.0), px(GROWN.1)));
+    later(shell, cx, x::CONTENT);
+}
+
+/// The plates the layer has drawn since the press, none for a frame with no card.
+fn plates() -> Vec<Option<Plate>> {
+    DRAWN.with_borrow(|drawn| {
+        drawn
+            .iter()
+            .map(|each| each.map(|(plate, ..)| plate))
+            .collect()
+    })
 }
 
 /// How many of the heard lines are `line`.
@@ -97,16 +123,12 @@ fn without_a_grow_the_card_cross_fades(cx: &mut TestAppContext) {
 }
 
 /// Where the host grows it, the card grows from its own size to the window's as the window is
-/// on each frame, shaped each frame, ending at the window's bounds and the window's corners, and
-/// the exit ends as the grow does.
+/// on each frame, the host's glass shaped after it, ending at the window's bounds and the
+/// window's corners, and the exit ends as the grow does.
 #[gpui::test]
 fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
-    host.grows_first_run.set(true);
-    cx.simulate_keystrokes("enter");
-    // The host grows the window as it answers.
-    cx.simulate_resize(size(px(1200.), px(800.)));
-    later(&shell, cx, x::CONTENT);
+    pressed_and_grown(&shell, cx, &host);
     assert_eq!(card(&shell, cx, |o| o.grows), Some(true));
     later(&shell, cx, x::GROW / 4.);
     later(&shell, cx, x::GROW / 4.);
@@ -122,7 +144,9 @@ fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
         "{grown:?}"
     );
     later(&shell, cx, x::GROW / 2. - 0.001);
-    let (w, h, radius) = *shapes(&host.take()).last().unwrap();
+    let Some(&Some((_, _, w, h, radius))) = plates().last() else {
+        panic!("the card is drawn");
+    };
     let [_, to_radius] = x::CORNERS;
     assert!(
         (w - 1200.).abs() < 1. && (h - 800.).abs() < 1. && (radius - to_radius).abs() < 0.1,
@@ -130,6 +154,126 @@ fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
     );
     later(&shell, cx, 0.01);
     assert_eq!(step(&shell, cx), None);
+}
+
+/// The frame a grown exit ends on still draws the card, the whole window: first run's window
+/// stays on screen until the browser window is, and a frame of it with no card is its glass bare.
+/// The cross-fade's last frame, the card faded out, draws none.
+#[gpui::test]
+fn a_grown_exits_last_frame_is_the_grown_card(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    pressed_and_grown(&shell, cx, &host);
+    later(&shell, cx, x::GROW);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    let [_, to_radius] = x::CORNERS;
+    let whole = (0., 0., GROWN.0, GROWN.1, to_radius);
+    assert_eq!(plates().last(), Some(&Some(whole)), "the frame it ends on");
+}
+
+#[gpui::test]
+fn a_cross_fades_last_frame_draws_no_card(cx: &mut TestAppContext) {
+    let (shell, cx, _) = at_the_end(cx);
+    cx.simulate_keystrokes("enter");
+    later(&shell, cx, x::CROSS_FADE);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    assert_eq!(plates().last(), Some(&None));
+}
+
+/// As the card grows, the host's glass is given the shape of the frame before: it reaches the
+/// screen a frame ahead of the card the UI draws with it, so it's never outside the fill. On the
+/// frame the exit ends on too.
+#[gpui::test]
+fn the_glass_takes_the_shape_of_the_frame_before(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    pressed_and_grown(&shell, cx, &host);
+    for _ in 0..3 {
+        later(&shell, cx, x::GROW / 8.);
+    }
+    later(&shell, cx, x::GROW);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    let drawn = DRAWN.with_borrow(|drawn| drawn.clone());
+    let mut grew = 0;
+    for pair in drawn.windows(2) {
+        let [
+            Some(((_, _, w, h, radius), ..)),
+            Some(((_, _, now, ..), _, glass)),
+        ] = pair
+        else {
+            panic!("the card on every frame: {drawn:?}");
+        };
+        assert_eq!(*glass, (*w, *h, *radius), "the card of the frame before");
+        grew += usize::from(now > w);
+    }
+    assert!(grew >= 4, "the card grew frame by frame: {drawn:?}");
+    // And that's what the host was told, the last of it too.
+    let glass = drawn.last().copied().flatten().map(|(.., glass)| glass);
+    assert_eq!(shapes(&host.take()).last().copied(), glass);
+}
+
+/// The step's knot fades with the card's words and the plate grows plain: the exit draws no knot
+/// of its own, so each of its frames draws as many as a frame of the step at rest.
+#[gpui::test]
+fn the_exit_draws_no_knot_of_its_own(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    // Each frame of the layer draws the step's knot.
+    let knots = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let frames = plates().len();
+        KNOTS.set(0);
+        later(shell, cx, 0.001);
+        (KNOTS.get() as usize, plates().len() - frames)
+    };
+    let (at_rest, frames) = knots(&shell, cx);
+    assert!(at_rest > 0 && at_rest == frames, "one a frame at rest");
+    pressed_and_grown(&shell, cx, &host);
+    let (growing, frames) = knots(&shell, cx);
+    assert_eq!(growing, frames, "one a frame as the card grows");
+}
+
+/// The grown card's fill ends as the browser window draws itself under a page: its tint, with
+/// the card the pages lie in over it.
+fn the_fill_ends_on_the_page(appearance: Appearance, cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::Appearance(appearance), "test", cx)
+    });
+    cx.run_until_parked();
+    let page = shell.read_with(cx, |shell, _| {
+        crate::palette::composite(shell.window_tint(), shell.palette.page)
+    });
+    assert_ne!(
+        page,
+        shell.read_with(cx, |shell, _| shell.window_tint()),
+        "the page's card shows over the tint"
+    );
+    pressed_and_grown(&shell, cx, &host);
+    // How far the last frame's fill is from the page's, at most, in a channel.
+    let off = || {
+        let (_, fill, _) = DRAWN.with_borrow(|drawn| drawn.last().copied().flatten().unwrap());
+        [
+            fill.r - page.r,
+            fill.g - page.g,
+            fill.b - page.b,
+            fill.a - page.a,
+        ]
+        .into_iter()
+        .fold(0_f32, |most, each| most.max(each.abs()))
+    };
+    let level = 1. / 255.;
+    assert!(off() > level, "the card's own sheet as the grow starts");
+    later(&shell, cx, x::MATERIAL);
+    assert!(off() < level / 2., "crossed: {}", off());
+    later(&shell, cx, x::GROW);
+    assert!(off() < f32::EPSILON, "and on the frame it ends on");
+}
+
+#[gpui::test]
+fn the_grown_cards_fill_ends_on_the_page_in_dark(cx: &mut TestAppContext) {
+    the_fill_ends_on_the_page(Appearance::Dark, cx);
+}
+
+#[gpui::test]
+fn the_grown_cards_fill_ends_on_the_page_in_light(cx: &mut TestAppContext) {
+    the_fill_ends_on_the_page(Appearance::Light, cx);
 }
 
 /// With Reduce Motion the exit is the cross-fade alone, and the host is never asked to grow.

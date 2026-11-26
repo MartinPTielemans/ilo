@@ -2375,9 +2375,17 @@ impl Browser for Engine {
         unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
     }
 
-    // No platform grows first run's window yet, so the exit is the cross-fade everywhere.
+    // The Mac's host grows first run's window where it can (host_grow_first_run); no other does
+    // yet, so there the exit is the cross-fade.
     fn grows_first_run(&self) -> bool {
-        false
+        #[cfg(target_os = "macos")]
+        {
+            unsafe { platform::host_grow_first_run() }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
