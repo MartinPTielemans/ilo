@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, MouseButton, Pixels, SharedString, Size, Task,
-    Window, canvas, div, point, prelude::*, px, rgb, size,
+    Window, canvas, div, point, prelude::*, px, size,
 };
 
 use super::{
@@ -22,7 +22,6 @@ use super::{
 };
 use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
-use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
 
@@ -1258,22 +1257,6 @@ impl Shell {
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
-        // While the agent drives the page, its pointer's ring goes round it, in `primary`.
-        let driving = in_place && self.task_drives(page.tab);
-        if driving {
-            let ring = place.dilate(px(RING));
-            layer = layer.child(
-                div()
-                    .absolute()
-                    .left(ring.left())
-                    .top(ring.top())
-                    .w(ring.size.width)
-                    .h(ring.size.height)
-                    .rounded(px(self.card_radius() + RING))
-                    .border(px(RING))
-                    .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0)),
-            );
-        }
         if in_place {
             // A page that died leaves its place to its card, as in the user's own Space.
             layer = layer
@@ -1332,39 +1315,6 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The dot of the task whose page the strip is under, as that page has it: the strip is the
-    /// page's own, never the task's. A task that waits on the user at another page, one it handed
-    /// them, is at work on this one (#4102).
-    pub(super) fn task_strip_dot(&self) -> Option<Dot> {
-        let card = self.task_card_shown()?;
-        let shown = self.task_page_drawn().map(|(_, tab)| tab);
-        let elsewhere = (self.agent_status.iter())
-            .filter(|status| status.agent == card.agent)
-            .flat_map(|status| status.held.iter())
-            .any(|(held, why)| Some(*held) != shown && !why.is_empty());
-        Some(match card.dot {
-            Dot::Waiting if elsewhere => Dot::Working,
-            dot => dot,
-        })
-    }
-
-    /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:
-    /// the page its agent is at work in, or once it works on several, each that has a step of
-    /// its own.
-    fn task_drives(&self, tab: u64) -> bool {
-        let Some(Bar::Working { tab: at, .. }) = self.agent_bar() else {
-            return false;
-        };
-        let Some(card) = self.task_card_shown() else {
-            return false;
-        };
-        let own = card.page_steps.iter().any(|(each, _)| *each == tab);
-        match card.page_steps.is_empty() {
-            true => self.task_working() && at == tab,
-            false => self.task_strip_dot() == Some(Dot::Working) && own,
-        }
-    }
-
     /// The agent of the task whose page the strip is under.
     pub(super) fn task_strip_agent(&self) -> Option<SharedString> {
         self.task_card_shown().map(|card| card.agent.clone())
@@ -1385,12 +1335,6 @@ impl Shell {
         (card.open.iter())
             .find(|(each, _)| *each == tab)
             .map(|(_, site)| format!("Open {site}"))
-    }
-
-    /// Whether the task the page area shows is at work, which its page's ring says.
-    pub(super) fn task_working(&self) -> bool {
-        self.task_card_shown()
-            .is_some_and(|card| card.dot == Dot::Working)
     }
 }
 
