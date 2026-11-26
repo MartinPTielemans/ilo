@@ -425,8 +425,10 @@ await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's 
 forward
 send key n cmd alt
 expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window on A"
+# The new window has no page, so it rests on its field, which ⌘L gives the keyboard.
 send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar"
+expect '^browser: resting field has the keyboard$' \
+  "⌘L didn't give the Little ilo window's field the keyboard"
 send insert "${site}login.html?users-own"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "A's Little ilo tab didn't load"

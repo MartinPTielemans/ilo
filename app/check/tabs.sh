@@ -239,9 +239,9 @@ expect '^browser: command bar shown$' "a click on the URL field didn't open the 
 expect '^browser: command bar drew "https://example.com/"$' \
   "the command bar from the URL field didn't show the tab's URL"
 at=$(grep '^browser: command bar at' "$log" | tail -1 | cut -d' ' -f5-)
-# The input alone is a row, 50 tall, over the field at 8, 46.
-[ "$at" = "8 44 350 50" ] ||
-  fail "the command bar from the URL field opened at $at, not at 8 44 and 350 by 50"
+# The input alone is a row, 50 tall, over the field at 8, 44 (url-field-top).
+[ "$at" = "8 42 350 50" ] ||
+  fail "the command bar from the URL field opened at $at, not at 8 42 and 350 by 50"
 ../tools/window-screenshot.sh "$pid" "$out/url-field-bar.png" || fail "no window to capture"
 # The field's own menu is ilo's, and gives the keyboard back to the field.
 post rightclickkey 175 25
