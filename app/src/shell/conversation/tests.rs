@@ -3410,11 +3410,10 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(held, 0, "a picture no card shows is still held");
 }
 
-/// While a stretch works, the page the assistant is on stands open with its steps and a page it
-/// left is one line; a click on the left page brings its steps back and leaves the other as it
-/// was. Going to a page has no line of its own under it.
+/// A stretch at work stands open, its steps flat at one indent with no page's line over them and
+/// going to a page among them; folded by the user, it opens to the same.
 #[gpui::test]
-fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
+fn a_stretch_at_work_stands_open_with_its_steps_flat(cx: &mut TestAppContext) {
     use crate::agents::task::OnPage;
     let (shell, _, cx) = shown(cx);
     let on = |key: usize, tab: Option<u64>, site: &str, went: bool, running: bool| {
@@ -3447,33 +3446,29 @@ fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
         view.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
     };
-    let height = |fold: Fold, current: bool, cx: &mut VisualTestContext| {
+    let height = |cx: &mut VisualTestContext| {
         view.read_with(cx, |view, _| {
-            (view.is_open(fold, current)).then(|| view.heights.borrow().get(&fold).copied())
+            (view.is_open(Fold::Trace(0), true))
+                .then(|| view.heights.borrow().get(&Fold::Trace(0)).copied())
         })
     };
+    let flat = Some(Some(lines_high(5.)));
     draw(cx);
     assert_eq!(
-        height(Fold::Page(3), true, cx),
-        Some(Some(lines_high(1.))),
-        "the page it's on isn't open to its one step, without the step that went to it"
-    );
-    assert_eq!(
-        height(Fold::Page(0), false, cx),
-        None,
-        "the left page stood open"
+        height(cx),
+        flat,
+        "at work, the stretch isn't open to its five steps alone, going to each page among them"
     );
 
-    view.update(cx, |view, cx| view.toggle(Fold::Page(0), false, cx));
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
+    draw(cx);
+    assert_eq!(height(cx), None, "the user's click didn't fold it");
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);
     assert_eq!(
-        height(Fold::Page(0), false, cx),
-        Some(Some(lines_high(2.))),
-        "the left page didn't bring back its two steps"
-    );
-    assert!(
-        height(Fold::Page(3), true, cx).is_some(),
-        "opening the left page folded the one it's on"
+        height(cx),
+        flat,
+        "opened again, it isn't the same five lines"
     );
 }
 
@@ -3907,7 +3902,7 @@ fn a_threads_primary_is_never_the_spaces_colour() {
 }
 
 /// What came of a step sits at the column's right edge, its words filling the line between; a
-/// fold's head, a page's line and a line read as one string keep theirs after their words.
+/// fold's head and a line read as one string keep theirs after their words.
 #[test]
 fn what_came_of_a_step_sits_at_the_columns_right() {
     use super::TraceLine;
@@ -3915,11 +3910,9 @@ fn what_came_of_a_step_sits_at_the_columns_right() {
     assert!(line(Fold::Step(1)).note_at_right());
     let mut head = line(Fold::Trace(0));
     head.head = Some(true);
-    let mut page = line(Fold::Page(2));
-    page.page = Some(false);
     let mut joined = line(Fold::Trace(0));
     joined.joined = true;
-    for kept in [head, page, joined] {
+    for kept in [head, joined] {
         assert!(!kept.note_at_right());
     }
 }

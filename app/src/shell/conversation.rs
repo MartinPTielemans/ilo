@@ -65,16 +65,16 @@ use crate::tokens::shell::conversation::{
     COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
     COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
     CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK, CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH,
-    FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON, FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP,
-    LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP,
-    META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL,
-    PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP,
-    PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
-    REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK, SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND,
-    SHIMMER_PERIOD, SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE,
-    TITLE_LINE, TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
-    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
-    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, INSET, ITEM_GAP, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3,
+    LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
+    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
+    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
+    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK,
+    SAID_RULE, SAYS_TOP, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING,
+    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TITLE_SIZE, TOP,
+    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
+    TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH,
+    TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -325,8 +325,6 @@ pub(super) enum Fold {
     Trace(usize),
     Step(usize),
     Group(usize),
-    /// A page in a stretch, by its first step's key.
-    Page(usize),
 }
 
 impl Shell {
@@ -1286,15 +1284,6 @@ impl TalkView {
                         Fold::Trace(trace.key),
                         self.is_open(Fold::Trace(trace.key), trace.running),
                     ));
-                    let paged = pages::paged(&trace.items);
-                    let current = pages::current(&paged, trace.running);
-                    for page in paged.iter().filter_map(|each| match each {
-                        pages::Paged::Page(page) => Some(page),
-                        pages::Paged::Item(..) => None,
-                    }) {
-                        let fold = Fold::Page(page.key);
-                        folds.push((fold, self.is_open(fold, current == Some(page.key))));
-                    }
                     (trace.items.iter())
                         .filter_map(|item| match item {
                             TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
@@ -2332,7 +2321,8 @@ impl TalkView {
             .into_any_element()
     }
 
-    /// A trace: its summary line, and its steps under it while it's open.
+    /// A trace: its summary line, and its steps under it while it's open, flat at one indent with
+    /// no page's line over them.
     fn trace(&self, trace: &Trace, look: &Look, cx: &mut Context<Self>) -> gpui::AnyElement {
         let fold = Fold::Trace(trace.key);
         let open = self.is_open(fold, trace.running);
@@ -2340,13 +2330,7 @@ impl TalkView {
         let mut line = summary_line(trace, look.now);
         line.chevron = Some(self.chevron(fold, open, look));
         self.crossfade(fold, &mut line, look);
-        let mut summary_icons = Vec::new();
         let paged = pages::paged(&trace.items);
-        // A done stretch's fold shows the pages it visited.
-        if trace.took.is_some() {
-            line_icons(&mut summary_icons, &paged, look);
-        }
-        let current = pages::current(&paged, trace.running);
         let mut nest = nest();
         for (at, each) in paged.iter().enumerate() {
             // A run of helpers has the line that says the work split over it.
@@ -2361,7 +2345,8 @@ impl TalkView {
             }
             let (index, item) = match each {
                 pages::Paged::Page(page) => {
-                    nest = nest.children(self.page(page, current == Some(page.key), look, cx));
+                    let steps = page.steps.iter();
+                    nest = nest.children(steps.flat_map(|step| self.step(step, true, look, cx)));
                     continue;
                 }
                 pages::Paged::Item(index, item) => (*index, *item),
@@ -2405,7 +2390,6 @@ impl TalkView {
                 }
             };
         }
-        line.icons = summary_icons;
         let summary = trace_line(look, line)
             .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, running, cx)));
         div()
@@ -2416,42 +2400,6 @@ impl TalkView {
             .child(summary)
             .children(self.unfolding(fold, open, nest.w_full(), look))
             .into_any_element()
-    }
-
-    /// A page's line, its icon and title, and its steps under it while it's open: the page the
-    /// assistant is on, in the text's ink, open until the user folds it; a page it has left, one
-    /// line in text-2 that a click opens.
-    fn page(
-        &self,
-        page: &pages::Page,
-        current: bool,
-        look: &Look,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let fold = Fold::Page(page.key);
-        let open = self.is_open(fold, current);
-        let head = look.page_head(page.tab);
-        let title = (head.map(|head| head.title.clone()))
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| page.site.clone());
-        let mut line = TraceLine::new(fold, title, "".into());
-        line.page = Some(current);
-        line.icon = head.and_then(|head| head.favicon.clone());
-        line.glyph = line.icon.is_none().then_some(PAGE_GLYPH);
-        let line = trace_line(look, line)
-            .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, current, cx)));
-        let line = risen(
-            line.into_any_element(),
-            self.motion.came(Key::Step(page.key)),
-            look,
-        );
-        let steps = nest().children(
-            page.shown()
-                .flat_map(|step| self.step(step, true, look, cx)),
-        );
-        std::iter::once(line)
-            .chain(self.unfolding(fold, open, steps.w_full(), look))
-            .collect()
     }
 
     /// The turn the user sent, until its trace or the agent's message takes its place: Thinking,
@@ -2579,10 +2527,9 @@ impl TalkView {
         line.glyph = glyph.then_some(step.glyph);
         line.failed = step.failed;
         line.chevron = opens.then(|| self.chevron(fold, open, look));
-        // The step under way wears the ring, and every step after the first joins the one above.
+        // The step under way wears the ring. Steps stand flat, with no connector between them.
         line.ring = (step.running && glyph).then(|| self.turned(look, cx));
         line.shimmers = (step.running && !glyph).then(|| look.shimmer(self.made));
-        line.joined_above = glyph;
         self.crossfade(Fold::Step(step.key), &mut line, look);
         line.note_alpha = line.note_alpha.min(self.motion.note(step.key, look.now));
         let mut line = trace_line(look, line);
@@ -3818,12 +3765,6 @@ struct TraceLine {
     /// A stretch's fold head, and whether its stretch is at work: its word then in the text's
     /// ink at medium, else in text-2.
     head: Option<bool>,
-    /// A page's line, and whether it's the page the assistant is on: its title then in the
-    /// text's ink, else in text-2. A click opens or folds its steps.
-    page: Option<bool>,
-    /// A done stretch's fold: the icons of the pages it visited, after its words. None for a
-    /// page whose tab has none, which shows the page glyph.
-    icons: Vec<Option<Arc<Image>>>,
     alpha: f32,
     note_alpha: f32,
     chevron_alpha: f32,
@@ -3852,8 +3793,6 @@ impl TraceLine {
             joined_above: false,
             ring_after: None,
             head: None,
-            page: None,
-            icons: Vec::new(),
             alpha: 1.,
             note_alpha: 1.,
             chevron_alpha: 1.,
@@ -3870,15 +3809,13 @@ impl TraceLine {
         let words = match self.shimmers {
             _ if ilos => palette.text(ILO_INK),
             _ if self.head == Some(true) => palette.text(TITLE),
-            _ if self.page == Some(true) => palette.text(TITLE),
-            _ if self.page == Some(false) => palette.gray(TRACE_NOTE),
             _ if self.ring.is_some() => palette.text(TITLE),
             Some(None) => palette.text(TITLE),
             // At the shimmer's peak, which each part fades down from.
             Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
             None => palette.text(TRACE_TITLE),
         };
-        let opens = self.chevron.is_some() || self.page.is_some();
+        let opens = self.chevron.is_some();
         // A shimmering title is lit by its shimmer, under the pointer too.
         let lit = opens && !matches!(self.shimmers, Some(Some(_)));
         LineInks {
@@ -3893,9 +3830,9 @@ impl TraceLine {
     }
 
     /// Whether what came of it sits at the column's right edge, its words filling the line: a
-    /// step's line, never a fold's head, a page's line, one of ilo's or a line read as one string.
+    /// step's line, never a fold's head, one of ilo's or a line read as one string.
     fn note_at_right(&self) -> bool {
-        self.mark.is_none() && self.head.is_none() && self.page.is_none() && !self.joined
+        self.mark.is_none() && self.head.is_none() && !self.joined
     }
 
     /// Its note's words as they draw after its title, the count apart from the rest as it rolls
@@ -4018,8 +3955,6 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         joined_above,
         ring_after,
         head,
-        page,
-        icons,
         alpha,
         note_alpha,
         chevron_alpha,
@@ -4044,10 +3979,6 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         LineKey::Fold(Fold::Step(key)) => (
             ("trace-step", key).into(),
             format!("trace-step-{key}").into(),
-        ),
-        LineKey::Fold(Fold::Page(key)) => (
-            ("trace-page", key).into(),
-            format!("trace-page-{key}").into(),
         ),
         LineKey::Fold(Fold::Group(key)) => (
             ("trace-group", key).into(),
@@ -4100,7 +4031,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .into_any_element(),
         false => part,
     };
-    let opens = chevron.is_some() || page.is_some();
+    let opens = chevron.is_some();
     let chevron = chevron.map(|open| {
         svg()
             .flex_none()
@@ -4188,10 +4119,10 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
             false => line
                 .relative()
-                .h(px(match (head, page) {
-                    (Some(_), _) => FOLD_HEAD,
-                    (_, Some(_)) => PAGE_LINE,
-                    _ => TRACE_LINE,
+                .h(px(if head.is_some() {
+                    FOLD_HEAD
+                } else {
+                    TRACE_LINE
                 }))
                 .when(head.is_some(), |line| line.gap(px(FOLD_GAP)))
                 .ml(px(-TRACE_HANG))
@@ -4260,38 +4191,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 palette.text(TITLE),
             )
         }))
-        .when(!icons.is_empty(), |line| {
-            line.child(
-                div()
-                    .flex_none()
-                    .ml(px(FOLD_DONE_GAP - FOLD_GAP))
-                    .flex()
-                    .items_center()
-                    .gap(px(FOLD_ICONS_GAP))
-                    .children(icons.into_iter().map(|icon| {
-                        match icon {
-                            Some(icon) => {
-                                img(icon).flex_none().size(px(FOLD_ICON)).into_any_element()
-                            }
-                            None => svg()
-                                .flex_none()
-                                .path(PAGE_GLYPH)
-                                .size(px(FOLD_ICON))
-                                .text_color(palette.glyph(TRACE_GLYPH_ALPHA))
-                                .into_any_element(),
-                        }
-                    })),
-            )
-        })
         .children(chevron)
-}
-
-/// A done stretch's fold's icons: each page it visited, once.
-fn line_icons(icons: &mut Vec<Option<Arc<Image>>>, paged: &[pages::Paged], look: &Look) {
-    icons.extend((pages::visited(paged).into_iter()).map(|page| {
-        look.page_head(page.tab)
-            .and_then(|head| head.favicon.clone())
-    }));
 }
 
 /// The split's line's glyph.
@@ -4324,8 +4224,6 @@ struct Look {
     asked_favicon: Option<Arc<Image>>,
     /// The pages its helpers' lines are of (#4102).
     helper_pages: Vec<HelperPage>,
-    /// The tabs its stretches acted on, by which a page's line has its title and icon.
-    pages: Vec<PageHead>,
     /// The thread's pages, each by its tab and address: the only places its words link to.
     thread_pages: Vec<(u64, SharedString)>,
     /// A page watched is going back into its picture over it, which hides what's under it.
@@ -4345,18 +4243,7 @@ struct HelperPage {
     word: &'static str,
 }
 
-/// What a page's line shows of its tab: its title and favicon.
-struct PageHead {
-    tab: u64,
-    title: SharedString,
-    favicon: Option<Arc<Image>>,
-}
-
 impl Look {
-    fn page_head(&self, tab: Option<u64>) -> Option<&PageHead> {
-        tab.and_then(|tab| self.pages.iter().find(|page| page.tab == tab))
-    }
-
     fn helper_page(&self, tab: u64) -> Option<&HelperPage> {
         self.helper_pages.iter().find(|page| page.tab == tab)
     }
@@ -4384,20 +4271,6 @@ impl Shell {
         (self.tabs.values())
             .find(|tab| tab.page.url.as_ref() == url)
             .and_then(|tab| tab.favicon.clone())
-    }
-
-    /// What the lines of the pages a task acted on, `tabs`, show of the tabs still open.
-    fn page_heads(&self, tabs: Vec<u64>) -> Vec<PageHead> {
-        (tabs.into_iter())
-            .filter_map(|tab| {
-                let open = self.tabs.get(&tab)?;
-                Some(PageHead {
-                    tab,
-                    title: open.title.clone(),
-                    favicon: open.favicon.clone(),
-                })
-            })
-            .collect()
     }
 
     /// What `agent`'s task's helpers' lines show of their pages, `tabs`: each one's favicon and
@@ -4532,24 +4405,6 @@ fn thread_tab(pages: &[(u64, SharedString)], url: &str) -> Option<u64> {
         .map(|(tab, _)| *tab)
 }
 
-/// The tabs the steps of `lines` acted on.
-fn page_tabs(lines: &[Line]) -> Vec<u64> {
-    let mut tabs: Vec<u64> = (lines.iter())
-        .filter_map(|line| match line {
-            Line::Trace(trace) => Some(&trace.items),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|item| match item {
-            TraceItem::Step(step) => step.page.as_ref().and_then(|page| page.tab),
-            _ => None,
-        })
-        .collect();
-    tabs.sort_unstable();
-    tabs.dedup();
-    tabs
-}
-
 /// The tabs of the helpers `lines` name.
 fn helper_tabs(lines: &[Line]) -> Vec<u64> {
     let traces = lines.iter().filter_map(|line| match line {
@@ -4577,7 +4432,6 @@ impl Render for TalkView {
             .map(|page| page.url.clone());
         let helpers =
             (self.shown.as_ref()).map_or_else(Vec::new, |shown| helper_tabs(&shown.lines));
-        let paged = (self.shown.as_ref()).map_or_else(Vec::new, |shown| page_tabs(&shown.lines));
         let thread_tabs: Vec<u64> = (self.shown.as_ref()).map_or_else(Vec::new, |shown| {
             shown.tabs.iter().map(|(tab, _)| *tab).collect()
         });
@@ -4590,7 +4444,6 @@ impl Render for TalkView {
                 still,
                 asked_favicon,
                 helper_pages: shell.helper_pages(&self.agent, helpers),
-                pages: shell.page_heads(paged),
                 thread_pages: (thread_tabs.into_iter())
                     .filter_map(|tab| Some((tab, shell.tabs.get(&tab)?.page.url.clone())))
                     .collect(),
