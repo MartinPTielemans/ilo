@@ -4208,8 +4208,8 @@ if [ "$driven" = 1 ]; then
   # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
   # answers the call under way that the user stopped it, then closes the client's connection,
   # which the bridge ends with, until the user reconnects it (#1080). The click comes while the
-  # step under way, the hand_off waiting on the user, shimmers: the shimmer draws on the loading
-  # dots' clock, and the driver reads its commands meanwhile, whatever the renderer (#1700).
+  # hand_off waits on the user: a step handed to them isn't under way, so nothing of its
+  # conversation moves.
   hello='^browser: agent mcp-client hello from check$'
   initialize='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
   bridge_on
@@ -4400,20 +4400,22 @@ PLATE
     fail "the reconnected client's handoff didn't open its page by itself once its conversation showed"
   await_more "^browser: task page $opened_tab in place\$" "$placed" ||
     fail "the reconnected client's handoff's page didn't come to rest in place"
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
   await_more "^browser: task page $opened_tab back\$" "$backs" ||
     fail "Escape didn't step back from the reconnected client's handoff's page"
-  # With motion reduced, as on GitHub's Windows runner, the step holds still rather than shimmer.
-  if ! grep -q '^browser: reduce motion on$' "$log"; then
-    await_log "^browser: task $session shimmers\$" "the conversation's step waiting on the user didn't shimmer"
-  fi
+  # The conversation is drawn again by the time the page is back in its picture, and holds still
+  # while the step waits on the user: it never said it shimmers, or last said it's still.
+  await_more "$thumbnail" "$shrunk" || fail "the reconnected client's handoff's page didn't go back into its picture"
+  [ "$(grep "^browser: task $session \(shimmers\|still\)\$" "$log" | tail -1)" != "browser: task $session shimmers" ] ||
+    fail "the conversation shimmered while its step waited on the user"
   await_log '^browser: task stop at ' "the new card's conversation drew no Stop"
   read -r sx sy sw sh <<STOP
 $(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
 STOP
   ../tools/window-screenshot.sh "$pid" "$out/agent-session.png" || fail "no window to capture"
   send click $((sx + sw / 2)) $((sy + sh / 2))
-  expect '^browser: command stop-task via conversation$' "the click on Stop while the step shimmered didn't arrive"
+  expect '^browser: command stop-task via conversation$' "the click on Stop didn't arrive"
   expect '^browser: agent mcp-client stopped by the user$' "Stop didn't stop the client"
   # No task waits once it's stopped, and the count and the urgency go with it.
   # Waits for the last line matching $1 to be $2, for up to 10 s.
@@ -4757,7 +4759,7 @@ if [ "$driven" = 1 ]; then
     "opens its tabs muted," \
     "is refused a tab the user took over with a press in its page until they hand it back and Not Now answers its ask for it," \
     "has a tab the user holds listed as with them and nothing of its page," \
-    "is stopped by its conversation's Stop while its waiting step shimmers," \
+    "is stopped by its conversation's Stop while its step waits on the user," \
     "which closes its connection once its call is answered," \
     "gets no saved login filled in or offered in its tab until the user takes it over," \
     "when it fills without a reload," \
