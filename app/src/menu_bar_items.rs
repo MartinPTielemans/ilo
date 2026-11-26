@@ -56,14 +56,14 @@ pub fn menus(
         MenuItem::separator(),
         MenuItem::os_submenu("Services", SystemMenuType::Services),
         MenuItem::separator(),
-        MenuItem::action(concat!("Hide ", env!("APP_NAME")), Hide),
+        MenuItem::action(concat!("Hide ", env!("PRODUCT_NAME")), Hide),
         MenuItem::action("Hide Others", HideOthers),
         MenuItem::action("Show All", ShowAll),
         MenuItem::separator(),
         named(Command::Quit),
     ]);
     vec![
-        menu(env!("APP_NAME"), app),
+        menu(env!("PRODUCT_NAME"), app),
         menu(
             "File",
             [

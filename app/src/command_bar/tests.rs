@@ -2776,7 +2776,7 @@ fn one_letter_lists_quit_after_the_suggestions(cx: &mut TestAppContext) {
     // Focus Agent Question, whose Question "q" would find, is offered only while a card asks.
     let mut bar = Bar::with_commands_but(cx, &[shell::Command::FocusAgentQuestion]);
     type_and_suggest(&mut bar, "q", suggestions("q", &["quora.com"]));
-    let quit = concat!("Quit ", env!("APP_NAME"), " ⌘Q");
+    let quit = concat!("Quit ", env!("PRODUCT_NAME"), " ⌘Q");
     assert_eq!(
         bar.listed(),
         [search("q"), "https://quora.com/".into(), quit.into()]
