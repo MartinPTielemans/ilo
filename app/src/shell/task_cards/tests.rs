@@ -292,11 +292,11 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     session.fuller = true;
     assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
 
-    // As a whole card says them: waiting, the site and Needs you, never the question; ended, its
+    // As its lines say them: waiting, Needs you and then the site, never the question; ended, its
     // state, never the result.
     assert_eq!(
         second_line(&asks, Form::Waits, "maat.pt").as_ref(),
-        "maat.pt · Needs you"
+        "Needs you · maat.pt"
     );
     assert_eq!(second_line(&asks, Form::Waits, "").as_ref(), "Needs you");
     for form in [Form::Waits, Form::Ended] {
@@ -326,7 +326,7 @@ fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
 
 /// An outside app's card has its line from the kind of its connection alone, a session with no
 /// task's token, and a task's never does, whatever either is named. The name, however long or made
-/// of whatever state words, moves nothing and changes no rim, mark or button.
+/// of whatever state words, moves nothing and changes no mark or second line.
 #[test]
 fn an_outside_apps_line_comes_from_its_connection_alone() {
     let long = "Flights ".repeat(25);
@@ -413,9 +413,10 @@ fn a_cards_line_says_its_status_only_where_its_maker_said_so() {
     assert_eq!(state_line(&session).as_ref(), "Claude · 1 order placed");
 }
 
-/// A card's mark, its rim and its button come from its task's state alone. Whatever the assistant
-/// writes, even ilo's own words for another state, the card at work has the ring, the waiting one
-/// the pause, its rim and Show Page, the done one the check, and the ended one today's glyph.
+/// A card's mark and its second line come from its task's state alone. Whatever the assistant
+/// writes, even ilo's own words for another state, the line at work has the ring, the waiting one
+/// the pause and the line that says it needs you, page or none, the done one the check, and the
+/// ended one today's glyph.
 #[test]
 fn a_cards_look_is_its_tasks_state_alone() {
     let posing = [
@@ -436,8 +437,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
             look(&with(Dot::Working, &[30]), Form::Working, false),
             Look {
                 mark: Some(Mark::Ring { turns: 0. }),
-                rim: false,
-                button: false,
+                needs: false,
                 dot: false,
                 from: false,
             },
@@ -447,22 +447,19 @@ fn a_cards_look_is_its_tasks_state_alone() {
             look(&with(Dot::Waiting, &[30]), Form::Waits, false),
             Look {
                 mark: Some(Mark::Pause),
-                rim: true,
-                button: true,
+                needs: true,
                 dot: false,
                 from: false,
             },
             "{status}"
         );
-        // Waiting with no page, it has nothing to show.
-        assert!(!look(&with(Dot::Waiting, &[]), Form::Waits, false).button);
+        assert!(look(&with(Dot::Waiting, &[]), Form::Waits, false).needs);
         let done = with(Dot::Done, &[30]);
         assert_eq!(
             look(&done, Form::Unseen, true),
             Look {
                 mark: Some(Mark::Check { unseen: true }),
-                rim: false,
-                button: false,
+                needs: false,
                 dot: true,
                 from: false,
             },
@@ -473,7 +470,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
             Some(Mark::Check { unseen: false })
         );
         let ended = look(&with(Dot::Ended, &[30]), Form::Ended, true);
-        assert_eq!((ended.mark, ended.rim, ended.button), (None, false, false));
+        assert_eq!((ended.mark, ended.needs), (None, false));
     }
     // The form follows the state too: a line but waiting, and ended with its chip while not seen.
     let form = |dot, unseen| Form::of(&card(1, dot), unseen);
@@ -627,7 +624,7 @@ fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) 
     let waits = card(3, Dot::Waiting);
     assert_eq!(
         spoken(&waits, Form::Waits, "taberna.example").as_ref(),
-        "taberna.example · Needs you"
+        "Needs you · taberna.example"
     );
 }
 
@@ -670,7 +667,7 @@ fn every_thread_at_work_is_one_line_however_many_work(cx: &mut TestAppContext) {
     assert_eq!(tab(&both) - tab(&alone), LINE);
     shell.read_with(cx, |shell, _| {
         for card in &shell.task_cards {
-            let framed = shell.card_framed(card, Form::Working, false);
+            let framed = shell.card_framed(card, Form::Working);
             assert_eq!(framed, super::card::Framed::Plain, "{}", card.agent);
         }
     });
@@ -973,8 +970,8 @@ fn the_walkers_pass_a_waiting_card_by_away_from_its_space(cx: &mut TestAppContex
     assert_eq!(shell.read_with(cx, |shell, _| shell.space), 2);
 }
 
-/// A waiting card shows in a Space of another profile too, and its Show Page goes to the task's
-/// own Space, as showing a page of another Space does, and stands on the page it waits on.
+/// A waiting line shows in a Space of another profile too, and its click goes to the task's own
+/// Space, as showing a page of another Space does, and stands on the page it waits on.
 #[gpui::test]
 fn show_page_away_goes_to_the_tasks_space_across_profiles(cx: &mut TestAppContext) {
     let first = vec![paged(1, Dot::Waiting, &[1010, 1011])];
@@ -986,10 +983,8 @@ fn show_page_away_goes_to_the_tasks_space_across_profiles(cx: &mut TestAppContex
     draw(&shell, cx);
     host.take();
     host.shown.borrow_mut().clear();
-    let button = STOPS_DRAWN
-        .with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied())
-        .expect("Show Page");
-    cx.simulate_click(button.center(), Modifiers::none());
+    let line = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+    cx.simulate_click(line.expect("its line").center(), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(*host.shown.borrow(), [1]);
     // The core shows Space 1, as it does for any Space shown.
@@ -1336,21 +1331,52 @@ fn one_thing_in_the_sidebar_is_shown_at_a_time(cx: &mut TestAppContext) {
     assert_eq!(shown(&shell, cx), (true, None));
 }
 
-/// Show Page stands on the page the task waits on, as its picture's click in the task's view
-/// does, and does nothing else: the task is told nothing and an agent's page isn't given the
-/// keyboard.
+/// A waiting line grows a second line that says so in the product's words, the site of the page
+/// it waits on after them, the host alone; never the page's own button words where the browser
+/// paused, and nothing on it to press. A screen reader hears it as drawn, a thread's row. Its
+/// click stands on the page it waits on and does nothing else: the task is told nothing and an
+/// agent's page isn't given the keyboard.
 #[gpui::test]
-fn show_page_watches_its_page_and_nothing_else(cx: &mut TestAppContext) {
-    let (shell, host, cx) = with_task_spaces(cx, vec![paged(1, Dot::Waiting, &[1010, 1011])]);
+fn a_waiting_lines_click_shows_its_page_and_nothing_else(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::{LINE, NEEDS_LINE};
+    let paused = Card {
+        status: "Stopped at Place order".into(),
+        ..paged(1, Dot::Waiting, &[1010, 1011])
+    };
+    let (shell, host, cx) = with_task_spaces(cx, vec![paused]);
+    cx.simulate_a11y_activation();
     still(cx);
     tick(5.);
-    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
     draw(&shell, cx);
     host.take();
-    let button = STOPS_DRAWN
-        .with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied())
-        .expect("Show Page");
-    cx.simulate_click(button.center(), Modifiers::none());
+    let line = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+    let line = line.expect("its line");
+    assert_eq!(f32::from(line.size.height), LINE + NEEDS_LINE);
+    let site = shell.read_with(cx, |shell, _| crate::agents::site(&shell.page(1010).url));
+    let said = match site.is_empty() {
+        true => "Find a flight to Lisbon, Needs you".to_string(),
+        false => format!("Find a flight to Lisbon, Needs you · {site}"),
+    };
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let names: Vec<(String, Option<String>)> = (tree.nodes.iter())
+        .filter_map(|(_, node)| {
+            let label = node.label()?.to_owned();
+            Some((label, node.role_description().map(str::to_owned)))
+        })
+        .collect();
+    assert!(
+        names.contains(&(said.clone(), Some("Thread".into()))),
+        "{said}: {names:?}"
+    );
+    for (name, _) in &names {
+        assert!(!name.contains("Place order"), "{name}");
+        assert!(!name.contains("Show Page"), "{name}");
+    }
+    shell.read_with(cx, |shell, _| {
+        let stops = shell.card_stops();
+        assert_eq!(stops.len(), 1, "the line alone: {stops:?}");
+    });
+    cx.simulate_click(line.center(), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.watched_task_page()),
@@ -1362,59 +1388,92 @@ fn show_page_watches_its_page_and_nothing_else(cx: &mut TestAppContext) {
     assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
 }
 
-/// A waiting card's Show Page shows the page that waits, so while that page is the one the page
-/// area shows it has nothing left to do: it isn't drawn and the keys' ring has no stop for it. The
-/// card keeps its waiting form and its height. The button is back once the user stands elsewhere.
+/// A waiting line whose page is the one the page area shows has no page left to show, so its click
+/// shows its conversation, as any line's does; the line keeps its form and its height. Once the
+/// user stands elsewhere, its click shows the page again.
 #[gpui::test]
-fn show_page_is_not_drawn_while_its_page_is_the_one_shown(cx: &mut TestAppContext) {
+fn a_waiting_line_whose_page_shows_shows_its_conversation(cx: &mut TestAppContext) {
     let (shell, _, cx) = with_task_spaces(cx, vec![paged(1, Dot::Waiting, &[1010, 1011])]);
     still(cx);
     tick(5.);
-    // Where the button is drawn, if it is, whether the ring stops on it, and how high its card is.
-    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    draw(&shell, cx);
+    let click = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let line = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+        let line = line.expect("its line");
+        cx.simulate_click(line.center(), Modifiers::none());
+        cx.run_until_parked();
         draw(shell, cx);
-        let button = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied());
-        let (stop, height) = shell.read_with(cx, |shell, _| {
-            let stop = (shell.card_stops().iter()).any(|(stop, _)| *stop == StripStop::Chip(1));
-            let plate = shell.task_plate_drawn("task-1").expect("its card");
-            (stop, plate.size.height)
-        });
-        (button, stop, height)
+        line.size.height
     };
-    // Its conversation first, so the card is the shown thread's before and after the button goes.
-    let plate = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
-    let header = plate.expect("its card").origin + gpui::point(gpui::px(24.), gpui::px(8.));
-    cx.simulate_click(header, Modifiers::none());
-    cx.run_until_parked();
+    let watched = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.watched_task_page())
+    };
+    let height = click(&shell, cx);
+    assert_eq!(watched(&shell, cx), Some((101, 1010)));
+    assert_eq!(click(&shell, cx), height);
+    assert_eq!(watched(&shell, cx), None);
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watched_task_page()),
-        None
-    );
-    let (button, stop, height) = drawn(&shell, cx);
-    assert!(stop, "the ring has no stop for Show Page");
-    cx.simulate_click(button.expect("Show Page").center(), Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watched_task_page()),
-        Some((101, 1010))
-    );
-    assert_eq!(
-        drawn(&shell, cx),
-        (None, false, height),
-        "Show Page with its page the one shown"
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-1".into())
     );
     assert_eq!(form(&shell, "task-1", cx), Some(Form::Waits));
-
-    // Another tab, the user's own: the page isn't the one shown, so the button shows it again.
+    // Another tab, the user's own: the page isn't the one shown, so the click shows it again.
     shell.update(cx, |shell, cx| shell.run(Command::SelectTab(1), "test", cx));
     cx.run_until_parked();
+    assert_eq!(watched(&shell, cx), None);
+    click(&shell, cx);
+    assert_eq!(watched(&shell, cx), Some((101, 1010)));
+}
+
+/// A line that grows or shrinks moves the rows under it, and a press under a pointer that hasn't
+/// moved since was meant for what was there: for PROTECT it takes none, read at the press with no
+/// timer. A pointer that moved aims afresh, and the press counts at once.
+#[gpui::test]
+fn a_row_a_line_moved_under_a_resting_pointer_takes_no_press_at_once(cx: &mut TestAppContext) {
+    let two = vec![
+        paged(2, Dot::Working, &[1020]),
+        paged(1, Dot::Done, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two.clone());
+    still(cx);
+    tick(5.);
+    draw(&shell, cx);
+    assert_eq!(today(&shell, cx), ["task-2", "task-1", "10", "11"]);
+    let talk = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.talk_agent())
+    };
+    let line = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let line = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+        line.expect("its line").center()
+    };
+    let before = line(&shell, cx);
+    // The line above grows as its thread comes to need the user, and task-1 moves down.
+    let waits = vec![paged(2, Dot::Waiting, &[1020]), two[1].clone()];
+    shell.update(cx, |shell, cx| shell.set_task_cards(waits, cx));
+    draw(&shell, cx);
+    let at = line(&shell, cx);
+    assert!(at.y > before.y, "the row under it moved");
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(talk(&shell, cx), None, "a press meant for what was there");
+    tick(0.5);
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(talk(&shell, cx), Some("task-1".into()), "PROTECT on");
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    // It shrinks back; the pointer that moves to the row counts at once.
+    shell.update(cx, |shell, cx| shell.set_task_cards(two.clone(), cx));
+    draw(&shell, cx);
+    let at = line(&shell, cx);
+    assert_eq!(at, before);
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watched_task_page()),
-        None
+        talk(&shell, cx),
+        Some("task-1".into()),
+        "a pointer that moved"
     );
-    let (button, stop, _) = drawn(&shell, cx);
-    assert!(button.is_some() && stop, "Show Page isn't back");
 }
 
 /// Every card is reached by the keys, among Today's rows where it stands: the arrows go over the
@@ -1448,26 +1507,11 @@ fn the_keys_reach_every_card(cx: &mut TestAppContext) {
     assert_eq!(ring(&shell, cx), (Some(10), None));
     let header = |n| (None, Some(StripStop::Header(n)));
     let new_tab = shell.read_with(cx, |shell, _| shell.key_rows()[0]);
-    let up: Vec<_> = (0..4).map(|_| press("up", &shell, cx)).collect();
-    assert_eq!(
-        up,
-        [
-            header(1),
-            (None, Some(StripStop::Chip(2))),
-            header(2),
-            (Some(new_tab), None),
-        ]
-    );
-    let down: Vec<_> = (0..4).map(|_| press("down", &shell, cx)).collect();
-    assert_eq!(
-        down,
-        [
-            header(2),
-            (None, Some(StripStop::Chip(2))),
-            header(1),
-            (Some(10), None),
-        ]
-    );
+    // A waiting line has no stop of its own but itself: nothing on it answers the wait.
+    let up: Vec<_> = (0..3).map(|_| press("up", &shell, cx)).collect();
+    assert_eq!(up, [header(1), header(2), (Some(new_tab), None)]);
+    let down: Vec<_> = (0..3).map(|_| press("down", &shell, cx)).collect();
+    assert_eq!(down, [header(2), header(1), (Some(10), None)]);
     press("up", &shell, cx);
     press("enter", &shell, cx);
     assert_eq!(
@@ -1705,18 +1749,17 @@ fn the_joined_cards_title_reads_on_its_stage() {
 /// The shown thread's card is a shape of its own in its stage's colour (spec-sidebar, "Thread,
 /// shown"): it takes the stage's fill, has no outline of its own, is inset at both sides and has
 /// four round corners, with a hairline of light round it on a dark stage and none on a light one.
-/// A whole card not shown keeps its state's outline, and a line, a tab's, has none; a waiting
-/// one shown gives up its rim and has it back once another thread is shown.
+/// A line not shown, a tab's, has no frame, and goes back to none once another thread is shown.
 #[gpui::test]
 fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut TestAppContext) {
     use super::card::Framed;
     use crate::palette::Tone;
     use crate::shell::own_shape::OWN_SHAPE;
     use crate::theme::Appearance;
-    use crate::tokens::shell::task_card::{RADIUS, RIM, RIM_WIDTH};
+    use crate::tokens::shell::task_card::RADIUS;
     use crate::tokens::shell::{DIVIDER, PLATE_INSET};
     let two = vec![
-        paged(2, Dot::Waiting, &[1020]),
+        paged(2, Dot::Done, &[1020]),
         paged(1, Dot::Working, &[1010]),
     ];
     let (shell, _, cx) = with_task_spaces(cx, two);
@@ -1732,14 +1775,10 @@ fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut Te
             let placed = (space.placed.iter())
                 .find(|placed| placed.agent.as_ref() == agent)
                 .expect("its place");
-            shell.card_framed(card, placed.form, shell.task_list.unseen.contains(agent))
+            shell.card_framed(card, placed.form)
         })
     };
-    let rim = Framed::Outlined {
-        outline: RIM,
-        width: RIM_WIDTH,
-    };
-    assert_eq!(framed(&shell, "task-2", cx), rim);
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Plain);
     assert_eq!(framed(&shell, "task-1", cx), Framed::Plain);
     let show = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
         let at = (shell.read_with(cx, |shell, _| shell.task_plate_drawn(agent)))
@@ -1799,5 +1838,5 @@ fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut Te
     }
     show(&shell, "task-1", cx);
     assert_eq!(framed(&shell, "task-1", cx), Framed::Own);
-    assert_eq!(framed(&shell, "task-2", cx), rim);
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Plain);
 }

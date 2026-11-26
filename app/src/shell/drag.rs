@@ -1446,7 +1446,10 @@ impl Shell {
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         moved
-                            .update(cx, |shell, cx| shell.drag_to(event.position, cx))
+                            .update(cx, |shell, cx| {
+                                shell.forget_moved();
+                                shell.drag_to(event.position, cx)
+                            })
                             .ok();
                     }
                 });

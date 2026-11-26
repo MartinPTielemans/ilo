@@ -399,8 +399,8 @@ if [ "$driven" = 1 ]; then
   done
   # The user's step has no card (#4086): it's ilo's line, and it stands where its page is, in the
   # conversation of the task that holds the page, though another connection asked. That one only
-  # handed a page over, so it has no task. A click on the task's card shows its conversation, where
-  # the tile of the page that needs the user opens it by itself; Escape steps back to the line.
+  # handed a page over, so it has no task. A click on the task's line, waiting on the user, shows
+  # the page that needs the user over the task's conversation; Escape steps back to the line.
   # Hand Back, the line's first button, is pressed with the keys, as the user does: Focus Agent
   # Question's key rings it, and ↩ presses once the app says a key on it counts.
   if grep -q '^browser: session session-[0-9]* of agent mcp-client as rules-second$' "$log"; then
@@ -417,7 +417,7 @@ PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $first shown\$" "a click on the card of the task that holds the held tab didn't show its conversation"
   await_more "^browser: task page $own_tab watched\$" "$opens" ||
-    fail "the page handed to the user didn't open by itself in the conversation of the task that holds it"
+    fail "a click on the waiting line didn't open the page handed to the user in the conversation of the task that holds it"
   await "^browser: task page $own_tab in place\$" || fail "the page handed to the user didn't come to rest in place"
   send key escape
   await_more "^browser: task page $own_tab back\$" "$backs" || fail "Escape didn't step back from the page handed to the user"

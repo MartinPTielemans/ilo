@@ -594,8 +594,9 @@ judging=
 press escape
 # An agent's change that ilo refuses (#4086, #4244) asks nothing and takes no keyboard. With its
 # conversation not shown, NVDA is told the task needs the user as its sidebar line says it, once,
-# as it comes. The keyboard shows the conversation, from the ring on the task's header at the
-# sidebar's foot, where Focus Agent Question's key gives ilo's line the keyboard on its first
+# as it comes. ↩ on the ring on the task's row at the sidebar's foot shows the page the change was
+# refused on, over the conversation, and Escape steps back from it to the conversation, where
+# Focus Agent Question's key gives ilo's line the keyboard on its first
 # button, which NVDA says by its label, and Escape gives the keyboard back, pressing nothing.
 await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
   fail "the saved switch didn't start the agents' server"
@@ -657,7 +658,12 @@ done
 on_header=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tail -1)
 echo "note: NVDA on the task's header: $on_header"
 press return
-expect '^browser: task session-[0-9]* shown$' "↩ on the task's header didn't show its conversation"
+expect '^browser: task session-[0-9]* shown$' "↩ on the task's row didn't show its conversation"
+expect "^browser: task page $agent_tab watched\$" \
+  "↩ on the waiting task's row didn't show the page its refused change was on"
+press escape
+expect "^browser: task page $agent_tab back\$" \
+  "Escape didn't step back from the refused change's page to its conversation"
 expect '^browser: ilo line [0-9]* Take Over at ' "the refused change's line drew no Take Over"
 at=$(wc -l < "$nvda_log")
 press a ctrl shift

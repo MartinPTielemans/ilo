@@ -1004,6 +1004,10 @@ impl Shell {
             return false;
         }
         let y = self.list_y(at.y);
+        // A row a thread's line moved under a resting pointer takes no press yet (#4095).
+        if event.button == MouseButton::Left && self.moved_under_rest(y) {
+            return true;
+        }
         let row_at = |tops: &[(u64, f32)]| {
             tops.iter()
                 .find_map(|&(tab, top)| (top..top + ROW_PITCH).contains(&y).then_some(tab))

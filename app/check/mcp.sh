@@ -1069,12 +1069,20 @@ send click $page_point
 driven=$active
 hand_back_pressed "$presses"
 if [ "$driven" = 1 ]; then
-  # A click on the card opens its conversation, its steps in its agent's place.
+  # A click on the thread's line, waiting on the user, shows the page it waits on, over its
+  # conversation, its steps in its agent's place; Escape steps back from the page to them.
   read -r px py pw ph <<PLATE
 $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
 PLATE
+  watched=$(grep -c "^browser: task page $agent_tab watched\$" "$log" || true)
+  backs=$(grep -c "^browser: task page $agent_tab back\$" "$log" || true)
   send click $((px + pw / 2)) $((py + ph / 2))
-  expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
+  expect "^browser: task $session shown\$" "a click on the client's waiting line didn't show its conversation"
+  await_more "^browser: task page $agent_tab watched\$" "$watched" ||
+    fail "a click on the client's waiting line didn't show the page its refused change was on"
+  send key escape
+  await_more "^browser: task page $agent_tab back\$" "$backs" ||
+    fail "Escape didn't step back from the refused change's page to its conversation"
   # Its one page so far stands in the rail beside the conversation, a tile to watch it from.
   picture "$agent_tab" > /dev/null
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
@@ -4163,12 +4171,13 @@ if [ "$driven" = 1 ]; then
 $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
 PLATE
     send click $((px + pw / 2)) $((py + ph / 2))
-    expect "^browser: task $session shown\$" "a click on the new card didn't show its conversation"
+    expect "^browser: task $session shown\$" "a click on the new thread's waiting line didn't show its conversation"
   fi
-  # The handoff's page opens by itself over the conversation shown, none of the task's being
-  # watched there, and Escape steps back from it to the conversation, where the task's Stop is.
+  # The handoff's page opens over the conversation shown, by itself on Linux's notification and
+  # by the click on its waiting line elsewhere, and Escape steps back from it to the conversation,
+  # where the task's Stop is.
   await_more "^browser: task page $opened_tab watched\$" "$opens" ||
-    fail "the reconnected client's handoff didn't open its page by itself once its conversation showed"
+    fail "the reconnected client's handoff didn't open its page once its conversation showed"
   await_more "^browser: task page $opened_tab in place\$" "$placed" ||
     fail "the reconnected client's handoff's page didn't come to rest in place"
   send key escape

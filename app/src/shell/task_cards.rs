@@ -46,7 +46,7 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, FROM_LINE, GAP, ICON, LINE, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    FROM_LINE, GAP, ICON, LINE, LIVE_LINE, NEEDS_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -185,6 +185,7 @@ impl PageWord {
 pub(super) enum Form {
     /// At work: one line.
     Working,
+    /// Waits on the user: the line, with a second line under the title that says so.
     Waits,
     /// Finished and not seen since: one line with the dot, an answer's title in the text's ink.
     Unseen,
@@ -207,28 +208,24 @@ impl Form {
     }
 
     pub(super) fn line(self) -> bool {
-        !matches!(self, Form::Waits | Form::Ended)
+        self != Form::Ended
     }
 }
 
 /// The room a card in `form` takes in the list: a line's, a tab row's, against the rows beside it
-/// as a tab's is; a whole card's, the room under it with it: its padding, its title's line, its
-/// second line, and, where it has one, its third, a gap between each.
+/// as a tab's is, and the second line's under it while it waits; a whole card's, the room under it
+/// with it: its padding, its title's line, its second line and its chip's row, a gap between each.
 fn room(card: &Card, form: Form) -> f32 {
-    if form.line() {
-        return LINE;
+    match form {
+        Form::Waits => return LINE + NEEDS_LINE,
+        Form::Ended => {}
+        _ => return LINE,
     }
-    let third = match form {
-        Form::Waits if !card.pages.is_empty() => BUTTON_HEIGHT,
-        Form::Ended => CHIP_HEIGHT.max(ICON),
-        _ => 0.,
-    };
-    let third = if third > 0. { GAP + third } else { 0. };
     let from = match card::outside(card) {
         true => FROM_LINE + GAP,
         false => 0.,
     };
-    2. * PADDING + from + TITLE_LINE + GAP + LIVE_LINE + third + UNDER
+    2. * PADDING + from + TITLE_LINE + GAP + LIVE_LINE + GAP + CHIP_HEIGHT.max(ICON) + UNDER
 }
 
 /// The room ⌘T's slot takes: a line at work's, so nothing moves as the task's line takes it.
@@ -352,9 +349,12 @@ pub(super) struct TaskList {
     seen_at: HashMap<SharedString, Instant>,
     /// The next ageing's wait.
     ageing: Option<gpui::Task<()>>,
-    /// The task whose waiting card was clicked away from its home Space, whose conversation shows
-    /// once that Space does, or the page it waits on where the click was its Show Page.
+    /// The task whose line was clicked away from its home Space, whose conversation shows once
+    /// that Space does, or the page it waits on where the line waits.
     going: Option<(SharedString, bool)>,
+    /// When a line grew or shrank, and where in the list the rows under it start, which moved:
+    /// a press there under a pointer that hasn't moved since was meant for what was there.
+    moved: Option<(Instant, f32)>,
     /// Each card as it fades in.
     coming: HashMap<SharedString, Ease>,
     /// The window has drawn its list, so what changes on it from now on moves.
@@ -383,6 +383,7 @@ impl Default for TaskList {
             seen_at: HashMap::new(),
             ageing: None,
             going: None,
+            moved: None,
             coming: HashMap::new(),
             primed: false,
             still: false,
@@ -588,6 +589,11 @@ impl Shell {
             self.task_list.unseen.remove(&agent);
         }
         let before = self.layout();
+        // Where a line of the Space shown grows or shrinks, the rows under it move.
+        let waited: HashMap<SharedString, bool> = (self.shown_space().into_iter())
+            .flat_map(|space| &space.placed)
+            .map(|placed| (placed.agent.clone(), placed.form == Form::Waits))
+            .collect();
         let homes: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let regular = !self.one_space();
         let shown = self.space;
@@ -626,8 +632,34 @@ impl Shell {
             space.placed = placed;
         }
         if self.task_list.primed && self.layout() != before {
+            let resized = (self.shown_space().into_iter())
+                .flat_map(|space| &space.placed)
+                .filter(|placed| {
+                    let waits = placed.form == Form::Waits;
+                    waited.get(&placed.agent).is_some_and(|&was| was != waits)
+                })
+                .filter_map(|placed| before.get(&Slot::Task(placed.n)))
+                .map(|top| top + LINE)
+                .reduce(f32::min);
+            if let Some(from) = resized {
+                self.task_list.moved = Some((clock(), from));
+            }
             self.move_rows(before, RowCurve::Slide, cx);
         }
+    }
+
+    /// Whether a press at `y` in the list lands on a row that moved under the pointer as a line
+    /// grew or shrank, less than PROTECT ago, the pointer resting since: it takes no press. Read at
+    /// the press, so nothing waits for the time to pass.
+    pub(super) fn moved_under_rest(&self, y: f32) -> bool {
+        self.task_list.moved.is_some_and(|(at, from)| {
+            y >= from && clock().saturating_duration_since(at) < crate::agents::tier::PROTECT
+        })
+    }
+
+    /// The pointer moved: what's under it now is what the user aims at.
+    pub(super) fn forget_moved(&mut self) {
+        self.task_list.moved = None;
     }
 
     /// Takes the finished cards the user has seen whose wait is up, as the profile's ageing takes a
@@ -695,7 +727,7 @@ impl Shell {
         }
         if page {
             if card.dot == Dot::Waiting {
-                self.card_button(agent, cx);
+                self.show_waiting_page(agent, cx);
             }
         } else if self.talk_agent() != Some(agent.clone()) {
             self.show_task(agent, cx);
@@ -811,12 +843,7 @@ impl Shell {
                 .copied()
                 .unwrap_or_default();
             stops.push((StripStop::Header(placed.n), top));
-            let button = match placed.form {
-                Form::Waits => self.offers_page(card),
-                Form::Ended => chip(card).is_some(),
-                _ => false,
-            };
-            if button {
+            if placed.form == Form::Ended && chip(card).is_some() {
                 stops.push((StripStop::Chip(placed.n), top));
             }
         }
@@ -830,7 +857,7 @@ impl Shell {
                 if let Some(agent) = self.card_agent(n) {
                     self.leave_strip("header", cx);
                     log!("browser: command show-task via strip keys");
-                    self.show_group(agent, cx);
+                    self.show_line(agent, cx);
                 }
             }
             StripStop::Chip(n) => {
@@ -860,28 +887,45 @@ impl Shell {
         self.show_task(agent, cx);
     }
 
-    /// The button on `agent`'s card: Show Page on a waiting card, the chip on an ended one.
+    /// A line's click, or Return on it: a waiting thread's shows the page it waits on and nothing
+    /// else, as a page of another Space shows there, and tells the thread nothing; an ask's, one
+    /// with no page, or one whose page is the one shown already, its conversation, as any line's.
+    fn show_line(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        let waits = (self.task_cards.iter())
+            .find(|card| card.agent == agent)
+            .filter(|card| card.dot == Dot::Waiting && !card.asks && self.offers_page(card));
+        match waits {
+            Some(_) => self.show_waiting_page(agent, cx),
+            None => self.show_group(agent, cx),
+        }
+    }
+
+    /// Stands on the page `agent`'s thread waits on, in its home Space.
+    fn show_waiting_page(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
+            return;
+        };
+        // Away from its home Space, the page shows there, as any page of another Space does.
+        if card.home != self.space {
+            let home = card.home;
+            log!("browser: task {agent} page shown in its home space {home}");
+            self.task_list.going = Some((agent, true));
+            return self.show_space(home, cx);
+        }
+        if let Some(tab) = self.waiting_page(card) {
+            log!("browser: command show-page via task card");
+            if self.talk_agent().as_ref() != Some(&agent) {
+                self.show_task(agent, cx);
+            }
+            self.watch_row(tab, false, cx);
+        }
+    }
+
+    /// The chip on an ended thread's card.
     fn card_button(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
-        if card.dot == Dot::Waiting {
-            // Away from its home Space, the page shows there, as any page of another Space does.
-            if card.home != self.space {
-                let home = card.home;
-                log!("browser: task {agent} page shown in its home space {home}");
-                self.task_list.going = Some((agent, true));
-                return self.show_space(home, cx);
-            }
-            if let Some(tab) = self.waiting_page(card) {
-                log!("browser: command show-page via task card");
-                if self.talk_agent().as_ref() != Some(&agent) {
-                    self.show_task(agent, cx);
-                }
-                self.watch_row(tab, false, cx);
-            }
-            return;
-        }
         if let Some(chip) = chip(card) {
             self.run_chip(agent, chip, cx);
         }
@@ -895,8 +939,8 @@ impl Shell {
             .copied()
     }
 
-    /// Whether a waiting `card`'s Show Page has a page to show: not while the page it waits on is
-    /// the one the page area shows or is on its way to, where the user stands already. The area's
+    /// Whether a waiting `card`'s line has a page to show: not while the page it waits on is the
+    /// one the page area shows or is on its way to, where the user stands already. The area's
     /// own page decides, as it does which button the conversation's line draws.
     pub(super) fn offers_page(&self, card: &Card) -> bool {
         let shown = self.watched_task_page().map(|(_, tab)| tab);

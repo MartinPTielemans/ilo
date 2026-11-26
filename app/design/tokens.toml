@@ -3279,23 +3279,18 @@ icon = 14.0
 icon-gap = 5.0
 text-3 = 0.42
 text-3-light = 0.5
-# Waits for you: the outline turns bright, `rim-width` at `rim`, and its one button is
-# `button-height` tall, `button-x` at each side, `button-radius` corners, filled with the ink, its
-# label small on `button-line`, semibold, in `on-primary` (`on-primary-light` on a light window).
-rim = 0.851
-rim-width = 1.5
-button-height = 24.0
-button-x = 10.0
-button-radius = 8.0
-button-line = 16.0
+# On the ink: the waiting mark's bars, in `on-primary` (`on-primary-light` on a light window).
 on-primary = 0x161618
 on-primary-light = 0xF3F0E8
-# A line, a tab's (spec-sidebar, "Thread"; #4095): a thread at work, or done and seen, `line`
-# tall against the rows beside it, `line-x` at each side, with no fill or outline but the shown
-# thread's own shape. The glyph and title sit as on a card's first row.
+# A line, a tab's (spec-sidebar, "Thread"; #4095): a thread, `line` tall against the rows beside
+# it, `line-x` at each side, with no fill or outline but the shown thread's own shape. The glyph
+# and title sit as on a card's first row. While it needs you it grows a second line under the
+# title, small type on `needs-line` in the text's ink, at the title's inset, and the pair sits
+# where the title sat, as much room above as below (the lead's 48, Proposed).
 line = 34.0
 line-x = 10.0
-# Not seen yet: a dot `dot` across after the title, in the ink.
+needs-line = 14.0
+# Unread: a dot `dot` across after the title, in the ink.
 dot = 6.0
 # The glyphs in their box. At work, a quarter arc in the ink on a ring at `track`, radius `ring`,
 # stroke `ring-stroke`, turning once a `turn`. Done, a check in the ink in a circle of the same
