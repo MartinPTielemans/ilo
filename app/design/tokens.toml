@@ -3276,12 +3276,9 @@ done-line = 16.0
 finding-lines = 3
 text-2 = 0.6
 text-2-light = 0.65
-# Row 3: its pages as icons `icon` square, `icon-gap` apart, those not yet visited at
-# `unvisited`, and at its right the count in small type on `count-line`, in text-3.
+# Row 3: its pages as icons `icon` square, `icon-gap` apart; text-3 is the quietest ink.
 icon = 14.0
 icon-gap = 5.0
-unvisited = 0.4
-count-line = 14.0
 text-3 = 0.42
 text-3-light = 0.5
 # Waits for you: the outline turns bright, `rim-width` at `rim`, and its one button is
@@ -3295,11 +3292,11 @@ button-radius = 8.0
 button-line = 16.0
 on-primary = 0x161618
 on-primary-light = 0xF3F0E8
-# A line: a card folded, done and seen, or one of several at work, `line` tall, `line-x` at each
-# side, `line-around` above and below it in the list.
+# A line, a tab's (spec-sidebar, "Thread"; #4095): a thread at work, or done and seen, `line`
+# tall against the rows beside it, `line-x` at each side, with no fill or outline but the shown
+# thread's own shape. The glyph and title sit as on a card's first row.
 line = 34.0
 line-x = 10.0
-line-around = 3.0
 # Not seen yet: a dot `dot` across after the title, in the ink.
 dot = 6.0
 # The glyphs in their box. At work, a quarter arc in the ink on a ring at `track`, radius `ring`,
@@ -3322,13 +3319,12 @@ pause-right = 9.7
 # An outside app's card (spec-thread-card, "An outside app's card, told from a thread's"): a line
 # over row 1, `from-line` tall and a `gap` above it, of the product's mark, `from-mark` square in
 # the glyph's column, stroked `from-stroke` in the ink at `from-ink`, then the app's name in small
-# type, text-3, one line, its rows' inset from the inner left edge. Folded, the mark sits
-# `from-mark-gap` before the page's icon, at the line's right.
+# type, text-3, one line, its rows' inset from the inner left edge. On a line, the mark sits at
+# its right, `glyph-gap` after the title.
 from-line = 14.0
 from-mark = 12.0
 from-stroke = 1.2
 from-ink = 0.6
-from-mark-gap = 6.0
 
 [shell.task-card.motion]
 # Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. The ring

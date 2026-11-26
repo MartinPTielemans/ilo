@@ -4171,8 +4171,14 @@ fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut Tes
                 false => cx.simulate_click(at.center(), Modifiers::none()),
             }
             cx.run_until_parked();
+            // A click moves the pointer, which takes down a tooltip it rested under, such as an
+            // outside app's line's in the sidebar; a key doesn't.
             let calls: Vec<String> = (host.take().into_iter())
-                .filter(|call| !call.starts_with("focus") && !call.starts_with("picture"))
+                .filter(|call| {
+                    !call.starts_with("focus")
+                        && !call.starts_with("picture")
+                        && !call.starts_with("tooltip")
+                })
                 .collect();
             assert!(!calls.is_empty(), "{name}: {button:?} did nothing");
             Some(calls)

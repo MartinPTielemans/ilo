@@ -46,8 +46,8 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH,
-    GLYPH_GAP, ICON, LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
+    LINE, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -179,45 +179,43 @@ impl PageWord {
     }
 }
 
-/// A card's form, from its task's state alone, whether its conversation has shown since it
-/// finished, and whether another task in the same list is at work.
+/// A card's form, from its task's state alone and whether its conversation has shown since it
+/// finished. A thread at work is one line however many work, as a tab is (#4095).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Form {
+    /// At work: one line.
     Working,
     Waits,
     DoneUnseen,
     /// Stopped, interrupted or at its limit, and not yet seen.
     Ended,
-    /// At work beside another at work.
-    WorkingLine,
     DoneLine,
     EndedLine,
 }
 
 impl Form {
-    fn of(card: &Card, unseen: bool, several: bool) -> Self {
-        match (card.dot, unseen, several) {
-            (Dot::Working, _, false) => Form::Working,
-            (Dot::Working, _, true) => Form::WorkingLine,
-            (Dot::Waiting, ..) => Form::Waits,
-            (Dot::Done, true, _) => Form::DoneUnseen,
-            (Dot::Done, false, _) => Form::DoneLine,
-            (Dot::Ended, true, _) => Form::Ended,
-            (Dot::Ended, false, _) => Form::EndedLine,
+    fn of(card: &Card, unseen: bool) -> Self {
+        match (card.dot, unseen) {
+            (Dot::Working, _) => Form::Working,
+            (Dot::Waiting, _) => Form::Waits,
+            (Dot::Done, true) => Form::DoneUnseen,
+            (Dot::Done, false) => Form::DoneLine,
+            (Dot::Ended, true) => Form::Ended,
+            (Dot::Ended, false) => Form::EndedLine,
         }
     }
 
     pub(super) fn line(self) -> bool {
-        matches!(self, Form::WorkingLine | Form::DoneLine | Form::EndedLine)
+        matches!(self, Form::Working | Form::DoneLine | Form::EndedLine)
     }
 }
 
-/// The room a card in `form` takes in the list, the room under it with it: its padding, its title's
-/// line, its second line, or a finding's `lines`, and, where it has one, its third, a gap between
-/// each.
+/// The room a card in `form` takes in the list: a line's, a tab row's, against the rows beside it
+/// as a tab's is; a whole card's, the room under it with it: its padding, its title's line, its
+/// second line, or a finding's `lines`, and, where it has one, its third, a gap between each.
 fn room(card: &Card, form: Form, lines: usize) -> f32 {
     if form.line() {
-        return LINE + 2. * LINE_AROUND;
+        return LINE;
     }
     let second = match form {
         Form::DoneUnseen => DONE_LINE * lines as f32,
@@ -227,7 +225,6 @@ fn room(card: &Card, form: Form, lines: usize) -> f32 {
     let visited = !card.visited.is_empty();
     let third = match form {
         Form::Waits if pages => BUTTON_HEIGHT,
-        Form::Working if pages => ICON.max(COUNT_LINE),
         Form::DoneUnseen if visited => ICON,
         Form::Ended if chip(card).is_some() => CHIP_HEIGHT.max(ICON),
         Form::Ended if visited => ICON,
@@ -258,9 +255,9 @@ fn finding_lines(finding: &str, width: f32, cx: &gpui::App) -> usize {
     (breaks + 1).min(FINDING_LINES as usize)
 }
 
-/// The room ⌘T's slot takes: a card at work's, before it has a page.
+/// The room ⌘T's slot takes: a line at work's, so nothing moves as the task's line takes it.
 fn slot_room() -> f32 {
-    2. * PADDING + TITLE_LINE + GAP + LIVE_LINE + UNDER
+    LINE
 }
 
 /// A card's place in a Space's list (`Space::placed`).
@@ -633,16 +630,11 @@ impl Shell {
             let listed: Vec<&Card> = (self.task_cards.iter())
                 .filter(|card| regular && lists_in(card, space.id, &homes))
                 .collect();
-            let several = listed
-                .iter()
-                .filter(|card| card.dot == Dot::Working)
-                .count()
-                > 1;
             let top = space.today.first().copied();
             let mut placed: Vec<Placed> = listed
                 .into_iter()
                 .map(|card| {
-                    let form = Form::of(card, list.unseen.contains(&card.agent), several);
+                    let form = Form::of(card, list.unseen.contains(&card.agent));
                     let away = card.home != space.id;
                     let stood = (space.placed.iter()).find(|was| was.agent == card.agent);
                     Placed {
@@ -1030,7 +1022,7 @@ impl Shell {
                 origin.x + px(PLATE_INSET),
                 origin.y + px(self.drawn_list_top() + top + scrolled),
             ),
-            gpui::size(px(self.width() - 2. * PLATE_INSET), px(slot_room() - UNDER)),
+            gpui::size(px(self.width() - 2. * PLATE_INSET), px(slot_room())),
         );
         let radius = crate::tokens::shell::task_card::RADIUS;
         Some((bounds, radius, self.palette.plate(super::TILE)))
@@ -1121,9 +1113,7 @@ impl Shell {
     pub(super) fn cards_live(&self) -> bool {
         !self.task_list.still
             && self.list_drawn()
-            && (self.shown_placed().iter()).any(|card| {
-                matches!(card.form, Form::Working | Form::WorkingLine) && card.n != SLOT
-            })
+            && (self.shown_placed().iter()).any(|card| card.form == Form::Working && card.n != SLOT)
     }
 
     /// Whether `tab`'s row waits for its page's flight to land, which draws it meanwhile.

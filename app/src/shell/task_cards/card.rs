@@ -1,6 +1,7 @@
 //! A task's card in Today's list, the one place the list puts it (spec-thread-card). Whole, it is
 //! an outlined card: its mark and title, a line in ilo's words under them, and its pages or its one
-//! button under that. Folded, it is one outlined line. Its rim, mark and button come from its
+//! button under that. As a line, at work or seen, it is a tab's line: its mark and title, with no
+//! fill or outline but the shown thread's shape (#4095). Its rim, mark and button come from its
 //! task's state alone; the title is the only words of the assistant's on it.
 
 use gpui::{
@@ -9,7 +10,7 @@ use gpui::{
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
+use super::{Chip, Form, SLOT, Shell, chip, clock, drawn_listener, number, state};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::palette::Palette;
@@ -20,11 +21,10 @@ use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, COUNT_LINE, DONE_LINE, DOT, FILL,
-    FROM_INK, FROM_LINE, FROM_MARK, FROM_MARK_GAP, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP,
-    LINE_AROUND, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING,
-    RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
-    UNVISITED,
+    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, DONE_LINE, DOT, FILL, FROM_INK, FROM_LINE,
+    FROM_MARK, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_X, LIVE_LINE, ON_PRIMARY,
+    ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2,
+    TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
 };
 use crate::tokens::text;
 
@@ -55,25 +55,20 @@ pub(super) fn first_sentence(text: &str) -> usize {
     ends.map_or(text.len(), |(at, c)| at + c.len_utf8())
 }
 
-/// What a card's second line says to the screen reader: as drawn, but a finding, the assistant's
+/// What a card says to the screen reader after its title: a line, which draws its state as its
+/// mark, the state's word; a whole card its second line as drawn, but a finding, the assistant's
 /// words, comes after Z24's mark, so it's never heard as the browser's, and as the conversation
 /// tells the same answer: cut at a whole word, as nothing marks a cut in speech.
 pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
+    if form.line() {
+        return card.word.after_name().into();
+    }
     let line = second_line(card, form, site);
     match form == Form::DoneUnseen && !card.finding.is_empty() {
         true if !card.told.is_empty() => words::says(&card.name, &card.told).into(),
         true => words::says(&card.name, &line).into(),
         false => line,
     }
-}
-
-/// How many of its pages a task at work has been on, of them all (Z1), left out while it has one.
-pub(super) fn count(card: &Card) -> Option<SharedString> {
-    let all = card.pages.len();
-    let visited = (card.pages.iter())
-        .filter(|tab| card.visited.contains(tab))
-        .count();
-    (all > 1).then(|| format!("{visited} of {all}").into())
 }
 
 /// The second line of a whole card in `form`: ilo's words alone.
@@ -92,7 +87,6 @@ pub(super) fn second_lead(card: &Card, form: Form) -> usize {
 /// has one.
 fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
     match form {
-        Form::Working if !card.status.is_empty() => (card.status.clone(), 0),
         Form::Waits => (needs_you(site), 0),
         Form::DoneUnseen if !card.finding.is_empty() => (card.finding.clone(), 0),
         Form::DoneUnseen => done_at(card),
@@ -143,11 +137,12 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
     }
 }
 
-/// A card's frame: a shape of its own in its stage's colour, or closed in its outline at `outline`
-/// of the ink, `width` wide.
+/// A card's frame: a shape of its own in its stage's colour, none for a line among the tabs, or
+/// closed in its outline at `outline` of the ink, `width` wide.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Framed {
     Own,
+    Plain,
     Outlined { outline: f32, width: f32 },
 }
 
@@ -273,33 +268,33 @@ impl Shell {
         let coming = self.task_list.coming.get(&card.agent);
         let rest = self.slide(Slot::Task(n)) == 0. && coming.is_none_or(|ease| !ease.moving(now));
         let opacity = coming.map_or(1., |ease| ease.at(now));
-        let body = match placed.form.line() {
-            true => self.card_line(card, placed.form),
+        let line = placed.form.line();
+        let body = match line {
+            true => self.card_line(card, framed == Framed::Own),
             false => self.card_whole(card, placed.form, cx),
         };
-        let width = rim_width(look(card, placed.form, unseen).rim);
-        let height = placed.room
-            - if placed.form.line() {
-                2. * LINE_AROUND
-            } else {
-                UNDER
-            };
+        // A whole card's outline keeps its room in its stage's colour; a line has none.
+        let width = match line {
+            true => 0.,
+            false => rim_width(look(card, placed.form, unseen).rim),
+        };
+        let height = placed.room - if line { 0. } else { UNDER };
         let agent = card.agent.clone();
-        // An outside app's name, after the title, then what the card says of its state.
-        let from = outside(card).then(|| format!("{}, ", card.name));
-        let name: SharedString = format!(
-            "{}, {}{}",
-            card.title,
-            from.unwrap_or_default(),
-            self.said(card, placed.form)
-        )
-        .into();
-        let tip = (outside(card) && placed.form.line()).then(|| card.name.clone());
+        // An outside app's name after the title, then what the card says of its state, as drawn.
+        let mut name = card.title.to_string();
+        if outside(card) {
+            name = format!("{name}, {}", card.name);
+        }
+        let said = self.said(card, placed.form);
+        if !said.is_empty() {
+            name = format!("{name}, {said}");
+        }
+        let name = SharedString::from(name);
+        let tip = (outside(card) && line).then(|| card.name.clone());
         let frame = div()
             .id(("task-plate", n))
             .relative()
             .h(px(height))
-            .when(placed.form.line(), |frame| frame.mt(px(LINE_AROUND)))
             .rounded(px(RADIUS))
             .opacity(opacity)
             .cursor_pointer();
@@ -310,6 +305,10 @@ impl Shell {
                 let shape = self.in_own_colour(stage_fill(&self.palette), 1., RADIUS);
                 // Placed from the frame's corner: left to itself it starts inside the room.
                 (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
+            }
+            Framed::Plain => {
+                let hover = self.palette.hovered_row();
+                frame.hover(move |style| style.bg(hover))
             }
             Framed::Outlined { outline, width } => frame
                 .border(px(width))
@@ -345,11 +344,15 @@ impl Shell {
     }
 
     /// How `card` in `form` is framed: in its stage's colour while its thread is the one shown
-    /// and the stage starts at the sidebar's edge, in either of the thread's forms, and otherwise
-    /// in its state's outline, the waiting one's rim.
+    /// and the stage starts at the sidebar's edge, in either of the thread's forms; a line
+    /// otherwise as a tab's, with none; a whole card in its state's outline, the waiting one's
+    /// rim.
     pub(super) fn card_framed(&self, card: &Card, form: Form, unseen: bool) -> Framed {
         if self.beside_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
             return Framed::Own;
+        }
+        if form.line() {
+            return Framed::Plain;
         }
         let rim = look(card, form, unseen).rim;
         Framed::Outlined {
@@ -390,7 +393,7 @@ impl Shell {
         );
         div()
             .relative()
-            .h(px(super::slot_room() - UNDER))
+            .h(px(super::slot_room()))
             .rounded(px(RADIUS))
             .bg(self.palette.plate(TILE).opacity(fill))
             .children(dashes)
@@ -503,7 +506,7 @@ impl Shell {
                     .into_any_element()
             }
         };
-        let third = self.card_third(card, form, text_3, cx);
+        let third = self.card_third(card, form, cx);
         let from = outside(card).then(|| self.from_line(card, text_3));
         div()
             .size_full()
@@ -542,17 +545,10 @@ impl Shell {
             .child(StyledText::new(words).with_highlights([(0..first, ink)]))
     }
 
-    /// A whole card's third row, if it has one: at work its pages, those not yet visited faint,
-    /// and how many it has been on; waiting the page it waits on and Show Page, which isn't drawn
-    /// while that page is the one shown, the row as high without it so the list stays where it is;
-    /// done or ended the pages it visited, and an ended task's chip.
-    fn card_third(
-        &self,
-        card: &Card,
-        form: Form,
-        text_3: Hsla,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    /// A whole card's third row, if it has one: waiting the page it waits on and Show Page, which
+    /// isn't drawn while that page is the one shown, the row as high without it so the list stays
+    /// where it is; done or ended the pages it visited, and an ended task's chip.
+    fn card_third(&self, card: &Card, form: Form, cx: &mut Context<Self>) -> Option<AnyElement> {
         let row = || div().flex().items_center().gap(px(ICON_GAP));
         let visited = || {
             (card.pages.iter())
@@ -562,30 +558,6 @@ impl Shell {
         };
         let n = number(&card.agent);
         match form {
-            Form::Working if !card.pages.is_empty() => {
-                let icons = card.pages.iter().map(|&tab| {
-                    let alpha = if card.visited.contains(&tab) {
-                        1.
-                    } else {
-                        UNVISITED
-                    };
-                    self.card_icon(tab, alpha)
-                });
-                let count = count(card).map(|count| {
-                    div()
-                        .flex_none()
-                        .text_size(px(text::SMALL))
-                        .line_height(px(COUNT_LINE))
-                        .text_color(text_3)
-                        .child(count)
-                });
-                let row = row()
-                    .h(px(ICON.max(COUNT_LINE)))
-                    .children(icons)
-                    .child(div().flex_1())
-                    .children(count);
-                Some(row.into_any_element())
-            }
             Form::Waits if look(card, form, false).button => {
                 let tab = self.waiting_page(card)?;
                 let agent = card.agent.clone();
@@ -671,49 +643,25 @@ impl Shell {
             .into_any_element()
     }
 
-    /// A card folded to one line: its mark, its title, and, at work, the icon of the page it's on.
-    fn card_line(&self, card: &Card, form: Form) -> AnyElement {
-        let weight = match form {
-            Form::WorkingLine => FontWeight::SEMIBOLD,
-            _ => FontWeight::NORMAL,
+    /// A card as one line, a tab's: its mark and its title, set heavier while its thread is the
+    /// one shown, as the open tab's is.
+    fn card_line(&self, card: &Card, shown: bool) -> AnyElement {
+        let weight = match shown {
+            true => FontWeight::SEMIBOLD,
+            false => FontWeight::NORMAL,
         };
-        let on = (form == Form::WorkingLine)
-            .then(|| self.working_page(card))
-            .flatten()
-            .map(|tab| self.card_icon(tab, 1.));
-        // An outside app's mark at the right, before the page's icon; its name is the line's
-        // tooltip and spoken label, not drawn.
+        // An outside app's mark at the right; its name is the line's tooltip and spoken label, not
+        // drawn.
         let from = outside(card).then(|| from_mark(&self.palette));
-        let end = (from.is_some() || on.is_some()).then(|| {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(FROM_MARK_GAP))
-                .children(from)
-                .children(on)
-        });
         div()
             .size_full()
-            .px(px(LINE_X - OUTLINE_WIDTH))
+            .px(px(LINE_X))
             .flex()
             .items_center()
             .gap(px(GLYPH_GAP))
             .child(self.card_mark(card.dot, false))
             .child(self.card_title(card, weight))
-            .children(end)
+            .children(from)
             .into_any_element()
-    }
-
-    /// The page a task at work is on: the one with the outline, else its last step's.
-    fn working_page(&self, card: &Card) -> Option<u64> {
-        let outlined = |tab: &&u64| {
-            let mark = self.page_mark(card, **tab);
-            mark.outline && mark.word == PageWord::Working
-        };
-        (card.pages.iter().find(outlined))
-            .or(self.agents_at.get(&card.agent))
-            .or(card.pages.first())
-            .copied()
     }
 }
