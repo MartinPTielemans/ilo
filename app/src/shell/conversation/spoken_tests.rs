@@ -15,7 +15,8 @@ use crate::agents::task::{Card, Conversation, Dot, Line, TITLE_KEPT, TOLD_KEPT, 
 use crate::agents::tier::{Tier, Why};
 use crate::needs_you::{self, Notify};
 use crate::product::PRODUCT;
-use crate::shell::{Command, Shell};
+use crate::shell::trouble::STOPPED;
+use crate::shell::{Command, Page, Shell, Trouble};
 
 /// A host for the needs: ilo in front or not, counting the notifications it's asked to post.
 struct Needs {
@@ -607,4 +608,30 @@ fn with_no_screen_reader_nothing_is_told(cx: &mut TestAppContext) {
     drawn(&shell, cx);
     assert_eq!(tellings(&shell, cx), (None, None));
     assert!(cx.a11y_tree().is_none(), "a tree with nothing asking");
+}
+
+/// A dead page's tile in the rail is spoken as its name, then the crash card's own heading, and
+/// as nothing of its own while the page lives.
+#[gpui::test]
+fn a_dead_pages_tile_is_spoken_as_its_name_then_the_cards_heading(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    talk(&shell, conversation(1), cx);
+    reader(&shell, cx);
+    let spoken = format!("skyscanner.net, {STOPPED}");
+    assert!(!named(Role::Button, cx).contains(&spoken));
+    for (trouble, dead) in [(Trouble::Crashed, true), (Trouble::Fine, false)] {
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                trouble,
+                ..Page::default()
+            };
+            shell.set_page(30, page, cx)
+        });
+        drawn(&shell, cx);
+        assert_eq!(
+            named(Role::Button, cx).contains(&spoken),
+            dead,
+            "{trouble:?}"
+        );
+    }
 }

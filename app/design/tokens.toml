@@ -3327,6 +3327,9 @@ site-gap = 3.0
 # A page with no picture yet has only its favicon, or its site's globe, in its tile's middle at
 # this size.
 picture-empty-glyph = 16.0
+# Ours: a page that died keeps its last picture under a wash of the page's own plane at this, so it
+# reads as not live, with the crash card's glyph in its middle at a tab row's favicon's size.
+picture-crashed-wash = 0.72
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
