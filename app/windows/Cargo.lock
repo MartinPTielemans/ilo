@@ -713,6 +713,7 @@ dependencies = [
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tiny-skia",
  "unicode-normalization",
  "unicode-properties",
