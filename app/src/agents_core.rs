@@ -468,7 +468,7 @@ fn path() -> std::path::PathBuf {
 }
 
 /// Makes the Agents, off, and reads what was saved in the background, which turns the server on
-/// if the user left it on. Once, as the first window's UI shows.
+/// if the user left it on. Once: as first run's card starts, else as the first window's UI shows.
 pub fn start(cx: &mut App) {
     if agents::global(cx).is_some() {
         return;

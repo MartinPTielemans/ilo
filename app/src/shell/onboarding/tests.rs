@@ -2352,6 +2352,19 @@ fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
     }
 }
 
+/// A first launch starts the card before the launch has made the Agents, and a program found
+/// still brings Other apps.
+#[gpui::test]
+fn a_found_agent_program_brings_other_apps_before_the_launch_makes_the_agents(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents_found
+        .replace(Some(vec![crate::agents::Client::ClaudeCode]));
+    started(&shell, cx);
+    assert!(steps(&shell, cx).contains(&Step::OtherApps));
+}
+
 /// Other apps' two switches are on their own step, off as it shows, each Settings' own and set at
 /// once, a click on it or its card turning it either way. Either on turns the outside switch on as
 /// it lands; it goes off only as the second is turned off. No other step has them, and nothing

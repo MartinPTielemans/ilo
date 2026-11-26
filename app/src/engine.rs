@@ -2178,8 +2178,7 @@ impl Browser for Engine {
         settings::set_send_crash_reports(on, cx);
     }
 
-    // Every build has the agents' server. The first launch picks its steps before the first
-    // frame, when agents_core makes the Agents, and a new profile's are off until then.
+    // Every build has the agents' server, a new profile's off.
     fn threads(&self, cx: &App) -> Option<bool> {
         Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).threads()))
     }
@@ -2189,6 +2188,10 @@ impl Browser for Engine {
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
         }
+    }
+
+    fn start_agents(&self, cx: &mut App) {
+        agents_core::start(cx);
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
