@@ -46,6 +46,12 @@ pub const COPIED_NOTE: &str =
     "Copied for this device only. The clipboard forgets them in a minute and a half.";
 #[cfg(target_os = "linux")]
 pub const COPIED_NOTE: &str = "Copied. The clipboard forgets them in a minute and a half.";
+/// What the recovery words' field says when what was typed isn't 24 of them.
+pub(crate) const REFUSED_WORDS: &str = "These aren't 24 recovery words. Check each one.";
+/// A new device that isn't asking the others to add it, with nothing gone wrong.
+pub(crate) const ASK_ANOTHER: &str = "Ask a device already signed in to add this one.";
+/// While the sign-in window is open.
+pub(crate) const FINISH_SIGN_IN: &str = "Finish in the window that opened.";
 /// The metadata that has GPUI's Linux clipboard offer a copy with KDE's password manager hint,
 /// which Klipper and the clipboard managers that follow it don't record (patches/
 /// gpui-linux-embedded.patch).
@@ -435,7 +441,7 @@ pub fn clock(at: f64, today: f64) -> String {
 }
 
 /// What the view says of a problem, by where the account is.
-fn problem_text(problem: Problem) -> &'static str {
+pub(crate) fn problem_text(problem: Problem) -> &'static str {
     match problem {
         Problem::WrongWords => "These words are for another account.",
         Problem::Declined => "Your other device didn't add this one.",
@@ -673,7 +679,7 @@ impl Account {
         kept
     }
 
-    fn enter_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn enter_words(&mut self, cx: &mut Context<Self>) {
         if self.state.status == Status::Pairing {
             self.host.cancel();
         }
@@ -691,7 +697,7 @@ impl Account {
         cx.notify();
     }
 
-    fn keep_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn keep_words(&mut self, cx: &mut Context<Self>) {
         let Some(field) = &mut self.entering else {
             return;
         };
@@ -706,7 +712,7 @@ impl Account {
         (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
     }
 
-    fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // With no server, the field is the only way to name one, so it stays.
         let stays = self.no_server() && self.server.is_some();
         if !stays && self.server.take().is_none() {
@@ -716,13 +722,13 @@ impl Account {
         cx.notify();
     }
 
-    fn ask_again(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn ask_again(&mut self, cx: &mut Context<Self>) {
         self.asked = true;
         self.host.request_pairing();
         cx.notify();
     }
 
-    fn copy_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_words(&mut self, cx: &mut Context<Self>) {
         let Some(words) = &mut self.words else {
             return;
         };
@@ -738,6 +744,50 @@ impl Account {
             .detach();
         }
         cx.notify();
+    }
+
+    /// The words were saved: they go, and an account that syncs already is finished.
+    pub(crate) fn words_kept(&mut self, cx: &mut Context<Self>) {
+        self.words = None;
+        if self.state.status == Status::On {
+            cx.emit(AccountEvent::Finished);
+        }
+        cx.notify();
+    }
+
+    /// The recovery words on screen, for a view that draws them itself, as first run's card does.
+    pub(crate) fn shown_words(&self) -> Option<&[String]> {
+        self.words.as_ref().map(|words| words.words.as_slice())
+    }
+
+    /// Copy reads Copied, and the note on where the copy went shows, at the executor's `now`.
+    pub(crate) fn copied(&self, now: Instant) -> (bool, bool) {
+        let at = self.words.as_ref().and_then(|words| words.copied);
+        let within = |kept: Duration| at.is_some_and(|at| now - at < kept);
+        (within(COPIED), within(WORDS_KEPT))
+    }
+
+    /// This device has asked the others to add it since it signed in.
+    pub(crate) fn asked(&self) -> bool {
+        self.asked
+    }
+
+    /// The recovery words' field while it's open, and whether what was typed wasn't taken.
+    pub(crate) fn entering(&self) -> Option<(Entity<TextInput>, bool)> {
+        (self.entering.as_ref()).map(|field| (field.input.clone(), field.refused))
+    }
+
+    /// Stops what's under way: the sign-in window, or this device's request to the others.
+    pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
+        self.host.cancel();
+        cx.notify();
+    }
+
+    /// Asks the core for what shows and gives a field just opened the keyboard, as drawing the
+    /// view does, for a view that draws the account itself.
+    pub(crate) fn showing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ask_what_shows();
+        self.focus_field(window, cx);
     }
 
     /// Signs out, asking first if this is the account's only device, as its words are then the
@@ -903,7 +953,7 @@ impl Account {
             }),
         };
         let detail = match (signing_in, self.state.problem) {
-            (true, _) => Some("Finish in the window that opened."),
+            (true, _) => Some(FINISH_SIGN_IN),
             // The address it needs, not a server it couldn't reach, which the user can't act on.
             (false, _) if self.no_server() => Some("Enter your sync server's address to sign in."),
             (false, Some(problem)) => Some(problem_text(problem)),
@@ -1077,13 +1127,9 @@ impl Account {
                     .flex()
                     .justify_between()
                     .child(copy)
-                    .child(self.button("done", "Done", cx, |account, _, cx| {
-                        account.words = None;
-                        if account.state.status == Status::On {
-                            cx.emit(AccountEvent::Finished);
-                        }
-                        cx.notify();
-                    })),
+                    .child(
+                        self.button("done", "Done", cx, |account, _, cx| account.words_kept(cx)),
+                    ),
             )
     }
 
@@ -1091,7 +1137,7 @@ impl Account {
     /// words.
     fn new_device(&self, cx: &mut Context<Self>) -> gpui::Div {
         if let Some(field) = &self.entering {
-            let refused = "These aren't 24 recovery words. Check each one.";
+            let refused = REFUSED_WORDS;
             let wrong = self.state.problem == Some(Problem::WrongWords) && !field.refused;
             return div()
                 .child(header(&self.look, "Enter your recovery words", true))
@@ -1170,10 +1216,7 @@ impl Account {
             }
             false => lines(
                 &self.look,
-                self.state.problem.map_or(
-                    "Ask a device already signed in to add this one.",
-                    problem_text,
-                ),
+                self.state.problem.map_or(ASK_ANOTHER, problem_text),
                 None,
                 Some(
                     self.button("ask-again", "Ask Again", cx, |account, _, cx| {
@@ -1540,7 +1583,7 @@ impl Account {
     }
 
     /// Gives a field just shown the keyboard.
-    fn focus_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for field in [&mut self.server, &mut self.entering].into_iter().flatten() {
             if std::mem::take(&mut field.focus) {
                 window.focus(&field.input.focus_handle(cx), cx);
