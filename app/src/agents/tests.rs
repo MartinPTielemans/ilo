@@ -11262,7 +11262,7 @@ mod tasks {
 
     /// The composer opens in a profile with what it last started a thread with there: its level,
     /// except Full access, which opens at the level every thread starts at, and its model. Each
-    /// profile keeps its own, and they're saved.
+    /// profile keeps its own, with the effort Settings set there, and they're saved.
     #[gpui::test]
     fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
         use crate::agents::task::Last;
@@ -11275,6 +11275,7 @@ mod tasks {
         let haiku = Some((Cli::Claude, "haiku".to_string()));
         agents.update(cx, |agents, _| {
             assert_eq!(agents.composer_last(1), Last::default(), "a first composer");
+            agents.set_new_thread_effort(1, Some("high"));
             agents.remember_composer(1, Tier::Look, haiku.clone());
             agents.remember_composer(2, Tier::Full, None);
         });
@@ -11283,9 +11284,11 @@ mod tasks {
                 (agents.composer_last(1), agents.composer_last(2))
             })
         };
+        // Settings' effort outlasts a composer's start, which never sets it.
         let looked = Last {
             tier: Tier::Look,
             model: haiku.clone(),
+            effort: Some("high"),
         };
         assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
         let again = super::agents(&browser, &configs, Some(path.clone()), cx);

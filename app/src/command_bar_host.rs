@@ -187,29 +187,7 @@ impl command_bar::Host for Bar {
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
-        if !agents.threads() {
-            return None;
-        }
-        let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
-            id: agent.cli.id().into(),
-            name: agent.cli.name().into(),
-            glyph: agent.cli.glyph(),
-            model: agents.task_model_name(agent.cli),
-            model_id: agents.task_model(agent.cli).to_string(),
-            default_row: browser::agents::task::model_default(agent.cli).into(),
-            default_model: (agents.task_default_model(agent.cli))
-                .map(|name| name.to_string().into()),
-            models: agents.task_models(agent.cli),
-            resets: agent.resets,
-        });
-        let signed_out = (agents.signed_out_agents().into_iter())
-            .map(|cli| (cli.id().into(), cli.name().into()))
-            .collect();
-        Some(command_bar::TaskAgents {
-            agents: listed.collect(),
-            known: agents.task_agents_known(),
-            signed_out,
-        })
+        agents.threads().then(|| task_agents_of(agents))
     }
 
     fn over_private(&self) -> bool {
@@ -358,19 +336,16 @@ impl command_bar::Host for Bar {
         settings::show_agents(cx);
     }
 
-    fn composer_last(
-        &self,
-        cx: &App,
-    ) -> (browser::agents::tier::Tier, Option<(SharedString, String)>) {
-        let space = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-        let space =
-            (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space());
+    fn composer_last(&self, cx: &App) -> command_bar::Opens {
         let Some(agents) = browser::agents::global(cx) else {
             return Default::default();
         };
-        let last = agents.read(cx).composer_last(space);
-        let model = last.model.map(|(cli, model)| (cli.id().into(), model));
-        (last.tier, model)
+        let last = agents.read(cx).composer_last(front_space(cx));
+        command_bar::Opens {
+            tier: last.tier,
+            model: last.model.map(|(cli, model)| (cli.id().into(), model)),
+            effort: last.effort,
+        }
     }
 
     fn sign_in(&self, agent: &str, _: &mut App) {
@@ -391,6 +366,37 @@ impl command_bar::Host for Bar {
     }
 }
 
+/// What the composer and Settings' `A new thread starts with` offer: the assistants signed in, the
+/// default first, and those installed but not signed in.
+pub(crate) fn task_agents_of(agents: &browser::agents::Agents) -> command_bar::TaskAgents {
+    let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
+        id: agent.cli.id().into(),
+        name: agent.cli.name().into(),
+        glyph: agent.cli.glyph(),
+        model: agents.task_model_name(agent.cli),
+        model_id: agents.task_model(agent.cli).to_string(),
+        default_row: browser::agents::task::model_default(agent.cli).into(),
+        default_model: (agents.task_default_model(agent.cli)).map(|name| name.to_string().into()),
+        models: agents.task_models(agent.cli),
+        resets: agent.resets,
+    });
+    let signed_out = (agents.signed_out_agents().into_iter())
+        .map(|cli| (cli.id().into(), cli.name().into()))
+        .collect();
+    command_bar::TaskAgents {
+        agents: listed.collect(),
+        known: agents.task_agents_known(),
+        signed_out,
+    }
+}
+
+/// The Space shown in the front window, whose profile the composer remembers what it last started
+/// a thread with in.
+pub(crate) fn front_space(cx: &App) -> u64 {
+    let space = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+    (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space())
+}
+
 /// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
 /// window, at the level on the model with the files its choices hold, the first two of which the
 /// profile remembers as the composer's last once it starts. Its conversation then takes the place
@@ -408,10 +414,7 @@ fn start_thread(
     window: bc::bc_id,
     cx: &mut App,
 ) {
-    let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-    let home = shell
-        .and_then(|shell| shell.upgrade())
-        .map_or(0, |shell| shell.read(cx).space());
+    let home = front_space(cx);
     let asked = asked.to_string();
     agents_core::update(move |agents, cx| {
         let start = browser::agents::task::Start {

@@ -844,28 +844,28 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     );
 }
 
-/// The bar rests with its input row level with ⌘T's bar's, and the group moves up only as far as
-/// it needs to fit the card, never nearer its top than `TOP`.
+/// The bar rests in the empty window's column, 150 down, under the mark's 48 and the 28 under it
+/// (the lead's drawing), and the group moves up only as far as it needs to fit the card, never
+/// nearer its top than `TOP`.
 #[test]
-fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
-    use crate::tokens::command_bar::HEIGHT;
+fn the_bar_rests_in_its_column_under_the_marks_room_and_rises_only_to_fit() {
     use crate::tokens::shell::composer::TOP;
-    let row = crate::command_bar::centered_row_middle(800.) - 40.;
-    let top = group_top(row, 720., false, false);
-    assert!(
-        (top + HEIGHT / 2. - row).abs() < 1e-3,
-        "the bar's row's middle is at {}, ⌘T's at {row}",
-        top + HEIGHT / 2.
+    let top = group_top(720., false, false);
+    assert_eq!(
+        top,
+        150. + 48. + 28.,
+        "the bar isn't 28 under a 48 mark at 150 down"
+    );
+    assert_eq!(
+        mark_top(top, false),
+        Some(150.),
+        "the mark doesn't start the column"
     );
     // A card 560 tall has room for the bar there, but not for the cards under it.
-    let cards = group_top(row, 560., true, true);
+    let cards = group_top(560., true, true);
     assert!(cards < top, "the cards didn't lift the group");
-    assert!(group_top(row, 400., true, true) == TOP, "it went above TOP");
-    assert_eq!(
-        group_top(row, 2000., true, true),
-        top,
-        "a tall card moved it"
-    );
+    assert!(group_top(400., true, true) == TOP, "it went above TOP");
+    assert_eq!(group_top(2000., true, true), top, "a tall card moved it");
 }
 
 /// The mark stands its gap over the bar where the card has that room over it. A Little Window
@@ -874,8 +874,7 @@ fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
 fn the_mark_stands_its_gap_over_the_bar_and_gives_way() {
     use crate::tokens::shell::composer::{MARK_GAP, TOP};
     use crate::tokens::shell::empty::MARK_SIZE;
-    let row = crate::command_bar::centered_row_middle(800.) - 40.;
-    let top = group_top(row, 720., false, false);
+    let top = group_top(720., false, false);
     assert_eq!(mark_top(top, false), Some(top - MARK_GAP - MARK_SIZE));
     assert_eq!(mark_top(top, true), None, "a Little Window drew the mark");
     assert_eq!(mark_top(TOP, false), None, "it stands over the card's top");
@@ -1184,4 +1183,28 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         let ran = rested(&host).iter().any(|c| c.starts_with("run task"));
         assert_eq!(ran, !private, "↩ started a thread, private: {private}");
     }
+}
+
+/// A thread at work in the bar's list at rest wears the turning ring before its state word, on
+/// the shell's one clock, in place of the green dot; a list with none at work asks for no frame,
+/// so an idle window draws nothing.
+#[gpui::test]
+fn a_working_threads_ring_turns_at_rest_and_nothing_else_asks_for_a_frame(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    let listed = |dot: Dot, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(1, dot)], cx));
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.latest_tasks(1).len(), 1, "the thread isn't listed");
+            shell.breath.pending()
+        })
+    };
+    assert!(
+        !listed(Dot::Done, cx),
+        "a done thread's card asked for a frame"
+    );
+    assert!(
+        listed(Dot::Working, cx),
+        "a working thread's ring doesn't turn"
+    );
 }
