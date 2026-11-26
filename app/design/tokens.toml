@@ -259,7 +259,9 @@ foot-line = 16.0
 # the left and 12 at the right, 2 between (P3, screen 48). A trigger is 26 high, its words 13 on a
 # 16 line and a chevron 10 after them, 8 in at each side and 5 between, with a plate only while
 # its menu shows; the model's starts 7 in, its assistant's mark 14 and 6 between. Start is a
-# circle 30 with an arrow 14, 6 after the triggers. A trigger's menu hangs 6 under it.
+# circle 30 with an arrow 14, 6 after the triggers. A trigger's menu hangs 6 under it. The plus,
+# first, is a trigger 26 square with a plus 16 in the secondary ink (spec-bar-composer 48); with
+# nothing to add it stays in its place at 0.26 of that ink and takes no press (the lead, 24 Nov).
 choices-height = 48.0
 choices-under = 6.0
 choices-left = 14.0
@@ -277,6 +279,8 @@ model-gap = 6.0
 start-size = 30.0
 start-arrow = 14.0
 start-space = 6.0
+plus = 16.0
+plus-off = 0.26
 choices-menu-drop = 6.0
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at
 # 305.5 of 949, which no fraction of the height fits.
@@ -954,6 +958,9 @@ swatch = 10.0
 # A page's favicon before its title in the back and forward buttons' menu of the tab's history
 # (#675), as Arc's and Chrome's show them: the engine's 16 pt favicon.
 favicon = 16.0
+# An item's icon before its title, in the secondary ink, as the add menu's rows have
+# (spec-bar-composer Add).
+icon = 16.0
 
 [offer]
 width = 320.0
@@ -2420,11 +2427,44 @@ archived-radius = 12.0
 # favorites' tiles' radius.
 media-gap = 6.0
 media-radius = 12.0
-# Ours: a running download's bar, under its text.
-progress-height = 3.0
-progress-bottom = 6.0
-progress-track = 0.12
-progress-fill = 0.6
+# A download's row, as drawn: 54 high, the rows touching, in the list's padding (search-x and
+# search-right), its plate's radius archived-radius, 10 in on the left and 8 on the right, and 11
+# between its tile, its words and its buttons.
+download-pitch = 54.0
+download-left = 10.0
+download-right = 8.0
+download-gap = 11.0
+# Its file's tile: 32 square, radius 8, in `card` with a line 1 wide inside it, the ink at this,
+# and the file's picture or the glyph, 16, in the glyphs' ink at text-2's alpha.
+download-tile = 32.0
+download-tile-radius = 8.0
+download-tile-line = 0.05
+download-tile-line-width = 1.0
+download-glyph = 16.0
+download-glyph-ink = 0.7
+# Its name, medium, 13 on 16, over a line 11 on 14, 1 below it, in text-2; or a running one's bar
+# row, 4 below it: the bar 84 by 3, radius 2, its track `shown` and what has come in the text's
+# ink, 8 before how much has come.
+download-name-size = 13.0
+download-name-line = 16.0
+download-detail-size = 11.0
+download-detail-line = 14.0
+download-detail-above = 1.0
+download-bar-above = 4.0
+download-bar-width = 84.0
+download-bar-height = 3.0
+download-bar-radius = 2.0
+download-bar-gap = 8.0
+# Its buttons at its end: 26 high, radius 8, in `button`; a glyph's square, the pause 12 and the
+# folder and the dots 14; a word's 10 either side, medium, 12 on 16; 6 apart (ours, as the drawing
+# has two words or two glyphs side by side without saying how far).
+download-button = 26.0
+download-button-radius = 8.0
+download-button-pad = 10.0
+download-button-text = 12.0
+download-button-gap = 6.0
+download-pause-glyph = 12.0
+download-button-glyph = 14.0
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
@@ -2644,6 +2684,23 @@ broom = [210.0, 52.0, 14.0]
 # Your first Space, until the theme editor's parts (#4274): the theme picker's swatches in the
 # column, and the transparency picker under them.
 space-gap = 24.0
+# Other apps (v9 §8): two cards side by side, a way in each, centred: their top, width, height,
+# gap and corners, their padding top and side, and how much both grow while the command's line
+# takes two lines. A card's row: its glyph's plate, corners and glyph, the gap after it and the
+# name's size. Its line: the gap over it, size and line. Its plate, near-black in Dark and the
+# field in Light: the gap over it, width, height, corners, padding top and side, and the mono
+# face's size and line. The small line under it: gap, size and line. Off, a plate's text is at
+# `way-off` of itself, and a Copied stays for `way-copied` seconds.
+ways = [100.0, 336.0, 148.0, 16.0, 12.0]
+way-inset = [12.0, 14.0]
+way-grow = 16.0
+way-glyph = [28.0, 7.0, 14.0, 10.0, 13.0]
+way-line = [6.0, 12.0, 16.0]
+way-plate = [8.0, 308.0, 42.0, 8.0, 5.0, 9.0, 11.0, 16.0]
+way-plate-fill = 0x17171b
+way-small = [7.0, 11.0, 14.0]
+way-off = 0.45
+way-copied = 1.2
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

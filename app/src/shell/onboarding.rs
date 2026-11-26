@@ -39,6 +39,7 @@ use crate::transparency::{self, Transparency};
 use card::Inks;
 
 mod card;
+mod other_apps;
 mod resume;
 mod window;
 
@@ -67,7 +68,8 @@ pub(super) enum Step {
     /// Tidy tabs: how long tabs wait before they're put away; left out until the core has the
     /// profile's time.
     Tidy,
-    /// Other apps: Settings › Other apps' switch, only when an agent program is found here.
+    /// Other apps: two ways in, the command with its skill and MCP, each with Settings › Other
+    /// apps' own switch, only when Claude Code or Codex is found here.
     OtherApps,
     /// You're woven in: the default browser and Help improve.
     Done,
@@ -203,8 +205,10 @@ enum Welcome {
 /// A switch the card shows, each Settings' own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum Switch {
-    /// Settings › Other apps' switch, set at once.
-    OtherApps,
+    /// Other apps' command, with its skill, added or removed at once.
+    Command,
+    /// Other apps' MCP: each program found connected or disconnected at once.
+    Mcp,
     /// Help improve: the daily usage count and crash reports together, off until the user turns it
     /// on, and set only as the last step is left, so nothing is sent while it shows (#2978).
     Help,
@@ -214,7 +218,8 @@ impl Switch {
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
-            Switch::OtherApps => "other-apps",
+            Switch::Command => "command",
+            Switch::Mcp => "mcp",
             Switch::Help => "help-improve",
         }
     }
@@ -222,9 +227,13 @@ impl Switch {
     /// Its row's name and words.
     fn words(self) -> (SharedString, SharedString) {
         match self {
-            Switch::OtherApps => (
-                format!("Let other apps' agents use {PRODUCT}").into(),
-                "Editors, terminal tools and scripts on this computer".into(),
+            Switch::Command => (
+                format!("The {} command", crate::agents::cli::LINK).into(),
+                "Stays out of the way until an agent needs a page.".into(),
+            ),
+            Switch::Mcp => (
+                "MCP".into(),
+                "Always in an app's tool list. Needs no terminal.".into(),
             ),
             Switch::Help => (
                 format!("Help improve {PRODUCT}").into(),
@@ -355,6 +364,8 @@ pub(super) struct Onboarding {
     shown_assistants: Option<Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>>,
     /// Help improve as turned at the last step, None while untouched: it's set as the step is left.
     help: Option<bool>,
+    /// When the command's line to paste was last copied, which Copy Line says for a moment.
+    copied: Option<Instant>,
     /// The tidy step's times, while the core has the profile's.
     pub(super) tidy: Option<Tidy>,
     /// The default browser's row: shown when the browser wasn't the default as the card began.
@@ -517,15 +528,14 @@ impl Shell {
         let tidy = (self.browser.archive_after(self.space))
             .and_then(|(was, offered)| Tidy::of(was, &offered));
         let account = self.signing(cx);
-        // An agent program found here is one Settings › Other apps lists: by the folder or file
-        // each makes in the user's home, a stat once as the card starts, which runs nothing, and
-        // what the browser already holds of them. Only with the command connected does that look
-        // also ask the login shell, so then the card keeps to what's held.
+        // Claude Code or Codex found here by the folder or file each makes in the user's home, a
+        // stat once as the card starts, which runs nothing (floor 1). Only with the command
+        // connected does that look also ask the login shell, so then the card keeps to what's held.
         let found_apps = crate::agents::global(cx).is_some_and(|agents| {
             if !agents.read(cx).is_connected(crate::agents::Client::Command) {
                 agents.update(cx, |agents, cx| agents.look_for_clients(cx));
             }
-            (agents.read(cx).listed().iter()).any(|client| client.cli().is_some())
+            !agents.read(cx).skill_programs().is_empty()
         });
         let steps: Vec<Step> = STEPS
             .into_iter()
@@ -613,6 +623,7 @@ impl Shell {
             }),
             shown_assistants: None,
             help: None,
+            copied: None,
             tidy,
             default_row: !self.browser.is_default_browser(),
         };
@@ -1115,12 +1126,14 @@ impl Shell {
     /// The switches `step` offers, each with whether it's on.
     pub(super) fn switches(&self, step: Step, cx: &gpui::App) -> Vec<(Switch, bool)> {
         let switches: &[Switch] = match step {
-            Step::OtherApps => &[Switch::OtherApps],
+            Step::OtherApps => &[Switch::Command, Switch::Mcp],
             Step::Done => &[Switch::Help],
             _ => &[],
         };
+        let agents = crate::agents::global(cx);
         let on = |switch| match switch {
-            Switch::OtherApps => self.browser.other_apps(cx),
+            Switch::Command => Some(other_apps::command(agents.as_ref()?.read(cx)).on),
+            Switch::Mcp => Some(other_apps::mcp(agents.as_ref()?.read(cx)).on),
             // Offered while either of its settings is; shown as turned, else on only where both
             // are kept on.
             Switch::Help => {
@@ -1142,8 +1155,8 @@ impl Shell {
             .collect()
     }
 
-    /// Turns a switch of the step shown. Other apps' is Settings' own, so it's set at once; Help
-    /// improve is set as its step is left.
+    /// Turns a switch of the step shown. Other apps' are Settings' own, so they're set at once;
+    /// Help improve is set as its step is left.
     pub(super) fn onboarding_switch(&mut self, switch: Switch, cx: &mut Context<Self>) {
         let Some(step) = self.onboarding.as_ref().map(|onboarding| onboarding.step) else {
             return;
@@ -1152,9 +1165,9 @@ impl Shell {
         let Some(&(_, on)) = switches.iter().find(|(each, _)| *each == switch) else {
             return;
         };
-        if switch == Switch::OtherApps {
-            let browser = self.browser.clone();
-            cx.defer(move |cx| browser.set_other_apps(!on, cx));
+        if matches!(switch, Switch::Command | Switch::Mcp) {
+            let other = (switches.iter()).any(|&(each, on)| each != switch && on);
+            self.onboarding_way(switch, on, other, cx);
         }
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((switch, onboarding.clock.now()));
@@ -1681,11 +1694,7 @@ impl Shell {
                 .children(self.tidy_card(inks, cx))
                 .children(self.broom_row(inks, cx))
                 .into_any_element(),
-            Step::OtherApps => div()
-                .flex()
-                .justify_center()
-                .child(self.switch_rows(step, inks, cx))
-                .into_any_element(),
+            Step::OtherApps => self.other_apps_ways(inks, cx),
             _ => div().into_any_element(),
         };
         let signed_in = self.assistants_signed_in(cx);
@@ -2367,19 +2376,6 @@ impl Shell {
         card::row(name, words, end, inks)
     }
 
-    /// The step's switches in one group, a row each.
-    fn switch_rows(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
-        let [_, width] = t::DONE_GROUP;
-        let rows = self.switch_list(step, inks, cx);
-        card::rows(
-            rows.into_iter()
-                .map(IntoElement::into_any_element)
-                .collect(),
-            width,
-            inks,
-        )
-    }
-
     /// A row each of the step's switches: its name over its words, and Settings' switch at the
     /// end. A click anywhere on a row, the switch included, turns it.
     fn switch_list(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> Vec<gpui::Div> {
@@ -2502,6 +2498,7 @@ impl Shell {
             let rows = shown.iter().map(|(cli, shown)| {
                 let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
                 first_run_row(&look, *cli, shown, a11y, card::check_disc(inks), act)
+                    .children(self.place(step, cli.id()))
             });
             Some(group(&look, rows))
         });
@@ -2666,7 +2663,7 @@ pub(super) type Places = Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>;
 type Frames = Rc<RefCell<HashMap<(Switch, &'static str), Bounds<Pixels>>>>;
 
 /// Keeps where a switch's `part` is drawn once the step has `settled`, and logs where its knob is
-/// each time it moves, as "browser: onboarding other-apps at x y", for check.sh to click it there.
+/// each time it moves, as "browser: onboarding command at x y", for check.sh to click it there.
 fn opt_in_frame(
     frames: Frames,
     switch: Switch,
@@ -2792,16 +2789,15 @@ fn card_words(
     shown: crate::agents::sign_in::Shown,
     learned: bool,
 ) -> crate::agents::sign_in::Shown {
-    use crate::agents::{runner::Cli, sign_in::Offer};
+    use crate::agents::sign_in::Offer;
     let offer = match learned {
         true => shown.offer,
         false => Offer::SignIn,
     };
-    let line = match (offer, cli) {
-        // Claude's sign-in is in the computer's browser, ChatGPT's in a window here.
-        (Offer::Cancel, Cli::Claude) => "Finish in the browser that opened.".into(),
-        (Offer::Cancel, Cli::Codex) => "Finish in the window that opened.".into(),
-        (Offer::TryAgain, _) => "Sign-in didn't finish.".into(),
+    let line = match offer {
+        // The wait's own line, which Settings › Models says too (FR19).
+        Offer::Cancel => shown.line,
+        Offer::TryAgain => "Sign-in didn't finish.".into(),
         _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
     };
     crate::agents::sign_in::Shown { line, offer }

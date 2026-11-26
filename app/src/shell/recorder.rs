@@ -70,8 +70,9 @@ pub(crate) struct Recorder {
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// Whether the resting bars are over a private window, as the host reads it of the front one.
     pub(super) private_bar: Rc<std::cell::Cell<bool>>,
-    /// Whether it can wall a task in with its files, as `files_available` answers.
-    pub(super) files: std::cell::Cell<bool>,
+    /// Whether it can wall a task in with its files, as `files_available` answers, here and to
+    /// its resting bars.
+    pub(super) files: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -121,7 +122,6 @@ pub(crate) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) threads: Cell<Option<bool>>,
-    pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -920,7 +920,9 @@ impl Browser for Recorder {
         !self.history_unloaded.get()
     }
 
-    fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
+    fn act_on_download(&self, id: u64, action: DownloadAction, _: &mut App) {
+        self.record(format!("act on download {id} {action:?}"));
+    }
 
     fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
         self.record(format!("clear downloads {private:?}"));
@@ -1907,6 +1909,7 @@ impl Browser for Recorder {
             asked: self.resting.clone(),
             unlearned: self.unlearned.clone(),
             private: self.private_bar.clone(),
+            files: self.files.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
@@ -2193,15 +2196,6 @@ impl Browser for Recorder {
         if let Some(agents) = crate::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
         }
-    }
-
-    fn other_apps(&self, _: &App) -> Option<bool> {
-        self.other_apps.get()
-    }
-
-    fn set_other_apps(&self, on: bool, _: &mut App) {
-        self.other_apps.set(Some(on));
-        self.record(format!("other apps {on}"))
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {

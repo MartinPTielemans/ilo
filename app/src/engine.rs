@@ -664,9 +664,13 @@ impl Browser for Engine {
         with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
     }
 
-    fn show_task(&self, _: SharedString, _: &mut App) {
-        // The Agents send a window its conversation as it changes; this sends it now.
-        agents_core::update(|_, cx| cx.notify());
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        // The Agents send a window its conversation as it changes; this sends it now, and a task
+        // a run before left asks for its kept log.
+        agents_core::update(move |agents, cx| {
+            agents.task_shown(&agent, cx);
+            cx.notify();
+        });
     }
 
     fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
@@ -2183,16 +2187,6 @@ impl Browser for Engine {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
-        }
-    }
-
-    fn other_apps(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
-    }
-
-    fn set_other_apps(&self, on: bool, cx: &mut App) {
-        if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
         }
     }
 

@@ -595,6 +595,10 @@ struct Recorder {
     glass: RefCell<Vec<(Vec<(Bounds<Pixels>, f32)>, bool)>>,
     /// Whether its window can't blend (`Host::blends`).
     opaque: bool,
+    /// Whether its window has the pointer over its whole frame, as the Mac's, and where in the
+    /// browser window's content it was asked to give a right press to the window under it.
+    whole: bool,
+    carried: RefCell<Vec<Point<Pixels>>>,
 }
 
 impl super::Host for Recorder {
@@ -613,6 +617,13 @@ impl super::Host for Recorder {
 
     fn blends(&self) -> bool {
         !self.opaque
+    }
+
+    fn press_under(&self, at: Point<Pixels>, _: &mut App) -> bool {
+        if self.whole {
+            self.carried.borrow_mut().push(at);
+        }
+        self.whole
     }
 }
 
@@ -808,6 +819,68 @@ fn a_scroll_leaves_the_menu_open_and_goes_no_further(cx: &mut TestAppContext) {
     assert_eq!(*host.calls.borrow(), ["show"]);
     cx.simulate_keystrokes("escape");
     assert_eq!(chosen.get(), Some(Closed::Otherwise));
+}
+
+/// A right press outside the menu closes it and goes on, to open the menu of what it's on. In the
+/// room round the panels it would go on to the menu's own window where that has the pointer over
+/// its whole frame, so there the host is asked to give it to the window under it, at that point,
+/// and the menu takes the press. Outside the window nothing is carried, nor is a left press, which
+/// only closes the menu, and a window that has the pointer on its panels alone carries nothing.
+#[gpui::test]
+fn a_right_press_in_the_windows_room_goes_to_the_window_under_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder {
+        whole: true,
+        ..Recorder::default()
+    });
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let reach = crate::elevation::menu_reach();
+    // Left of the menu, which opened at (100, 100): in its shadow's room, and past it.
+    let room = at(100. - reach.sides / 2., 110.);
+    let past = at(100. - reach.sides - 10., 110.);
+    let mut press = |event: Pointer, content: Point<Pixels>| {
+        let chosen = show_menu(cx);
+        let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+        let taken = cx
+            .cx
+            .update(|cx: &mut App| super::pointer(event, content - menu_at, cx));
+        cx.run_until_parked();
+        assert_eq!(chosen.get(), Some(Closed::Otherwise), "{event:?} left it");
+        taken
+    };
+
+    assert!(
+        press(Pointer::RightPressed, room),
+        "the press went on to the menu's own window"
+    );
+    assert_eq!(*host.carried.borrow(), [room]);
+    assert!(
+        !press(Pointer::RightPressed, past),
+        "a right press outside the window didn't go on"
+    );
+    assert!(press(Pointer::Pressed, room), "a left press went on");
+    assert_eq!(*host.carried.borrow(), [room], "only the one in the room");
+}
+
+#[gpui::test]
+fn a_right_press_in_the_room_of_a_window_shaped_to_its_panels_goes_on(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let reach = crate::elevation::menu_reach();
+
+    show_menu(cx);
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    let room = at(100. - reach.sides / 2., 110.) - menu_at;
+    assert!(
+        !cx.cx
+            .update(|cx: &mut App| super::pointer(Pointer::RightPressed, room, cx)),
+        "the menu took a press that is the other window's already"
+    );
 }
 
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer

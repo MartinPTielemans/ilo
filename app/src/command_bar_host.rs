@@ -264,6 +264,7 @@ impl command_bar::Host for Bar {
         tier: browser::agents::tier::Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: browser::agents::files::Picked,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -306,7 +307,7 @@ impl command_bar::Host for Bar {
             shell.fold_started(folded, cx);
             shell.bar_starting();
         });
-        start_thread(cli, asked, page, tier, model, effort, window, cx);
+        start_thread(cli, asked, page, (tier, model, effort, files), window, cx);
     }
 
     fn run_task_at_rest(
@@ -316,6 +317,7 @@ impl command_bar::Host for Bar {
         tier: browser::agents::tier::Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: browser::agents::files::Picked,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -323,7 +325,11 @@ impl command_bar::Host for Bar {
         };
         let window = front().0;
         update_window_in(window, cx, |shell, _| shell.bar_starting());
-        start_thread(cli, asked, None, tier, model, effort, window, cx);
+        start_thread(cli, asked, None, (tier, model, effort, files), window, cx);
+    }
+
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
     }
 
     fn set_up_agents(&self, cx: &mut App) {
@@ -392,16 +398,19 @@ pub(crate) fn front_space(cx: &App) -> u64 {
 }
 
 /// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
-/// window, at `tier` on `model`, which the profile remembers as the composer's last once it starts.
-/// Its conversation then takes the place of what `window` shows: ⌘T's slot, or a resting bar's
-/// empty page.
+/// window, at the level on the model with the files its choices hold, the first two of which the
+/// profile remembers as the composer's last once it starts. Its conversation then takes the place
+/// of what `window` shows: ⌘T's slot, or a resting bar's empty page.
 fn start_thread(
     cli: browser::agents::runner::Cli,
     asked: &str,
     page: Option<browser::agents::task::AskedOn>,
-    tier: browser::agents::tier::Tier,
-    model: Option<String>,
-    effort: Option<&'static str>,
+    (tier, model, effort, files): (
+        browser::agents::tier::Tier,
+        Option<String>,
+        Option<&'static str>,
+        browser::agents::files::Picked,
+    ),
     window: bc::bc_id,
     cx: &mut App,
 ) {
@@ -413,9 +422,9 @@ fn start_thread(
             model: model.clone(),
             effort: effort.map(String::from),
             pages: Vec::new(),
-            // Nothing rides the bar's start: it draws no `+`, and a path reaches a task only from
-            // the system's panel off one, by the user's own pick (#4101).
-            files: Default::default(),
+            // From the system's panel off the composer's plus alone, which the start gives the
+            // thread only inside its wall.
+            files: files.clone(),
         };
         let started = agents.start_task(cli, &asked, page, home, start, cx);
         if started.is_some() {

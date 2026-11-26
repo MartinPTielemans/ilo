@@ -1161,12 +1161,6 @@ pub trait Browser {
         None
     }
     fn set_threads(&self, _on: bool, _cx: &mut App) {}
-    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
-    /// it, whatever the inside one says, or None in a build without the agents' server.
-    fn other_apps(&self, _cx: &App) -> Option<bool> {
-        None
-    }
-    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {

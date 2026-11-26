@@ -55,6 +55,8 @@ struct Recorder {
     now: f64,
     /// The level and model the composer last started a thread with in the profile.
     last: RefCell<Opens>,
+    /// This system can wall a thread in with the user's files.
+    files: std::cell::Cell<bool>,
 }
 
 impl Recorder {
@@ -252,6 +254,7 @@ impl Host for Recorder {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
@@ -261,7 +264,27 @@ impl Host for Recorder {
         };
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
         let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
-        self.record(format!("task {agent} {asked}{page}{tier}{model}{effort}"));
+        // The files by name and the folder by its path, as the start is given them.
+        let name =
+            |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().into_owned();
+        let files = match files.files.is_empty() {
+            true => String::new(),
+            false => format!(
+                " files {}",
+                files
+                    .files
+                    .iter()
+                    .map(|file| name(file))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        } + &match &files.folder {
+            Some(folder) => format!(" folder {}", name(folder.root())),
+            None => String::new(),
+        };
+        self.record(format!(
+            "task {agent} {asked}{page}{tier}{model}{effort}{files}"
+        ));
     }
 
     fn run_task_at_rest(
@@ -271,10 +294,15 @@ impl Host for Recorder {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, effort, cx);
+        self.run_task(agent, asked, None, tier, model, effort, files, cx);
         self.record("at rest".into());
+    }
+
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
     }
 
     fn composer_last(&self, _: &App) -> Opens {
@@ -3640,6 +3668,17 @@ impl Bar {
             .unwrap()
     }
 
+    /// As `choice_menu`, for the trigger `id`'s menu, if it showed one.
+    fn menu_of(&mut self, id: &'static str) -> Option<(Vec<String>, Chosen)> {
+        self.shown_menu(match id {
+            PLUS_ID => CommandBar::open_add_menu_for_test,
+            FILES => CommandBar::files_menu,
+            FOLDER => CommandBar::folder_menu,
+            MODEL => CommandBar::model_menu,
+            _ => CommandBar::level_menu,
+        })
+    }
+
     fn shown_menu(
         &mut self,
         open: fn(&mut CommandBar, &mut Window, &mut Context<CommandBar>),
@@ -3674,6 +3713,48 @@ impl Bar {
             })
             .collect();
         Some((rows, chosen))
+    }
+
+    /// Whether the composer drew the trigger whose frame `at` records, as it records each frame.
+    fn drawn(&mut self, at: impl Fn(&CommandBar) -> Option<Bounds<Pixels>>) -> bool {
+        self.cx.run_until_parked();
+        (self.window)
+            .update(&mut self.cx.cx, |bar, window, _| {
+                window.refresh();
+                bar.plus.forget();
+                bar.files_at.set(None);
+                bar.folder_at.set(None);
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+        (self.window)
+            .read_with(&self.cx.cx, |bar, _| at(bar).is_some())
+            .unwrap()
+    }
+
+    /// Picks the add menu's row in the composer, and answers the system's panel with `paths`,
+    /// after checking it offers files and folders together, several at once.
+    fn add(&mut self, paths: Vec<std::path::PathBuf>) {
+        let (rows, chosen) = self.menu_of(PLUS_ID).expect("the plus showed no menu");
+        assert_eq!(
+            rows,
+            [MenuEntry::label(crate::plus::FILE_OR_FOLDER).to_string()]
+        );
+        self.pick(chosen, 0);
+        assert!(self.cx.did_prompt_for_paths(), "no panel opened");
+        self.cx.simulate_path_prompt_response(|asked| {
+            assert!(
+                asked.files && asked.directories && asked.multiple,
+                "the panel doesn't offer files and folders, several at once"
+            );
+            Some(paths)
+        });
+        self.cx.run_until_parked();
+        assert_eq!(
+            self.calls(),
+            ["take keyboard"],
+            "the bar didn't take the keyboard back as the panel answered"
+        );
     }
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
@@ -5380,6 +5461,136 @@ fn the_open_is_timed_as_its_drawn_frame_comes_on_screen(cx: &mut TestAppContext)
         wakes,
         "timing the first frame asked for a frame"
     );
+}
+
+/// A folder the test makes, with the files named in it, as the system's panel gives them: beside
+/// the build, as ilo may give that on every system the tests run on, where the system's temporary
+/// folder is one ilo never gives on the Mac. Each is its own, as the tests run side by side.
+fn made(name: &str, files: &[&str]) -> std::path::PathBuf {
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/ilo-test-folders")
+        .join(format!("{name}-{}-{made}", std::process::id()))
+        .join(name);
+    _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    for file in files {
+        std::fs::write(folder.join(file), "made").unwrap();
+    }
+    folder.canonicalize().unwrap()
+}
+
+/// The composer opened on what's typed, by a bar over a system that can wall a thread in with the
+/// user's files, or one that can't.
+fn composing(cx: &mut TestAppContext, files: bool) -> Bar {
+    let bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.host.files.set(files);
+    let mut bar = bar;
+    bar.type_text("pack for the trip");
+    bar.keys("tab");
+    bar.calls();
+    bar
+}
+
+/// The plus is drawn in its place either way: disabled, showing no menu, where nothing can be
+/// added, and opening its menu where files can be.
+#[gpui::test]
+fn the_plus_is_disabled_where_nothing_can_be_added(cx: &mut TestAppContext) {
+    let mut bar = composing(cx, false);
+    assert!(bar.drawn(|bar| bar.plus.drawn()), "the plus left its place");
+    assert!(bar.menu_of(PLUS_ID).is_none(), "a menu with nothing to add");
+    bar.host.files.set(true);
+    assert!(bar.drawn(|bar| bar.plus.drawn()), "no plus");
+    assert!(bar.menu_of(PLUS_ID).is_some(), "no menu with files to add");
+}
+
+/// The add menu's one row opens the system's panel, and what's picked there, files and a folder,
+/// goes with the thread: each file once, the folder granted. Its triggers then show them.
+#[gpui::test]
+fn files_and_a_folder_added_on_the_plus_go_with_the_thread(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf", "hotel.txt"]);
+    let (seats, hotel) = (trip.join("seats.pdf"), trip.join("hotel.txt"));
+    let mut bar = composing(cx, true);
+    bar.add(vec![seats.clone(), hotel, trip.clone(), seats]);
+    assert!(
+        bar.drawn(|bar| bar.files_at.get()),
+        "no trigger for the files"
+    );
+    assert!(
+        bar.drawn(|bar| bar.folder_at.get()),
+        "no trigger for the folder"
+    );
+    bar.keys("enter");
+    assert_eq!(
+        bar.calls(),
+        ["task claude pack for the trip files seats.pdf hotel.txt folder trip"]
+    );
+}
+
+/// A folder ilo never gives, such as a disk's root, isn't granted: the thread starts without it,
+/// and the composer shows no folder.
+#[gpui::test]
+fn a_folder_ilo_never_gives_isnt_added(cx: &mut TestAppContext) {
+    let mut bar = composing(cx, true);
+    let root = std::path::PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" });
+    bar.add(vec![root]);
+    assert!(
+        !bar.drawn(|bar| bar.folder_at.get()),
+        "a folder ilo never gives"
+    );
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
+}
+
+/// What the plus added is taken out on its own triggers: the files' menu lists each, checked, and
+/// a pick takes it out; the folder's has Revoke, after which the thread has no folder. A later
+/// folder takes the place of the one before.
+#[gpui::test]
+fn what_the_plus_added_comes_out_on_its_triggers(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf", "hotel.txt"]);
+    let home = made("home", &[]);
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.join("seats.pdf"), trip.join("hotel.txt"), home]);
+    bar.add(vec![trip.clone()]);
+    let (rows, chosen) = bar.menu_of(FILES).expect("the files showed no menu");
+    assert_eq!(rows, ["✓ seats.pdf", "✓ hotel.txt"]);
+    bar.pick(chosen, 0);
+    let (rows, _) = bar.menu_of(FOLDER).expect("the folder showed no menu");
+    assert_eq!(rows, [MenuEntry::label(files_words::REVOKE).to_string()]);
+    bar.keys("enter");
+    assert_eq!(
+        bar.calls(),
+        ["task claude pack for the trip files hotel.txt folder trip"]
+    );
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.clone()]);
+    let (_, chosen) = bar.menu_of(FOLDER).unwrap();
+    bar.pick(chosen, 0);
+    assert!(!bar.drawn(|bar| bar.folder_at.get()), "the folder stayed");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
+}
+
+/// What the plus adds is for this thread alone: back to search, and what was added goes, as the
+/// level does, and a panel that answers after the composer left adds nothing.
+#[gpui::test]
+fn what_the_plus_added_goes_with_the_composer(cx: &mut TestAppContext) {
+    let trip = made("trip", &["seats.pdf"]);
+    let mut bar = composing(cx, true);
+    bar.add(vec![trip.join("seats.pdf"), trip.clone()]);
+    bar.keys("tab tab");
+    assert!(!bar.drawn(|bar| bar.files_at.get()), "the files stayed");
+    let (_, chosen) = bar.menu_of(PLUS_ID).unwrap();
+    bar.pick(chosen, 0);
+    bar.keys("tab");
+    bar.cx
+        .simulate_path_prompt_response(|_| Some(vec![trip.clone()]));
+    bar.cx.run_until_parked();
+    bar.keys("tab");
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude pack for the trip"]);
 }
 
 /// What a menu says, row by row, for comparing two menus: each row's title, its marks and where

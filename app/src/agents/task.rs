@@ -29,6 +29,7 @@ use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
+mod log_of;
 mod pick_up;
 pub(super) mod revoke;
 pub(super) mod rewall;
@@ -998,6 +999,9 @@ pub struct Tasks {
     /// What each kept task a run before left read back of its card, until a reply takes it up or
     /// it goes (pick_up.rs).
     came_back: HashMap<String, super::kept::cards::Back>,
+    /// The kept log of each task a run before left that was shown, asked once (None until it's
+    /// read, and for one with none), until a reply takes the task up or it goes.
+    came_logs: HashMap<String, Option<Vec<super::kept::log::Record>>>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1326,6 +1330,21 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
+        // A task a run before left draws its kept log first, settled, under what was asked,
+        // which heads it already (kept/log.rs).
+        let mut kept_finished = Vec::new();
+        if let Some(log) = self.kept_log(task) {
+            let mut drawn = log_of::drawn(log);
+            let asked = matches!(drawn.lines.first(), Some(Line::You(text)) if *text == task.asked);
+            if asked {
+                drawn.lines.remove(0);
+            }
+            let past = usize::from(asked);
+            kept_finished = (drawn.finished.into_iter())
+                .filter_map(|(at, when)| Some((at.checked_sub(past)?, when)))
+                .collect();
+            lines.splice(0..0, drawn.lines);
+        }
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
@@ -1345,7 +1364,8 @@ impl Agents {
             (None, true) => format!("{} · {about}", task.name),
             (None, false) => format!("{} · {} · {about}", task.name, task.model),
         };
-        let finished = finished(&task.messages, &lines);
+        let mut finished = finished(&task.messages, &lines);
+        finished.splice(0..0, kept_finished);
         let held = (tabs.iter())
             .map(|(tab, _)| *tab)
             .filter(|tab| self.taken_over(*tab))
@@ -4067,8 +4087,9 @@ impl Agents {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
                 let shows = element.as_ref().is_some_and(page::Element::shows_typed);
-                if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
-                    did.text = typed;
+                // What may show is cut at its most, as a chosen option is, never dropped whole.
+                if tool == "type" && shows {
+                    did.text = page::clip(&page::one_line(&typed), tools::TYPED_SHOWN);
                 }
             }
             "select" => {

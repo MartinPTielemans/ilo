@@ -618,6 +618,38 @@ fn return_in_the_composer_at_rest_starts_the_thread(cx: &mut TestAppContext) {
     assert_eq!(typed, "");
 }
 
+/// The plus of the composer at rest adds as ⌘T's does: what the system's panel gave goes with
+/// the thread its ↩ starts there.
+#[gpui::test]
+fn the_composer_at_rest_starts_its_thread_with_what_the_plus_added(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.files.set(true);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("tab");
+    let bar = cx.update(|_, cx| shell.read(cx).resting.as_ref().unwrap().bar.clone());
+    let menu: Rc<std::cell::RefCell<Option<crate::text_input::Chosen>>> = Rc::default();
+    let into = menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+        )))
+    });
+    bar.update_in(cx, |bar, window, cx| bar.open_add_menu_for_test(window, cx));
+    let chosen = menu.take().expect("the plus showed no menu");
+    cx.update(|window, cx| chosen(crate::menu::Closed::Chose(0), window, cx));
+    cx.run_until_parked();
+    let menu = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    cx.simulate_path_prompt_response(|_| Some(vec![menu]));
+    cx.run_until_parked();
+    host.resting.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        rested(&host),
+        ["run task at rest claude book a table at work files 1 folder false"]
+    );
+}
+
 /// ↩ in the composer at rest with "book a table" typed, on a window with no tab, as the host
 /// takes it: the start is the Space's, over the empty page.
 fn composed(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {

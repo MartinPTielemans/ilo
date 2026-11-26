@@ -609,7 +609,6 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.reads_shell(shell.downgrade());
     host.threads.set(Some(true));
-    host.other_apps.set(Some(true));
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
     assert!(placed("main", cx).is_none(), "no main button");
@@ -619,12 +618,7 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
     assert!(host.take().is_empty());
     click("just-the-browser", cx);
     cx.run_until_parked();
-    assert_eq!(host.take(), ["threads false"]);
-    assert_eq!(
-        host.other_apps.get(),
-        Some(true),
-        "Other apps' switch is as it was"
-    );
+    assert_eq!(host.take(), ["threads false"], "and nothing else");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 
     shell.update(cx, |shell, _| shell.onboarding = None);
@@ -2078,8 +2072,7 @@ fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
         (vec![Client::Codex], true),
         (vec![], false),
     ] {
-        let (shell, cx, host) = first_window(cx);
-        host.other_apps.set(Some(false));
+        let (shell, cx, _host) = first_window(cx);
         let (_agents, looks) =
             cx.update(|_, cx| crate::agents::tests::stand_in_with(Vec::new(), found.clone(), cx));
         started(&shell, cx);
@@ -2092,54 +2085,94 @@ fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
     }
 }
 
-/// Other apps' switch is on its own step, Settings' own and set at once, a click on it or its row
-/// turning it either way; no other step has it, and nothing else it moves.
+/// Other apps' two switches are on their own step, off as it shows, each Settings' own and set at
+/// once, a click on it or its card turning it either way. Either on turns the outside switch on as
+/// it lands; it goes off only as the second is turned off. No other step has them, and nothing
+/// else moves.
 #[gpui::test]
-fn other_apps_agents_have_their_row_on_their_step(cx: &mut TestAppContext) {
+fn other_apps_two_ways_are_off_as_they_show_and_either_turns_the_outside_switch_on(
+    cx: &mut TestAppContext,
+) {
+    use crate::agents::Client;
     let (shell, cx, host) = first_window(cx);
-    host.other_apps.set(Some(false));
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let (agents, heard, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in_failing(found.clone(), None, cx));
+    let outside =
+        |cx: &mut VisualTestContext| agents.read_with(cx, |agents, _| agents.other_apps());
     started(&shell, cx);
-    // A test's shell has no Agents to find a program of, so it puts the step in as the import's
-    // begun puts the favorites in.
-    shell.update(cx, |shell, _| {
-        let steps = &mut shell.onboarding.as_mut().unwrap().steps;
-        let done = steps.iter().position(|&step| step == Step::Done).unwrap();
-        steps.insert(done, Step::OtherApps);
-    });
+    assert!(steps(&shell, cx).contains(&Step::OtherApps));
     let others = shell.update(cx, |shell, cx| {
         (STEPS.iter())
             .filter(|&&step| step != Step::OtherApps)
             .any(|&step| {
-                (shell.switches(step, cx).iter()).any(|(each, _)| *each == Switch::OtherApps)
+                (shell.switches(step, cx).iter())
+                    .any(|(each, _)| matches!(each, Switch::Command | Switch::Mcp))
             })
     });
-    assert!(!others, "no other step has a row about other apps");
+    assert!(!others, "no other step has a way in");
     on_to(&shell, cx, Step::OtherApps);
     let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| shell.switches(Step::OtherApps, cx))
     };
-    assert_eq!(offered(&shell, cx), [(Switch::OtherApps, false)], "off");
-    let frame = |part, shell: &Entity<Shell>, cx: &VisualTestContext| {
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, false), (Switch::Mcp, false)],
+        "both off as it shows"
+    );
+    let frame = |switch, part, shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| {
             let onboarding = shell.onboarding.as_ref().expect("the card shows");
-            (onboarding.frames.borrow())
-                .get(&(Switch::OtherApps, part))
-                .copied()
+            (onboarding.frames.borrow()).get(&(switch, part)).copied()
         })
     };
-    let switch = frame("switch", &shell, cx).expect("its switch is drawn");
-    let row = frame("row", &shell, cx).expect("its row is drawn");
+    let command = frame(Switch::Command, "switch", &shell, cx).expect("its switch is drawn");
+    let mcp = frame(Switch::Mcp, "row", &shell, cx).expect("its card is drawn");
+    let at_left = |card: gpui::Bounds<gpui::Pixels>| point(card.left() + px(4.), card.center().y);
     host.take();
-    cx.simulate_click(switch.center(), Modifiers::none());
+
+    assert!(!outside(cx));
+    cx.simulate_click(command.center(), Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(host.take(), ["other apps true"], "set at once");
-    assert_eq!(offered(&shell, cx), [(Switch::OtherApps, true)]);
-    cx.simulate_click(
-        point(row.left() + px(4.), row.center().y),
-        Modifiers::none(),
+    assert!(outside(cx), "on as the command landed");
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, true), (Switch::Mcp, false)]
     );
+    assert!(agents.read_with(cx, |agents, _| agents.is_connected(Client::Command)));
+    assert_eq!(
+        heard().0,
+        [Client::Command],
+        "no app connected by the command"
+    );
+
+    cx.simulate_click(at_left(mcp), Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(host.take(), ["other apps false"], "and back by its row");
+    assert!(outside(cx), "still on");
+    assert_eq!(
+        heard().0,
+        [Client::Command, Client::ClaudeCode, Client::Codex]
+    );
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, true), (Switch::Mcp, true)]
+    );
+
+    cx.simulate_click(command.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(outside(cx), "on while MCP is");
+    cx.simulate_click(at_left(mcp), Modifiers::none());
+    cx.run_until_parked();
+    assert!(!outside(cx), "off with both");
+    assert_eq!(
+        heard().1,
+        [Client::Command, Client::ClaudeCode, Client::Codex]
+    );
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, false), (Switch::Mcp, false)],
+        "off takes away what on added"
+    );
     assert_eq!(
         host.threads.get(),
         None,
@@ -2148,6 +2181,74 @@ fn other_apps_agents_have_their_row_on_their_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Done));
     assert!(host.take().is_empty(), "Next sets nothing more");
+    assert!(!outside(cx));
+}
+
+/// A way whose Add fails turns back off and says so in its small line: the command's, or MCP's
+/// for each app that fell, on while one is connected. The outside switch is as it was before the
+/// click while the other way is off, and stays on while it's on.
+#[gpui::test]
+fn a_way_that_fails_turns_back_off_and_says_so(cx: &mut TestAppContext) {
+    use super::other_apps;
+    use crate::agents::Client;
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let failed = |switch| match switch {
+        Switch::Command => "Couldn't add the command.",
+        _ => "Couldn't connect Claude Code and Codex.",
+    };
+    for (switch, other) in [
+        (Switch::Command, Switch::Mcp),
+        (Switch::Mcp, Switch::Command),
+    ] {
+        for other_on in [false, true] {
+            let (shell, cx, _host) = first_window(cx);
+            let (agents, _, fail_next) =
+                cx.update(|_, cx| crate::agents::tests::stand_in_failing(found.clone(), None, cx));
+            let outside =
+                |cx: &mut VisualTestContext| agents.read_with(cx, |agents, _| agents.other_apps());
+            started(&shell, cx);
+            on_to(&shell, cx, Step::OtherApps);
+            if other_on {
+                shell.update(cx, |shell, cx| shell.onboarding_switch(other, cx));
+                cx.run_until_parked();
+                assert!(outside(cx));
+            }
+            // Each of the way's writes fails: MCP's both apps, so nothing of it lands.
+            fail_next(2);
+            shell.update(cx, |shell, cx| shell.onboarding_switch(switch, cx));
+            cx.run_until_parked();
+            let way = agents.read_with(cx, |agents, _| match switch {
+                Switch::Command => other_apps::command(agents),
+                _ => other_apps::mcp(agents),
+            });
+            assert!(!way.on, "{switch:?} {other_on}");
+            assert_eq!(way.small.as_ref(), failed(switch), "{switch:?} {other_on}");
+            assert_eq!(outside(cx), other_on, "{switch:?}: as before the click");
+        }
+    }
+}
+
+/// MCP's way with one app that fails and one that lands is on, says which fell, and turns the
+/// outside switch on with the one that landed.
+#[gpui::test]
+fn a_way_that_lands_for_one_app_turns_the_outside_switch_on(cx: &mut TestAppContext) {
+    use super::other_apps;
+    use crate::agents::Client;
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let (shell, cx, _host) = first_window(cx);
+    let (agents, _, _) = cx.update(|_, cx| {
+        crate::agents::tests::stand_in_failing(found.clone(), Some("not installed"), cx)
+    });
+    started(&shell, cx);
+    on_to(&shell, cx, Step::OtherApps);
+    shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Mcp, cx));
+    cx.run_until_parked();
+    let (way, outside) = agents.read_with(cx, |agents, _| {
+        (other_apps::mcp(agents), agents.other_apps())
+    });
+    assert!(way.on);
+    assert_eq!(way.small.as_ref(), "Connected Codex. Claude Code failed.");
+    assert!(outside);
 }
 
 /// Safari's files kept from the app need Full Disk Access as Safari is picked: the import step
@@ -2680,14 +2781,114 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
     }
     assert_eq!(
         card(Cli::Claude, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the browser that opened.", Offer::Cancel),
+        said("Finish in your browser.", Offer::Cancel),
         "Claude's sign-in is in the computer's browser"
     );
     assert_eq!(
         card(Cli::Codex, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the window that opened.", Offer::Cancel),
+        said("Finish in the new window.", Offer::Cancel),
         "ChatGPT's is in a window here"
     );
+}
+
+/// A row on the card is as tall in each of its states (FR19), as each state's line is one line in
+/// the card's column: its maker's plan with Sign In, the wait with the ring and Cancel, signed in
+/// with the disc and ⋯, and a sign-in that didn't finish.
+#[gpui::test]
+fn an_assistants_row_is_as_tall_in_each_state(cx: &mut TestAppContext) {
+    use crate::agents::ready::Ready;
+    use crate::agents::sign_in::{Row, shown};
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let states = [
+        ("at the start", Ready::SignedOut, None, Row::Idle),
+        ("waiting", Ready::SignedOut, None, Row::SigningIn),
+        ("signed in", Ready::SignedIn, Some("Plus"), Row::Idle),
+        ("failed", Ready::SignedOut, None, Row::Failed(None)),
+    ];
+    for cli in Cli::ALL {
+        let mut heights = Vec::new();
+        for (state, ready, plan, row) in &states {
+            let rows = vec![(cli, shown(cli, *ready, *plan, row))];
+            shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+            settle(&shell, cx);
+            let drawn = placed(cli.id(), cx)
+                .unwrap_or_else(|| panic!("{cli:?}'s row wasn't drawn {state}"));
+            heights.push((*state, f32::from(drawn.size.height)));
+        }
+        let first = heights[0].1;
+        assert!(
+            heights
+                .iter()
+                .all(|&(_, height)| (height - first).abs() < 0.5),
+            "{cli:?}'s row changes height between its states: {heights:?}"
+        );
+    }
+}
+
+/// A line too long for the card's column is cut where it's drawn, the row keeping its height, and
+/// read whole by an assistive app; each maker's own waiting line is read whole too.
+#[gpui::test]
+fn a_cut_line_keeps_the_rows_height_and_is_read_whole(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let show = |shell: &Entity<Shell>, cx: &mut VisualTestContext, line: &str, offer| {
+        let rows = vec![(
+            Cli::Claude,
+            Shown {
+                line: line.into(),
+                offer,
+            },
+        )];
+        shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+        settle(shell, cx);
+        placed("claude", cx)
+            .expect("Claude's row is drawn")
+            .size
+            .height
+    };
+    let rest = show(&shell, cx, "", Offer::SignIn);
+    let long = "Finish signing in to your Claude plan in the browser window that opened just now.";
+    assert_eq!(
+        show(&shell, cx, long, Offer::Cancel),
+        rest,
+        "the cut row's height"
+    );
+    let read = |cx: &mut VisualTestContext| {
+        let said = read(cx).into_iter();
+        let labels = said.filter(|(role, ..)| *role == Role::Label);
+        labels.map(|(_, name, _)| name).collect::<Vec<_>>()
+    };
+    let said = read(cx);
+    assert!(
+        said.iter().any(|name| name == long),
+        "the whole line in {said:?}"
+    );
+
+    let rows = Cli::ALL.map(|cli| {
+        let waiting = crate::agents::sign_in::Row::SigningIn;
+        let ready = crate::agents::ready::Ready::SignedOut;
+        (
+            cli,
+            crate::agents::sign_in::shown(cli, ready, None, &waiting),
+        )
+    });
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_show_assistants(rows.to_vec(), cx)
+    });
+    settle(&shell, cx);
+    let said = read(cx);
+    for line in [
+        crate::agents::sign_in::CLAUDE_WAITING,
+        crate::agents::sign_in::CHATGPT_WAITING,
+    ] {
+        assert!(said.iter().any(|name| name == line), "{line} in {said:?}");
+    }
 }
 
 /// A signed-in row on the card has the check disc and its ⋯, not Settings' mark, and the foot's

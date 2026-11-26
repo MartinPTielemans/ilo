@@ -219,7 +219,7 @@ fn recent(downloads: &[Download]) -> Vec<u64> {
 }
 
 /// How far a download still coming has got, 0 to 1, if its size is known and it isn't held.
-fn progress(download: &Download) -> Option<f32> {
+pub(super) fn progress(download: &Download) -> Option<f32> {
     let coming = matches!(
         download.state,
         DownloadState::Running | DownloadState::Paused
@@ -243,7 +243,7 @@ fn amount(of: f64) -> String {
 /// How much of a download has come, beside its bar, where the Library's words for it don't fit:
 /// both sizes in the whole one's unit, said once ("48 of 122 MB", "1.2 of 4.8 GB"). Kilobytes
 /// and bytes are always whole.
-fn come(received: i64, total: i64) -> String {
+pub(super) fn come(received: i64, total: i64) -> String {
     if total <= 0 {
         return bytes(received);
     }
@@ -263,7 +263,7 @@ fn come(received: i64, total: i64) -> String {
 
 /// The glyph on the tile of a file with no picture: a page, or the warning triangle for one the
 /// browser holds until it's kept or deleted.
-fn tile_glyph(download: &Download) -> &'static str {
+pub(super) fn tile_glyph(download: &Download) -> &'static str {
     match download.held {
         true => "icons/triangle-alert.svg",
         false => "icons/file.svg",
@@ -521,8 +521,8 @@ impl Shell {
     ) {
         if let Some(entry) = self.download_previews.get_mut(&id) {
             *entry = preview;
-            let in_media = self.library.is_some() && self.section == Section::Media;
-            if in_media || self.recent_downloads.rows.contains(&id) {
+            let listed = matches!(self.section, Section::Media | Section::Downloads);
+            if (self.library.is_some() && listed) || self.recent_downloads.rows.contains(&id) {
                 cx.notify();
             }
         }
