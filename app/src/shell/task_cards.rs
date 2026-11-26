@@ -854,7 +854,7 @@ impl Shell {
                 .unwrap_or_default();
             stops.push((StripStop::Header(placed.n), top));
             let button = match placed.form {
-                Form::Waits => self.waiting_page(card).is_some(),
+                Form::Waits => self.offers_page(card),
                 Form::Ended => chip(card).is_some(),
                 _ => false,
             };
@@ -935,6 +935,14 @@ impl Shell {
         (card.pages.iter().find(waits))
             .or(card.pages.first())
             .copied()
+    }
+
+    /// Whether a waiting `card`'s Show Page has a page to show: not while the page it waits on is
+    /// the one the page area shows or is on its way to, where the user stands already. The area's
+    /// own page decides, as it does which button the conversation's line draws.
+    pub(super) fn offers_page(&self, card: &Card) -> bool {
+        let shown = self.watched_task_page().map(|(_, tab)| tab);
+        (self.waiting_page(card)).is_some_and(|tab| shown != Some(tab))
     }
 
     /// Stands on `tab`, a task's page, as its picture's click in the task's view does, and nothing

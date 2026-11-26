@@ -1332,6 +1332,61 @@ fn show_page_watches_its_page_and_nothing_else(cx: &mut TestAppContext) {
     assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
 }
 
+/// A waiting card's Show Page shows the page that waits, so while that page is the one the page
+/// area shows it has nothing left to do: it isn't drawn and the keys' ring has no stop for it. The
+/// card keeps its waiting form and its height. The button is back once the user stands elsewhere.
+#[gpui::test]
+fn show_page_is_not_drawn_while_its_page_is_the_one_shown(cx: &mut TestAppContext) {
+    let (shell, _, cx) = with_task_spaces(cx, vec![paged(1, Dot::Waiting, &[1010, 1011])]);
+    still(cx);
+    tick(5.);
+    // Where the button is drawn, if it is, whether the ring stops on it, and how high its card is.
+    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(shell, cx);
+        let button = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied());
+        let (stop, height) = shell.read_with(cx, |shell, _| {
+            let stop = (shell.card_stops().iter()).any(|(stop, _)| *stop == StripStop::Chip(1));
+            let plate = shell.task_plate_drawn("task-1").expect("its card");
+            (stop, plate.size.height)
+        });
+        (button, stop, height)
+    };
+    // Its conversation first, so the card is the shown thread's before and after the button goes.
+    let plate = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
+    let header = plate.expect("its card").origin + gpui::point(gpui::px(24.), gpui::px(8.));
+    cx.simulate_click(header, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None
+    );
+    let (button, stop, height) = drawn(&shell, cx);
+    assert!(stop, "the ring has no stop for Show Page");
+    cx.simulate_click(button.expect("Show Page").center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((101, 1010))
+    );
+    assert_eq!(
+        drawn(&shell, cx),
+        (None, false, height),
+        "Show Page with its page the one shown"
+    );
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Waits));
+
+    // Another tab, the user's own: the page isn't the one shown, so the button shows it again.
+    shell.update(cx, |shell, cx| shell.run(Command::SelectTab(1), "test", cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None
+    );
+    let (button, stop, _) = drawn(&shell, cx);
+    assert!(button.is_some() && stop, "Show Page isn't back");
+}
+
 /// Every card is reached by the keys, among Today's rows where it stands: the arrows go over the
 /// cards and their buttons with the rows, Return on a card shows its conversation, and Focus
 /// Sidebar then rings that card.
