@@ -651,14 +651,13 @@ class WindowViews : public views::WidgetObserver,
 
   // Lets the UI show, and take the clicks, but where the pages shown are and in Chromium's parts of
   // the band at the window's edges that resizes it, whose presses its hit test takes (wayland.cc).
-  // A page reaching the window's sides leaves the strips along them to the UI out of full screen
+  // A page reaching the window's sides leaves the strips along them to the UI, in full screen too
   // (page_edge_strips.h).
   void ShowThrough() {
     const float scale = ScaleOf(widget_);
     const gfx::Size pixels = ContentPixelsOf(widget_);
     const std::vector<gfx::Rect> bands = ResizeBandsOf(widget_, pixels, scale);
-    const int strip =
-        widget_->IsFullscreen() ? 0 : static_cast<int>(std::lround(kPageEdgeStrip * scale));
+    const int strip = static_cast<int>(std::lround(kPageEdgeStrip * scale));
     std::vector<const Slot*> shown;
     auto add = [&](const Slot& slot) {
       if (slot.holder && slot.page && slot.holder->IsVisible()) {
@@ -674,7 +673,8 @@ class WindowViews : public views::WidgetObserver,
       std::vector<gfx::Rect> region;
       for (const Slot* slot : shown) {
         const gfx::Rect page = PageWithoutEdgeStrips(
-            gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)), pixels.width(), strip);
+            gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)), pixels.width(), strip,
+            EdgeSides::kBoth);
         if (!page.IsEmpty()) {
           region.push_back(page);
         }
@@ -708,7 +708,7 @@ class WindowViews : public views::WidgetObserver,
                frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
                slot->bottom_corners_only)) {
         row.Offset(frame.OffsetFromOrigin());
-        row = PageWithoutEdgeStrips(row, pixels.width(), strip);
+        row = PageWithoutEdgeStrips(row, pixels.width(), strip, EdgeSides::kBoth);
         if (!row.IsEmpty()) {
           holes.push_back(row);
         }
@@ -1626,6 +1626,8 @@ views::NativeWidget* NewNativeWidget(views::Widget* widget, base::RepeatingClosu
   // screen for, as a show state change, so the page leaves with it and nothing runs early.
   return new views::DesktopNativeWidgetAura(widget);
 }
+
+void SetLittle(views::Widget*, bool) {}
 
 void AddWindowViews(views::Widget* widget, void* ui_view) {
   // On X11 the app's UI is its X window's id; on Wayland it's a subsurface the app puts in place.

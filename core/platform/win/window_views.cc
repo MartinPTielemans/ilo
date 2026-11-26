@@ -215,7 +215,7 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   }
 
   // ui::HWNDMessageFilter:
-  bool FilterMessage(HWND, UINT message, WPARAM w_param, LPARAM, LRESULT*) override {
+  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM, LRESULT*) override {
     ui::InputMethod* input_method = widget_->GetInputMethod();
     if (message == WM_SETFOCUS) {
       took_keyboard_.Run();
@@ -519,12 +519,12 @@ gfx::Insets InsetsOf(const gfx::Rect& frame, const gfx::Size& window) {
                            window.width() - frame.right());
 }
 
-// Hands the pointer in the strips along a browser window's sides (page_edge_strips.h), and in the
-// top edge that resizes it (host.cc's FrameHit), from a page reaching them to the UI's holder under
-// the pane, out of full screen: over a page, the UI would hear neither the hidden sidebar's edge
-// nor the top edge. Answers for the pane's window and the windows content makes in it on this
-// thread, as content's own answers its hit test itself (LegacyRenderWidgetHostHWND::OnNCHitTest),
-// and Windows passes HTTRANSPARENT on to the window under it on the same thread.
+// Hands the pointer in the strips along a browser window's sides (page_edge_strips.h), from a page
+// reaching them to the UI's holder under the pane, in full screen too: over a page, the UI would
+// not hear the hidden sidebar's edge. Answers for the pane's window and the windows content makes
+// in it on this thread, as content's own answers its hit test itself
+// (LegacyRenderWidgetHostHWND::OnNCHitTest), and Windows passes HTTRANSPARENT on to the window
+// under it on the same thread.
 class EdgeStrips : public ui::HWNDMessageFilter {
  public:
   EdgeStrips() = default;
@@ -532,33 +532,30 @@ class EdgeStrips : public ui::HWNDMessageFilter {
   EdgeStrips& operator=(const EdgeStrips&) = delete;
   ~EdgeStrips() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
 
-  // Answers for |pane| and the windows in it on this thread, from now. A window's filters are a
-  // set, so a window already answered for stays as it is.
+  // Answers for |pane| and the windows in it on this thread, from now, A
+  // window's filters are a set, so a window already answered for stays as it is.
   void Watch(HWND pane) {
     Add(pane);
     EnumChildWindows(pane, &EdgeStrips::Each, reinterpret_cast<LPARAM>(this));
   }
 
   // ui::HWNDMessageFilter:
-  bool FilterMessage(HWND hwnd, UINT message, WPARAM, LPARAM l_param, LRESULT* result) override {
+  bool FilterMessage(HWND hwnd, UINT message, WPARAM, LPARAM l_param,
+                     LRESULT* result) override {
     if (message != WM_NCHITTEST) {
       return false;
     }
     HWND root = GetAncestor(hwnd, GA_ROOT);
-    // Full screen takes the caption style away, as FrameHit reads it.
-    if (!root || !(GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION)) {
+    if (!root) {
       return false;
     }
     POINT at{static_cast<short>(LOWORD(l_param)), static_cast<short>(HIWORD(l_param))};
     ScreenToClient(root, &at);
     RECT client{};
     GetClientRect(root, &client);
-    const UINT dpi = GetDpiForWindow(root);
-    const double strip = kPageEdgeStrip * dpi / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
-    // host.cc's TopEdge, kept in step with it.
-    const int top =
-        GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-    if (InPageEdgeStrip(at.x, client.right, strip) || (!IsZoomed(root) && at.y >= 0 && at.y < top)) {
+    const double strip =
+        kPageEdgeStrip * GetDpiForWindow(root) / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    if (InPageEdgeStrip(at.x, client.right, strip, EdgeSides::kBoth)) {
       *result = HTTRANSPARENT;
       return true;
     }
@@ -572,7 +569,7 @@ class EdgeStrips : public ui::HWNDMessageFilter {
   }
 
   void Add(HWND window) {
-    if (GetWindowThreadProcessId(window, nullptr) == GetCurrentThreadId()) {
+    if (window && GetWindowThreadProcessId(window, nullptr) == GetCurrentThreadId()) {
       ui::HWNDSubclass::AddFilterToTarget(window, this);
     }
   }
@@ -1142,6 +1139,8 @@ views::NativeWidget* NewNativeWidget(views::Widget* widget, base::RepeatingClosu
   // Chrome or the app (bc_window_toggle_full_screen) asks, each through Window::LeaveFullScreen.
   return new views::DesktopNativeWidgetAura(widget);
 }
+
+void SetLittle(views::Widget*, bool) {}
 
 void AddWindowViews(views::Widget* widget, void* ui_view) {
   HWND ui = static_cast<HWND>(ui_view);
