@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
+use browser::log;
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -30,6 +31,32 @@ fn call<T>(core: impl FnOnce() -> T) -> T {
 }
 
 struct Core;
+
+/// bc_profile_search_url's shape, as browser_core.h declares it.
+type ProfileSearchUrl =
+    unsafe extern "C" fn(bc::bc_id, *const std::ffi::c_char, *mut std::ffi::c_char, usize) -> usize;
+
+/// bc_profile_search_url, where the core linked has it (build 14 on). It's looked up by name, so a
+/// core from before it still starts the app, which searches as it did; logged once, at the start.
+fn profile_search_url() -> Option<ProfileSearchUrl> {
+    static FOUND: std::sync::OnceLock<Option<ProfileSearchUrl>> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        #[cfg(unix)]
+        // SAFETY: dlsym reads the name, which ends in a zero byte, and answers null when nothing
+        // loaded has it. The core exports it only in browser_core.h's shape.
+        let found = unsafe {
+            let found = libc::dlsym(libc::RTLD_DEFAULT, c"bc_profile_search_url".as_ptr());
+            (!found.is_null())
+                .then(|| std::mem::transmute::<*mut std::ffi::c_void, ProfileSearchUrl>(found))
+        };
+        #[cfg(not(unix))]
+        let found = None;
+        // check.sh reads this line.
+        let by = if found.is_some() { "profile" } else { "window" };
+        log!("browser: core searches by {by}");
+        found
+    })
+}
 
 impl Browser for Core {
     fn agent_space(&self, agent: &str) -> u64 {
@@ -215,10 +242,16 @@ impl Browser for Core {
     }
 
     fn search_url(&self, space: u64, words: &str) -> Option<String> {
-        // The engine of a window that shows the Space's profile. A thread's Space has none of its
-        // own, and with no window of its profile open there's no engine to search with, never
-        // another profile's, until the app links an engine with bc_profile_search_url (build 14).
         let profile = unsafe { bc::bc_space_profile(space) };
+        // The engine of the Space's profile, whichever window is open, where the core has it.
+        if let Some(search) = profile_search_url() {
+            return crate::url_for(words, |words, url, capacity| unsafe {
+                search(profile, words, url, capacity)
+            });
+        }
+        // Else that of a window that shows the profile. A thread's Space has none of its own, and
+        // with no window of its profile open there's no engine to search with, never another
+        // profile's.
         let window = WINDOWS.with_borrow(|windows| {
             (windows.iter())
                 .filter(|window| window.regular())
@@ -503,6 +536,7 @@ pub fn start(cx: &mut App) {
         bridge = agents::bridge::store_alias(&local);
     }
     let bridge = agents::bridge::launch(&bridge, agents::bridge::flatpak_id().as_deref());
+    profile_search_url();
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),
