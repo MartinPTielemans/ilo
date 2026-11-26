@@ -18,7 +18,7 @@ Every release is on [GitHub Releases](https://github.com/MartinPTielemans/ilo/re
 
 ### macOS
 
-macOS 15 (Sequoia) or later, on Apple silicon. Download [ilo-mac-arm64.dmg](https://github.com/MartinPTielemans/ilo/releases/latest/download/ilo-mac-arm64.dmg), open it and drag ilo into Applications.
+macOS 14 (Sonoma) or later, on Apple silicon. Download [ilo-mac-arm64.dmg](https://github.com/MartinPTielemans/ilo/releases/latest/download/ilo-mac-arm64.dmg), open it and drag ilo into Applications.
 
 ### Windows
 

@@ -49,6 +49,13 @@ on:
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
+      runner:
+        description: >-
+          The hosted Mac the checks run on: macos-26, or macos-14 for the app's minimum (#4354).
+          The app is built on macos-26 either way, as a release is
+        type: choice
+        options: [macos-26, macos-14]
+        default: macos-26
       lists_from:
         description: >-
           A Check run's id, on any OS, whose adblock-parity lists this run's adblock-parity and
@@ -231,7 +238,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3, 4]' || inputs.runs == '' && '[1, 2, 3]' || '[0]') }}
-    runs-on: macos-26
+    # The night's runs, which have no inputs, on macos-26.
+    runs-on: ${{ inputs.runner || 'macos-26' }}
     # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
     # the job's time unsplit (44322076346).
     timeout-minutes: 120

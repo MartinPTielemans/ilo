@@ -274,7 +274,7 @@ fn translator_swift(root: &Path) {
     }
     .to_owned();
     // The app's own minimum, which build.sh gives its Info.plist.
-    let minimum = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.0".into());
+    let minimum = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "14.0".into());
     let status = std::process::Command::new(&swiftc)
         .args([
             "-parse-as-library",

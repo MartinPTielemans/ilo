@@ -53,7 +53,7 @@ jobs:
           status=0
           for file in app/platform/mac/*.mm; do
             echo "::group::$file"
-            if ! xcrun clang++ -fsyntax-only -target arm64-apple-macos11 -std=c++20 -fobjc-arc \
+            if ! xcrun clang++ -fsyntax-only -target arm64-apple-macos14 -std=c++20 -fobjc-arc \
                 -Wall -Wextra -DNDEBUG -Icore/public -F"$RUNNER_TEMP/Sparkle" "$file" 2> "$RUNNER_TEMP/out"; then
               status=1
             fi

@@ -3,8 +3,8 @@
 //! Safari's engine plays these sites with Apple's DRM, so its one button shows the tab's page there,
 //! in the tab, and the profile keeps the site for it: its pages open there from then on, with no
 //! note, until the Site Controls turn it off (decision 1). The site's session goes with the tab, so
-//! the user stays signed in. Where the Mac has no engine to give, on macOS 13, and in an agent's
-//! Space, whose tabs never switch, it opens the page in Safari instead and leaves the tab as it is.
+//! the user stays signed in. Where the Mac has no engine to give, as in an agent's Space, whose
+//! tabs never switch, it opens the page in Safari instead and leaves the tab as it is.
 //! On Windows, while ilo isn't the system's default browser, it offers that browser instead, and on
 //! Linux nothing (Elsewhere::on).
 //! Its ×, shown under the pointer, and escape while the UI has the keyboard close it for the site in
@@ -647,7 +647,7 @@ mod tests {
         host.take()
     }
 
-    /// The Mac, where Safari's engine isn't there to give, as on macOS 13: the card offers Safari,
+    /// The Mac, where the core has no Safari engine to give: the card offers Safari,
     /// which opens the tab's page, and the tab keeps its page and its note.
     #[gpui::test]
     fn on_the_mac_the_card_opens_the_page_in_safari(cx: &mut TestAppContext) {
