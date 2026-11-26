@@ -547,6 +547,7 @@ impl Shell {
         // Claude Code or Codex found here by the folder or file each makes in the user's home, a
         // stat once as the card starts, which runs nothing (floor 1). Only with the command
         // connected does that look also ask the login shell, so then the card keeps to what's held.
+        self.browser.start_agents(cx);
         let found_apps = crate::agents::global(cx).is_some_and(|agents| {
             if !agents.read(cx).is_connected(crate::agents::Client::Command) {
                 agents.update(cx, |agents, cx| agents.look_for_clients(cx));

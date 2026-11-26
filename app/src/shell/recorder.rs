@@ -126,6 +126,9 @@ pub(crate) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) threads: Cell<Option<bool>>,
+    /// The programs found by the Agents `start_agents` makes, as a launch makes them after the card
+    /// starts; None leaves them unmade.
+    pub(super) agents_found: RefCell<Option<Vec<crate::agents::Client>>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -2205,6 +2208,14 @@ impl Browser for Recorder {
         // As the engine's host passes it on, so a stand-in's Agents runs what the switch lets.
         if let Some(agents) = crate::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+        }
+    }
+
+    fn start_agents(&self, cx: &mut App) {
+        if crate::agents::global(cx).is_none()
+            && let Some(found) = self.agents_found.take()
+        {
+            _ = crate::agents::tests::stand_in_with(Vec::new(), found, cx);
         }
     }
 

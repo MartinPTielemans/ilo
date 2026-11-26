@@ -1168,6 +1168,9 @@ pub trait Browser {
         None
     }
     fn set_threads(&self, _on: bool, _cx: &mut App) {}
+    /// Makes the Agents if they aren't yet. A launch makes them after its first frame, and first
+    /// run's card, which starts before it, reads what they find.
+    fn start_agents(&self, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {
