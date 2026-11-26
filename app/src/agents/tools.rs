@@ -1109,8 +1109,8 @@ fn words(did: &Did, tense: Tense, object: bool) -> String {
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
         "wait" => match did.target.strip_suffix(" to go") {
-            // Text that should go: “Loading” to go.
-            Some(text) if tense == Tense::Failed => return format!("Didn't see {text} go"),
+            // Text that should go: “Loading” to go (TS4).
+            Some(text) if tense == Tense::Failed => return format!("Didn't see {text} disappear"),
             _ if did.target == SETTLE => (
                 "Waiting",
                 "Waited",
@@ -1206,9 +1206,13 @@ fn words(did: &Did, tense: Tense, object: bool) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
-        // A trace's step has its words; the activity log's entry, a thread's, its count alone.
+        // A trace's step has its words (AP28, Z45); the activity log's entry, a thread's, its
+        // count alone (Z46).
         SEARCHED => {
             return match (did.text.is_empty(), did.target.parse::<usize>()) {
+                (false, _) if tense == Tense::Now => {
+                    format!("Searching the web for “{}”", did.text)
+                }
                 (false, _) => format!("Searched the web for “{}”", did.text),
                 (true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
                 _ => "Searched the web".into(),
@@ -1339,8 +1343,8 @@ const JUDGED_FIRST: [&str; 6] = [
 /// changes something beyond its page (an order or a payment, a message sent, a request that may
 /// change something, a file saved, a sign-in, a bank's site, a tab closed or thrown away, a fenced
 /// site), one a page permission stopped, one that was `refused`, and one that waits on the user
-/// with a product's button on its row (`waiting`). A step that failed or was stopped keeps the
-/// assistant's words, since its account at the right says so. An act under way that ilo hasn't
+/// with a product's button on its row (`waiting`). A failed step keeps the assistant's words,
+/// since its account at the right says so; one the user stopped with Stop leaves no line (TS3). An act under way that ilo hasn't
 /// judged yet keeps the account alone until it has, so one that turns out to be an order never
 /// showed as anything else; a step ilo never judges, such as a scroll, is the assistant's from
 /// the start.

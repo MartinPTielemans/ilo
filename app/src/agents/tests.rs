@@ -9695,7 +9695,17 @@ mod tasks {
             (
                 did("wait", "", "“Loading” to go", ""),
                 Tense::Failed,
-                "Didn't see “Loading” go",
+                "Didn't see “Loading” disappear",
+            ),
+            (
+                did(crate::agents::tools::SEARCHED, "", "", "ferry to Tangier"),
+                Tense::Now,
+                "Searching the web for “ferry to Tangier”",
+            ),
+            (
+                did(crate::agents::tools::SEARCHED, "", "", "ferry to Tangier"),
+                Tense::Done,
+                "Searched the web for “ferry to Tangier”",
             ),
             (
                 did("wait", "", tools::SETTLE, ""),
