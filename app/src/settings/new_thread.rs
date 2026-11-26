@@ -7,10 +7,9 @@ use browser::agents::task::MODEL;
 use browser::agents::tier::{ACCESS, Tier};
 use browser::command_bar::{self, EFFORT_DEFAULT, EFFORT_NAME, ModelPick};
 
-/// The group's heading and the line under it, as drawn (S8).
+/// The group's heading, as drawn (S8), and the line under it, as the table has it (ST1).
 const NEW_THREAD: &str = "A new thread starts with";
-const NEW_THREAD_FOOT: &str =
-    "Where a new thread starts. Pick differently for one thread where you write it.";
+const NEW_THREAD_FOOT: &str = "Pick differently for one thread where you write it.";
 
 impl Settings {
     /// The group, while threads are on: Access, Model once an assistant is signed in, and Effort
