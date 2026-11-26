@@ -5463,6 +5463,42 @@ fn the_open_is_timed_as_its_drawn_frame_comes_on_screen(cx: &mut TestAppContext)
     );
 }
 
+/// One open logs both of its points once, in order: its first frame drawn, off screen as the host
+/// draws it, then that frame's window on screen. A later frame logs neither again.
+#[gpui::test]
+fn an_open_logs_its_frame_drawn_then_its_window_on_screen_once(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    cx.update(text_input::bind_keys);
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no window for the bar");
+    let screen = cx.test_window(window.into());
+    screen.simulate_visibility_change(WindowVisibility::Hidden);
+    crate::heard::listen();
+    cx.update(|cx| show(None, Vec::new(), Vec::new(), None, cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    screen.simulate_visibility_change(WindowVisibility::Visible);
+    window.update(&mut visual, |_, _, cx| cx.notify()).unwrap();
+    visual.run_until_parked();
+    let points: Vec<String> = crate::heard::take()
+        .into_iter()
+        .filter(|line| {
+            line.starts_with("browser: command bar frame drawn in ")
+                || line.starts_with("browser: command bar first frame in ")
+        })
+        .map(|line| line.split(" in ").next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        points,
+        [
+            "browser: command bar frame drawn",
+            "browser: command bar first frame"
+        ],
+        "an open didn't log its frame drawn and then its window on screen, once each"
+    );
+}
+
 /// A folder the test makes, with the files named in it, as the system's panel gives them: beside
 /// the build, as ilo may give that on every system the tests run on, where the system's temporary
 /// folder is one ilo never gives on the Mac. Each is its own, as the tests run side by side.
@@ -5650,4 +5686,55 @@ fn settings_model_is_the_composers_model_menu() {
         };
         assert_eq!(checked, [&starts]);
     }
+}
+
+/// The bar's model trigger still says its assistant's name and the model's: only the panel beside
+/// a page draws the model's own word alone.
+#[gpui::test]
+fn the_bars_model_trigger_says_its_assistant_and_its_model(cx: &mut TestAppContext) {
+    use crate::tokens::command_bar::{
+        MODEL_GAP, MODEL_LEFT, MODEL_MARK, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_TEXT, TRIGGER_X,
+    };
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        last: RefCell::new(Opens {
+            tier: Tier::Look,
+            model: Some(("claude".into(), "sonnet".into())),
+            effort: None,
+        }),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("read the menu");
+    bar.keys("tab");
+    let (_, said) = bar.choices();
+    assert_eq!(said, "claude \u{b7} Sonnet");
+    bar.cx.run_until_parked();
+    let model = bar
+        .window
+        .read_with(&bar.cx.cx, |bar, _| bar.model_at.get())
+        .unwrap();
+    let model = model.expect("no model trigger");
+    // The trigger less its inset, the assistant's mark, its chevron and the gaps between them.
+    let drawn = f32::from(model.size.width)
+        - MODEL_LEFT
+        - MODEL_MARK
+        - MODEL_GAP
+        - TRIGGER_GAP
+        - TRIGGER_CHEVRON
+        - TRIGGER_X;
+    let width = bar.cx.update(|_, cx| {
+        let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+        let measure = |text: &str| {
+            let text = gpui::SharedString::from(text.to_string());
+            crate::tooltip::text_width(&text, TRIGGER_TEXT, gpui::FontWeight::NORMAL, &system)
+        };
+        (measure(&said), measure("Sonnet"))
+    });
+    assert!(
+        (drawn - width.0).abs() <= 1.,
+        "the bar's model is {drawn} wide: both words are {}, Sonnet alone {}",
+        width.0,
+        width.1
+    );
 }

@@ -194,6 +194,7 @@ pub use commands::{
 pub use display_face::{display_text, display_text_weighted};
 pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::{Elsewhere, PlayReady};
+pub use empty::field_typed;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
@@ -1584,9 +1585,11 @@ pub struct Shell {
     /// The first launch's import, made at its first step and kept for the window's life, so an
     /// import under way goes on while the steps after it show and once the flow has ended.
     importing: Option<onboarding::Importing>,
-    /// The onboarding has just ended, so the empty card says what the command bar over it is,
-    /// until a page shows.
+    /// First run has just ended, so the landing field has its one-time hint under it, until the
+    /// first key or a page shows (first-run v9 §10). A flag alone: nothing of what's typed.
     in_hint: bool,
+    /// While the hint shows, what takes it away at the first key.
+    hint_keys: Option<gpui::Subscription>,
     /// The press under way was on a target that opens the command bar while it was open, so the
     /// click that follows only closes it.
     press_closed_bar: bool,
@@ -2235,6 +2238,7 @@ impl Shell {
             first_run: None,
             importing: None,
             in_hint: false,
+            hint_keys: None,
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
@@ -3699,6 +3703,8 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        // First run's hint was under its field.
+        self.drop_hint();
         self.field_let_go(cx);
         self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
@@ -4861,7 +4867,6 @@ impl Render for Shell {
             .as_ref()
             .is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
-            || self.agent_pointer_shown()
             || self.download_flying(cx);
         if drop_targets || self.drop_targets_shown {
             self.drop_targets_shown = drop_targets;

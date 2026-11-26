@@ -272,6 +272,7 @@ impl Shell {
                 .left(px((width - MARK_SIZE) / 2.))
                 .child(product::mark(MARK_SIZE, &palette))
         });
+        let hint = self.landing_hint(top, width, cx);
         let page = div()
             .size_full()
             .relative()
@@ -279,7 +280,8 @@ impl Shell {
             .flex_col()
             .items_center()
             .pt(px(top + BAR_HEIGHT))
-            .children(mark);
+            .children(mark)
+            .children(hint);
         if cards.is_empty() {
             return Some(page.child(bar));
         }

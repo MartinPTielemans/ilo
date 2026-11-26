@@ -234,7 +234,7 @@ mod tests {
     fn the_working_task_has_a_model_for_its_row() {
         use browser::agents::runner::Cli;
         let talk = super::tasks::task_conversation("claude".into());
-        let Some((mark, said, _)) = talk.model else {
+        let Some((mark, said, _, _)) = talk.model else {
             panic!("the preview's thread has no model, so its row shows the level alone");
         };
         assert_eq!(mark, Cli::Claude.glyph());

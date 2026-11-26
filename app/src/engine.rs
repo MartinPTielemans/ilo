@@ -2375,6 +2375,11 @@ impl Browser for Engine {
         unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
     }
 
+    // No platform grows first run's window yet, so the exit is the cross-fade everywhere.
+    fn grows_first_run(&self) -> bool {
+        false
+    }
+
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
         unsafe { platform::host_close_first_run() };
         window

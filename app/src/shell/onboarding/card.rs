@@ -313,11 +313,20 @@ pub(super) fn whole_knot(size: f32, ink: Rgba) -> gpui::Svg {
 /// column on the split ones, so nothing of the foot sits on the picture.
 pub(super) fn foot_span(step: Step) -> (f32, f32) {
     let side = t::FOOT_SIDE;
+    match step.split() {
+        true => (side, side + column(step)),
+        false => (side, t::WIDTH - side),
+    }
+}
+
+/// How wide a step's column is: a pictured step's own, beside its picture or centred without it,
+/// and the centred steps' otherwise.
+pub(super) fn column(step: Step) -> f32 {
     let [_, column] = t::COLUMN;
     match step {
-        Step::Assistant | Step::Tidy => (side, side + column),
-        Step::Space => (side, side + t::SPACE_FOOT),
-        _ => (side, t::WIDTH - side),
+        Step::Assistant | Step::Tidy => column,
+        Step::Space => t::SPACE_FOOT,
+        _ => t::CENTRED_COLUMN,
     }
 }
 

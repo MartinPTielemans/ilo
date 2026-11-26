@@ -473,12 +473,15 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
 
 /// A thread's model as its composer's row says it, the app's way: its CLI's mark and name with
 /// the model's, or its default's row, opening the model's menu where the CLI takes another.
-fn model(cli: Cli, name: Option<&str>) -> (&'static str, SharedString, bool) {
-    let said = match name {
-        Some(name) => format!("{} \u{b7} {name}", cli.name()),
-        None => browser::agents::task::model_default(cli),
+fn model(cli: Cli, name: Option<&str>) -> (&'static str, SharedString, SharedString, bool) {
+    let (said, word) = match name {
+        Some(name) => (format!("{} \u{b7} {name}", cli.name()), name.to_string()),
+        None => {
+            let default = browser::agents::task::model_default(cli);
+            (default, browser::command_bar::DEFAULT_ROW.to_string())
+        }
     };
-    (cli.glyph(), said.into(), cli.switches_model())
+    (cli.glyph(), said.into(), word.into(), cli.switches_model())
 }
 
 /// The view of a task that isn't at work says what its group's header does: its title, where it

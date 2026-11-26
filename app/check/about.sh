@@ -60,7 +60,7 @@ $(grep '^browser: menu shown' "$log" | tail -1)"
   send key down
   send key return
   expect '^browser: command settings via footer$' "down and return in the menu control's menu didn't run Settings…"
-  settings_on_general "Settings… from the menu control didn't show Settings"
+  expect '^browser: settings shown General$' "Settings… from the menu control didn't show Settings on its General tab"
   settings_drew General
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings shown from the menu control"

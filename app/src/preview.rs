@@ -2058,6 +2058,11 @@ impl Browser for Fake {
         true
     }
 
+    // Nor one to grow it, so its exit is the cross-fade.
+    fn grows_first_run(&self) -> bool {
+        false
+    }
+
     // A made-up account, signed out, so the onboarding opens on its Welcome; elsewhere none, as
     // the other states show a build that names no sync server.
     fn account_host(&self) -> Option<Rc<dyn browser::account::Host>> {
@@ -3302,10 +3307,10 @@ fn main() {
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
                             shell.onboarding_show_assistants(rows, cx);
                         }
-                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth palette at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
-                            shell.onboarding_pick_swatch(index, cx);
+                            shell.onboarding_pick_palette(index, cx);
                         }
                     }
                     shell

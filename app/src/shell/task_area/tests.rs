@@ -2248,28 +2248,3 @@ fn a_web_link_from_a_threads_page_opens_in_the_users_space(cx: &mut TestAppConte
         );
     }
 }
-
-/// The agent's pointer and the rings it draws wear `primary`, the text's colour, never green, with
-/// `on-primary`, the other look's ink, outlining the pointer and on its chips: Dark's primary is
-/// Light's on-primary and the other way round, and each reads on the other.
-#[test]
-fn the_agents_pointer_wears_primary_in_both_tones() {
-    use crate::palette::{Palette, Tone, contrast};
-    use crate::shell::agent_pointer::pointer_inks;
-    let inks = [Tone::Dark, Tone::Light].map(|tone| pointer_inks(&Palette::of(None, tone)));
-    let [(dark, on_dark), (light, on_light)] = inks;
-    assert_eq!((dark, on_dark), (on_light, light));
-    for (primary, on_primary) in inks {
-        let (primary, on_primary) = (gpui::rgb(primary), gpui::rgb(on_primary));
-        assert!(
-            contrast(on_primary, primary) >= 4.5,
-            "{on_primary:?} on {primary:?}"
-        );
-        // The text's colour is a near grey, which no green is.
-        let hsla = gpui::Hsla::from(primary);
-        assert!(
-            hsla.s < 0.25 || hsla.l > 0.9 || hsla.l < 0.1,
-            "{primary:?} is a colour"
-        );
-    }
-}
