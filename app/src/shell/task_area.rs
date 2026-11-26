@@ -33,7 +33,7 @@ use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::Tone;
 use crate::tokens::shell::conversation::ilo::ARM;
-use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST, PAGE_ROOM};
+use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
 use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT};
 
 /// What the page area shows of a task, at most one per window.
@@ -139,12 +139,21 @@ impl Zoom {
 const DEFAULT_WINDOW: (f32, f32) = (1280., 800.);
 
 /// An agent's page's own size, which the core gives it (core/window.cc, kAgentPageSize) and a tile
-/// never changes: a watch fits it whole into the page's part beside the panel, never past 1:1
-/// (#3788).
+/// never changes: as wide as a card in a window at its default size, and as tall as keeps the shape
+/// of the page's part of that card beside the panel, so a watch there fills the part, scaled down,
+/// and never goes past 1:1 in another (#3788).
 pub(super) fn agent_page_size() -> Size<Pixels> {
+    let card = Bounds::new(
+        point(px(0.), px(0.)),
+        size(
+            px(DEFAULT_WINDOW.0 - SIDEBAR_WIDTH - CARD_INSET),
+            px(DEFAULT_WINDOW.1 - 2. * CARD_INSET),
+        ),
+    );
+    let (stage, _) = split(watched(card));
     size(
-        px(DEFAULT_WINDOW.0 - SIDEBAR_WIDTH - CARD_INSET),
-        px(DEFAULT_WINDOW.1 - 2. * CARD_INSET - PAGE_ROOM),
+        card.size.width,
+        (card.size.width * (stage.size.height / stage.size.width)).round(),
     )
 }
 
