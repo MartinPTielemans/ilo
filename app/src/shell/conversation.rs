@@ -248,8 +248,10 @@ pub struct TalkView {
     scroll: ScrollHandle,
     /// Its rail of pages, which brings a tile into sight once as its word turns to Needs you.
     rail_scroll: ScrollHandle,
-    /// The window's size as last drawn: a change keeps the lines at their end if they were.
-    viewport: Size<Pixels>,
+    /// The window's size as last drawn, and whether the lines stood in the panel beside a page:
+    /// a change of either is a change of the lines' own column, which keeps them at their end if
+    /// they were.
+    viewport: (Size<Pixels>, bool),
     /// What the user opened or folded of its traces and their lines, which wins over what the
     /// trace would do by itself.
     opened: HashMap<Fold, bool>,
@@ -490,7 +492,7 @@ impl Shell {
                     shimmering: false,
                     scroll: ScrollHandle::new(),
                     rail_scroll: ScrollHandle::new(),
-                    viewport: Size::default(),
+                    viewport: Default::default(),
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
                     folding: HashMap::new(),
@@ -4605,11 +4607,16 @@ impl Render for TalkView {
         {
             self.visited.insert(tab);
         }
-        // A shorter or narrower window keeps the newest line in view while the user reads at the
-        // end, as the scroll keeps its distance from the top.
-        let viewport = window.viewport_size();
-        if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
+        // A shorter or narrower window, or the lines' column narrower or wider as a page goes
+        // beside them or away, keeps the newest line in view while the user reads at the end, as
+        // the scroll keeps its distance from the top; a follow under way ends there. Only the
+        // user's own scroll takes the lines off their end.
+        let viewport = (window.viewport_size(), look.standing);
+        if std::mem::replace(&mut self.viewport, viewport) != viewport
+            && (self.at_end() || self.motion.follow.is_some())
+        {
             self.scroll.scroll_to_bottom();
+            self.motion.follow = None;
         }
         self.level_drawn.set(None);
         self.folder_drawn.set(None);
