@@ -93,8 +93,8 @@ actions!(conversation, [SendReply, StopTask]);
 mod ilo_keys;
 mod markdown;
 mod motion;
-mod pages;
-pub(super) mod words;
+pub(crate) mod pages;
+pub(crate) mod words;
 
 /// The assistant's said words, in the answer and between a stretch's steps alike: the text's ink.
 fn said_ink(palette: &super::Palette) -> Hsla {
