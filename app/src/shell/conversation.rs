@@ -2401,7 +2401,7 @@ impl TalkView {
     }
 
     /// The turn the user sent, until its trace or the agent's message takes its place: Thinking,
-    /// shimmering as the step under way does, or why the agent couldn't start on it, in red.
+    /// shimmering as the step under way does, or why the agent couldn't start on it.
     fn thinking(&self, key: usize, failed: Option<SharedString>, look: &Look) -> gpui::AnyElement {
         let fold = Fold::Trace(key);
         let line = match failed {
@@ -3675,6 +3675,16 @@ fn steps(lines: &[Line]) -> usize {
 /// Where the words of ilo's lines were drawn and how they were laid out, by line.
 type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>>;
 
+/// The colours a trace's line draws in (`TraceLine::inks`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LineInks {
+    words: Hsla,
+    note: Hsla,
+    glyph: Hsla,
+    /// Its words under the pointer, where the line opens and no shimmer lights them.
+    pointed: Option<Hsla>,
+}
+
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
@@ -3753,6 +3763,36 @@ impl TraceLine {
 
     /// Whether what came of it sits at the column's right edge, its words filling the line: a
     /// step's line, never a fold's head, a page's line, one of ilo's or a line read as one string.
+    /// Its colours. Each is the text's ink at one strength or another, and a failed line's are
+    /// any other's, a cross for its glyph and why at its end: never red, at rest or under the
+    /// pointer.
+    fn inks(&self, palette: &super::Palette) -> LineInks {
+        let ilos = self.mark.is_some();
+        let words = match self.shimmers {
+            _ if ilos => palette.text(ILO_INK),
+            _ if self.head == Some(true) => palette.text(TITLE),
+            _ if self.page == Some(true) => palette.text(TITLE),
+            _ if self.page == Some(false) => palette.gray(TRACE_NOTE),
+            _ if self.ring.is_some() => palette.text(TITLE),
+            Some(None) => palette.text(TITLE),
+            // At the shimmer's peak, which each part fades down from.
+            Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
+            None => palette.text(TRACE_TITLE),
+        };
+        let opens = self.chevron.is_some() || self.page.is_some();
+        // A shimmering title is lit by its shimmer, under the pointer too.
+        let lit = opens && !matches!(self.shimmers, Some(Some(_)));
+        LineInks {
+            words,
+            note: palette.gray(TRACE_NOTE),
+            glyph: match ilos {
+                true => palette.text(MARK_INK),
+                false => palette.glyph(TRACE_GLYPH_ALPHA),
+            },
+            pointed: lit.then(|| palette.text(TITLE)),
+        }
+    }
+
     fn note_at_right(&self) -> bool {
         self.mark.is_none() && self.head.is_none() && self.page.is_none() && !self.joined
     }
@@ -3860,6 +3900,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
     let parts = line.note_parts();
     let at_right = line.note_at_right();
+    let inks = line.inks(&palette);
     let TraceLine {
         key,
         glyph,
@@ -3912,26 +3953,16 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             format!("trace-group-{key}").into(),
         ),
     };
-    // A failed line is as quiet as any other, a cross for its glyph and why at its end: never
-    // red.
-    let note = palette.gray(TRACE_NOTE);
+    let LineInks {
+        words,
+        note,
+        glyph: glyph_ink,
+        pointed,
+    } = inks;
     let ilos = mark.is_some();
-    let words = match shimmers {
-        _ if ilos => palette.text(ILO_INK),
-        _ if head == Some(true) => palette.text(TITLE),
-        _ if page == Some(true) => palette.text(TITLE),
-        _ if page == Some(false) => palette.gray(TRACE_NOTE),
-        _ if ring.is_some() => palette.text(TITLE),
-        Some(None) => palette.text(TITLE),
-        // At the shimmer's peak, which each part fades down from.
-        Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
-        None => palette.text(TRACE_TITLE),
-    };
     let glyph = glyph.map(|glyph| {
-        let (color, size) = match ilos {
-            true => (palette.text(MARK_INK), ILO_GLYPH),
-            false => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
-        };
+        let size = if ilos { ILO_GLYPH } else { TRACE_GLYPH };
+        let color = glyph_ink;
         let path = if failed { "icons/x.svg" } else { glyph };
         match ring {
             Some(turned) => div()
@@ -4018,11 +4049,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .when(head == Some(true), |title| {
             title.font_weight(FontWeight::MEDIUM)
         })
-        // A shimmering title is lit by its shimmer, under the pointer too.
-        .when(
-            opens && !failed && !matches!(shimmers, Some(Some(_))),
-            |title| title.group_hover(hover, move |style| style.text_color(palette.text(TITLE))),
-        )
+        .when_some(pointed, |title, pointed| {
+            title.group_hover(hover, move |style| style.text_color(pointed))
+        })
         .child(match shimmers {
             Some(Some(phase)) => shimmering(&palette, title, phase),
             _ => {
