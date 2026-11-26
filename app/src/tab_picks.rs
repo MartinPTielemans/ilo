@@ -20,6 +20,9 @@ use crate::tokens::tab_picks::{
 /// Z-tab Z33: the add menu's row that lists the user's tabs.
 pub const YOUR_TABS: &str = "Your Tabs";
 const YOUR_TABS_ICON: &str = "icons/app-window.svg";
+/// #4278: the second menu's first row, which picks every tab it lists. The lead's proposed words,
+/// waiting for the table's row.
+pub const ALL_TABS: &str = "All Tabs";
 const NO_FAVICON: &str = "icons/globe.svg";
 const CLOSE_ICON: &str = "icons/x.svg";
 
@@ -100,6 +103,24 @@ impl Picks {
         true
     }
 
+    /// The user's click on the menu's All Tabs row for the Space `space`: with `pick`, picks each
+    /// of `listed` not picked yet, after those that are, in the menu's order; else unpicks each.
+    pub fn set_all(&mut self, space: u64, listed: &[Offered], pick: bool) {
+        if self.space != space {
+            self.chips.clear();
+            self.space = space;
+        }
+        let picked = |chips: &[Offered], tab: u64| chips.iter().any(|chip| chip.tab == tab);
+        if !pick {
+            return self.chips.retain(|chip| !picked(listed, chip.tab));
+        }
+        for each in listed {
+            if !picked(&self.chips, each.tab) {
+                self.chips.push(each.clone());
+            }
+        }
+    }
+
     /// The user's press on `tab`'s chip's ✕. Whether it was picked.
     pub fn unpick(&mut self, tab: u64) -> bool {
         let before = self.chips.len();
@@ -153,16 +174,37 @@ impl Picks {
 /// The add menu's row for the user's tabs, with its second menu. `listed` is asked once, as the
 /// add menu opens and not before, for the tabs to list and which of them are picked; with none
 /// to list the row is not in the menu. A click on a tab's row calls `flip`, which answers
-/// whether it is picked now, and the menu stays open.
+/// whether it is picked now, and the menu stays open. With two tabs or more, All Tabs comes
+/// first: its click calls `set_all` with the tabs listed, to unpick them all where it showed each
+/// picked and else to pick them all, and closes the menu, as the other rows' checks would be
+/// left as they were.
 pub fn row(
     listed: impl FnOnce(&mut App) -> (Offer, Vec<u64>) + 'static,
     flip: impl Fn(u64, Offered, &mut App) -> bool + Clone + 'static,
+    set_all: impl FnOnce(u64, Vec<Offered>, bool, &mut App) + 'static,
 ) -> crate::plus::Row {
     let entry = MenuEntry::new(YOUR_TABS, true).icon(YOUR_TABS_ICON);
     crate::plus::Row::over(entry, move |cx| {
         let (offer, picked) = listed(cx);
-        entries(&offer, &picked, flip)
+        let all = all_checked(&offer, &picked).map(|checked| {
+            let entry = MenuEntry {
+                checked,
+                ..MenuEntry::new(ALL_TABS, true)
+            };
+            let (space, tabs) = (offer.space, offer.tabs.clone());
+            crate::plus::Row::new(entry, move |_, cx| set_all(space, tabs, !checked, cx))
+        });
+        let tabs = entries(&offer, &picked, flip).into_iter();
+        all.into_iter()
+            .chain(tabs.map(crate::plus::Row::staying))
+            .collect()
     })
+}
+
+/// The All Tabs row's check, where the menu has the row: with two tabs or more listed, whether
+/// each is picked. With one it would be that tab's row again.
+fn all_checked(offer: &Offer, picked: &[u64]) -> Option<bool> {
+    (offer.tabs.len() >= 2).then(|| (offer.tabs.iter()).all(|each| picked.contains(&each.tab)))
 }
 
 /// The second menu's rows: `offer`'s tabs by icon and title, those in `picked` checked.

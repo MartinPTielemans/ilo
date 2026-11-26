@@ -403,7 +403,8 @@ impl Agents {
     /// Whether `tab` is one the app would hand from the user's Space `from` to a thread of the
     /// Space `own`: the user's own tab, in the Space the window shows, never a private window's
     /// and never one of another profile than the thread's, on a page on the web, as every page a
-    /// thread has.
+    /// thread has, and never at a site the user put Off limits, whose page no thread reads at any
+    /// level, so handing it would give nothing (#4278).
     fn fits(&self, own: u64, from: u64, tab: u64, cx: &App) -> bool {
         self.space_fits(own, from) && self.tab_fits(from, tab, cx)
     }
@@ -416,7 +417,11 @@ impl Agents {
 
     /// What `fits` asks of `tab` itself.
     fn tab_fits(&self, from: u64, tab: u64, cx: &App) -> bool {
-        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none()
+        let fenced = || {
+            self.fence_of(&site(&self.browser.tab(tab, cx).url))
+                .is_some()
+        };
+        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none() && !fenced()
     }
 
     /// Whether the composer may offer `tab`, and keep its chip, seen from the user's Space

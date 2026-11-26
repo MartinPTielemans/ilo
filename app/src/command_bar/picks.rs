@@ -16,6 +16,7 @@ impl CommandBar {
         }
         let picked = self.ask.as_ref().map(|ask| ask.picks.tabs());
         let (host, picked, flips) = (self.host.clone(), picked?, cx.weak_entity());
+        let sets = flips.clone();
         Some(tab_picks::row(
             // The add menu opened: the tabs the thread may be handed, asked now and here alone,
             // with which of them are picked.
@@ -24,7 +25,17 @@ impl CommandBar {
                 let picked = flips.update(cx, |bar, cx| bar.flip_pick(space, offered, cx));
                 picked.unwrap_or(false)
             },
+            move |space, listed, pick, cx| {
+                (sets.update(cx, |bar, cx| bar.pick_all(space, &listed, pick, cx))).ok();
+            },
         ))
+    }
+
+    /// The user's click on the menu's All Tabs row.
+    fn pick_all(&mut self, space: u64, listed: &[Offered], pick: bool, cx: &mut Context<Self>) {
+        let Some(ask) = &mut self.ask else { return };
+        ask.picks.set_all(space, listed, pick);
+        self.picks_changed(cx);
     }
 
     /// The user's click on a tab's row of the menu. Whether it is picked now.

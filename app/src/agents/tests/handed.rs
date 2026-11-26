@@ -2141,6 +2141,28 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
 }
 
+/// A tab at a site the user put Off limits is offered to no thread, at any level, as none reads
+/// its page: left out of the composer's menu, and handed by no send. Once the site is off the
+/// list, the tab is offered again.
+#[gpui::test]
+fn an_off_limits_site_is_never_offered_or_handed(cx: &mut TestAppContext) {
+    let run = run("handed-off-limits", cx);
+    (run.agents).update(cx, |agents, cx| agents.fence("tickets.example", cx));
+    let among = |agent: Option<&str>, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            agents.fits_among(agent, USERS, &[TRAINS.0, SEATS.0], cx)
+        })
+    };
+    assert_eq!(among(None, cx), [TRAINS.0]);
+    let agent = send(&run, ASKED, USERS, &[SEATS.0], cx).expect("started on its words");
+    run.ran(1);
+    assert!(given(&run).is_empty());
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(among(Some(&agent), cx), [TRAINS.0]);
+    (run.agents).update(cx, |agents, cx| agents.unfence("tickets.example", cx));
+    assert_eq!(among(Some(&agent), cx), [TRAINS.0, SEATS.0]);
+}
+
 /// The composer's menu of the user's tabs asks once for them all: its answer is the tabs
 /// `still_fits` would keep, in their order, for a thread to start and for a reply, and what is the
 /// Space's is asked once however many tabs there are.
