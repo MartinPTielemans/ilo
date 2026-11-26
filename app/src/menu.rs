@@ -14,25 +14,26 @@ use std::time::Instant;
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, FocusHandle, Global, Hsla, KeyDownEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Radians, Rgba, Role, SharedString, Task, TitlebarOptions, Transformation, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img,
-    point, prelude::*, px, rgb, rgba, size, svg,
+    AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Global, Hsla,
+    KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Radians, Rgba, Role, SharedString, Subscription, Task, TitlebarOptions,
+    Transformation, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
     elevation::Reach,
     list_keys::TypeAhead,
     shell::{MenuEntry, Shell, keystroke_label},
-    text_input::{self, FieldMenu},
+    text_input::{self, FieldMenu, TextInput},
 };
 
 pub use crate::tokens::menu::*;
 
-/// The panel's colour, 0xRRGGBBAA: what floats over a dark or a light window (#4090).
-pub const DARK_FILL: u32 = (crate::tokens::palette::OVERLAY_DARK << 8) | 0xff;
-pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
+/// The panel's colour, 0xRRGGBBAA, opaque: what floats over a dark or a light window, where the
+/// host has no material under it (#4090).
+pub const DARK_FILL: u32 = crate::tokens::floating::FILL | 0xff;
+pub const LIGHT_FILL: u32 = crate::tokens::floating::LIGHT_FILL | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
@@ -50,7 +51,7 @@ pub struct Palette {
 
 const DARK: Palette = Palette {
     fill: DARK_FILL,
-    rim: DARK_RIM,
+    rim: crate::tokens::floating::RIM,
     label: DARK_LABEL,
     secondary: DARK_SECONDARY,
     line: DARK_LINE,
@@ -60,7 +61,7 @@ const DARK: Palette = Palette {
 
 const LIGHT: Palette = Palette {
     fill: LIGHT_FILL,
-    rim: LIGHT_RIM,
+    rim: crate::tokens::floating::LIGHT_RIM,
     label: LIGHT_LABEL,
     secondary: LIGHT_SECONDARY,
     line: LIGHT_LINE,
@@ -154,13 +155,31 @@ impl Look {
         Highlight::plate(self.light)
     }
 
+    /// The secondary ink of a shortcut, a chevron, a detail or a heading: the look's where it
+    /// reads over the material, or as much more as does (`palette::float_ink`).
+    pub fn secondary(self) -> Rgba {
+        let ink = rgba(self.palette().secondary);
+        Rgba {
+            a: crate::palette::Float::Menu.word(self.tone(), ink.a),
+            ..ink
+        }
+    }
+
+    /// A disabled row's ink: the look's at every level, held to no ratio, and never fainter.
+    pub fn disabled(self) -> Rgba {
+        rgba(self.palette().disabled)
+    }
+
     /// The panel as drawn: frosted where the host blurs under the menu's window (#4090).
     pub fn fill(self) -> Rgba {
-        let tone = match self.light {
+        crate::palette::Float::Menu.fill(self.tone())
+    }
+
+    fn tone(self) -> crate::palette::Tone {
+        match self.light {
             true => crate::palette::Tone::Light,
             false => crate::palette::Tone::Dark,
-        };
-        crate::palette::Float::Menu.fill(tone)
+        }
     }
 }
 
@@ -188,7 +207,7 @@ pub fn glass<E: Styled + ParentElement + gpui::prelude::FluentBuilder>(
         inset: true,
     };
     let mut shadows = match shadowed {
-        true => crate::elevation::menu_shadow(light),
+        true => crate::elevation::menu_shadow(),
         false => Vec::new(),
     };
     shadows.push(match light {
@@ -263,6 +282,13 @@ pub enum Closed {
     Otherwise,
 }
 
+/// What a row that stays does each time it's chosen (`MenuEntry::stays`), answering whether it
+/// shows its check now.
+pub type Stays = Rc<dyn Fn(&mut App) -> bool>;
+
+/// The log's line for a pick that left the menu open (`MenuEntry::stays`).
+const STAYED: &str = "browser: menu picked a row that stays";
+
 /// How a menu closed, with `Otherwise`'s ways told apart, for the line the log has of it (#2873).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Closing {
@@ -334,6 +360,9 @@ pub(crate) struct Level {
 
 /// How tall `entry` stands in its level, a line or a row, quiet in a level of choices.
 fn row_height(entry: &MenuEntry, choices: bool) -> f32 {
+    if entry.field {
+        return FIELD_ROW;
+    }
     match (entry.title.is_empty(), choices) {
         (true, _) => LINE,
         (false, true) => QUIET_ROW,
@@ -439,6 +468,8 @@ fn panel_width(
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
+    let out = items.iter().any(|&at| entries[at].out);
+    let chevron = chevron + if out { GAP + OUT_ARROW } else { 0. };
     (2. * (PADDING + ROW_X) + lead + widest + chevron).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
@@ -468,11 +499,17 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
     point(px(x), px(y))
 }
 
+/// Whether `entry` asks its level for the checks' column: checked, or a row that stays, which may
+/// be at any pick, so its title never moves under the pointer.
+fn marked(entry: &MenuEntry) -> bool {
+    entry.checked || entry.stays.is_some()
+}
+
 /// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
 /// so a control can open it with its foot where it wants.
 pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
     let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
-    let choices = top.clone().any(|entry| entry.checked);
+    let choices = top.clone().any(marked);
     let rows: f32 = top.map(|entry| row_height(entry, choices)).sum();
     PADDING + rows + PADDING
 }
@@ -486,6 +523,20 @@ pub(crate) fn lay_out(
     area: Bounds<Pixels>,
     width_of: &dyn Fn(&str) -> f32,
 ) -> Layout {
+    lay_out_wide(entries, at, area, width_of, 0., false)
+}
+
+/// Lays `entries` out as `lay_out` does, with the root's panel at least `least` wide, and a level
+/// of choices if `choices`: a search's rows keep the panel and the rows they were narrowed in, as
+/// the chosen row goes.
+fn lay_out_wide(
+    entries: &[MenuEntry],
+    at: Point<Pixels>,
+    area: Bounds<Pixels>,
+    width_of: &dyn Fn(&str) -> f32,
+    least: f32,
+    choices: bool,
+) -> Layout {
     let parents: Vec<Option<usize>> = std::iter::once(None)
         .chain(
             (0..entries.len())
@@ -498,14 +549,21 @@ pub(crate) fn lay_out(
         let items: Vec<usize> = (0..entries.len())
             .filter(|&at| entries[at].parent == parent && !entries[at].alternate)
             .collect();
-        let checks = items.iter().any(|&item| entries[item].checked);
+        let checks =
+            items.iter().any(|&item| marked(&entries[item])) || (choices && parent.is_none());
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
         for &item in &items {
             tops.push(y);
             y += row_height(&entries[item], checks);
         }
-        let size = (panel_width(entries, &items, checks, width_of), y + PADDING);
+        let width = panel_width(entries, &items, checks, width_of);
+        let width = if parent.is_none() {
+            width.max(least)
+        } else {
+            width
+        };
+        let size = (width, y + PADDING);
         let origin = match parent {
             None => {
                 let (x, y) = (f32::from(at.x), f32::from(at.y));
@@ -708,7 +766,10 @@ impl Tracking {
             let row = (0..level.items.len())
                 .find(|&row| level.row_bounds(row, &self.entries).contains(&at));
             return match row {
-                Some(row) if !self.entries[level.items[row]].title.is_empty() => {
+                Some(row)
+                    if !self.entries[level.items[row]].title.is_empty()
+                        && !self.entries[level.items[row]].field =>
+                {
                     Hit::Row(open.level, level.items[row])
                 }
                 _ => Hit::Panel(open.level),
@@ -995,6 +1056,118 @@ impl Tracking {
                 })
         })
     }
+
+    /// Shows `entries`, a search's narrowing of the menu, laid out as `layout`, with the first row
+    /// that matched what was typed highlighted, so ↩ picks it, and none where nothing was typed or
+    /// nothing matched: ↩ never signs in or opens Settings for a search that found nothing. The
+    /// pointer and the press stay as they were.
+    fn narrow(&mut self, entries: Vec<MenuEntry>, layout: Layout, typed: bool) {
+        self.entries = entries;
+        self.layout = layout;
+        let first = (self.layout.levels[0].items.iter().copied())
+            .find(|&item| self.selectable(item) && !self.entries[item].kept);
+        self.open = vec![Open {
+            level: 0,
+            highlight: first.filter(|_| typed),
+        }];
+        self.resting = None;
+    }
+}
+
+/// The ink of `entry`'s title, `lit` or not, on `on_fill` where it's lit: a heading's and an
+/// offer's the secondary ink, as the model menu's not-signed-in Sign In.
+pub(crate) fn title_ink(entry: &MenuEntry, lit: bool, look: Look, on_fill: Rgba) -> Hsla {
+    let palette = look.palette();
+    match (lit, entry.enabled, entry.destructive) {
+        _ if entry.header => look.secondary().into(),
+        (true, ..) => on_fill.into(),
+        (false, false, _) => look.disabled().into(),
+        (false, true, true) => rgba(palette.destructive).into(),
+        (false, true, false) if entry.offer => look.secondary().into(),
+        (false, true, false) => rgba(palette.label).into(),
+    }
+}
+
+/// The items of `entries` a search for `typed` leaves, by index: the field; each row whose title
+/// holds what's typed, ignoring case, and each a search keeps (`MenuEntry::kept`); a heading while
+/// a row under it stays; the lines between what's left; and what's in a kept row's submenu or
+/// takes its place while ⌥ is held. An offer (`MenuEntry::offer`) goes once anything is typed, so a
+/// heading over offers alone goes with them. Nothing typed leaves them all. A search that matches
+/// nothing leaves only the field and the kept rows, with no words of its own.
+pub(crate) fn narrowed(entries: &[MenuEntry], typed: &str) -> Vec<usize> {
+    let typed = typed.trim().to_lowercase();
+    if typed.is_empty() {
+        return (0..entries.len()).collect();
+    }
+    let root: Vec<usize> = (0..entries.len())
+        .filter(|&at| entries[at].parent.is_none() && !entries[at].alternate)
+        .collect();
+    let row = |entry: &MenuEntry| !entry.header && !entry.title.is_empty() && !entry.field;
+    let matches = |entry: &MenuEntry| {
+        entry.field
+            || (row(entry)
+                && !entry.offer
+                && (entry.kept || entry.title.to_lowercase().contains(&typed)))
+    };
+    let mut left: Vec<usize> = Vec::new();
+    for (k, &at) in root.iter().enumerate() {
+        let entry = &entries[at];
+        let stays = if entry.header {
+            // A heading heads the rows after it, up to the next heading or line.
+            (root[k + 1..].iter())
+                .map(|&next| &entries[next])
+                .take_while(|next| !next.header && !next.title.is_empty())
+                .any(|next| matches(next))
+        } else {
+            entry.title.is_empty() || matches(entry)
+        };
+        if stays {
+            left.push(at);
+        }
+    }
+    // No line first, last, after the field or after another.
+    let mut root_left: Vec<usize> = Vec::new();
+    for at in left {
+        let line = entries[at].title.is_empty();
+        let after_line_or_field = root_left
+            .last()
+            .is_none_or(|&last| entries[last].title.is_empty() || entries[last].field);
+        if line && after_line_or_field {
+            continue;
+        }
+        root_left.push(at);
+    }
+    if root_left
+        .last()
+        .is_some_and(|&last| entries[last].title.is_empty())
+    {
+        root_left.pop();
+    }
+    // A submenu's items and an item's alternate go with it, their parent coming first.
+    let mut kept = vec![false; entries.len()];
+    for &at in &root_left {
+        kept[at] = true;
+    }
+    for at in 0..entries.len() {
+        let entry = &entries[at];
+        if entry.alternate && at > 0 && entry.parent.is_none() {
+            kept[at] = kept[at - 1];
+        } else if let Some(parent) = entry.parent {
+            kept[at] = kept[parent];
+        }
+    }
+    (0..entries.len()).filter(|&at| kept[at]).collect()
+}
+
+/// `entries` at the indices `left`, each submenu's items pointing at their parent's new place.
+fn kept_entries(entries: &[MenuEntry], left: &[usize]) -> Vec<MenuEntry> {
+    (left.iter())
+        .map(|&at| MenuEntry {
+            parent: (entries[at].parent)
+                .and_then(|parent| left.iter().position(|&each| each == parent)),
+            ..entries[at].clone()
+        })
+        .collect()
 }
 
 /// The menu's items as the host's menus log them, for check.sh: lines left out, a submenu's items
@@ -1032,7 +1205,7 @@ pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
         titles: &mut Vec<String>,
     ) {
         for (at, entry) in entries.iter().enumerate() {
-            if entry.parent != parent || entry.title.is_empty() || entry.alternate {
+            if entry.parent != parent || entry.title.is_empty() || entry.alternate || entry.field {
                 continue;
             }
             let title = format!("{path}{}", entry.title);
@@ -1100,6 +1273,27 @@ struct Shown {
     drawn_open: Vec<usize>,
     /// Whether its window blends with what's under it (`Host::blends`).
     blends: bool,
+    /// Its search, where its first row is a field (`MenuEntry::field`).
+    search: Option<Search>,
+}
+
+/// A menu's search: what's typed in its field narrows its rows (`narrowed`). The text lives in the
+/// field alone, in the menu's memory, and goes with the menu: never to the log, kept, or to anyone.
+struct Search {
+    field: Entity<TextInput>,
+    /// Every item the menu was asked for.
+    all: Vec<MenuEntry>,
+    /// Each item shown's index in `all`.
+    left: Vec<usize>,
+    /// What the rows were last narrowed for.
+    typed: String,
+    /// The root's panel as it opened, whose top left and width a narrowing keeps, so the field
+    /// stays where it is; and where the menu may go.
+    root: Bounds<Pixels>,
+    area: Bounds<Pixels>,
+    /// Whether the root opened as a level of choices, which it stays.
+    choices: bool,
+    _typing: Subscription,
 }
 
 impl Shown {
@@ -1233,6 +1427,15 @@ fn update(
     }
 }
 
+/// How wide a menu's text is in `window`'s text system.
+fn measure(window: &Window) -> impl Fn(&str) -> f32 + use<> {
+    let system = window.text_system().clone();
+    move |text: &str| {
+        let text = SharedString::from(text.to_string());
+        crate::tooltip::text_width(&text, TEXT, gpui::FontWeight::NORMAL, &system)
+    }
+}
+
 /// Shows the menu `request` asks for, closing one that shows.
 pub fn show(request: Request, cx: &mut App) {
     crate::lazy_window::ready::<ContextMenu>(cx);
@@ -1250,11 +1453,7 @@ pub fn show(request: Request, cx: &mut App) {
             return;
         };
         menu.close(Closing::Replaced, cx);
-        let system = window.text_system().clone();
-        let width_of = |text: &str| {
-            let text = SharedString::from(text.to_string());
-            crate::tooltip::text_width(&text, TEXT, gpui::FontWeight::NORMAL, &system)
-        };
+        let width_of = measure(window);
         let layout = lay_out_over(&request.items, request.at, request.area, &width_of);
         let blends = menu.host.blends();
         let layout = if blends { layout } else { layout.opaque() };
@@ -1262,6 +1461,29 @@ pub fn show(request: Request, cx: &mut App) {
         log!("browser: menu shown {}", described(&request.items));
         let frame = layout.frame;
         let origin = menu.fixed.unwrap_or(frame.origin);
+        let search = (request.items.iter().any(|item| item.field)).then(|| {
+            let palette = request.look.palette();
+            let colors = text_input::Colors {
+                caret: rgba(palette.label).into(),
+                ..text_input::Colors::placeholder(rgba(palette.secondary))
+            };
+            let placeholder = (request.items.iter().find(|item| item.field))
+                .map(|item| item.title.clone())
+                .unwrap_or_default();
+            let field = cx.new(|cx| TextInput::new(placeholder, cx).follows(move |_| colors));
+            Search {
+                _typing: cx.observe_in(&field, window, |menu, _, window, cx| {
+                    menu.narrow(window, cx)
+                }),
+                field,
+                all: request.items.clone(),
+                left: (0..request.items.len()).collect(),
+                typed: String::new(),
+                root: layout.levels[0].bounds,
+                area: request.area,
+                choices: layout.levels[0].checks,
+            }
+        });
         let shown = Shown {
             tracking: Tracking::new(request.items, layout, request.at),
             at: request.at,
@@ -1274,10 +1496,16 @@ pub fn show(request: Request, cx: &mut App) {
             drawn: None,
             drawn_open: Vec::new(),
             blends,
+            search,
         };
         let (panels, glass, light) = (shown.panels(), shown.glass(), shown.look.light);
+        // A search's field has the keyboard, so the cursor is in it as the menu opens.
+        let focus = (shown.search.as_ref()).map_or_else(
+            || menu.focus.clone(),
+            |search| search.field.focus_handle(cx),
+        );
         menu.shown = Some(shown);
-        window.focus(&menu.focus, cx);
+        window.focus(&focus, cx);
         // After a hide that `close` asked for, so the new menu stays.
         let host = menu.host.clone();
         cx.defer(move |_| {
@@ -1341,7 +1569,7 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
             .and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
-            menu.close(Closing::Chose(item), cx);
+            menu.pick(item, cx);
         }
     });
     chosen
@@ -1431,8 +1659,57 @@ impl ContextMenu {
             _ => log!("browser: menu closed"),
         }
         log!("{}", closing.line(shown.at));
+        // A search's rows are some of those asked for: the answer names the one asked for.
+        let closed = match (closed, &shown.search) {
+            (Closed::Chose(item), Some(search)) => Closed::Chose(search.left[item]),
+            (closed, _) => closed,
+        };
         if let Some(answer) = shown.chosen.take() {
             cx.defer(move |cx| answer(closed, cx));
+        }
+        cx.notify();
+    }
+
+    /// Chooses `item`, which closes the menu with it chosen. A row that stays (`MenuEntry::stays`)
+    /// closes nothing: it does what it does once the update is over, as an answer is given, and
+    /// the menu is left as it was, the row highlighted.
+    fn pick(&mut self, item: usize, cx: &mut Context<Self>) {
+        let stays = self.shown.as_ref().and_then(|shown| {
+            let held = as_held(&shown.tracking.entries, item, shown.alt);
+            Some((held, shown.tracking.entries[held].stays.clone()?))
+        });
+        let Some((held, stays)) = stays else {
+            return self.close(Closing::Chose(item), cx);
+        };
+        // For check.sh to wait on. It names no item, as the closing's line doesn't (#2873).
+        log!("{STAYED}");
+        let menu = cx.weak_entity();
+        cx.defer(move |cx| {
+            let checked = stays(cx);
+            menu.update(cx, |menu, cx| menu.stayed(held, &stays, checked, cx))
+                .ok();
+        });
+        cx.notify();
+    }
+
+    /// The row at `item` did what `stays` does and shows its check if `checked`, where the menu
+    /// still shows that row: what it did may have closed the menu or put another in its place.
+    fn stayed(&mut self, item: usize, stays: &Stays, checked: bool, cx: &mut Context<Self>) {
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
+        let same = |entry: &&mut MenuEntry| {
+            (entry.stays.as_ref()).is_some_and(|each| Rc::ptr_eq(each, stays))
+        };
+        let Some(entry) = shown.tracking.entries.get_mut(item).filter(same) else {
+            return;
+        };
+        entry.checked = checked;
+        // A search's rows are some of those asked for, which the next narrowing lays out again.
+        let asked =
+            (shown.search.as_mut()).and_then(|search| search.all.get_mut(*search.left.get(item)?));
+        if let Some(asked) = asked {
+            asked.checked = checked;
         }
         cx.notify();
     }
@@ -1440,7 +1717,7 @@ impl ContextMenu {
     fn outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Stay => cx.notify(),
-            Outcome::Pick(item) => self.close(Closing::Chose(item), cx),
+            Outcome::Pick(item) => self.pick(item, cx),
             Outcome::Escape => self.close(Closing::Escape, cx),
             Outcome::ReleasedOutside => self.close(Closing::ReleasedOutside, cx),
         }
@@ -1510,16 +1787,80 @@ impl ContextMenu {
         }));
     }
 
+    /// Narrows the rows to what's typed in the search's field, once an input method has committed
+    /// it and only if it changed: no more work per key than that, on the list the menu holds.
+    fn narrow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
+        let Some(search) = shown.search.as_mut() else {
+            return;
+        };
+        let typed = search.field.read(cx).committed();
+        if typed == search.typed {
+            return;
+        }
+        search.left = narrowed(&search.all, &typed);
+        let entries = kept_entries(&search.all, &search.left);
+        let width = f32::from(search.root.size.width);
+        let layout = lay_out_wide(
+            &entries,
+            search.root.origin,
+            search.area,
+            &measure(window),
+            width,
+            search.choices,
+        );
+        let layout = if shown.blends {
+            layout
+        } else {
+            layout.opaque()
+        };
+        let frame = layout.frame;
+        shown
+            .tracking
+            .narrow(entries, layout, !typed.trim().is_empty());
+        search.typed = typed;
+        shown.origin = self.fixed.unwrap_or(frame.origin);
+        let (host, panels) = (self.host.clone(), shown.panels());
+        let (glass, light) = (shown.glass(), shown.look.light);
+        cx.defer(move |_| {
+            host.show(frame, &panels);
+            host.glass(&glass, light);
+        });
+        self.changed(cx);
+        cx.notify();
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(shown) = self.shown.as_mut() else {
             return;
         };
+        // While an input method composes in a search's field, every key is the composition's: ↩
+        // that ends it picks nothing, and esc closes nothing.
+        let search = (shown.search.as_ref()).map(|search| search.field.read(cx).composing());
+        if search == Some(true) {
+            // Nor do they go on into the field as text, which would end the composition.
+            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
+                cx.stop_propagation();
+            }
+            return;
+        }
         let modifiers = event.keystroke.modifiers;
-        // A shortcut closes the menu, as the menu shows them but doesn't run them.
+        // A shortcut closes the menu, as the menu shows them but doesn't run them. A search's
+        // field takes its own, such as ⌘⌫, before they come here.
         if modifiers.platform || modifiers.control {
             return self.close(Closing::Shortcut, cx);
         }
         if let Some(key) = key_of(event) {
+            // In a search, characters and space are what's typed, not type-to-select or a pick.
+            let typed = matches!(key, Key::Char(_)) || event.keystroke.key == "space";
+            if search.is_some() && typed {
+                return;
+            }
+            if search.is_some() {
+                cx.stop_propagation();
+            }
             let outcome = shown.tracking.key(key, Instant::now());
             self.outcome(outcome, cx);
             self.changed(cx);
@@ -1627,6 +1968,37 @@ impl ContextMenu {
             .top(top)
             .w(bounds.size.width)
             .h(bounds.size.height);
+        if let Some(search) = shown.search.as_ref().filter(|_| entry.field) {
+            let line = div().mx(px(ROW_X)).h(px(1.)).bg(rgba(palette.line));
+            // The glyph stands in the checks' column and the text starts where the titles do.
+            let glyph = svg()
+                .path("icons/search.svg")
+                .size(px(SEARCH_GLYPH))
+                .flex_none()
+                .text_color(rgba(palette.secondary));
+            let column = div()
+                .debug_selector(|| "menu-search-glyph".into())
+                .w(px(CHECK))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .child(glyph);
+            return (placed.id(("menu-field", item)).flex().flex_col())
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .gap(px(GAP))
+                        .pl(px(ROW_X))
+                        .pr(px(ROW_X))
+                        .text_color(rgba(palette.label))
+                        .child(column)
+                        .child(search.field.clone()),
+                )
+                .child(line)
+                .into_any_element();
+        }
         if entry.title.is_empty() {
             let line = div().mx(px(ROW_X)).h(px(1.)).bg(rgba(palette.line));
             return (placed.id(("menu-line", item)).flex().items_center())
@@ -1640,23 +2012,21 @@ impl ContextMenu {
             true => (rgba(DESTRUCTIVE_FILL), rgba(DESTRUCTIVE_LABEL)),
             false => (highlight.fill, highlight.label),
         };
-        let label: Hsla = match (lit, entry.enabled, entry.destructive) {
-            _ if entry.header => rgba(palette.secondary).into(),
-            (true, ..) => on_fill.into(),
-            (false, false, _) => rgba(palette.disabled).into(),
-            (false, true, true) => rgba(palette.destructive).into(),
-            (false, true, false) => rgba(palette.label).into(),
-        };
+        let label = title_ink(entry, lit, shown.look, on_fill);
         let secondary: Hsla = match (lit, entry.enabled) {
             (true, _) => on_fill.into(),
-            (false, false) => rgba(palette.disabled).into(),
-            (false, true) => rgba(palette.secondary).into(),
+            (false, false) => shown.look.disabled().into(),
+            (false, true) => shown.look.secondary().into(),
         };
         let submenu = tracking.layout.level_of(item).is_some();
         let shortcut = entry.shortcut.as_deref().map(keystroke_label);
         let pressed = lit && tracking.pressed;
         let check = lay.checks.then(|| {
-            div().w(px(CHECK)).flex_none().when(entry.checked, |slot| {
+            (div()
+                .debug_selector(move || format!("menu-check {item}"))
+                .w(px(CHECK))
+                .flex_none())
+            .when(entry.checked, |slot| {
                 slot.child(
                     svg()
                         .path("icons/check.svg")
@@ -1697,6 +2067,15 @@ impl ContextMenu {
                     .flex_none()
                     .text_color(secondary)
                     .child(keys.clone())
+                    .into_any_element(),
+            ),
+            (None, false) if entry.out => Some(
+                svg()
+                    .debug_selector(move || format!("menu-out {item}"))
+                    .path("icons/arrow-up-right.svg")
+                    .size(px(OUT_ARROW))
+                    .flex_none()
+                    .text_color(secondary)
                     .into_any_element(),
             ),
             (None, false) => None,

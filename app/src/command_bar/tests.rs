@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use super::*;
+use crate::agents::runner::Cli;
 use crate::text_input::{self, Chosen, FieldMenu, korean};
 
 /// A host that records what the bar asks of it, but its suggestions and its window's height, and
@@ -250,6 +251,7 @@ impl Host for Recorder {
         page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
@@ -258,7 +260,21 @@ impl Host for Recorder {
             tier => format!(" at {}", tier.id()),
         };
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
-        self.record(format!("task {agent} {asked}{page}{tier}{model}"));
+        let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
+        self.record(format!("task {agent} {asked}{page}{tier}{model}{effort}"));
+    }
+
+    fn run_task_at_rest(
+        &self,
+        agent: &str,
+        asked: &str,
+        tier: Tier,
+        model: Option<String>,
+        effort: Option<&'static str>,
+        cx: &mut App,
+    ) {
+        self.run_task(agent, asked, None, tier, model, effort, cx);
+        self.record("at rest".into());
     }
 
     fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
@@ -282,6 +298,12 @@ impl Host for Recorder {
             .push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
         self.anchors.borrow_mut().push(anchor);
     }
+}
+
+/// An assistant's heading in the model menu as `choice_menu` writes it: its name as Settings'
+/// page has it, from Settings' own source, so the two can't say it differently.
+fn settings_heading(cli: Cli) -> String {
+    format!("# {}", crate::settings_rows::assistant_name(cli))
 }
 
 /// The agents the host offers: each ready, at its limit if it has a reset time. Claude offers
@@ -3547,9 +3569,35 @@ impl Bar {
     }
 
     /// Opens the composer's level menu, or its model menu, as a click on its trigger does, and
-    /// gives its rows, each title with ✓ before it where it's checked, `-` where it's disabled
-    /// and `#` where it's a heading, and its answer, which `pick` then gives the menu's pick.
+    /// gives its rows, each title with ✓ before it where it's checked, `-` where it's disabled,
+    /// `#` where it's a heading, `?` where it's the search's field and `~` where it's an offer in
+    /// the secondary ink, ↗ after one with the out arrow, and its answer, which `pick` then gives
+    /// the menu's pick.
     fn choice_menu(&mut self, model: bool) -> (Vec<String>, Chosen) {
+        self.shown_menu(match model {
+            true => CommandBar::model_menu,
+            false => CommandBar::level_menu,
+        })
+        .expect("no menu showed")
+    }
+
+    /// Opens the composer's effort menu as a click on its trigger does, as `choice_menu` does
+    /// the others; None where no menu shows.
+    fn effort_menu(&mut self) -> Option<(Vec<String>, Chosen)> {
+        self.shown_menu(CommandBar::effort_menu)
+    }
+
+    /// What the effort trigger reads, None where it isn't drawn.
+    fn effort_said(&mut self) -> Option<String> {
+        (self.window)
+            .read_with(&self.cx.cx, |bar, _| bar.effort_words().map(String::from))
+            .unwrap()
+    }
+
+    fn shown_menu(
+        &mut self,
+        open: fn(&mut CommandBar, &mut Window, &mut Context<CommandBar>),
+    ) -> Option<(Vec<String>, Chosen)> {
         let shown: Rc<RefCell<Option<(Vec<MenuEntry>, Chosen)>>> = Rc::default();
         let into = shown.clone();
         self.cx.update(|_, cx| {
@@ -3559,27 +3607,27 @@ impl Bar {
         });
         self.cx.run_until_parked();
         (self.window)
-            .update(&mut self.cx.cx, |bar, window, cx| match model {
-                true => bar.model_menu(window, cx),
-                false => bar.level_menu(window, cx),
-            })
+            .update(&mut self.cx.cx, |bar, window, cx| open(bar, window, cx))
             .unwrap();
-        let (items, chosen) = shown.borrow_mut().take().expect("no menu showed");
+        let (items, chosen) = shown.borrow_mut().take()?;
         let rows = (items.iter())
             .map(|item| {
                 let mark = match (item.header, item.checked, item.enabled) {
+                    _ if item.field => "? ",
+                    _ if item.offer => "~ ",
                     (true, _, _) => "# ",
                     (_, true, _) => "✓ ",
                     (_, _, false) => "- ",
                     _ => "",
                 };
+                let out = if item.out { " ↗" } else { "" };
                 match &item.detail {
-                    Some(detail) => format!("{mark}{} ({detail})", item.title),
-                    None => format!("{mark}{}", item.title),
+                    Some(detail) => format!("{mark}{} ({detail}){out}", item.title),
+                    None => format!("{mark}{}{out}", item.title),
                 }
             })
             .collect();
-        (rows, chosen)
+        Some((rows, chosen))
     }
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
@@ -3649,7 +3697,7 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
             "✓ Work on pages",
             "Full access",
             "- ",
-            &format!("- {NEVER_GETS}"),
+            &format!("- {}", super::choices::NEVER_GETS),
         ]
     );
     bar.pick(chosen, 2);
@@ -3657,17 +3705,18 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
     assert_eq!(
         rows,
         [
-            "# claude",
-            "claude's default",
+            "? Search models",
+            &settings_heading(Cli::Claude),
+            "Default",
             "✓ Haiku",
             "Sonnet",
-            "# codex",
-            "codex's default",
+            &settings_heading(Cli::Codex),
+            "Default",
             "- ",
-            "Settings",
+            "Settings ↗",
         ]
     );
-    bar.pick(chosen, 5);
+    bar.pick(chosen, 6);
     assert_eq!(
         bar.choices(),
         ("Full access".into(), "codex's default".into())
@@ -3712,6 +3761,137 @@ fn a_trigger_wears_its_plate_while_its_menu_is_open(cx: &mut TestAppContext) {
     bar.pick(chosen, 0);
     assert_eq!(open(&mut bar), None);
     assert_eq!(bar.choices().0, "Look only");
+}
+
+/// The model menu opens with the cursor in its search, in ilo's menu: what's typed narrows it,
+/// and ↩ picks a row of the list the menu was built from, so the model the assistant is given is
+/// one it offers, never the words typed; esc closes it with the composer's keyboard where it was
+/// and nothing changed.
+#[gpui::test]
+fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
+    use crate::menu;
+    let window = cx
+        .update(|cx| menu::open(Rc::new(MenuWindow), cx))
+        .expect("no window for the menu");
+    let mut in_menu = VisualTestContext::from_window(window.into(), cx);
+    cx.update(|cx| {
+        cx.set_global(menu::entries_menu(Rc::new(|_, request, cx| {
+            let area = gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(2000.), px(2000.)));
+            menu::show(menu::Request { area, ..request }, cx);
+        })))
+    });
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    let open = |bar: &mut Bar| {
+        (bar.window)
+            .update(&mut bar.cx.cx, |bar, window, cx| {
+                bar.model_menu(window, cx);
+            })
+            .unwrap();
+        bar.cx.run_until_parked();
+    };
+    open(&mut bar);
+    in_menu.simulate_keystrokes("s o n enter");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.choices().1, "claude · Sonnet");
+
+    open(&mut bar);
+    in_menu.simulate_keystrokes("o p u s enter");
+    bar.cx.run_until_parked();
+    assert_eq!(
+        bar.choices().1,
+        "claude · Sonnet",
+        "a model named by what was typed"
+    );
+    in_menu.simulate_keystrokes("escape");
+    bar.cx.run_until_parked();
+    let (plate, focused) = bar
+        .window
+        .update(&mut bar.cx.cx, |bar, window, cx| {
+            (
+                bar.menu_open,
+                bar.input.read(cx).focus_handle(cx).is_focused(window),
+            )
+        })
+        .unwrap();
+    assert_eq!(plate, None, "the trigger kept its plate after esc");
+    assert!(focused, "the composer lost the keyboard to the menu");
+    assert_eq!(bar.choices().1, "claude · Sonnet");
+    assert!(!bar.calls().iter().any(|call| call.contains("opus")));
+}
+
+/// Claude's effort trigger reads Effort and its menu has Default ticked before a pick; a level
+/// picked is what the trigger reads and goes with the start, and Default takes it back to none.
+#[gpui::test]
+fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
+    let (rows, chosen) = bar.effort_menu().expect("no effort menu for Claude");
+    let all = ["Low", "Medium", "High", "Extra high", "Max"];
+    assert_eq!(rows, [&["✓ Default"][..], &all].concat());
+    bar.pick(chosen, 3);
+    assert_eq!(bar.effort_said().as_deref(), Some("High"));
+    let (rows, chosen) = bar.effort_menu().unwrap();
+    assert_eq!(
+        rows,
+        ["Default", "Low", "Medium", "✓ High", "Extra high", "Max"]
+    );
+    bar.pick(chosen, 0);
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week"]);
+}
+
+/// The floor: every row on the effort menu gives the program a level from its own list, each a
+/// different one, and Default gives it none.
+#[gpui::test]
+fn every_effort_row_passes_a_level_from_the_programs_list(cx: &mut TestAppContext) {
+    let listed = crate::agents::runner::Cli::Claude.efforts();
+    let mut passed = Vec::new();
+    for row in 0..=listed.len() {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("plan the week");
+        bar.keys("tab");
+        let (rows, chosen) = bar.effort_menu().unwrap();
+        assert_eq!(
+            rows.len(),
+            listed.len() + 1,
+            "a row with no level: {rows:?}"
+        );
+        bar.pick(chosen, row);
+        bar.calls();
+        bar.keys("enter");
+        let call = bar.calls().concat();
+        passed.push(
+            call.split_once(" effort ")
+                .map(|(_, level)| level.to_string()),
+        );
+    }
+    assert_eq!(passed[0], None, "Default passed a level");
+    let levels: Vec<_> = passed[1..].iter().flatten().map(String::as_str).collect();
+    assert_eq!(levels, listed);
+}
+
+/// Codex's program takes no effort setting, so its composer draws no effort trigger and has no
+/// effort menu; a level picked for Claude doesn't go with Codex's start.
+#[gpui::test]
+fn codex_has_no_effort_trigger(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("codex", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said(), None);
+    assert!(bar.effort_menu().is_none(), "Codex takes no effort");
+}
+
+/// A level the table has no word for is drawn as the program gives it, first letter capital.
+#[test]
+fn a_level_with_no_word_is_the_programs_own_capitalised() {
+    assert_eq!(effort_name("xhigh"), "Extra high");
+    assert_eq!(effort_name("ultra"), "Ultra");
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.
@@ -3778,6 +3958,40 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
         "Esc left the composer rather than closing it"
     );
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
+}
+
+/// Going back from ⌘T's composer keeps the words and asks nothing for them until the user's
+/// next edit: words written for an assistant don't go to the search provider for ⇥, ⇧⇥ or Esc.
+#[gpui::test]
+fn leaving_the_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    let asked = |bar: &mut Bar| -> Vec<String> {
+        (bar.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect()
+    };
+    for back in ["tab", "shift-tab", "escape"] {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("book");
+        bar.keys("tab");
+        bar.type_text(" a table for two");
+        asked(&mut bar);
+        bar.keys(back);
+        assert_eq!(
+            asked(&mut bar),
+            Vec::<String>::new(),
+            "{back} sent the words"
+        );
+        if back == "escape" {
+            continue;
+        }
+        assert_eq!(
+            bar.input().0,
+            "book a table for two",
+            "{back} lost the words"
+        );
+        bar.type_text("!");
+        assert_eq!(asked(&mut bar), ["book a table for two!"]);
+    }
 }
 
 /// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
@@ -3942,10 +4156,10 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(bar.choices().1, "codex's default");
     let (rows, _) = bar.choice_menu(true);
     assert_eq!(
-        rows[..4],
+        rows[1..5],
         [
-            "# claude",
-            "- claude's default (Limit resets 18:00)",
+            &settings_heading(Cli::Claude),
+            "- Default (Limit resets 18:00)",
             "- Haiku (Limit resets 18:00)",
             "- Sonnet (Limit resets 18:00)",
         ]
@@ -3964,14 +4178,23 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert!(!bar.calls().iter().any(|call| call.starts_with("task")));
     assert!(bar.is_open());
     let (rows, chosen) = bar.choice_menu(true);
-    assert_eq!(rows, ["# Codex", "Sign In", "- ", "Settings"]);
-    bar.pick(chosen, 1);
+    assert_eq!(
+        rows,
+        [
+            "? Search models",
+            &settings_heading(Cli::Codex),
+            "~ Sign In ↗",
+            "- ",
+            "Settings ↗"
+        ]
+    );
+    bar.pick(chosen, 2);
     assert_eq!(bar.calls(), ["sign in codex"]);
     assert!(bar.is_open());
     // Settings ends the ask as the bar hides, so Today's slot closes with it, and the next ⌘T,
     // which the Shell opens from inside its own update, has no ask to end (#2459).
     let (_, chosen) = bar.choice_menu(true);
-    bar.pick(chosen, 3);
+    bar.pick(chosen, 4);
     assert_eq!(bar.calls(), ["asking false", "hide", "set up agents"]);
     bar.cx
         .update(|_, cx| show(None, Vec::new(), Vec::new(), None, cx));
@@ -4547,51 +4770,41 @@ fn a_day_alone_ends_where_the_tiles_glyph_does() {
     assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
 }
 
-/// A page a bar rests in, as an empty Space is (#4140): the bar's field, its rows under it, and a
-/// control of the page's own, as the sidebar's are, which can take the keyboard.
+/// A page a bar rests in, as an empty Space is (#4140): the bar itself, and a control of the
+/// page's own, as the sidebar's are, which can take the keyboard.
 struct Rest {
     bar: Entity<CommandBar>,
     other: gpui::FocusHandle,
 }
 
 impl Render for Rest {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let field = (self.bar).update(cx, |bar, cx| bar.field(gpui::black(), window, cx));
-        let rows = self.bar.update(cx, |bar, cx| bar.listed(cx));
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(div().id("other").track_focus(&self.other).size(px(20.)))
-            .child(field)
-            .children(rows)
+            .child(self.bar.clone())
     }
 }
 
-/// A bar at rest in a window of its own page, its field with the keyboard, and the keys it handed
-/// the page.
+/// A bar at rest in a window of its own page, its field with the keyboard.
 struct Resting {
     cx: VisualTestContext,
     window: WindowHandle<Rest>,
     host: Rc<Recorder>,
-    keys: Rc<RefCell<Vec<InPlaceKey>>>,
 }
 
 impl Resting {
     fn new(cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
         cx.update(text_input::bind_keys);
-        let keys: Rc<RefCell<Vec<InPlaceKey>>> = Rc::default();
-        let (handed, resting_host) = (keys.clone(), host.clone());
+        let resting_host = host.clone();
         let window = cx
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
                     let bar = in_place(resting_host, window, cx);
                     cx.new(|cx| {
-                        cx.subscribe(&bar, move |_, _, key: &InPlaceKey, _| {
-                            handed.borrow_mut().push(*key)
-                        })
-                        .detach();
                         cx.observe(&bar, |_, _, cx| cx.notify()).detach();
                         Rest {
                             bar,
@@ -4608,12 +4821,14 @@ impl Resting {
             })
             .unwrap();
         cx.run_until_parked();
-        Resting {
-            cx,
-            window,
-            host,
-            keys,
-        }
+        Resting { cx, window, host }
+    }
+
+    /// As `new`, with Claude found.
+    fn with_claude(cx: &mut TestAppContext) -> Self {
+        let rest = Self::new(cx);
+        *rest.host.agents.borrow_mut() = agents(&[("claude", None)]);
+        rest
     }
 
     fn type_text(&mut self, text: &str) {
@@ -4626,18 +4841,6 @@ impl Resting {
         self.cx.run_until_parked();
     }
 
-    /// The page's switch goes to Ask, or back to search.
-    fn switch(&mut self, on_ask: bool) {
-        (self.window)
-            .update(&mut self.cx, |rest, window, cx| {
-                rest.bar.update(cx, |bar, cx| {
-                    bar.set_on_ask(on_ask, "placeholder".into(), window, cx)
-                })
-            })
-            .unwrap();
-        self.cx.run_until_parked();
-    }
-
     /// The input method composing `text` in the field, in place of what it composed before.
     fn compose(&mut self, text: &str) {
         (self.window)
@@ -4645,6 +4848,19 @@ impl Resting {
                 let input = rest.bar.read(cx).input.clone();
                 input.update(cx, |input, cx| {
                     input.replace_and_mark_text_in_range(None, text, None, window, cx)
+                })
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
+    /// The input method committing `text` in place of what it composed.
+    fn commit(&mut self, text: &str) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                let input = rest.bar.read(cx).input.clone();
+                input.update(cx, |input, cx| {
+                    input.replace_text_in_range(None, text, window, cx)
                 })
             })
             .unwrap();
@@ -4681,11 +4897,172 @@ impl Resting {
             .unwrap()
     }
 
+    /// Whether the bar is the composer, and what its field holds.
+    fn composer(&mut self) -> (bool, String) {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                let bar = rest.bar.read(cx);
+                (bar.ask.is_some(), bar.input.read(cx).text().to_string())
+            })
+            .unwrap()
+    }
+
+    /// Picks the composer's level on row `at` of its menu, as a click on its trigger and then
+    /// on the row does.
+    fn pick_level(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.level_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no level menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+
     fn asked(&self) -> Vec<String> {
         (self.host.asked.take().into_iter())
             .map(|(text, _)| text)
             .collect()
     }
+
+    /// Picks row `at` of the composer's model menu, as `pick_level` does its level.
+    fn pick_model(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.model_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no model menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// The composer's level, and whether a model is picked on its menu, while it shows.
+    fn picks(&mut self) -> Option<(Tier, bool)> {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                (rest.bar.read(cx).ask.as_ref()).map(|ask| (ask.tier, ask.model.is_some()))
+            })
+            .unwrap()
+    }
+
+    /// The page the bar rests in is another empty Space's now.
+    fn change_space(&mut self) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.space_changed(window, cx))
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
+    /// Picks row `at` of the composer's effort menu, as `pick_level` does its level.
+    fn pick_effort(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.effort_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no effort menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+}
+
+/// Going back from the composer at rest keeps the words and asks nothing for them until the
+/// user's next edit: ⇥, ⇧⇥, Esc and a change of Space send nothing to the search provider.
+#[gpui::test]
+fn leaving_a_resting_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    for back in ["tab", "shift-tab", "escape", "another Space"] {
+        let mut rest = Resting::with_claude(cx);
+        rest.type_text("book");
+        rest.keys("tab");
+        rest.type_text(" a table");
+        rest.asked();
+        match back {
+            "another Space" => rest.change_space(),
+            keys => rest.keys(keys),
+        }
+        assert_eq!(rest.composer(), (false, "book a table".into()), "{back}");
+        assert_eq!(rest.asked(), Vec::<String>::new(), "{back} sent the words");
+        rest.type_text("!");
+        assert_eq!(rest.asked(), ["book a table!"], "{back}");
+    }
+}
+
+/// A composer open at rest doesn't carry into another Space: the bar is search again there with
+/// the words kept, and the level and model picked are gone, so ⇥ there opens the composer as the
+/// host last started a thread, and ↩ starts nothing of the Space before's.
+#[gpui::test]
+fn a_composer_at_rest_doesnt_carry_into_another_space(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_level(2);
+    rest.pick_model(4);
+    assert_eq!(
+        rest.picks(),
+        Some((Tier::Full, true)),
+        "the picks didn't take"
+    );
+
+    rest.change_space();
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    rest.keys("tab");
+    assert_eq!(rest.picks(), Some((Tier::Work, false)), "a pick came along");
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table", "at rest"]
+    );
+}
+
+/// A thread started from the composer at rest goes with the effort picked on its menu, as ⌘T's
+/// does, and with none where Default is picked.
+#[gpui::test]
+fn the_composer_at_rest_starts_the_thread_with_its_effort(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_effort(3);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table effort high", "at rest"]
+    );
+    rest.type_text("next");
+    rest.keys("tab");
+    rest.pick_effort(0);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(rest.host.calls.take(), ["task claude next", "at rest"]);
 }
 
 /// A Space's first frame reads nothing for its field: the bar resting there asks the core and the
@@ -4707,52 +5084,63 @@ fn a_resting_bar_asks_nothing_until_typed_in(cx: &mut TestAppContext) {
     assert!(rest.host.heights.take().is_empty() && rest.host.shown.take().is_empty());
 }
 
-/// At rest ⇥ and ⇧⇥ are the page's switch and Esc is the page's, so the bar never enters an Ask
-/// of its own beside the composer's.
+/// At rest ⇥ grows the bar into the composer where it rests, with what's typed, as ⌘T's bar does,
+/// and ⇧⇥, ⇥ again or Esc take it back to search with the words kept. Nothing opens at Today's
+/// top: the bar only looks for the assistants.
 #[gpui::test]
-fn a_resting_bar_hands_tab_and_escape_to_its_page(cx: &mut TestAppContext) {
-    let mut rest = Resting::new(cx);
-    *rest.host.agents.borrow_mut() = agents(&[("claude", None)]);
+fn tab_grows_a_resting_bar_into_the_composer_and_back_keeps_the_words(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
     rest.type_text("book a table");
     rest.keys("tab");
+    assert_eq!(rest.composer(), (true, "book a table".into()));
+    assert_eq!(rest.rows(), Vec::<String>::new(), "the composer lists rows");
     rest.keys("shift-tab");
-    rest.keys("escape");
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    rest.keys("tab tab");
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    rest.keys("tab escape");
+    assert_eq!(rest.composer(), (false, "book a table".into()));
     assert_eq!(
-        *rest.keys.borrow(),
-        [InPlaceKey::Flip, InPlaceKey::Flip, InPlaceKey::Escape]
+        rest.focused(),
+        (true, false),
+        "the field let the keyboard go"
     );
-    let asks = (rest.window)
-        .read_with(&rest.cx, |rest, cx| rest.bar.read(cx).ask.is_some())
-        .unwrap();
-    assert!(!asks, "the bar entered its own Ask");
-    assert_eq!(rest.host.calls.take(), Vec::<String>::new());
+    let calls = rest.host.calls.take();
+    assert!(
+        calls.iter().all(|call| call == "look for agents"),
+        "a resting composer asked its host for more than the assistants: {calls:?}"
+    );
 }
 
-/// In the page's Ask, what's typed is the task: nothing is suggested, the rows go, and ↩ hands it
-/// to the page. Back in search, the task isn't sent for suggestions until the user types again.
+/// In a resting composer what's typed is the thread's, which nothing is suggested for, and ↩ starts
+/// it in the Space the bar rests in, at the level picked on the composer's own menu. The field
+/// empties for the next, which starts at the level the host keeps, not the last pick.
 #[gpui::test]
-fn a_resting_bar_in_the_ask_suggests_nothing_and_hands_return_on(cx: &mut TestAppContext) {
-    let mut rest = Resting::new(cx);
-    rest.type_text("ex");
-    rest.cx
-        .cx
-        .update(|cx| suggested("ex".into(), vec![page("https://example.com/")], cx));
-    rest.cx.run_until_parked();
+fn return_in_a_resting_composer_starts_the_thread_where_it_rests(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book");
+    rest.keys("tab");
     rest.asked();
-    rest.switch(true);
-    assert_eq!(rest.rows(), Vec::<String>::new());
-    rest.type_text("plain");
-    assert_eq!(rest.asked(), Vec::<String>::new());
-    rest.keys("enter");
-    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Run]);
-    rest.switch(false);
+    rest.type_text(" a table");
     assert_eq!(
         rest.asked(),
         Vec::<String>::new(),
-        "the task went for suggestions"
+        "the thread went for suggestions"
     );
-    rest.type_text("s");
-    assert_eq!(rest.asked(), ["explains"]);
+    rest.pick_level(2);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table at full", "at rest"]
+    );
+    assert_eq!(rest.composer(), (false, String::new()));
+    rest.type_text("next");
+    rest.keys("tab enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["look for agents", "task claude next", "at rest"]
+    );
 }
 
 /// A choice at rest is the page's to follow: a sum's copy leaves the keyboard in the field, which
@@ -4786,48 +5174,43 @@ fn a_choice_at_rest_leaves_the_keyboard_unless_a_page_takes_it(cx: &mut TestAppC
     );
 }
 
-/// ↩ that commits Japanese the input method composes in the Ask is the input method's: the page
-/// isn't handed a Run with half a word, and the next ↩ hands it on.
+/// ↩ that commits Japanese the input method composes in a resting composer is the input method's:
+/// no thread starts with half a word, and the next ↩ starts it.
 #[gpui::test]
-fn return_committing_japanese_in_the_ask_runs_nothing(cx: &mut TestAppContext) {
-    let mut rest = Resting::new(cx);
-    rest.switch(true);
-    rest.compose("よやく");
+fn return_committing_japanese_in_a_resting_composer_runs_nothing(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("東京の");
+    rest.keys("tab");
+    rest.host.calls.take();
+    rest.compose("ほてる");
     rest.keys("enter");
     assert_eq!(
-        *rest.keys.borrow(),
-        Vec::<InPlaceKey>::new(),
+        rest.host.calls.take(),
+        Vec::<String>::new(),
         "↩ while composing ran"
     );
-    (rest.window)
-        .update(&mut rest.cx, |rest, window, cx| {
-            let input = rest.bar.read(cx).input.clone();
-            input.update(cx, |input, cx| {
-                input.replace_text_in_range(None, "予約", window, cx)
-            })
-        })
-        .unwrap();
-    rest.cx.run_until_parked();
+    assert!(rest.composer().0, "↩ while composing left the composer");
+    rest.commit("ホテル");
     rest.keys("enter");
-    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Run]);
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude 東京のホテル", "at rest"]
+    );
 }
 
-/// Esc while the input method composes in the Ask cancels the composition and nothing else: the
-/// page's switch stays on Ask.
+/// Esc while the input method composes in a resting composer cancels the composition and nothing
+/// else: the bar stays the composer until the next Esc.
 #[gpui::test]
-fn escape_while_composing_in_the_ask_stays_in_it(cx: &mut TestAppContext) {
-    let mut rest = Resting::new(cx);
-    rest.switch(true);
-    rest.compose("よやく");
+fn escape_while_composing_in_a_resting_composer_stays_in_it(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("東京の");
+    rest.keys("tab");
+    rest.compose("ほてる");
     rest.keys("escape");
-    assert_eq!(
-        *rest.keys.borrow(),
-        Vec::<InPlaceKey>::new(),
-        "Esc while composing left"
-    );
+    assert!(rest.composer().0, "Esc while composing left the composer");
     rest.compose("");
     rest.keys("escape");
-    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Escape]);
+    assert!(!rest.composer().0, "Esc after the composition stayed");
 }
 
 /// At rest the field doesn't take the keyboard back: a control of the page that takes it keeps it.

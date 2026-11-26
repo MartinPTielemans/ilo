@@ -5,7 +5,7 @@ use gpui::{
     Bounds, ContentMask, Hsla, IntoElement, PathBuilder, Pixels, Styled, canvas, point, px,
 };
 
-use crate::tokens::shell::{JOIN_RADIUS, PAGE_OUTLINE_WIDTH, PLATE_RADIUS};
+use crate::tokens::shell::{JOIN_RADIUS, PAGE_OUTLINE_WIDTH};
 
 #[cfg(test)]
 thread_local! {
@@ -29,8 +29,14 @@ pub(super) struct Joined {
 /// page starts at, `page_left` with the sidebar on the right, with a curve above and below it
 /// there, so the line and the page of that fill are one shape. With `outline`, a line of it runs
 /// round the shape, where the page's own carries on, for a fill the window wouldn't tell from
-/// itself. A page's tab and a task's card over its stage are both this, each with its own fill.
-pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl IntoElement {
+/// itself. A page's tab and a task's card over its stage are both this, each with its own fill
+/// and its far end rounded at its own `corner`.
+pub(super) fn join(
+    fill: Hsla,
+    outline: Option<Hsla>,
+    page_left: bool,
+    corner: f32,
+) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |line, _, window, _| {
@@ -61,7 +67,7 @@ pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl I
                 lined,
             }));
             let mut shape = PathBuilder::fill();
-            trace(&mut shape, line, page_left, 0.);
+            trace(&mut shape, line, page_left, corner, 0.);
             shape.close();
             if let Ok(shape) = shape.build() {
                 window.paint_path(shape, fill);
@@ -70,7 +76,7 @@ pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl I
                 return;
             };
             let mut round = PathBuilder::stroke(width);
-            trace(&mut round, line, page_left, PAGE_OUTLINE_WIDTH / 2.);
+            trace(&mut round, line, page_left, corner, PAGE_OUTLINE_WIDTH / 2.);
             if let Ok(round) = round.build() {
                 window.with_content_mask(Some(ContentMask { bounds: lined }), |window| {
                     window.paint_path(round, outline);
@@ -83,10 +89,11 @@ pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl I
 }
 
 /// The shape's edge, from the page's side above the line round the line's far end to the page's
-/// side below it, `out` outside the shape itself, for a line drawn round it.
-fn trace(path: &mut PathBuilder, line: Bounds<Pixels>, page_left: bool, out: f32) {
+/// side below it, its far corners at `corner`, `out` outside the shape itself, for a line drawn
+/// round it.
+fn trace(path: &mut PathBuilder, line: Bounds<Pixels>, page_left: bool, corner: f32, out: f32) {
     let out = px(out);
-    let (curve, corner) = (px(JOIN_RADIUS) - out, px(PLATE_RADIUS) + out);
+    let (curve, corner) = (px(JOIN_RADIUS) - out, px(corner) + out);
     let (top, bottom) = (line.top() - out, line.bottom() + out);
     // Along the line from the page's edge: 1 toward the left, -1 with the page on the left.
     let (edge, way) = match page_left {

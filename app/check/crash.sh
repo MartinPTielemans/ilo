@@ -3,11 +3,12 @@
 # browser once it has started, Crashpad's handler is up and the profile's Preferences say its
 # session crashed, the handler writes the report, and no Chromium process outlives the crash, the
 # handler included. Nor does one outlive a quit.
-# A new profile's first launch offers Send Crash Reports at its onboarding's opt-ins step, as the
-# run names a collector, check/collector.py, where a prod build alone names the real one. Left off
-# there with Skip, nothing goes to the collector: the launch after a crash offers to send that
-# crash's report in a toast, and keeps it. Turned on at a new first launch's step, the report goes
-# at once, the minidump and Sentry's field saying to keep no IP address, without cookies and with
+# A new profile's first launch offers crash reports in Help improve, the switch the daily count
+# shares at its onboarding's last step (7), as the run names a collector, check/collector.py, where
+# a prod build alone names the real one. Left off there, nothing goes to the collector: the launch
+# after a crash offers to send that crash's report in a toast, and keeps it. Turned on at a new
+# first launch's step, nothing is sent while the step shows, and as Start Browsing leaves it the
+# report goes, the minidump and Sentry's field saying to keep no IP address, without cookies and with
 # no annotation naming the profile's folder or the home, and is deleted once the collector has it.
 # One the collector refuses waits for the next launch, and turning the switch off in Settings ›
 # Privacy deletes it, which only the Mac's run clicks so far.
@@ -96,8 +97,9 @@ launch() {
   await_load
 }
 # Launches a new profile, whose saved Spaces are gone, logging to $1, and goes on through its
-# onboarding to the opt-ins step, which offers crash reports as a collector is named. Its import
-# home is empty, so the import never lists this desk's browsers and leaves its step out.
+# onboarding, taking nothing it offers, to the last step, whose Help improve offers crash reports as
+# a collector is named. Its import home is empty, so the import never lists this desk's browsers
+# and leaves its step out.
 mkdir -p "$out/crash-home"
 import_home="$PWD/$out/crash-home"
 ! windows || import_home=$(cygpath -w "$import_home")
@@ -109,32 +111,21 @@ first_launch() {
     "$browser" "--crash-upload-url=$reports" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
-  await '^browser: onboarding step intro settled$' || fail "the first launch didn't play the intro"
-  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
-  case "$steps" in
-    *" opt-ins keys") ;;
-    *) fail "the first launch's steps were '$steps', with no opt-ins step for crash reports" ;;
-  esac
-  for each in $steps; do
-    case $each in
-      intro) send key return && how=return ;;
-      opt-ins) break ;;
-      *)
-        expect "^browser: onboarding step $each settled\$" "the first launch's $each step didn't come"
-        skip_step "$each"
-        how=skip
-        ;;
-    esac
-    expect "^browser: onboarding left $each via $how\$" "$how didn't leave the first launch's $each"
-  done
-  expect '^browser: onboarding step opt-ins settled$' "the first launch's opt-ins step didn't come"
+  await '^browser: onboarding started$' || fail "the first launch didn't play the onboarding"
+  walk_steps 7 "the first launch: "
+  expect '^browser: onboarding help-improve at ' "the last step didn't draw Help improve's switch"
+}
+# Leaves the last step with Return, Start Browsing, which ends the onboarding.
+start_browsing() {
+  send key return
+  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
+  expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
 }
 
-# The first launch offers crash reports, and Skip goes on with them off.
+# The first launch offers crash reports, and Start Browsing goes on with them off.
 first_launch "$out/crash-first.log"
-../tools/window-screenshot.sh "$pid" "$out/crash-opt-ins.png" || fail "no window to capture"
-skip_step opt-ins
-expect '^browser: onboarding left opt-ins via skip$' "Skip didn't leave the opt-ins step"
+../tools/window-screenshot.sh "$pid" "$out/crash-help-improve.png" || fail "no window to capture"
+start_browsing
 exec 3>&-
 quit
 
@@ -145,7 +136,7 @@ bytes=$(wc -c < "$dump" | tr -d ' ')
 log="$out/crash-off.log"
 launch "$reports"
 await '^browser: crash report offered$' || fail "the launch after the crash didn't offer its report"
-await "^browser: toast shown $app_name quit unexpectedly\. \[send, don't send\]\$" ||
+await "^browser: toast shown $product quit unexpectedly\. \[send, don't send\]\$" ||
   fail "the offer's toast didn't show"
 await '^browser: toast settled$' || fail "the offer's toast didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/crash-offer.png" || fail "no window to capture"
@@ -161,17 +152,17 @@ quit
 [ -s "$out/collector.log" ] && fail "a report was sent while Send Crash Reports was off"
 [ "$(pending)" = 1 ] || fail "the report didn't wait while Send Crash Reports was off"
 
-# Turned on at a new first launch's opt-ins step, it sends the report waiting and deletes it. Their
-# row takes a click on its switch, where the app says it's drawn once the step has come, as
-# onboarding.sh clicks the agents' (#1286).
+# Turned on at a new first launch's last step, it sends the report waiting as Start Browsing leaves
+# the step, and deletes it. The switch takes a click on its knob, where the app says it's drawn
+# once the step has come (#1286).
 first_launch "$out/crash-on.log"
-expect '^browser: onboarding crash-reports at ' "the opt-ins step didn't draw the crash reports' switch"
-send click $(grep '^browser: onboarding crash-reports at ' "$log" | tail -1 | cut -d' ' -f5-6)
-expect '^browser: onboarding crash-reports on$' \
-  "a click on the crash reports' row didn't turn them on"
-await '^browser: crash report sent$' || fail "the report wasn't sent once the step turned them on"
-skip_step opt-ins
-expect '^browser: onboarding left opt-ins via skip$' "Skip didn't leave the opt-ins step"
+send click $(grep '^browser: onboarding help-improve at ' "$log" | tail -1 | cut -d' ' -f5-6)
+expect '^browser: onboarding switch slid$' "a click on Help improve's switch didn't turn it"
+grep -q '^browser: crash report sent$' "$log" &&
+  fail "the report was sent while the step showed, before Start Browsing left it"
+start_browsing
+await '^browser: crash report sent$' ||
+  fail "the report wasn't sent once Start Browsing left the step with Help improve on"
 grep -q '^refused' "$out/collector.log" &&
   fail "the collector refused the report: $(cat "$out/collector.log")"
 grep -q "^report [0-9]* /api/1/minidump/?sentry_key=check\$" "$out/collector.log" ||
@@ -202,20 +193,20 @@ if [ "$(uname)" != Darwin ] || [ "$active" = 1 ]; then
   expect '^browser: crash reports deleted 1$' "turning crash reports off didn't delete the report"
   [ "$(pending)" = 0 ] || fail "the report not sent outlived turning crash reports off"
   turned_off=" Turned off in Settings › Privacy, it deleted that one."
-  windows="$out/crash-opt-ins.png, $out/crash-offer.png, $out/privacy.png"
+  windows="$out/crash-help-improve.png, $out/crash-offer.png, $out/privacy.png"
 else
   echo "skip: crash's Settings switch. Browser wasn't the active app."
   turned_off=
-  windows="$out/crash-opt-ins.png, $out/crash-offer.png"
+  windows="$out/crash-help-improve.png, $out/crash-offer.png"
 fi
 exec 3>&-
 quit
 kill "$collector" 2>/dev/null || true
 annotations=$(grep -m1 '^annotations ' "$out/collector.log" | cut -d' ' -f2-)
-echo "ok: a new profile's first launch offered Send Crash Reports at its opt-ins step; left off" \
-  "there, the crash left a minidump of $bytes bytes, which the next launch offered to send and" \
-  "kept, and turned on at a new first launch's step, it was sent and deleted once the collector" \
-  "had it," \
+echo "ok: a new profile's first launch offered crash reports in Help improve at its last step;" \
+  "left off there, the crash left a minidump of $bytes bytes, which the next launch offered to" \
+  "send and kept, and turned on at a new first launch's step, it was sent as Start Browsing left" \
+  "the step and deleted once the collector had it," \
   "with Sentry's field to keep no IP address and annotations naming neither the profile nor the" \
   "home: $annotations." \
   "One the collector refused waited.$turned_off Windows: $windows"

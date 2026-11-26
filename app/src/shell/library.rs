@@ -25,13 +25,13 @@ use super::{
     SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
     URL_BUTTON_SIZE, What,
     access::Accessible,
-    dashed_square,
-    display_face::{cap_top, display_text},
+    clear_label, dashed_square,
+    display_face::display_text,
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
     host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
     space_order::{Along, DraggedSpace},
-    split_plate, spring_to, still_clear,
+    split_plate, spring_to,
     task_cards::number as task_number,
     title,
 };
@@ -47,6 +47,7 @@ use crate::{
     tooltip::{Anchor, Tip},
 };
 
+#[cfg(test)]
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
@@ -76,29 +77,27 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::library::COLUMN;
-use crate::tokens::shell::library::COLUMN_EDGE;
+use crate::palette::{FIELD_PLATE, Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
 use crate::tokens::shell::library::COLUMN_WIDTH;
 pub(super) use crate::tokens::shell::library::LIBRARY_BACK_INSET;
+use crate::tokens::shell::library::LIBRARY_PLATE;
+use crate::tokens::shell::library::SECTION_COUNT_LINE;
+use crate::tokens::shell::library::SECTION_COUNT_TEXT;
 use crate::tokens::shell::library::SECTION_GAP;
 use crate::tokens::shell::library::SECTION_GLYPH;
 use crate::tokens::shell::library::SECTION_GLYPH_UNSELECTED;
-use crate::tokens::shell::library::SECTION_GLYPH_Y;
 use crate::tokens::shell::library::SECTION_HEIGHT;
-use crate::tokens::shell::library::SECTION_LABEL;
-use crate::tokens::shell::library::SECTION_LABEL_HEIGHT;
-use crate::tokens::shell::library::SECTION_LABEL_Y;
+use crate::tokens::shell::library::SECTION_LINE;
+use crate::tokens::shell::library::SECTION_PAD;
 use crate::tokens::shell::library::SECTION_RADIUS;
-use crate::tokens::shell::library::SECTION_WIDTH;
+use crate::tokens::shell::library::SECTION_TEXT;
 use crate::tokens::shell::library::SECTION_X;
-use crate::tokens::shell::library::SECTIONS_BOTTOM;
 use crate::tokens::shell::library::SECTIONS_TOP;
-use crate::tokens::shell::library::TITLE_CAP;
+use crate::tokens::shell::library::TITLE_HEIGHT;
 use crate::tokens::shell::library::TITLE_LINE;
 use crate::tokens::shell::library::TITLE_SIZE;
+use crate::tokens::shell::library::TITLE_TOP;
 use crate::tokens::shell::library::TITLE_X;
-use crate::tokens::shell::library::{LIBRARY_PLATE, SECTION_HOVERED};
 
 use crate::elevation::Level;
 use crate::tokens::shell::library::CARD_BRUSH;
@@ -129,20 +128,24 @@ use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
+use crate::tokens::shell::{
+    FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
+};
 
-#[cfg(test)]
-use crate::tokens::shell::library::FILTER_X;
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
 use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
 use crate::tokens::shell::library::SEARCH_RADIUS;
+use crate::tokens::shell::library::SEARCH_RIGHT;
 use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_TOP;
-use crate::tokens::shell::library::SEARCH_WIDTH;
 use crate::tokens::shell::library::SEARCH_X;
-use crate::tokens::shell::library::{FILTER_GAP, FILTER_PAD, FILTER_WIDTH};
+use crate::tokens::shell::library::{
+    FILTER_CHEVRON, FILTER_CHEVRON_GAP, FILTER_GAP, FILTER_PAD_LEFT, FILTER_PAD_RIGHT,
+};
 
+use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
 use crate::tokens::shell::library::ARCHIVED_FAVICON_X;
@@ -153,17 +156,26 @@ use crate::tokens::shell::library::ARCHIVED_RADIUS;
 use crate::tokens::shell::library::ARCHIVED_RIGHT;
 use crate::tokens::shell::library::ARCHIVED_TEXT_X;
 use crate::tokens::shell::library::HEADING_BOTTOM;
-use crate::tokens::shell::library::HEADING_GAP;
 use crate::tokens::shell::library::HEADING_HEIGHT;
 use crate::tokens::shell::library::HEADING_TOP;
 use crate::tokens::shell::library::HEADING_X;
 use crate::tokens::shell::library::MEDIA_GAP;
 use crate::tokens::shell::library::MEDIA_RADIUS;
-/// Media's tiles a row, and each one's side, as the rows' width holds them.
+use crate::tokens::shell::library::PAGE_LEAST;
+/// Media's tiles a row.
 const MEDIA_COLUMNS: usize = 3;
-const MEDIA_TILE: f32 =
-    (ARCHIVE_WIDTH - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
-        / MEDIA_COLUMNS as f32;
+
+/// Each of Media's tiles' side, as a list `list` wide holds them.
+const fn media_tile(list: f32) -> f32 {
+    (list - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
+        / MEDIA_COLUMNS as f32
+}
+
+/// How wide the list beside the column is in a window `window` wide: as drawn, unless the page
+/// would keep less than page-least beside the Library, when it gives way down to its least.
+pub(super) fn list_width(window: f32) -> f32 {
+    (window - PAGE_LEAST - COLUMN_WIDTH).clamp(ARCHIVE_LEAST, ARCHIVE_WIDTH)
+}
 /// The file's own icon in a tile without a picture of it.
 const MEDIA_ICON: f32 = 32.;
 /// Set in the preview ids of captures, which downloads' ids never reach.
@@ -171,23 +183,21 @@ const CAPTURE_BIT: u64 = 1 << 63;
 /// Rows laid out past the list's ends, so a scroll doesn't show them late.
 const ARCHIVE_OVERDRAW: f32 = 300.;
 use crate::tokens::shell::library::BUTTON_PROGRESS_BOTTOM;
+use crate::tokens::shell::library::BUTTON_PROGRESS_FILL;
 use crate::tokens::shell::library::BUTTON_PROGRESS_HEIGHT;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK_PLATED;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
+use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::PROGRESS_BOTTOM;
 use crate::tokens::shell::library::PROGRESS_FILL;
 use crate::tokens::shell::library::PROGRESS_HEIGHT;
 use crate::tokens::shell::library::PROGRESS_TRACK;
 use crate::tokens::text;
 
-/// The headings, by how long ago a tab was archived: the starts of `Browser::day_starts`, then
-/// before them.
-const HEADINGS: [&str; 5] = [
-    "Today",
-    "Yesterday",
-    "Earlier This Week",
-    "Last Week",
-    "Older",
-];
+/// The headings of today and yesterday, by the starts of `Browser::day_starts`; a day before them
+/// is headed by its date (`Item::Day`), as drawn.
+const HEADINGS: [&str; 2] = ["Today", "Yesterday"];
 
 /// A tab in the archive, as the browser reports it.
 #[derive(Clone)]
@@ -393,14 +403,25 @@ pub(super) enum Section {
 }
 
 impl Section {
-    /// What its button says, and what an assistive app calls its list.
+    /// The column's rows, top to bottom, as drawn: each is listed where the window has it.
+    pub(super) const ORDER: [Section; 7] = [
+        Section::Downloads,
+        Section::Archive,
+        Section::Agents,
+        Section::Media,
+        Section::Spaces,
+        Section::Boards,
+        Section::Boosts,
+    ];
+
+    /// What its row says, and what an assistive app calls its list.
     fn title(self) -> &'static str {
         match self {
             Section::Media => "Media",
             Section::Downloads => "Downloads",
             Section::Spaces => "Spaces",
             Section::Archive => "History",
-            Section::Agents => "Agents",
+            Section::Agents => "Threads",
             Section::Boosts => "Boosts",
             Section::Boards => "Boards",
         }
@@ -506,8 +527,8 @@ impl Only {
         match self {
             Only::All => "All",
             Only::Closed => "Closed Tabs",
-            Only::Little => "Little ilo",
-            Only::Tasks => "Tasks",
+            Only::Little => "Little Window",
+            Only::Tasks => "Threads",
             Only::Visited => "Visited",
         }
     }
@@ -535,7 +556,11 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     // Headings, Clear and a past page's sites take no ring, so none takes its place.
     let rows = |items: &[Item]| -> Vec<Item> {
         let rings = |each: &&Item| {
-            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+            *each == item
+                || !matches!(
+                    each,
+                    Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_)
+                )
         };
         items.iter().filter(rings).copied().collect()
     };
@@ -552,6 +577,8 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
 #[derive(Clone, Copy, PartialEq)]
 enum Item {
     Heading(&'static str),
+    /// A day before yesterday's heading, its date on the clock here: "Sunday 22 November".
+    Day(chrono::NaiveDate),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
     /// The visited page at this index of History's pages.
@@ -576,6 +603,11 @@ enum Item {
     Download(usize),
     /// A row of Media's tiles, from its left.
     Media([Option<Medium>; MEDIA_COLUMNS]),
+}
+
+/// A day's heading before yesterday, as drawn: its weekday, then its date, "Sunday 22 November".
+fn day_heading(day: chrono::NaiveDate) -> String {
+    day.format("%A %-d %B").to_string()
 }
 
 /// A tile of the Library's Media.
@@ -783,8 +815,13 @@ impl Shell {
     pub(super) fn section_width(&self, section: Section) -> f32 {
         match section {
             Section::Spaces => spaces_width(self.spaces.len(), f32::from(self.viewport.width)),
-            _ => LIBRARY_WIDTH,
+            _ => COLUMN_WIDTH + self.list_width(),
         }
+    }
+
+    /// How wide the list beside the column is in this window.
+    pub(super) fn list_width(&self) -> f32 {
+        list_width(f32::from(self.viewport.width))
     }
 
     /// How wide the Library is: its section's, and on its way to another's after a click on it, or
@@ -1022,28 +1059,11 @@ impl Shell {
         }
     }
 
-    /// The gap between the sections' buttons and how far below Arc's place, 5 above the column's
-    /// middle, they start: Arc's gap and place while the window has room, and in a shorter window,
-    /// as seven buttons need at 800 tall, under the heading's caps, with the gaps closing before
-    /// they'd reach the back button.
-    pub(super) fn sections_fit(&self) -> (f32, f32) {
-        let shown = [
-            Section::Spaces,
-            Section::Boards,
-            Section::Archive,
-            Section::Agents,
-            Section::Boosts,
-        ];
-        let count = 2. + shown.iter().filter(|each| self.has_section(**each)).count() as f32;
-        let height = f32::from(self.viewport.height);
-        if height <= 0. {
-            return (SECTION_GAP, 0.);
-        }
-        let room = height - SECTIONS_TOP - SECTIONS_BOTTOM - count * SECTION_HEIGHT;
-        let gap = (room / (count - 1.)).clamp(0., SECTION_GAP);
-        let stack = count * SECTION_HEIGHT + (count - 1.) * gap;
-        let top = (height - stack) / 2. - 5.;
-        (gap, (SECTIONS_TOP - top).max(0.))
+    /// The sections the column lists, in its order: those the window has.
+    pub(super) fn shown_sections(&self) -> Vec<Section> {
+        (Section::ORDER.into_iter())
+            .filter(|&section| self.has_section(section))
+            .collect()
     }
 
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
@@ -1081,13 +1101,13 @@ impl Shell {
         }
         self.section = section;
         let placeholder = match section {
-            Section::Media => "Search Media…",
-            Section::Downloads => "Search Downloads…",
+            Section::Media => "Search media",
+            Section::Downloads => "Search downloads",
             Section::Spaces => "",
-            Section::Archive => "Search History…",
-            Section::Agents => "Search Agents…",
-            Section::Boosts => "Search Boosts…",
-            Section::Boards => "Search Boards…",
+            Section::Archive => "Search history",
+            Section::Agents => "Search threads",
+            Section::Boosts => "Search boosts",
+            Section::Boards => "Search boards",
         };
         // Its colours are the panel's to give as it draws, since the field outlives a change of
         // the window's look.
@@ -1406,10 +1426,13 @@ impl Shell {
         }
         let mut heading = None;
         for (item, time) in found {
-            let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
+            let day = match starts.iter().position(|&start| time >= start) {
+                Some(day @ (0 | 1)) => Item::Heading(HEADINGS[day]),
+                _ => history_list::day(time).map_or(Item::Heading(""), Item::Day),
+            };
             if self.section != Section::Boosts && heading != Some(day) {
                 heading = Some(day);
-                items.push(Item::Heading(HEADINGS[day]));
+                items.push(day);
             }
             // A tile goes into the row before it, under the same heading, while it has room.
             if let (Item::Media([Some(medium), ..]), Some(Item::Media(row))) =
@@ -1743,17 +1766,17 @@ impl Shell {
                 };
                 match (tabs, tasks) {
                     (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
-                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its thread leaves the archive. {undo} brings it back."),
                     (_, 0) => {
                         format!("Its {tabs} tabs leave the archive. {undo} brings them back.")
                     }
                     (0, _) => {
-                        format!("Its {tasks} tasks leave the archive. {undo} brings them back.")
+                        format!("Its {tasks} threads leave the archive. {undo} brings them back.")
                     }
                     _ => format!(
                         "Its {} and {} leave the archive. {undo} brings them back.",
                         some(tabs, "tab"),
-                        some(tasks, "task")
+                        some(tasks, "thread")
                     ),
                 }
             },
@@ -1832,8 +1855,8 @@ impl Shell {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
             (Section::Spaces, _) => "",
-            (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
-            (Section::Archive, false) if tasks => "No tasks match.",
+            (Section::Archive, true) if tasks => "Archived threads show here.",
+            (Section::Archive, false) if tasks => "No threads match.",
             (Section::Archive, unsearched) => match (self.archive_only(), unsearched) {
                 (Only::Visited, true) => "Pages you visit show here.",
                 (Only::Visited, false) => "No visited pages match.",
@@ -1842,8 +1865,8 @@ impl Shell {
                 (_, true) => "Pages you visit and tabs you close show here.",
                 (_, false) => "No pages match.",
             },
-            (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
-            (Section::Agents, false) => "No tasks match.",
+            (Section::Agents, true) => "Archived threads stay here for 30 days.",
+            (Section::Agents, false) => "No threads match.",
             (Section::Boosts, true) => {
                 "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
             }
@@ -1869,9 +1892,9 @@ impl Shell {
         let Some(library) = &self.library else {
             return div();
         };
-        // The selected section's glyph has the Space's accent, as in Arc, where it reads there.
-        let color = Hsla::from(self.palette.section_glyph);
-        let (gap, lower) = self.sections_fit();
+        // Taken on past where it opens, the column's fill reaches back to the window's edge, so
+        // the window's own background never shows left of it.
+        let past = self.library_past();
         let sections = div()
             .id("library-sections")
             .when(self.a11y, |sections| {
@@ -1880,38 +1903,17 @@ impl Shell {
                     .aria_label("Sections")
                     .aria_orientation(gpui::Orientation::Vertical)
             })
+            .absolute()
+            .top(px(SECTIONS_TOP))
+            .left(px(SECTION_X + past))
+            .w(px(COLUMN_WIDTH - 2. * SECTION_X))
             .flex()
             .flex_col()
-            .gap(px(gap))
-            // Arc's buttons sit 5 above the column's middle, and lower where the heading needs it.
-            .mb(px(10.))
-            .mt(px(2. * lower))
-            .child(self.section_button(Section::Media, color, cx))
-            .child(self.section_button(Section::Downloads, color, cx))
             .children(
-                self.has_section(Section::Spaces)
-                    .then(|| self.section_button(Section::Spaces, color, cx)),
-            )
-            // Ours: after Spaces, as both are what the user made; Arc's Easels aren't recorded.
-            .children(
-                self.has_section(Section::Boards)
-                    .then(|| self.section_button(Section::Boards, color, cx)),
-            )
-            .children(
-                self.has_section(Section::Archive)
-                    .then(|| self.section_button(Section::Archive, color, cx)),
-            )
-            .children(
-                self.has_section(Section::Agents)
-                    .then(|| self.section_button(Section::Agents, color, cx)),
-            )
-            .children(
-                self.has_section(Section::Boosts)
-                    .then(|| self.section_button(Section::Boosts, color, cx)),
+                self.shown_sections()
+                    .into_iter()
+                    .map(|section| self.section_button(section, cx)),
             );
-        // Taken on past where it opens, the column's fill reaches back to the window's edge, so
-        // the window's own background never shows left of it.
-        let past = self.library_past();
         let width = self.library_width();
         // On the right the columns swap, list then sections, so the sections and the window's
         // buttons on them stay at the window's edge, and what's across the list moves the column's
@@ -1945,41 +1947,29 @@ impl Shell {
                     .size(px(16.))
                     .text_color(self.palette.glyph(NAV)),
             );
-        // Placed by its caps and its L's stem, not its line's box.
-        let heading = display_text("Library", TITLE_SIZE, TITLE_LINE, cx)
+        let heading = div()
             .absolute()
-            .left(px(TITLE_X + past))
-            .top(px(TITLE_CAP - cap_top(TITLE_SIZE, TITLE_LINE)))
-            .text_color(self.palette.gray(SECTION_LABEL));
+            .top(px(TITLE_TOP))
+            .left(px(SECTION_X + TITLE_X + past))
+            .h(px(TITLE_HEIGHT))
+            .flex()
+            .items_center()
+            .child(
+                display_text("Library", TITLE_SIZE, TITLE_LINE, cx)
+                    .text_color(self.palette.text(TEXT_PRIMARY)),
+            );
         let column = div()
             .absolute()
             .left(px(if right { width - COLUMN_WIDTH } else { -past }))
             .top_0()
             .bottom_0()
             .w(px(COLUMN_WIDTH + past))
-            .bg(self.palette.plate(COLUMN))
-            .flex()
-            .items_center()
-            .map(|column| match right {
-                true => column.justify_end().pr(px(SECTION_X)),
-                false => column.pl(px(SECTION_X + past)),
-            })
             .child(heading)
             .child(sections)
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
             // column when fingers take it past its end; mirrored across it on the right.
             .children(buttons.then(|| self.window_buttons(px(COLUMN_WIDTH), cx)));
-        let edge = div()
-            .absolute()
-            .left(px(match right {
-                true => width - COLUMN_WIDTH - 1.,
-                false => COLUMN_WIDTH,
-            }))
-            .top_0()
-            .bottom_0()
-            .w(px(1.))
-            .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
         // The field stays as the window goes from dark to light or to a Space of another colour,
         // so its placeholder, caret and selection are this frame's palette's, as the glyph's is:
@@ -2003,7 +1993,7 @@ impl Shell {
             .pl(px(SEARCH_TEXT_X))
             .pr(px(12.))
             .rounded(px(SEARCH_RADIUS))
-            .bg(self.palette.plate(LIBRARY_PLATE))
+            .bg(self.palette.plate(FIELD_PLATE))
             .block_mouse_except_scroll()
             // The page may have the keyboard.
             .on_mouse_down(
@@ -2034,21 +2024,18 @@ impl Shell {
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
         let filter = filtered.then(|| {
-            let label = match self.archive_only() {
-                Only::All => "Filter",
-                only => only.label(),
-            };
-            // At least Arc's width, growing from its end to fit what it filters to.
+            // What it filters to, `All` included, as drawn.
+            let label = self.archive_only().label();
             self.stop(div().id("library-filter"), label.into())
                 .flex_none()
-                .min_w(px(FILTER_WIDTH))
-                .px(px(FILTER_PAD))
+                .pl(px(FILTER_PAD_LEFT))
+                .pr(px(FILTER_PAD_RIGHT))
                 .h(px(SEARCH_HEIGHT))
                 .flex()
                 .items_center()
-                .justify_center()
+                .gap(px(FILTER_CHEVRON_GAP))
                 .rounded(px(SEARCH_RADIUS))
-                .bg(self.palette.plate(LIBRARY_PLATE))
+                .bg(self.palette.plate(FIELD_PLATE))
                 .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
                 .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
@@ -2058,6 +2045,13 @@ impl Shell {
                     shell.archive_filter_menu(event.position(), cx)
                 }))
                 .child(label)
+                .child(
+                    svg()
+                        .path("icons/chevron-down.svg")
+                        .flex_none()
+                        .size(px(FILTER_CHEVRON))
+                        .text_color(placeholder),
+                )
         });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
@@ -2132,18 +2126,18 @@ impl Shell {
             .bottom_0()
             .w(px(width))
             .opacity(Shell::library_opacity(sidebar_opacity))
-            .child(column)
-            .child(edge);
+            .child(column);
         let panel = self.with_stops(panel, cx);
+        let list = self.list_width();
         let panel = match spaces {
             true => panel.child(self.space_cards(cx)),
             false => panel
                 .child(
                     div()
                         .absolute()
-                        .left(px(list_x(SEARCH_X)))
+                        .left(px(list_x(COLUMN_WIDTH + SEARCH_X)))
                         .top(px(SEARCH_TOP))
-                        .w(px(SEARCH_WIDTH))
+                        .w(px(list - SEARCH_X - SEARCH_RIGHT))
                         .flex()
                         .gap(px(FILTER_GAP))
                         .child(field)
@@ -2155,7 +2149,7 @@ impl Shell {
                         .left(px(list_x(COLUMN_WIDTH)))
                         .top(px(ARCHIVE_TOP))
                         .bottom_0()
-                        .w(px(ARCHIVE_WIDTH))
+                        .w(px(list))
                         .child(archive),
                 )
                 .child(self.download_press_listeners(cx)),
@@ -2268,7 +2262,7 @@ impl Shell {
         let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
-                let clear = still_clear(&palette, space.clears_last(space.shown));
+                let clear = clear_label(&palette, palette.tertiary());
                 divider_box(&palette, self.hairline(), Some(clear)).into_any_element()
             }
             Line::Folder(folder, depth) => {
@@ -2733,28 +2727,27 @@ impl Shell {
         else {
             return div().into_any_element();
         };
+        let heading = |heading: SharedString| {
+            div()
+                .pt(px(HEADING_TOP))
+                .pb(px(HEADING_BOTTOM))
+                .pl(px(HEADING_X))
+                .child(
+                    div()
+                        .h(px(HEADING_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .text_size(px(text::SMALL))
+                        .line_height(px(HEADING_HEIGHT))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.palette.gray(SECONDARY))
+                        .child(heading),
+                )
+                .into_any_element()
+        };
         let tab = match *item {
-            Item::Heading(heading) => {
-                return div()
-                    .pt(px(if index == 0 {
-                        HEADING_TOP
-                    } else {
-                        HEADING_TOP + HEADING_GAP
-                    }))
-                    .pb(px(HEADING_BOTTOM))
-                    .pl(px(HEADING_X))
-                    .child(
-                        div()
-                            .h(px(HEADING_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .text_size(px(text::SMALL))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.palette.gray(SECONDARY))
-                            .child(heading),
-                    )
-                    .into_any_element();
-            }
+            Item::Heading(name) => return heading(name.into()),
+            Item::Day(day) => return heading(day_heading(day).into()),
             Item::Tab(tab) => tab,
             Item::Visit(page) => return self.visited_item(page, cx),
             Item::Task(task) => return self.archived_task_item(task, cx),
@@ -2800,7 +2793,7 @@ impl Shell {
         };
         let named = self.library.as_ref().is_some_and(|library| library.named);
         let about = SharedString::from(match tab.little && named {
-            true => format!("Closed {when} in Little ilo · {host}"),
+            true => format!("Closed {when} in a Little Window · {host}"),
             false => format!("Closed {when} · {host}"),
         });
         let pointed = (self.library.as_ref())
@@ -3710,7 +3703,7 @@ impl Shell {
             .map(|tile| self.library_row(tile, line, column, MEDIA_RADIUS))
             .relative()
             .flex_none()
-            .size(px(MEDIA_TILE))
+            .size(px(media_tile(self.list_width())))
             .flex()
             .items_center()
             .justify_center()
@@ -3765,7 +3758,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         if !self.media_videos.contains_key(&id) {
-            let side = (MEDIA_TILE * window.scale_factor()).ceil() as u32;
+            let side = (media_tile(self.list_width()) * window.scale_factor()).ceil() as u32;
             if !self.browser.open_video(id, path, side, cx) {
                 return None;
             }
@@ -3880,23 +3873,23 @@ impl Shell {
         self.browser.list_captures(cx);
     }
 
-    /// A section's button in the column, which shows the section.
-    fn section_button(
-        &self,
-        section: Section,
-        color: Hsla,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    /// A section's row in the column, which shows the section: its glyph, its name and, on
+    /// Downloads while files download, how many.
+    fn section_button(&self, section: Section, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let selected = section == self.section;
         let label = section.title();
         let glyph = match section {
-            Section::Media => "icons/image.svg",
-            Section::Downloads => "icons/arrow-down-to-line.svg",
-            Section::Spaces => "icons/spaces.svg",
-            Section::Archive => "icons/rotate-ccw-clock.svg",
-            Section::Agents => "icons/square-mouse-pointer.svg",
-            Section::Boosts => "icons/paintbrush.svg",
-            Section::Boards => "icons/presentation.svg",
+            Section::Media => "icons/library-media.svg",
+            Section::Downloads => "icons/library-downloads.svg",
+            Section::Spaces => "icons/library-spaces.svg",
+            Section::Archive => "icons/library-history.svg",
+            Section::Agents => "icons/library-threads.svg",
+            Section::Boosts => "icons/library-boosts.svg",
+            Section::Boards => "icons/library-boards.svg",
+        };
+        let running = match section {
+            Section::Downloads => self.downloads_running(),
+            _ => 0,
         };
         // check.sh clicks where this says the button is drawn, so a section added to the column
         // moves no check's click. Said once the column is at rest, not each frame it slides.
@@ -3917,20 +3910,11 @@ impl Shell {
             |_, _, _, _| {},
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full();
-        // ↓ and ↑ go along the buttons, stopping at the ends, as Settings' sections do.
-        let shown: Vec<Section> = [
-            Section::Media,
-            Section::Downloads,
-            Section::Spaces,
-            Section::Boards,
-            Section::Archive,
-            Section::Agents,
-            Section::Boosts,
-        ]
-        .into_iter()
-        .filter(|&each| self.has_section(each))
-        .collect();
+        // ↓ and ↑ go along the rows, stopping at the ends, as Settings' sections do.
+        let shown = self.shown_sections();
         let at = shown.iter().position(|&each| each == section).unwrap_or(0);
         let last = shown.len().saturating_sub(1);
         div()
@@ -3957,15 +3941,23 @@ impl Shell {
                 cx.stop_propagation();
             })
             .relative()
-            .w(px(SECTION_WIDTH))
+            .w_full()
             .h(px(SECTION_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(SECTION_GAP))
+            .px(px(SECTION_PAD))
             .rounded(px(SECTION_RADIUS))
             .block_mouse_except_scroll()
-            .when(selected, |button| {
-                button.bg(self.palette.plate(LIBRARY_PLATE))
-            })
+            .when(selected, |button| button.bg(self.palette.selected(0.)))
             .when(!selected, |button| {
-                button.hover(|style| style.bg(self.palette.plate(SECTION_HOVERED)))
+                button
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
             })
             .on_click(cx.listener(move |shell, _, _, cx| {
                 if section != shell.section {
@@ -3983,30 +3975,40 @@ impl Shell {
             .child(
                 svg()
                     .path(glyph)
-                    .absolute()
-                    .left(px((SECTION_WIDTH - SECTION_GLYPH) / 2.))
-                    .top(px(SECTION_GLYPH_Y - SECTION_GLYPH / 2.))
+                    .flex_none()
                     .size(px(SECTION_GLYPH))
                     .text_color(if selected {
-                        color
+                        self.palette.text(TEXT_PRIMARY)
                     } else {
                         self.palette.glyph(SECTION_GLYPH_UNSELECTED)
                     }),
             )
             .child(
                 div()
-                    .absolute()
-                    .top(px(SECTION_LABEL_Y - SECTION_LABEL_HEIGHT / 2.))
-                    .w_full()
-                    .h(px(SECTION_LABEL_HEIGHT))
-                    .flex()
-                    .justify_center()
-                    .text_size(px(text::SMALL))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.gray(SECTION_LABEL))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(SECTION_TEXT))
+                    .line_height(px(SECTION_LINE))
+                    .text_color(self.palette.text(TEXT_PRIMARY))
                     .child(label),
             )
+            .children((running > 0).then(|| {
+                div()
+                    .flex_none()
+                    .text_size(px(SECTION_COUNT_TEXT))
+                    .line_height(px(SECTION_COUNT_LINE))
+                    .text_color(self.palette.text(self.palette.secondary()))
+                    .child(format!("{running} running"))
+            }))
             .child(log_drawn)
+    }
+
+    /// How many files are downloading: those running, less any held as harmful.
+    fn downloads_running(&self) -> usize {
+        (self.downloads.iter())
+            .filter(|each| each.state == DownloadState::Running && !each.held)
+            .count()
     }
 
     /// A download's row: its file's icon, its name over where it is, and while it runs, a bar. A
@@ -4335,12 +4337,23 @@ impl Shell {
         }
     }
 
+    /// Whether the footer's Library button wears its plate: while the Library is open, which with
+    /// the sidebar receding under it is as long as the button is still seen.
+    pub(super) fn library_lit(&self) -> bool {
+        self.library_open
+    }
+
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
     /// its glyph and name over a bar of how far they've got. The pointer resting on it shows the
-    /// recent downloads over it.
+    /// recent downloads over it. While the Library is open it wears a plate, its glyph in the
+    /// text's ink.
     pub(super) fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let progress = downloads_progress(&self.downloads);
         let command = Command::ViewLibrary;
+        // While its plate of recent downloads is up the button is the plate's foot, in its fill:
+        // no plate of its own, its glyph in the ink.
+        let plated = self.recent_downloads.plated();
+        let lit = self.library_lit() && !plated;
         div()
             .id("library")
             .when(self.a11y, |button| {
@@ -4356,9 +4369,12 @@ impl Shell {
             .justify_center()
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
-            .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .map(|button| self.with_tip_frame(button, command, cx))
+            .when(!plated, |button| {
+                button
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            })
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
                 shell.hover_button(
@@ -4371,17 +4387,29 @@ impl Shell {
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                    shell.hover_kinds_menu(event.position, cx)
-                }),
-            )
+            .when(lit, |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .left(px((LIBRARY_BUTTON - FOOT_PLATE) / 2.))
+                        .top(px((FOOT_ROW - FOOT_PLATE) / 2.))
+                        .size(px(FOOT_PLATE))
+                        .rounded(px(FOOT_PLATE_RADIUS))
+                        .bg(self.palette.plate(match self.palette.tone {
+                            Tone::Dark => LIBRARY_OPEN_PLATE,
+                            Tone::Light => LIGHT_LIBRARY_OPEN_PLATE,
+                        })),
+                )
+            })
             .child(
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .text_color(self.palette.glyph(if lit || plated {
+                        LIBRARY_OPEN_GLYPH
+                    } else {
+                        NAV
+                    })),
             )
             .when_some(progress, |button, done| {
                 button.child(
@@ -4392,13 +4420,17 @@ impl Shell {
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
                         .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                        .bg(self.palette.faint(PROGRESS_TRACK))
+                        .bg(self.palette.faint(match self.palette.tone {
+                            _ if plated => BUTTON_PROGRESS_TRACK_PLATED,
+                            Tone::Dark => BUTTON_PROGRESS_TRACK,
+                            Tone::Light => LIGHT_BUTTON_PROGRESS_TRACK,
+                        }))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(done))
                                 .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                                .bg(self.palette.glyph(PROGRESS_FILL)),
+                                .bg(self.palette.glyph(BUTTON_PROGRESS_FILL)),
                         ),
                 )
             })
@@ -4584,12 +4616,13 @@ mod task_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
-        COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
-        FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
-        LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP,
-        SECTION_WIDTH, SECTION_X, Space, bar_drawn, card_x, download_menu_items,
-        downloads_progress, library_band, panel_at_rest, past_end, plus_x, receded_opacity,
+        ARCHIVE_LEAST, ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived,
+        CARD_WIDTH, COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice,
+        DownloadState, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT,
+        HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST,
+        SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space,
+        bar_drawn, card_x, day_heading, download_menu_items, downloads_progress, history_list,
+        library_band, list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity,
         spaces_width,
     };
     use std::rc::Rc;
@@ -4621,6 +4654,44 @@ mod tests {
             peeked: Vec::new(),
             live_rooms: Default::default(),
             placed: Vec::new(),
+        }
+    }
+
+    /// Media's tiles in the list as drawn, at the tests' window's width.
+    const MEDIA_TILE: f32 = media_tile(ARCHIVE_WIDTH);
+
+    /// The list is as drawn in a wide window and gives way, so the page keeps page-least beside
+    /// the Library, down to its least, from where the page takes what's left; the column is the
+    /// same at every width (the lead, 26 Nov).
+    #[gpui::test]
+    fn the_list_gives_way_in_a_narrow_window_and_the_column_never(cx: &mut TestAppContext) {
+        let reaches_least = COLUMN_WIDTH + ARCHIVE_LEAST + PAGE_LEAST;
+        assert_eq!(list_width(reaches_least + 400.), ARCHIVE_WIDTH);
+        assert_eq!(list_width(reaches_least + 20.), ARCHIVE_LEAST + 20.);
+        assert_eq!(list_width(reaches_least), ARCHIVE_LEAST);
+        assert_eq!(list_width(640.), ARCHIVE_LEAST);
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        for width in [
+            640.,
+            reaches_least,
+            reaches_least + 20.,
+            reaches_least + 400.,
+        ] {
+            let (library, list) = shell.update(cx, |shell, _| {
+                shell.viewport = gpui::size(px(width), px(800.));
+                (shell.section_width(Section::Archive), shell.list_width())
+            });
+            assert_eq!(
+                library - list,
+                COLUMN_WIDTH,
+                "the column in a window {width} wide"
+            );
+            assert!(
+                library >= COLUMN_WIDTH + ARCHIVE_LEAST,
+                "a window {width} wide"
+            );
         }
     }
 
@@ -4809,7 +4880,7 @@ mod tests {
         let section = shell.read_with(cx, |shell, _| {
             shell.buttons_drawn.borrow()["archive"].center()
         });
-        assert_eq!(section.x, px(SECTION_X + SECTION_WIDTH / 2.));
+        assert_eq!(section.x, px(COLUMN_WIDTH / 2.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());
@@ -4829,6 +4900,85 @@ mod tests {
         assert!(
             shell.read_with(cx, |shell, _| shell.library_open),
             "the Library closed"
+        );
+    }
+
+    /// The column lists its sections in the drawn order, Downloads first, each a row as wide as
+    /// the column less its inset, one under the next from under the heading.
+    #[gpui::test]
+    fn the_sections_are_rows_in_the_drawn_order(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+        });
+        cx.run_until_parked();
+        let (shown, drawn) = shell.read_with(cx, |shell, _| {
+            let shown = shell.shown_sections();
+            let drawn = shell.buttons_drawn.borrow();
+            let rows: Vec<_> = (shown.iter())
+                .map(|section| drawn[section.name()])
+                .collect();
+            (shown, rows)
+        });
+        let order: Vec<_> = (Section::ORDER.into_iter())
+            .filter(|section| shown.contains(section))
+            .collect();
+        assert_eq!(shown, order, "the column's order isn't the drawn one");
+        assert_eq!(shown[0], Section::Downloads, "Downloads isn't first");
+        assert_eq!(drawn[0].origin.y, px(SECTIONS_TOP), "{shown:?} {drawn:?}");
+        for (row, next) in drawn.iter().zip(&drawn[1..]) {
+            assert_eq!(row.size.height, px(SECTION_HEIGHT), "{drawn:?}");
+            assert_eq!(
+                row.size.width,
+                px(COLUMN_WIDTH - 2. * SECTION_X),
+                "{drawn:?}"
+            );
+            assert_eq!(row.origin.x, px(SECTION_X), "{drawn:?}");
+            assert_eq!(next.origin.y, row.origin.y + row.size.height, "{drawn:?}");
+        }
+    }
+
+    /// Past yesterday a day is headed by its weekday and date, as drawn (LB4), not by how long ago.
+    #[test]
+    fn a_day_before_yesterday_is_headed_by_its_date() {
+        let day = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+        assert_eq!(day_heading(day(11, 22)), "Sunday 22 November");
+        assert_eq!(day_heading(day(3, 1)), "Sunday 1 March");
+    }
+
+    /// Downloads' row counts the files coming in, and none held as harmful or stopped.
+    #[gpui::test]
+    fn the_downloads_row_counts_what_runs(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        let count = |downloads: Vec<Download>, cx: &mut gpui::VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                shell.set_downloads(downloads, cx);
+                shell.downloads_running()
+            })
+        };
+        let some = |state, held, id| Download {
+            id,
+            ..download(state, held)
+        };
+        use DownloadState::{Done, Paused, Running};
+        assert_eq!(count(Vec::new(), cx), 0);
+        assert_eq!(
+            count(
+                vec![
+                    some(Running, false, 1),
+                    some(Running, false, 2),
+                    some(Running, true, 3),
+                    some(Paused, false, 4),
+                    some(Done, false, 5),
+                ],
+                cx
+            ),
+            2
         );
     }
 
@@ -4855,7 +5005,10 @@ mod tests {
         });
         cx.run_until_parked();
         let filter = point(
-            px(FILTER_X + FILTER_WIDTH / 2.),
+            px(COLUMN_WIDTH + ARCHIVE_WIDTH
+                - SEARCH_RIGHT
+                - FILTER_PAD_RIGHT
+                - FILTER_CHEVRON / 2.),
             px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
         );
         let click = |cx: &mut gpui::VisualTestContext| {
@@ -4891,7 +5044,7 @@ mod tests {
                 ("All".into(), true),
                 ("".into(), false),
                 ("Closed Tabs".into(), true),
-                ("Little ilo".into(), true),
+                ("Little Window".into(), true),
                 ("".into(), false),
                 ("Visited".into(), true)
             ]
@@ -4904,7 +5057,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false, false, false, false, false]
         );
-        cx.update(|_, cx| host.choose("Little ilo", cx));
+        cx.update(|_, cx| host.choose("Little Window", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [2]);
 
@@ -4971,7 +5124,7 @@ mod tests {
                     Item::Heading("Today"),
                     Item::Media([Some(download(1)), Some(capture(0)), Some(download(2))]),
                     Item::Media([Some(capture(1)), None, None]),
-                    Item::Heading("Older"),
+                    Item::Day(history_list::day(-1.).unwrap()),
                     Item::Media([Some(capture(2)), None, None]),
                 ]
         );
@@ -5208,20 +5361,25 @@ mod tests {
         }
     }
 
-    /// The Spaces section is as wide as Arc's: 480 with one Space and 1008 with three, the cards
-    /// 264 apart from 140 and the + 33 after the last. Once they don't fit it leaves the page 56,
-    /// however narrow the window, as Arc 1.171's with 8 Spaces: 1044 at 1100 and 444 at 500.
+    /// The Spaces section is as wide as Arc's, and as much more as the drawn column is wider than
+    /// Arc's 112: 480 with one Space and 1008 with three, the cards 264 apart from 140 and the +
+    /// 33 after the last. Once they don't fit it leaves the page 56, however narrow the window, as
+    /// Arc 1.171's with 8 Spaces: 1044 at 1100 and 444 at 500.
     #[test]
     fn the_spaces_section_grows_with_its_spaces() {
-        assert_eq!(spaces_width(1, 1800.), 480.);
-        assert_eq!(spaces_width(3, 1800.), 1008.);
-        assert_eq!([card_x(0), card_x(1), card_x(2)], [140., 404., 668.]);
-        assert_eq!(plus_x(3), 941.);
-        assert_eq!(spaces_width(0, 1800.), 480.);
+        const WIDER: f32 = COLUMN_WIDTH - 112.;
+        assert_eq!(spaces_width(1, 1800.), 480. + WIDER);
+        assert_eq!(spaces_width(3, 1800.), 1008. + WIDER);
+        assert_eq!(
+            [card_x(0), card_x(1), card_x(2)],
+            [140. + WIDER, 404. + WIDER, 668. + WIDER]
+        );
+        assert_eq!(plus_x(3), 941. + WIDER);
+        assert_eq!(spaces_width(0, 1800.), 480. + WIDER);
         assert_eq!(spaces_width(8, 1100.), 1044.);
         assert_eq!(spaces_width(8, 500.), 444.);
         assert_eq!(spaces_width(10, 1800.), 1744.);
-        assert_eq!(spaces_width(3, 1200.), 1008.);
+        assert_eq!(spaces_width(3, 1200.), 1008. + WIDER);
         assert_eq!(spaces_width(3, 700.), 644.);
         assert_eq!(spaces_width(1, 500.), 444.);
         // The column stays, in a window narrower than any.
@@ -5242,8 +5400,13 @@ mod tests {
             (905., 260.),
             (947.5, 320.),
         ];
+        // The drawn column is wider than Arc's 112, so the sheet is too, and the card starts as
+        // much further along: Arc's measure moves that much more by the time the sheet is in.
+        const WIDER: f32 = COLUMN_WIDTH - 112.;
         for (page, red) in cards {
-            let left = sheet_left((page - 288.) / 720., 1008.) + card_x(1);
+            let out = (page - 288.) / 720.;
+            let left = sheet_left(out, 1008. + WIDER) + card_x(1);
+            let red = red + out * WIDER;
             assert!((left - red).abs() < 2., "the card at {left}, not {red}");
         }
         // How far the card has gone and the sidebar's opacity, measured, both ways.

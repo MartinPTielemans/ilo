@@ -30,6 +30,11 @@ use serde_json::{Value, json};
 use super::runner::Cli;
 use super::tier::Tier;
 
+pub mod cards;
+pub mod unkept;
+
+use cards::CardId;
+
 /// The folder under the profile's that holds each kept task's own, and the file of their ids.
 pub const FOLDER: &str = "Kept tasks";
 /// The file of ids, in `FOLDER`: each kept conversation's id and its assistant.
@@ -114,10 +119,10 @@ pub enum Nowhere {
 /// Whether an assistant's runs can be kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeps {
-    /// Never: each run keeps nothing, whatever is wanted.
+    /// Never: each run keeps nothing.
     Never,
-    /// When a run is wanted kept.
-    WhenWanted,
+    /// Each run that can be: one with no files (`decide`).
+    Always,
 }
 
 /// The table: one row for each assistant.
@@ -125,20 +130,19 @@ pub const fn keeps(cli: Cli) -> Keeps {
     match cli {
         // Its print-mode conversations stay out of its own history in a terminal, in a folder of
         // ilo's that no terminal is in.
-        Cli::Claude => Keeps::WhenWanted,
+        Cli::Claude => Keeps::Always,
         // Until a run shows its app-server's threads stay out of its own history in a terminal.
         Cli::Codex => Keeps::Never,
     }
 }
 
-/// What a new run of `cli` keeps. `wanted` is why it would be kept at all: today Settings ›
-/// Agents' switch alone. A `walled` run, a task's with files, keeps nothing whatever is wanted:
-/// its assistant can't write where it keeps conversations. The runner is told only what comes
-/// of it, never the reason.
-pub fn decide(cli: Cli, wanted: bool, walled: bool) -> Keep {
-    match (keeps(cli), wanted && !walled) {
-        (Keeps::WhenWanted, true) => Keep::New(Id::new()),
-        (Keeps::WhenWanted, false) | (Keeps::Never, _) => Keep::Nothing,
+/// What a new run of `cli` keeps: nothing the user sets decides it. A `walled` run, a task's
+/// with files, keeps nothing: its assistant can't write where it keeps conversations. The runner
+/// is told only what comes of it, never the reason.
+pub fn decide(cli: Cli, walled: bool) -> Keep {
+    match (keeps(cli), walled) {
+        (Keeps::Always, false) => Keep::New(Id::new()),
+        (Keeps::Always, true) | (Keeps::Never, _) => Keep::Nothing,
     }
 }
 
@@ -242,6 +246,8 @@ pub struct Record {
     pub task: Option<String>,
     pub cli: Cli,
     pub id: Id,
+    /// Its card's own id, which names the card's folder (cards.rs): never the conversation's.
+    pub card: CardId,
     /// What the file says of its task, from its start and while it's listed: none for one
     /// deleted from the Archive, which a quit then leaves to be removed.
     pub past: Option<Past>,
@@ -256,6 +262,9 @@ pub struct Record {
     /// The user's replies that took the task up again, each by how many messages of theirs came
     /// before it and the access it came back at: ilo's line goes over each.
     pub resumed: Vec<(usize, Tier)>,
+    /// The names of the places its runs left something running in, each until a later launch's
+    /// sweep of it comes clean: a place's name alone, never its mark, a process or a path.
+    pub left: Vec<String>,
     /// Its removal is under way.
     removing: bool,
     /// Its removal failed: it's still there, for the user to try again.
@@ -266,10 +275,8 @@ pub struct Record {
 #[derive(Debug, Default)]
 pub struct Kept {
     records: Vec<Record>,
-    /// Settings › Agents' Keep finished tasks, off.
-    pub off: bool,
     /// The tasks whose conversation was removed from under them, as Remove All does: each had
-    /// one, where a task that started with the switch off never did, and the two say so apart.
+    /// one, where a task with files never did, and the two say so apart.
     removed_from: Vec<String>,
 }
 
@@ -312,6 +319,7 @@ impl Kept {
         task: Option<&str>,
         cli: Cli,
         id: Id,
+        card: CardId,
         profile: &str,
         past: Option<Past>,
     ) {
@@ -319,11 +327,13 @@ impl Kept {
             task: task.map(String::from),
             cli,
             id,
+            card,
             past,
             profile: profile.to_string(),
             nowhere: None,
             gone: false,
             resumed: Vec::new(),
+            left: Vec::new(),
             removing: false,
             stuck: false,
         });
@@ -332,7 +342,7 @@ impl Kept {
     /// Holds `id` for `task`, new, asked in `profile` and under way since `at`.
     pub fn hold(&mut self, task: &str, cli: Cli, id: Id, profile: &str, at: u64) {
         let under_way = Past::under_way(String::new(), at);
-        self.hold_for(Some(task), cli, id, profile, Some(under_way));
+        self.hold_for(Some(task), cli, id, CardId::new(), profile, Some(under_way));
     }
 
     /// The tasks an earlier run of the browser left that ended, each by its conversation's id,
@@ -379,6 +389,30 @@ impl Kept {
             .collect()
     }
 
+    /// The card of the conversation under `id`, while the browser holds it.
+    pub fn card_of(&self, id: &Id) -> Option<CardId> {
+        (self.records.iter())
+            .find(|record| record.id == *id)
+            .map(|record| record.card.clone())
+    }
+
+    /// The cards of the tasks the file lists: those a launch's sweep leaves (cards.rs).
+    pub fn cards(&self) -> Vec<CardId> {
+        (self.records.iter())
+            .filter(|record| record.past.is_some() && !record.removing)
+            .map(|record| record.card.clone())
+            .collect()
+    }
+
+    /// The sweep of `place` came clean: the row that carried its name no longer does. None if no
+    /// row did; else that row's task, if it has one.
+    pub fn came_clean(&mut self, place: &str) -> Option<Option<String>> {
+        let record = (self.records.iter_mut())
+            .find(|record| record.left.iter().any(|each| each == place))?;
+        record.left.retain(|each| each != place);
+        Some(record.task.clone())
+    }
+
     /// A removal ended: the id goes if the conversation did, else it stays, marked.
     pub fn removed(&mut self, id: &Id, removed: bool) {
         match removed {
@@ -414,7 +448,9 @@ impl Kept {
             }
             // A folder's own name and nothing more: one with a path in it names no profile.
             let profile = text("profile").filter(|name| !name.contains(['/', '\\']));
-            self.hold_for(None, cli, id, profile.unwrap_or_default(), None);
+            // A row with no card of its own gets a new id, which names no card there is.
+            let card = text("card").and_then(CardId::parse).unwrap_or_default();
+            self.hold_for(None, cli, id, card, profile.unwrap_or_default(), None);
             let end =
                 text("state").and_then(|end| End::ALL.into_iter().find(|each| each.id() == end));
             let at = each.get("ended").and_then(Value::as_u64);
@@ -425,6 +461,15 @@ impl Kept {
                     .take(TITLE)
                     .collect();
                 record.past = Some(Past { title, end, at });
+                // Names a place is made with, and nothing else.
+                let left = (each
+                    .get("left")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten())
+                .filter_map(Value::as_str)
+                .filter(|name| super::wall::leftovers::is_name(name));
+                record.left = left.map(String::from).collect();
             }
         }
         true
@@ -449,6 +494,10 @@ impl Kept {
                     row["state"] = json!(past.end.id());
                     row["ended"] = json!(past.at);
                     row["profile"] = json!(record.profile);
+                    row["card"] = json!(record.card.as_str());
+                    if !record.left.is_empty() {
+                        row["left"] = json!(record.left);
+                    }
                 }
                 row
             })

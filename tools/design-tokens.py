@@ -38,6 +38,8 @@ def digits(value):
 
 
 def to_pen(value):
+    if value.startswith('"'):
+        return {'type': 'string', 'value': value[1:-1]}
     hex = digits(value)
     if hex is not None and len(hex) in (6, 8):
         return {'type': 'color', 'value': '#' + hex.lower()}
@@ -49,6 +51,9 @@ def to_pen(value):
 
 def from_pen(old, pen):
     """The TOML text for pen's value, in the old value's form, or None if pen's can't be written so."""
+    if old.startswith('"'):
+        # build.rs takes a word of letters, digits and spaces only.
+        return f'"{pen}"' if isinstance(pen, str) and re.fullmatch(r'[A-Za-z0-9 ]*', pen) else None
     hex = digits(old)
     if hex is not None and len(hex) in (6, 8):
         if not isinstance(pen, str) or not re.fullmatch(r'#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})', pen):
@@ -94,7 +99,7 @@ def main():
             continue
         new = from_pen(value, pen[name].get('value'))
         if new is None:
-            why = 'an alias, a themed value, or an alpha on an rgb colour'
+            why = 'an alias, a themed value, an alpha on an rgb colour, or a word with more than letters, digits and spaces'
             skipped.append(f'{name}: {pen[name].get("value")!r} ({why})')
         elif new != value:
             changed.append(f'{name}: {value} -> {new}')

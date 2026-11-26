@@ -215,8 +215,8 @@ else
       expect "^browser: find $a closed\$" "escape didn't close the find bar"
     fi
 
-    # Settings' column is a tab list of its sections, the one shown selected, and Chromium
-    # settings at its foot a button.
+    # Settings' column is a tab list of its sections, the one shown selected, then About, its foot
+    # row, a tab of its own after them, and Chromium settings a button.
     settings="$out/access-settings.txt"
     send menu Settings…
     expect '^browser: settings shown General$' "Settings… didn't show Settings on General"
@@ -224,8 +224,11 @@ else
     read_tree '"Sections"' > "$settings"
     under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"General\" $shown" ||
       fail "Settings' General isn't the selected tab in its Sections: $settings"
-    under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"About\"" ||
-      fail "Settings' About isn't a tab in its Sections: $settings"
+    awk -v list="$tab_group \"Sections\"" -v about=" $tab \"About\"" '
+      !found && index($0, list) { found = 1; depth = $1; next }
+      found && $1 <= depth { ok = $1 == depth && index($0, about); exit }
+      END { exit !ok }' "$settings" ||
+      fail "Settings' About isn't a tab after its Sections, at their depth: $settings"
     grep -q " $button \"Chromium settings\"" "$settings" ||
       fail "Settings' Chromium settings isn't a button: $settings"
     # Its sub-views name their controls too (#1911), as far as this copy draws them: Links' + and
@@ -320,10 +323,10 @@ else
   fi
 fi
 # A new profile's onboarding, read as the reader reads it (#3151): each step a dialog called by its
-# title, the welcome too, with Get Started and Skip Setup buttons, the colour step with Continue
-# and Skip, and its
-# swatches a radio group called Color, a radio button a colour, none picked until → picks the
-# first. Its import home is empty, so the import step is left out.
+# title, the first whichever the card lists first, with its main button where it has one, and Your
+# first Space (4) with Next and no Skip, its swatches a radio group called Color, a radio button a
+# colour, none picked until → picks the first. Its import home is empty, so the import step is left
+# out.
 if ! grep -q '^accessibility: skipped' "$tree"; then
   log="$out/access-onboarding.log"
   step=0
@@ -342,33 +345,33 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding started$' || fail "the onboarding didn't start"
-  await '^browser: onboarding step intro settled$' || fail "the onboarding's welcome didn't draw"
-  intro="$out/access-intro.txt"
-  read_tree "$dialog \"Welcome to $app_name.\"" > "$intro"
-  grep -q " $dialog \"Welcome to $app_name.\"" "$intro" ||
-    fail "the welcome isn't a dialog called by its title, Welcome to $app_name.: $intro"
-  grep -q " $button \"Get Started\"" "$intro" || fail "the welcome's Get Started isn't a button: $intro"
-  grep -q " $button \"Skip Setup\"" "$intro" || fail "the welcome's Skip Setup isn't a button: $intro"
-  # Return goes on from the welcome, and Skip from each step after to the colour's, as Esc is
-  # Back, each one settled before the next Skip.
-  send key return
-  expect '^browser: onboarding left intro via return$' "Return didn't go on from the welcome"
-  expect '^browser: onboarding step [a-z-]* settled$' "no step came after the welcome"
-  for _ in 1 2 3 4 5 6; do
-    grep -q '^browser: onboarding step color settled$' "$log" && break
-    at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
-    skip_step "$at"
-    expect '^browser: onboarding step [a-z-]* settled$' "Skip didn't go on from the $at step"
-  done
-  grep -q '^browser: onboarding step color settled$' "$log" || fail "Skip didn't come to the colour step"
+  first_step=$(onboarding_steps | cut -d' ' -f1)
+  step_settled "$first_step" "the onboarding's first step, $first_step, didn't draw"
+  # Each step's title, as the card's own words say it; the Welcome's is the product's name.
+  case $first_step in
+    1) title=$product main=Continue ;;
+    2) title="Your assistants" main= ;;
+    4) title="Your first Space" main=Next ;;
+    *) fail "the onboarding's first step was $first_step, which an empty home can't make" ;;
+  esac
+  intro="$out/access-first-step.txt"
+  read_tree "$dialog \"$title\"" > "$intro"
+  grep -q " $dialog \"$title\"" "$intro" ||
+    fail "the first step, $first_step, isn't a dialog called by its title, $title: $intro"
+  [ -z "$main" ] || grep -q " $button \"$main\"" "$intro" ||
+    fail "the first step's $main isn't a button: $intro"
+  # Not Now goes on from the Welcome, without signing in.
+  [ "$first_step" != 1 ] || grep -q " $button \"Not Now\"" "$intro" ||
+    fail "the Welcome's Not Now isn't a button: $intro"
+  walk_steps 4
   colour="$out/access-colour.txt"
   read_tree "$radio_group \"Color\"" > "$colour"
-  grep -q " $dialog \"Pick a color for your first Space.\"" "$colour" ||
-    fail "the colour step isn't a dialog called by its title: $colour"
+  grep -q " $dialog \"Your first Space\"" "$colour" ||
+    fail "Your first Space isn't a dialog called by its title: $colour"
   [ "$(grep -c " $dialog \"" "$colour")" = 1 ] ||
     fail "the step it left is still a dialog: $colour"
-  grep -q " $button \"Continue\"" "$colour" || fail "Continue isn't a button: $colour"
-  grep -q " $button \"Skip\"" "$colour" || fail "Skip isn't a button: $colour"
+  grep -q " $button \"Next\"" "$colour" || fail "Next isn't a button: $colour"
+  ! grep -q " $button \"Skip\"" "$colour" || fail "Your first Space has a Skip, which it never shows: $colour"
   swatches=$(under "$radio_group \"Color\"" "$colour" | grep " $radio \"[^\"]")
   [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Color: $colour"
   ! echo "$swatches" | grep -q " $picked" || fail "a colour reads as picked before any is: $colour"
@@ -380,7 +383,7 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
     fail "→ didn't read as picking the first colour, $first: $picked_tree"
   exec 3>&-
   quit
-  echo "ok: $screen_reader reads the onboarding's welcome as a dialog called by its title with Get Started and Skip Setup buttons, the colour step as a dialog called by its title with Continue and Skip buttons, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Color, $first picked by →. Trees: $intro, $colour, $picked_tree"
+  echo "ok: $screen_reader reads the onboarding's first step, $first_step, as a dialog called by its title, $title${main:+, with its $main button}, Your first Space as a dialog called by its title with Next and no Skip, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Color, $first picked by →. Trees: $intro, $colour, $picked_tree"
 fi
 # The run's buses go with it.
 [ -z "${buses:-}" ] || kill $buses 2> /dev/null || true

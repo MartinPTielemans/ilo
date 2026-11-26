@@ -28,7 +28,7 @@ use crate::tokens::shell::{
 use crate::tokens::text;
 
 /// Its words, as check.sh and an assistive app name them.
-pub(super) const TITLE: &str = concat!(env!("APP_NAME"), " closed unexpectedly");
+pub(super) const TITLE: &str = concat!(env!("PRODUCT_NAME"), " closed unexpectedly");
 const OFF: &str = "Extensions and Boosts are off for now.";
 const OFF_UNBLOCKED: &str = "Extensions and Boosts are off for now, so ads aren’t blocked.";
 pub(super) const TURN_BACK_ON: &str = "Turn Back On";

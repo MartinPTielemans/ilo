@@ -10,10 +10,12 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
-    QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held, described,
-    described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, OUT_ARROW, Outcome, PADDING,
+    Pointer, QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held,
+    described, described_held, key_of, lay_out, lay_out_over, narrowed, title_ink,
 };
+use gpui::Focusable as _;
+
 use crate::shell::MenuEntry;
 
 /// Seven points a character, near enough to SF's 13 pt for where things go.
@@ -1318,4 +1320,574 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
             );
         }
     }
+}
+
+/// A disabled row keeps its ink at every level, never fainter and held to no ratio, while a
+/// shortcut, chevron, detail or heading takes at least what a word on what floats takes.
+#[test]
+fn a_disabled_row_keeps_its_ink_and_the_secondary_takes_the_floor() {
+    use crate::palette::{Float, Tone};
+    use crate::tokens::menu::{DARK_DISABLED, DARK_SECONDARY, LIGHT_DISABLED, LIGHT_SECONDARY};
+    use crate::transparency::Transparency;
+    for level in [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ] {
+        crate::palette::set_transparency(level);
+        for (light, tone, disabled, secondary) in [
+            (false, Tone::Dark, DARK_DISABLED, DARK_SECONDARY),
+            (true, Tone::Light, LIGHT_DISABLED, LIGHT_SECONDARY),
+        ] {
+            let look = Look::plain(light);
+            assert_eq!(look.disabled(), gpui::rgba(disabled), "at {level:?}");
+            let ink = look.secondary();
+            let token = gpui::rgba(secondary).a;
+            assert!(ink.a >= token && ink.a == Float::Menu.word(tone, token));
+            assert_eq!(
+                gpui::Rgba { a: 1., ..ink },
+                gpui::Rgba {
+                    a: 1.,
+                    ..gpui::rgba(secondary)
+                }
+            );
+        }
+    }
+}
+
+/// A model menu as the composer's: its search, each assistant's models under its name, one not
+/// signed in with Sign In, and Settings.
+fn models() -> Vec<MenuEntry> {
+    let heading = |title: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(title.to_string(), false)
+    };
+    vec![
+        MenuEntry::search("Search models"), // 0
+        heading("Claude"),                  // 1
+        item("Default"),                    // 2
+        item("Haiku"),                      // 3
+        item("Sonnet"),                     // 4
+        heading("ChatGPT"),                 // 5
+        item("GPT-5"),                      // 6
+        item("o4-mini"),                    // 7
+        heading("Gemini"),                  // 8
+        item("Sign In").offer().out(),      // 9
+        MenuEntry::line(),                  // 10
+        item("Settings").kept().out(),      // 11
+    ]
+}
+
+/// A search leaves the rows whose titles hold what's typed, in any case, an assistant's name
+/// while one of its models is left, and Settings whatever is typed. An assistant with no model
+/// left goes, its name with it, and so does a not-signed-in one's Sign In, even when it's what's
+/// typed: with no match, the search and Settings alone, and no words of the search's own.
+#[test]
+fn a_search_narrows_the_rows_to_what_holds_it() {
+    let menu = models();
+    assert_eq!(narrowed(&menu, ""), (0..menu.len()).collect::<Vec<_>>());
+    assert_eq!(narrowed(&menu, "  "), (0..menu.len()).collect::<Vec<_>>());
+    assert_eq!(narrowed(&menu, "o"), [0, 1, 4, 5, 7, 10, 11]);
+    assert_eq!(narrowed(&menu, "HAI"), [0, 1, 3, 10, 11]);
+    assert_eq!(narrowed(&menu, "zzz"), [0, 11]);
+    assert_eq!(
+        narrowed(&menu, "sign"),
+        [0, 11],
+        "Sign In stayed for its words"
+    );
+    // A heading's own name matches nothing: it stays for its rows.
+    assert_eq!(narrowed(&menu, "claude"), [0, 11]);
+    // Without a row a search keeps, no line is left hanging at either end.
+    let plain = vec![
+        MenuEntry::search("Search"),
+        item("Copy"),
+        MenuEntry::line(),
+        item("Paste"),
+        MenuEntry::line(),
+        item("Delete"),
+    ];
+    assert_eq!(narrowed(&plain, "p"), [0, 1, 2, 3]);
+    assert_eq!(narrowed(&plain, "paste"), [0, 3]);
+    assert_eq!(narrowed(&plain, "zzz"), [0]);
+    assert_eq!(
+        described(&plain),
+        "Copy, Paste, Delete",
+        "the field isn't a row"
+    );
+}
+
+/// A not-signed-in assistant's Sign In is in the secondary ink, as a heading is, and the plate's
+/// ink while it's lit; a model's row is in the label's.
+#[test]
+fn an_offer_is_in_the_secondary_ink() {
+    use gpui::rgba;
+    let look = Look::dark();
+    let on_fill = rgba(0x123456ff);
+    let menu = models();
+    assert_eq!(
+        title_ink(&menu[9], false, look, on_fill),
+        look.secondary().into()
+    );
+    assert_eq!(title_ink(&menu[9], true, look, on_fill), on_fill.into());
+    assert_eq!(
+        title_ink(&menu[3], false, look, on_fill),
+        rgba(look.palette().label).into()
+    );
+}
+
+/// The search's glyph stands in the checks' column, centred on the check before the model the
+/// thread starts on, and the out arrow stands after Sign In's and Settings' titles, at the row's
+/// right, and after no model's. GPUI records where an element was drawn only in a debug build.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_search_glyph_is_in_the_checks_column_and_the_out_arrow_at_the_right(
+    cx: &mut TestAppContext,
+) {
+    let (_, _, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let mut menu = models();
+    menu[3].checked = true;
+    show_items(menu, cx);
+    let glyph = cx
+        .debug_bounds("menu-search-glyph")
+        .expect("the search has no glyph");
+    let check = cx.debug_bounds("menu-check 3").expect("Haiku has no check");
+    assert_eq!(glyph.center().x, check.center().x);
+    assert_eq!(glyph.size.width, px(CHECK));
+    for (out, check) in [
+        ("menu-out 9", "menu-check 9"),
+        ("menu-out 11", "menu-check 11"),
+    ] {
+        let arrow = (cx.debug_bounds(out)).unwrap_or_else(|| panic!("no {out}"));
+        let check = cx.debug_bounds(check).unwrap();
+        assert!(arrow.origin.x > check.right() + px(100.), "{arrow:?}");
+        assert_eq!(arrow.size.width, px(OUT_ARROW));
+    }
+    assert!(cx.debug_bounds("menu-out 3").is_none(), "a model went out");
+}
+
+/// Shows `items` at (100, 100) and returns how it closed once it does.
+fn show_items(items: Vec<MenuEntry>, cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
+    let chosen = Rc::new(Cell::new(None));
+    let answer = chosen.clone();
+    cx.cx.update(|cx: &mut App| {
+        let request = Request {
+            items,
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    chosen
+}
+
+/// The menu's window, for the tests to look into.
+fn search_menu(
+    cx: &mut TestAppContext,
+) -> (
+    Rc<Recorder>,
+    gpui::WindowHandle<super::ContextMenu>,
+    VisualTestContext,
+) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = VisualTestContext::from_window(window.into(), cx);
+    (host, window, cx)
+}
+
+/// The search's field and the titles of the rows shown, the field's left out.
+fn searched(
+    window: gpui::WindowHandle<super::ContextMenu>,
+    cx: &mut VisualTestContext,
+) -> Option<(gpui::Entity<crate::text_input::TextInput>, Vec<String>)> {
+    window
+        .update(&mut cx.cx, |menu, _, _| {
+            let shown = menu.shown.as_ref()?;
+            let field = shown.search.as_ref()?.field.clone();
+            let rows = (shown.tracking.entries.iter())
+                .filter(|entry| !entry.field)
+                .map(|entry| entry.title.to_string())
+                .collect();
+            Some((field, rows))
+        })
+        .unwrap()
+}
+
+/// The cursor is in the field as the menu opens; what's typed there narrows the rows and selects
+/// nothing by its letters, space included; the arrows and ↩ walk and pick the rows left, and the
+/// pick is the row of the list the menu was asked to show, not of the rows left.
+#[gpui::test]
+fn the_arrows_and_return_pick_while_the_cursor_is_in_the_search(cx: &mut TestAppContext) {
+    let (host, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let chosen = show_items(models(), cx);
+    let (field, _) = searched(window, cx).expect("the menu has no search");
+    let focused = cx.update(|window, cx| field.read(cx).focus_handle(cx).is_focused(window));
+    assert!(focused, "the cursor isn't in the field as the menu opens");
+
+    cx.simulate_keystrokes("o");
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        "o"
+    );
+    assert_eq!(
+        rows,
+        ["Claude", "Sonnet", "ChatGPT", "o4-mini", "", "Settings"]
+    );
+    cx.simulate_keystrokes("space");
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        "o "
+    );
+    assert_eq!(chosen.get(), None, "space picked a row in a search");
+    // The field's own keys, such as ⌫, are bindings these tests don't make: the text is put back
+    // through the input method's way in.
+    cx.update(|window, cx| {
+        use gpui::EntityInputHandler as _;
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(Some(0..2), "o", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(
+        chosen.get(),
+        Some(Closed::Chose(7)),
+        "o4-mini in the list asked for"
+    );
+    assert_eq!(host.calls.borrow().last(), Some(&"hide"));
+
+    // Up from nothing lit goes to the last row, which a search that matches nothing leaves.
+    let chosen = show_items(models(), cx);
+    cx.simulate_keystrokes("z z z");
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Settings"]);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        chosen.get(),
+        None,
+        "a search that matches nothing lights nothing"
+    );
+    cx.simulate_keystrokes("up enter");
+    assert_eq!(chosen.get(), Some(Closed::Chose(11)), "Settings");
+}
+
+/// ↩ and esc while an input method composes in the search are the composition's: ↩ picks
+/// nothing and closes nothing, esc leaves the menu open. Once the method commits, the rows narrow
+/// to it, and esc closes the menu, the search going with it, so the next menu's field is empty.
+#[gpui::test]
+fn return_and_escape_while_composing_in_the_search_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (host, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let chosen = show_items(models(), cx);
+    cx.simulate_keystrokes("s");
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Claude", "Sonnet", "", "Settings"]);
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ソ", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert!(field.read_with(cx, |field, _| field.composing()));
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(
+        rows,
+        ["Claude", "Sonnet", "", "Settings"],
+        "the rows narrowed to a composition"
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(chosen.get(), None, "↩ that ends a composition picked a row");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), None, "esc while composing closed the menu");
+    assert!(
+        searched(window, cx).is_some(),
+        "the menu closed while composing"
+    );
+    assert_eq!(
+        field.read_with(cx, |field, _| (field.text().to_string(), field.composing())),
+        ("sソ".to_string(), true)
+    );
+
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ソ", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Settings"]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+    assert_eq!(
+        host.calls.borrow().last(),
+        Some(&"hide"),
+        "the keyboard went nowhere back"
+    );
+    assert!(searched(window, cx).is_none());
+
+    show_items(models(), cx);
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "");
+    assert_eq!(rows.len(), models().len() - 1, "the last search was kept");
+}
+
+/// A menu of things picked together, as tabs to hand over: two rows that stay, each counting its
+/// picks and checked at every other one, and a row that closes the menu as any does.
+fn picks() -> (Vec<MenuEntry>, [Rc<Cell<usize>>; 2]) {
+    let counts = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+    let stays = |title: &str, count: &Rc<Cell<usize>>| {
+        let count = count.clone();
+        item(title).stays(move |_| {
+            count.set(count.get() + 1);
+            count.get() % 2 == 1
+        })
+    };
+    let items = vec![
+        stays("Inbox", &counts[0]),    // 0
+        stays("Calendar", &counts[1]), // 1
+        MenuEntry::line(),             // 2
+        item("Done"),                  // 3
+    ];
+    (items, counts)
+}
+
+/// Which rows the menu shows checked, what's highlighted in its root, and whether it shows at all.
+fn checked(
+    window: gpui::WindowHandle<super::ContextMenu>,
+    cx: &mut VisualTestContext,
+) -> Option<(Vec<bool>, Option<usize>)> {
+    window
+        .update(&mut cx.cx, |menu, _, _| {
+            let tracking = &menu.shown.as_ref()?.tracking;
+            let checks = tracking.entries.iter().map(|entry| entry.checked).collect();
+            Some((checks, tracking.highlights()[0]))
+        })
+        .unwrap()
+}
+
+/// A click in the middle of the row of `entry`, in the window's terms.
+fn click_row(
+    window: gpui::WindowHandle<super::ContextMenu>,
+    entry: usize,
+    cx: &mut VisualTestContext,
+) {
+    let row = window
+        .update(&mut cx.cx, |menu, _, _| {
+            let shown = menu.shown.as_ref().expect("no menu shows");
+            row_of(&shown.tracking, entry) - shown.origin
+        })
+        .unwrap();
+    cx.cx.update(|cx: &mut App| {
+        assert!(super::pointer(Pointer::Moved, row, cx));
+        assert!(super::pointer(Pointer::Pressed, row, cx));
+        assert!(super::pointer(Pointer::Released, row, cx));
+    });
+    cx.run_until_parked();
+}
+
+/// A row that stays does what it does at each pick, by space, ↩, a click or the driver, and the
+/// menu is left open with that row highlighted and its check as the row last answered. The menu
+/// then closes as any does, by esc, a press outside it or the user leaving, and by a pick of a row
+/// that doesn't stay, none of which picks a row that stays again.
+#[gpui::test]
+fn a_row_that_stays_is_picked_as_often_as_wanted_and_the_menu_stays_open(cx: &mut TestAppContext) {
+    let (host, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let (items, counts) = picks();
+    let ran = |counts: &[Rc<Cell<usize>>; 2]| [counts[0].get(), counts[1].get()];
+
+    let chosen = show_items(items.clone(), cx);
+    cx.simulate_keystrokes("down space");
+    assert_eq!(ran(&counts), [1, 0]);
+    assert_eq!(
+        checked(window, cx),
+        Some((vec![true, false, false, false], Some(0)))
+    );
+    cx.simulate_keystrokes("space");
+    assert_eq!(ran(&counts), [2, 0], "a second pick takes the first back");
+    assert_eq!(
+        checked(window, cx),
+        Some((vec![false; 4], Some(0))),
+        "the check is the row's last answer"
+    );
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(ran(&counts), [2, 1]);
+    assert_eq!(
+        checked(window, cx),
+        Some((vec![false, true, false, false], Some(1)))
+    );
+
+    // The click that opened the menu is over, as a context menu's is; then one on each row.
+    click_row(window, 0, cx);
+    assert_eq!(ran(&counts), [3, 1]);
+    assert_eq!(
+        checked(window, cx),
+        Some((vec![true, true, false, false], Some(0))),
+        "a click picks the row under it and leaves it highlighted"
+    );
+    assert!(cx.cx.update(|cx: &mut App| super::choose("Calendar", cx)));
+    cx.run_until_parked();
+    assert_eq!(ran(&counts), [3, 2]);
+    assert_eq!(chosen.get(), None, "a pick of a row that stays closed it");
+    assert_eq!(*host.calls.borrow(), ["show"], "the menu was hidden");
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+
+    let chosen = show_items(items.clone(), cx);
+    let outside = point(px(60.), px(40.));
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    cx.cx
+        .update(|cx: &mut App| super::pointer(Pointer::Pressed, outside - menu_at, cx));
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+
+    // Another window or another app, which the host tells the menu the one way.
+    let chosen = show_items(items.clone(), cx);
+    cx.simulate_keystrokes("down space");
+    cx.cx.update(|cx: &mut App| super::dismissed(cx));
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::Left));
+    assert_eq!(ran(&counts), [4, 2]);
+
+    // A row that doesn't stay closes the menu with itself chosen, by the keys and by a click.
+    let chosen = show_items(items.clone(), cx);
+    cx.simulate_keystrokes("end enter");
+    assert_eq!(chosen.get(), Some(Closed::Chose(3)));
+    let chosen = show_items(items, cx);
+    click_row(window, 3, cx);
+    assert_eq!(chosen.get(), Some(Closed::Chose(3)));
+    assert_eq!(checked(window, cx), None);
+    assert_eq!(
+        ran(&counts),
+        [4, 2],
+        "closing the menu picked a row that stays"
+    );
+}
+
+/// What a row that stays does may close the menu or open another in its place: the menu is not
+/// in an update of its own while the row does it, and the check goes to that row alone, never to
+/// whatever row is at its place in a menu shown since.
+#[gpui::test]
+fn what_a_row_that_stays_does_may_close_the_menu_or_show_another(cx: &mut TestAppContext) {
+    let (_, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+
+    let leaves = vec![item("Leave").stays(|cx| {
+        super::dismissed(cx);
+        true
+    })];
+    let chosen = show_items(leaves, cx);
+    cx.simulate_keystrokes("down space");
+    assert_eq!(chosen.get(), Some(Closed::Left));
+    assert_eq!(checked(window, cx), None);
+
+    let other = Rc::new(Cell::new(None));
+    let answer = other.clone();
+    let replaces = vec![item("More").stays(move |cx| {
+        let answer = answer.clone();
+        let request = Request {
+            items: vec![item("Plain")],
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+        };
+        super::show(request, cx);
+        true
+    })];
+    let chosen = show_items(replaces, cx);
+    cx.simulate_keystrokes("down space");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise), "its place was taken");
+    assert_eq!(
+        checked(window, cx).map(|(checks, _)| checks),
+        Some(vec![false]),
+        "the other menu's row took the check"
+    );
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(other.get(), Some(Closed::Chose(0)));
+}
+
+/// In a search, a row that stays keeps its check through every narrowing, and ↩ picks it there
+/// while space is what's typed, as for any row.
+#[gpui::test]
+fn a_row_that_stays_keeps_its_check_as_a_search_narrows(cx: &mut TestAppContext) {
+    let (_, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let (mut items, counts) = picks();
+    items.insert(0, MenuEntry::search("Search tabs"));
+    let chosen = show_items(items, cx);
+
+    cx.simulate_keystrokes("c");
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Calendar"]);
+    cx.simulate_keystrokes("down enter");
+    assert_eq!([counts[0].get(), counts[1].get()], [0, 1]);
+    assert_eq!(chosen.get(), None);
+    assert_eq!(
+        checked(window, cx),
+        Some((vec![false, true], Some(1))),
+        "the field, then Calendar"
+    );
+    cx.update(|window, cx| {
+        use gpui::EntityInputHandler as _;
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(Some(0..1), "", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Inbox", "Calendar", "", "Done"]);
+    assert_eq!(
+        checked(window, cx).map(|(checks, _)| checks),
+        Some(vec![false, false, true, false, false]),
+        "the narrowing lost Calendar's check"
+    );
+}
+
+/// A row that stays asks its level for the checks' column from the start, so no title moves at a
+/// pick; a level that has the column already is laid out the same with such a row or without, and
+/// a menu with no such row is laid out and read to the log as it ever was.
+#[test]
+fn a_row_that_stays_moves_no_other_row() {
+    let (items, _) = picks();
+    let plain: Vec<MenuEntry> = (items.iter().cloned())
+        .map(|entry| MenuEntry {
+            stays: None,
+            ..entry
+        })
+        .collect();
+    let once_checked: Vec<MenuEntry> = (plain.iter().cloned().enumerate())
+        .map(|(at, entry)| MenuEntry {
+            checked: at == 0,
+            ..entry
+        })
+        .collect();
+    let lay = |entries: &[MenuEntry]| lay_out(entries, at(100., 100.), area(), &width_of);
+    assert_eq!(
+        lay(&items),
+        lay(&once_checked),
+        "before a pick and after it"
+    );
+    assert!(lay(&items).levels[0].checks);
+    assert!(!lay(&plain).levels[0].checks);
+    assert_eq!(super::height(&items), super::height(&once_checked));
+    assert_eq!(described(&items), described(&plain));
+
+    // The tab's menu has its checks in a submenu: a row there that stays changes nothing of it.
+    let mut tabs = tab_menu();
+    let before = (lay(&tabs), described(&tabs), super::height(&tabs));
+    tabs[7] = tabs[7].clone().stays(|_| true);
+    assert_eq!((lay(&tabs), described(&tabs), super::height(&tabs)), before);
 }

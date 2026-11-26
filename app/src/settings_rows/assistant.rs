@@ -4,6 +4,10 @@ use super::*;
 
 /// An assistant's one button to sign in, as its row says it.
 pub const SIGN_IN: &str = "Sign In";
+/// The line under the assistants' rows (M1): what a sign-in leaves where.
+pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
+/// ChatGPT's row's line, signed in.
+const CHATGPT_SIGNED_IN: &str = "Your ChatGPT plan";
 /// The row's line while its sign-in is under way.
 const UNDER_WAY: &str = "Sign in on the page that opened";
 
@@ -96,22 +100,13 @@ pub fn assistant_row(
             ),
         ],
         Offer::SignedIn => {
-            let more = {
-                let act = act.clone();
-                icon_button(look, ("assistant-more", index), "icons/ellipsis.svg")
-                    .relative()
-                    .child(menu_at)
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                        act(Act::Menu, window, cx)
-                    })
-                    .when(a11y, |more| named_button(more, format!("{name} options")))
-            };
+            let more = more(look, cli, a11y, menu_at, act.clone());
             let mark = {
                 let act = act.clone();
                 div()
                     .id(("assistant-mark", index))
                     .when(a11y, |mark| {
-                        named_check(mark, format!("Run tasks with {name}"), marked)
+                        named_check(mark, format!("Run threads with {name}"), marked)
                     })
                     .size(px(CONTROL_HEIGHT))
                     .relative()
@@ -129,6 +124,10 @@ pub fn assistant_row(
     let line: SharedString = match shown.offer {
         Offer::Get | Offer::SignIn => on_plan(cli).into(),
         Offer::Cancel => UNDER_WAY.into(),
+        // ChatGPT's signed in says whose plan, not the program it runs through (M2).
+        Offer::SignedIn if matches!(cli, crate::agents::runner::Cli::Codex) => {
+            CHATGPT_SIGNED_IN.into()
+        }
         _ => shown.line.clone().into(),
     };
     let text = match shown.command() {
@@ -136,6 +135,95 @@ pub fn assistant_row(
         None => named(name, Some(lined(look).child(line))).into_any_element(),
     };
     wrapping(look, cli.glyph(), text, controls)
+}
+
+/// An assistant's ⋯, which opens its menu at `menu_at` with a press.
+fn more(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    a11y: bool,
+    menu_at: impl IntoElement,
+    act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Stateful<gpui::Div> {
+    let name = assistant_name(cli);
+    icon_button(look, ("assistant-more", cli as usize), "icons/ellipsis.svg")
+        .relative()
+        .child(menu_at)
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            act(Act::Menu, window, cx)
+        })
+        .when(a11y, |more| named_button(more, format!("{name} options")))
+}
+
+/// First run's form of an assistant's row (v9 §4): its line as `shown` words it, then Sign In,
+/// the ring and Cancel while it waits, the ring alone while a look or a sign-out is under way, or,
+/// signed in, `done` (the card's check disc) and the ⋯. The mark stays Settings › Models' alone,
+/// as the card draws none.
+pub fn first_run_row(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    shown: &crate::agents::sign_in::Shown,
+    a11y: bool,
+    done: impl IntoElement,
+    act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Div {
+    use crate::agents::sign_in::Offer;
+    let index = cli as usize;
+    let press = |id: &'static str, title: SharedString, what: Act| {
+        let act = act.clone();
+        stop_button(look, (id, index), title, a11y)
+            .on_click(move |_, window, cx| act(what, window, cx))
+            .into_any_element()
+    };
+    let sign_in = || SharedString::from(SIGN_IN);
+    let controls = match shown.offer {
+        Offer::Nothing => vec![working(look, index).into_any_element()],
+        Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
+        Offer::SignIn | Offer::TryAgain => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
+        Offer::Cancel => vec![
+            working(look, index).into_any_element(),
+            press(
+                "assistant-cancel",
+                Offer::Cancel.label(cli).unwrap_or_default().into(),
+                Act::Cancel,
+            ),
+        ],
+        Offer::SignedIn => vec![
+            done.into_any_element(),
+            more(look, cli, a11y, div(), act.clone()).into_any_element(),
+        ],
+    };
+    let line = lined(look).child(SharedString::from(shown.line.clone()));
+    wrapping(
+        look,
+        cli.glyph(),
+        named(assistant_name(cli), Some(line)),
+        controls,
+    )
+}
+
+/// An assistant's row while the inside switch is off and the user hasn't clicked it on this
+/// showing of the page: its glyph and name alone, since its state would mean running its program.
+/// A click calls `look`; while that look is under way, `looking`, the ring turns at its end.
+pub fn assistant_name_alone(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    looking: bool,
+    a11y: bool,
+    on_look: Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Div {
+    let index = cli as usize;
+    let name = assistant_name(cli);
+    let controls = match looking {
+        true => vec![working(look, index).into_any_element()],
+        false => Vec::new(),
+    };
+    let row = wrapping(look, cli.glyph(), named(name, None), controls)
+        .id(("assistant-name-alone", index))
+        .cursor_pointer()
+        .when(a11y, |row| named_button(row, name))
+        .on_click(move |_, window, cx| on_look(window, cx));
+    div().child(row)
 }
 
 /// An assistant's row, or another app's: its glyph, its name and line, then its controls at the

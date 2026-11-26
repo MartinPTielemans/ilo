@@ -179,7 +179,7 @@ jobs:
           await '^browser: onboarding started$' 900 || fail "a new profile's first launch didn't start the onboarding"
           steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
           summary "- The first launch started the onboarding: $steps"
-          await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+          await '^browser: onboarding step [0-9a-z]* settled$' || fail "the onboarding's first step didn't draw"
           capture onboarding-intro
           for each in $steps; do
             [ "$each" = intro ] && continue
@@ -187,7 +187,7 @@ jobs:
             capture "onboarding-$each"
             [ "$each" = opt-ins ] && agents_on
             send key escape
-            await "^browser: onboarding left $each via escape\$" || fail "Esc didn't leave the onboarding's $each step"
+            case $each in 1) send key tab; send key return ;; 2) send key tab shift; send key return ;; 3|3b) send click $(grep '^browser: onboarding skip at ' "$log" | tail -1 | cut -d' ' -f5-6) ;; *) send key return ;; esac; await "^browser: onboarding left $each\$" || fail "the onboarding's step $each wasn't left"
           done
           await '^browser: onboarding done$' || fail "the onboarding didn't end after its last step"
           await '^browser: command new-tab via onboarding$' || fail "the onboarding didn't end with the command bar"

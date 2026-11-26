@@ -1,0 +1,6 @@
+<!-- The owner's drawing of the Library (values-library-foot.md, 33): its Media section, on Lucide's grid at the one stroke. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="4.5" width="18" height="15" rx="3.3" />
+  <path d="M3.9 16.5l4.65-4.65 3.75 3.45 2.7-2.4 4.95 4.35" />
+  <circle cx="15.9" cy="9.3" r="0.4" />
+</svg>

@@ -227,6 +227,14 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/database.svg"),
     ),
     (
+        "icons/device-laptop.svg",
+        include_bytes!("../../assets/icons/device-laptop.svg"),
+    ),
+    (
+        "icons/device-phone.svg",
+        include_bytes!("../../assets/icons/device-phone.svg"),
+    ),
+    (
         "icons/download.svg",
         include_bytes!("../../assets/icons/download.svg"),
     ),
@@ -277,10 +285,6 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/folder.svg",
         include_bytes!("../../assets/icons/folder.svg"),
-    ),
-    (
-        "icons/folder-ellipsis.svg",
-        include_bytes!("../../assets/icons/folder-ellipsis.svg"),
     ),
     (
         "icons/folder-open.svg",
@@ -379,6 +383,34 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/leaf.svg"),
     ),
     (
+        "icons/library-boards.svg",
+        include_bytes!("../../assets/icons/library-boards.svg"),
+    ),
+    (
+        "icons/library-boosts.svg",
+        include_bytes!("../../assets/icons/library-boosts.svg"),
+    ),
+    (
+        "icons/library-downloads.svg",
+        include_bytes!("../../assets/icons/library-downloads.svg"),
+    ),
+    (
+        "icons/library-history.svg",
+        include_bytes!("../../assets/icons/library-history.svg"),
+    ),
+    (
+        "icons/library-media.svg",
+        include_bytes!("../../assets/icons/library-media.svg"),
+    ),
+    (
+        "icons/library-spaces.svg",
+        include_bytes!("../../assets/icons/library-spaces.svg"),
+    ),
+    (
+        "icons/library-threads.svg",
+        include_bytes!("../../assets/icons/library-threads.svg"),
+    ),
+    (
         "icons/library.svg",
         include_bytes!("../../assets/icons/library.svg"),
     ),
@@ -449,6 +481,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/moon.svg",
         include_bytes!("../../assets/icons/moon.svg"),
+    ),
+    (
+        "icons/mouse-pointer-2-outline.svg",
+        include_bytes!("../../assets/icons/mouse-pointer-2-outline.svg"),
     ),
     (
         "icons/mouse-pointer-2.svg",
@@ -569,6 +605,18 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/rotate-cw.svg",
         include_bytes!("../../assets/icons/rotate-cw.svg"),
+    ),
+    (
+        "icons/row-folder.svg",
+        include_bytes!("../../assets/icons/row-folder.svg"),
+    ),
+    (
+        "icons/row-folder-ellipsis.svg",
+        include_bytes!("../../assets/icons/row-folder-ellipsis.svg"),
+    ),
+    (
+        "icons/row-folder-open.svg",
+        include_bytes!("../../assets/icons/row-folder-open.svg"),
     ),
     (
         "icons/save.svg",
@@ -885,6 +933,9 @@ impl AssetSource for Assets {
         if let Some(angle) = angle.and_then(|angle| angle.parse::<f32>().ok()) {
             return Ok(Some(Cow::Owned(bars_svg(angle).into_bytes())));
         }
+        if let Some(drawn) = crate::product::drawn_mark(path) {
+            return Ok(Some(Cow::Owned(drawn.into_bytes())));
+        }
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)
@@ -929,11 +980,40 @@ mod tests {
     }
 
     /// The glyphs that keep their own stroke: Arc's measured nav glyphs, the window buttons' and
-    /// the loading ring, and the Library's cards, which has one solid.
+    /// the loading ring, the Library's cards, which has one solid, a folder's on its line, and the
+    /// agent's pointer's outline, a wider stroke drawn under the pointer.
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
-            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
+            || name.starts_with(ROW_FOLDER)
+            || [
+                "loading.svg",
+                "spaces.svg",
+                "working.svg",
+                "mouse-pointer-2-outline.svg",
+            ]
+            .contains(&name)
+    }
+
+    /// What the names of a folder's drawings on its line start with.
+    const ROW_FOLDER: &str = "row-folder";
+
+    /// A folder's line draws Lucide's folder at the line's own lighter stroke, each of its three
+    /// drawings at the same one, so a folder doesn't change weight as it opens or hides folders.
+    #[test]
+    fn a_folders_line_has_its_three_drawings_at_one_stroke() {
+        use crate::tokens::shell::assets::{ICON_GRID, ROW_FOLDER_STROKE};
+        let stroke = format!("stroke-width=\"{ROW_FOLDER_STROKE}\"");
+        let viewbox = format!("viewBox=\"0 0 {ICON_GRID} {ICON_GRID}\"");
+        for (open, elided) in [(false, false), (false, true), (true, false)] {
+            let path = super::super::swap::folder_glyph(open, elided);
+            assert!(path.starts_with(&format!("icons/{ROW_FOLDER}")), "{path}");
+            let svg = Assets.load(path).unwrap().expect(path);
+            let svg = std::str::from_utf8(&svg).unwrap();
+            for want in [stroke.as_str(), viewbox.as_str(), "fill=\"none\""] {
+                assert!(svg.contains(want), "{path}: needs {want}");
+            }
+        }
     }
 
     /// One family: every other glyph is an outline on Lucide's grid at the one stroke, with round

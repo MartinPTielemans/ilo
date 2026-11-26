@@ -14,7 +14,7 @@ use std::{
 use browser::account::{self, Account};
 use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
-    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+    Card as TaskCard, Conversation, Dot, Line, OnPage, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
@@ -996,12 +996,6 @@ impl Browser for Fake {
     // Nor captures.
     fn list_captures(&self, _: &mut App) {}
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        browser::shell::HOVER_ALL
-    }
-
-    fn set_hover_kinds(&self, _: u32, _: &mut App) {}
-
     // The made-up downloads have no files, so each is gone already and none drags.
     fn trash(&self, _: &str, _: &mut App) -> bool {
         true
@@ -1751,9 +1745,6 @@ impl Browser for Fake {
         command_bar::in_place(Rc::new(PreviewBar), window, cx)
     }
 
-    // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
-
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }
@@ -2077,6 +2068,16 @@ impl Browser for Fake {
         true
     }
 
+    // A made-up account, signed out, so the onboarding opens on its Welcome; elsewhere none, as
+    // the other states show a build that names no sync server.
+    fn account_host(&self) -> Option<Rc<dyn browser::account::Host>> {
+        let onboarding = states::var_os("PREVIEW_ONBOARDING").is_some()
+            || states::var_os("PREVIEW_ONBOARDING_STEP").is_some();
+        let account: Rc<dyn browser::account::Host> =
+            Rc::new(states::account::PreviewAccount { dialog: None });
+        onboarding.then_some(account)
+    }
+
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false
@@ -2103,11 +2104,11 @@ impl Browser for Fake {
         self.opt_ins.set((on, self.opt_ins.get().1));
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
+    fn threads(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().1)
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
@@ -2247,6 +2248,18 @@ impl command_bar::Host for PreviewBar {
         _: Option<(SharedString, SharedString)>,
         _: browser::agents::tier::Tier,
         _: Option<String>,
+        _: Option<&'static str>,
+        _: &mut App,
+    ) {
+    }
+
+    fn run_task_at_rest(
+        &self,
+        _: &str,
+        _: &str,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: Option<&'static str>,
         _: &mut App,
     ) {
     }
@@ -2340,38 +2353,46 @@ fn preview_profiles() -> Vec<(u64, SharedString)> {
         .collect()
 }
 
-/// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
-/// as a headless session has none to switch.
-/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS, and the one marked.
+/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS: checking, start, waiting, failed or
+/// signed-in.
 fn onboarding_assistants(
     state: &str,
-) -> Option<(
+) -> Option<
     Vec<(
         browser::agents::runner::Cli,
         browser::agents::sign_in::Shown,
     )>,
-    Option<browser::agents::runner::Cli>,
-)> {
+> {
     use browser::agents::ready::Ready;
     use browser::agents::runner::Cli;
     use browser::agents::sign_in::{Row, shown};
-    let ([claude, codex], plan, marked) = match state {
-        "checking" => ([Ready::Unknown, Ready::Unknown], None, None),
-        "start" => ([Ready::SignedOut, Ready::NotFound], None, None),
-        "signed-in" => (
-            [Ready::SignedIn, Ready::SignedIn],
-            Some("Plus"),
-            Some(Cli::Claude),
+    let idle = |ready| (ready, Row::Idle);
+    // Each row as a press would leave it: first run's words come from these.
+    let ([claude, codex], plan) = match state {
+        "checking" => ([idle(Ready::Unknown), idle(Ready::Unknown)], None),
+        "start" => ([idle(Ready::SignedOut), idle(Ready::NotFound)], None),
+        "waiting" => (
+            [
+                (Ready::SignedOut, Row::SigningIn),
+                (Ready::SignedOut, Row::SigningIn),
+            ],
+            None,
         ),
+        "failed" => (
+            [(Ready::SignedOut, Row::Failed(None)), idle(Ready::SignedIn)],
+            Some("Plus"),
+        ),
+        "signed-in" => ([idle(Ready::SignedIn), idle(Ready::SignedIn)], Some("Plus")),
         _ => return None,
     };
-    let rows = vec![
-        (Cli::Claude, shown(Cli::Claude, claude, None, &Row::Idle)),
-        (Cli::Codex, shown(Cli::Codex, codex, plan, &Row::Idle)),
-    ];
-    Some((rows, marked))
+    Some(vec![
+        (Cli::Claude, shown(Cli::Claude, claude.0, None, &claude.1)),
+        (Cli::Codex, shown(Cli::Codex, codex.0, plan, &codex.1)),
+    ])
 }
 
+/// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
+/// as a headless session has none to switch.
 fn preview_tone() -> Option<Tone> {
     match states::var("PREVIEW_APPEARANCE").ok()?.as_str() {
         "light" => Some(Tone::Light),
@@ -2883,6 +2904,7 @@ fn main() {
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
+                    let files = states::var("PREVIEW_DOWNLOADS").as_deref() == Ok("files");
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
                         .map(
@@ -2890,7 +2912,14 @@ fn main() {
                                 id,
                                 name: name.into(),
                                 url: url.into(),
-                                path: SharedString::default(),
+                                // PREVIEW_DOWNLOADS=files gives the finished ones made-up files:
+                                // the Library button's plate lists a finished one only with one.
+                                path: match state {
+                                    DownloadState::Done if files => {
+                                        format!("/preview/{name}").into()
+                                    }
+                                    _ => SharedString::default(),
+                                },
                                 received,
                                 total,
                                 state,
@@ -2934,8 +2963,8 @@ fn main() {
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
                     // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
-                    // PREVIEW_ONBOARDING_STEP=transparency, or a step's number from 1, opens it at
-                    // that step.
+                    // PREVIEW_ONBOARDING_STEP=<a step's number, 1 to 7 or 3b> opens it at that
+                    // step.
                     let onboarding_step = states::var("PREVIEW_ONBOARDING_STEP").ok();
                     let onboarding = states::var("PREVIEW_ONBOARDING")
                         .ok()
@@ -3234,12 +3263,7 @@ fn main() {
                             let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| {
-                                        if states::var_os("PREVIEW_TASK").is_some() {
-                                            shell.set_talk_beside(true, cx);
-                                        }
-                                        shell.show_task(agent.into(), cx)
-                                    })
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
@@ -3281,8 +3305,8 @@ fn main() {
                     if welcome {
                         shell.set_welcome(cx);
                     }
-                    // =dark:opt-ins opens it at that step, and =dark:opt-ins:on turns the
-                    // daily count's switch on there.
+                    // =dark:7 opens it at that step, and =dark:7:on turns Help improve on
+                    // there.
                     if let Some(given) = &onboarding {
                         let mut parts = given.split(':');
                         let appearance = parts.next();
@@ -3293,14 +3317,13 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
-                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start or =signed-in gives
-                        // the assistants' step its rows in each state they read.
+                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start, =waiting, =failed or
+                        // =signed-in gives the assistants' step its rows in each state they read.
                         let assistants = states::var("PREVIEW_ONBOARDING_ASSISTANTS").ok();
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
-                            let (rows, marked) = rows;
-                            shell.onboarding_show_assistants(rows, marked, cx);
+                            shell.onboarding_show_assistants(rows, cx);
                         }
-                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_swatch(index, cx);
@@ -3626,8 +3649,13 @@ fn main() {
             // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
             // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
             // with PREVIEW_APPEARANCE=light (#2455).
+            // PREVIEW_MODEL_MENU=composer[,<key>…] shows the composer's model menu instead, with its
+            // search, Claude's recorded models and Codex not signed in, then types the keys in it.
             if let Ok(cli) = states::var("PREVIEW_MODEL_MENU") {
-                preview_model_menu(bounds, &cli, cx);
+                match cli.strip_prefix("composer") {
+                    Some(keys) => preview_composer_model_menu(bounds, keys, cx),
+                    None => preview_model_menu(bounds, &cli, cx),
+                }
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3878,6 +3906,63 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             };
             menu::show(request, cx);
         });
+    })
+    .detach();
+}
+
+/// The composer's model menu as the command bar builds it, from Claude's recorded list and with
+/// Codex not signed in, then `keys`, comma-separated, typed in its search.
+fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App) {
+    use browser::agents::{ready::claude_listed, runner::Cli, task};
+    let answer = serde_json::from_str(include_str!(
+        "agents/runner/answers/claude-2.1.322-initialize.json"
+    ))
+    .unwrap_or_default();
+    let models = claude_listed(&answer).unwrap_or_default();
+    let heading = |name: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(name.to_string(), false)
+    };
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
+    let mut items = vec![
+        MenuEntry::search("Search models"),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
+    ];
+    items.extend(models.into_iter().map(|entry| MenuEntry {
+        over: false,
+        ..entry
+    }));
+    items.extend([
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
+        MenuEntry::line(),
+        MenuEntry::named("Settings", true).kept().out(),
+    ]);
+    let keys: Vec<String> = (keys.split(','))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+        .collect();
+    let light = preview_tone() == Some(Tone::Light);
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
+    let window: gpui::AnyWindowHandle = window.into();
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+        press_keys(window, keys, cx).await;
     })
     .detach();
 }

@@ -328,37 +328,29 @@ BROWSER_IMPORT_HOME=$(cygpath -aw "$out/screen-reader-home") BROWSER_DRIVE=1 BRO
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
-await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+await '^browser: onboarding started$' || fail "the onboarding didn't start"
 judging=1
-spoken launch
-send key return
-await '^browser: onboarding left intro via return$' || fail "Return didn't go on from the welcome"
-await '^browser: onboarding step [a-z-]* settled$' || fail "no step came after the intro"
-spoken "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | cut -d' ' -f4) step"
-press tab
-press tab
-press tab shift
-# An arrow on a button has nothing new to say.
-judging=
-press down
-judging=1
-# On through the steps as Skip goes, a click on it where each step says it's drawn, as Esc is Back,
-# each one's speech recorded as it comes.
-for _ in $(seq 14); do
-  grep -q '^browser: onboarding done$' "$log" && break
-  at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
-  heard=$(wc -l < "$nvda_log")
-  # The keys' step, the last, has no Skip: its Return is the way in.
-  if [ "$at" = keys ]; then
-    send key return
-    expect '^browser: onboarding done$' "Return didn't leave the keys' step"
-    spoken "Return at keys"
-    continue
+# On through the card's steps, each left the way that takes nothing it offers (pass_step), each
+# one's speech recorded as it comes. Your first Space (4), which every run shows, rests on its
+# swatches, where ⇥ goes on to Back and Next and ⇧⇥ back as far, so its ↩ is still Next's.
+for at in $(onboarding_steps); do
+  step_settled "$at" "the onboarding's step $at didn't draw"
+  spoken "step $at"
+  if [ "$at" = 4 ]; then
+    press tab
+    press tab
+    press tab shift
+    press tab shift
+    # An arrow on the swatches picks one, which may have nothing new to say.
+    judging=
+    press right
+    judging=1
   fi
-  skip_step "$at"
-  expect '^browser: onboarding \(step [a-z-]* settled\|done\)$' "Skip didn't leave the $at step"
-  spoken "Skip at $at"
+  heard=$(wc -l < "$nvda_log")
+  pass_step "$at"
 done
+expect '^browser: onboarding done$' "the onboarding didn't end after its last step"
+spoken "leaving the last step"
 judging=
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
 spoken "command bar after the onboarding"
@@ -557,7 +549,7 @@ says "$at" "'Second', 'document'" "NVDA didn't say the page after F10 from the m
 # it said only the window's before (#3238).
 judging=1
 press l cmd shift
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't on the Library's search field after ⇧⌃L: $focus_file"
 # ↓ from the field rings History's first row, this run's pages, and NVDA says it and where it
 # stands, as it says the command bar's selected suggestion, while the field keeps the keyboard.
@@ -577,7 +569,7 @@ expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't hig
 expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 press escape
 expect '^browser: menu closed$' "escape didn't close History's row's menu"
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't back on the Library's search field after the row's menu: $focus_file"
 none_since '^browser: library rows ring ended$' "$at" || fail "the row's menu ended the ring on History's row"
 # Tab from the field goes on to the Library's other controls, its sections first, which ↓ walks,
@@ -597,7 +589,7 @@ press down
 in_library Downloads down
 press tab shift
 press tab shift
-in_library "Search History" "⇧Tab twice"
+in_library "Search history" "⇧Tab twice"
 judging=
 press escape
 # An agent's change that ilo refuses (#4086, #4244) asks nothing and takes no keyboard. With its

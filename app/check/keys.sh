@@ -554,7 +554,7 @@ close_find_bar() {
 }
 if find_keys_refused; then
   echo "skip: escape and typing in the find bar, after ⌘F with the UI focused, a second ⌘F and" \
-    "⌘F with Prefer $app_name, known under #2904: on sway's Xwayland before wlroots 0.19" \
+    "⌘F with Prefer $product, known under #2904: on sway's Xwayland before wlroots 0.19" \
     "($(sway --version)) the find bar can't keep the X focus"
   send key f cmd
   expect '^browser: find bar drew ' "⌘F with the UI focused didn't open the find bar"
@@ -769,17 +769,29 @@ settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
-# Settings › Threads' Tasks from the command bar (#1636), under Let agents use the browser while
-# agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
-# Agents go off again after.
+# Settings › Threads' first switch, the product's own threads (#1636, #4260): on, ⇥ in ⌘T makes
+# what's typed a task; off, it doesn't. It goes off again after.
 send clickkey $(drawn "toolbar Threads")
 settings_drew Threads
-click_in_sight "switch agents"
-expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
-tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
+# The search above drew this switch among its rows, far down the card, and a section's "drew"
+# line comes before its frame's places: only a place drawn since Threads drew is its own.
+click_in_sight "switch agents" clickkey '^browser: settings drew Threads$'
+expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
-send clickkey $tasks_switch
-expect '^browser: agent tasks off$' "a click on Tasks from the command bar didn't turn tasks off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ didn't make a task with threads on"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
+send menu Settings…
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
+click_in_sight "switch agents"
+expect '^browser: agents off$' "a click on Let agents use the browser didn't turn threads off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -787,28 +799,12 @@ send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type summarise this
 send key tab
-none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with tasks off"
+none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with threads off"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
 expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
 settings_drew Threads
-click_in_sight "switch agent tasks"
-expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
-send key w cmd
-expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type summarise this
-send key tab
-expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
-send menu Settings…
-expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
-settings_drew Threads
-click_in_sight "switch agents"
-expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
 click_in_sight "shortcut new-tab"
@@ -935,9 +931,13 @@ send clickkey $(drawn "search")
 send type sidebar
 expect '^browser: settings search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
-# Tabs & Sidebar's hidden sidebar row comes first, before the commands.
-grep -q "^browser: settings search \"sidebar\" finds \(.*, \)\{0,1\}$found\$" "$log" ||
+# The search finds every page's rows: Window's Sidebar position first, then the commands, then Tabs
+# & Spaces' rows for the hidden sidebar, with Restore an earlier sidebar once the core has backed the
+# sidebar up, which it does as it saves the Spaces.
+alone_key=⌥
+[ "$(uname)" = Darwin ] || alone_key=Alt
+found="Sidebar position, Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar, Show the hidden sidebar at the window's edge, Show the hidden sidebar when $alone_key is pressed alone"
+grep -q "^browser: settings search \"sidebar\" finds $found\(, Restore an earlier sidebar\)\{0,1\}\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
 send type pinned tabs
@@ -1083,7 +1083,7 @@ $(grep '^browser: menu shown' "$log" | tail -1)"
   send choose "$(cased "$3")"
   expect "^browser: shortcut find prefers $2\$" "$3 didn't take for Find"
 }
-prefer "Prefer Websites (checked), Prefer $app_name" ilo "Prefer $app_name"
+prefer "Prefer Websites (checked), Prefer $product" ilo "Prefer $product"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-prefer.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -1092,8 +1092,8 @@ send type y
 expect '^browser: title [0-9]* value .*y$' "the page didn't get the y typed before ⌘F"
 send key f cmd
 pressed=$step
-expect '^browser: command find via page$' "⌘F with Prefer $app_name didn't run Find at once"
-expect '^browser: find bar drew ' "⌘F with Prefer $app_name didn't open the find bar"
+expect '^browser: command find via page$' "⌘F with Prefer $product didn't run Find at once"
+expect '^browser: find bar drew ' "⌘F with Prefer $product didn't open the find bar"
 saw='^browser: title [0-9]* page saw cmd-f$'
 sed -n "/^browser: drive $pressed: /,\$p" "$log" | grep -q "$saw" &&
   fail "the page saw ⌘F with Prefer $app_name"
@@ -1103,7 +1103,7 @@ else
   send key escape
   expect '^browser: find bar hidden$' "escape didn't close the find bar"
 fi
-prefer "Prefer Websites, Prefer $app_name (checked)" websites "Prefer Websites"
+prefer "Prefer Websites, Prefer $product (checked)" websites "Prefer Websites"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
@@ -1468,14 +1468,14 @@ width=${content%x*}
 height=${content#*x}
 post key q cmd
 expect '^browser: command quit via page$' "⌘Q with the page focused didn't reach the UI"
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/quit.png" || fail "no window to capture"
 send key escape
 expect '^browser: dialog cancelled$' "escape didn't cancel quitting"
 expect '^browser: dialog hidden$' "the dialog asking to quit didn't go"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask again after Cancel"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask again after Cancel"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle again"
 # It's the driver's last command: the app doesn't report it done.
 post click $((width / 2 - 225 + 29 + 40)) $((height / 2 - 86 + 1 + 38 + 22 + 46 + 18))

@@ -33,8 +33,9 @@ pub struct Step {
     pub site: String,
     /// Why it was refused, or empty if it wasn't.
     pub refused: String,
-    /// A request's method and path, its whole address, and what it sent, or would have; empty
-    /// for any other step, and for a request kept before they were.
+    /// A request's method and path, its whole address, and what it sent, or would have; a web
+    /// search's count of the thread's searches, never their words; empty for any other step, and
+    /// for a request kept before they were.
     pub target: String,
     pub url: String,
     pub sent: Vec<Sent>,
@@ -151,7 +152,7 @@ impl Past {
         sites
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         // No title or pages: a build from before sorts reads no task in the line, and skips it.
         if let Some(sorted) = self.sorted {
             return json!({
@@ -177,6 +178,10 @@ impl Past {
                     kept["target"] = json!(step.target);
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
+                }
+                // A search's entry holds its count alone, which its row says.
+                if step.action == crate::agents::tools::SEARCHED {
+                    kept["target"] = json!(step.target);
                 }
                 if !step.tier.is_empty() {
                     kept["tier"] = json!(step.tier);

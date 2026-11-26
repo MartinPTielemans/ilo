@@ -323,7 +323,7 @@ impl Shell {
         let mut stops = Vec::new();
         for (line, item) in library.items.iter().enumerate() {
             match item {
-                Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+                Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => {}
                 Item::PastStep(past, step) => {
                     if self.past_step_opens(*past, *step) {
                         stops.push((line, 0));
@@ -480,7 +480,7 @@ impl Shell {
                 }
                 None => None,
             },
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => None,
         };
         name.unwrap_or_default()
     }
@@ -600,7 +600,7 @@ impl Shell {
                     self.open_media(&path, cx);
                 }
             }
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => {}
         }
     }
 
@@ -649,7 +649,7 @@ impl Shell {
                 None => None,
             },
             Item::Past(_) | Item::PastHead(_) | Item::PastStep(..) => None,
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => None,
         };
         if shown.is_some() {
             // check.sh waits for this line.
@@ -807,9 +807,9 @@ mod tests {
         let (shell, host, cx) = window(Section::Archive, cx);
         run(&shell, Command::ViewLibrary, cx);
         assert!(host.take().contains(&"focus ui".to_owned()));
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         run(&shell, Command::ViewDownloads, cx);
-        assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search downloads".into()));
         run(&shell, Command::ViewLibrary, cx);
         assert!(
             root_keyed(&shell, cx),
@@ -824,7 +824,7 @@ mod tests {
         let (shell, host, cx) = window(Section::Archive, cx);
         let focused_page = |host: &Recorder| host.take().contains(&"focus page".to_owned());
         run_from(&shell, Command::ViewDownloads, "page", cx);
-        assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search downloads".into()));
         // Another section's key keeps the Library open, and the page's turn for the keyboard.
         run(&shell, Command::ViewArchive, cx);
         assert!(
@@ -846,7 +846,7 @@ mod tests {
         );
 
         run_from(&shell, Command::ViewLibrary, "page", cx);
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
         cx.run_until_parked();
@@ -881,7 +881,7 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.library_open),
             "escape closed it"
         );
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         search.read_with(cx, |search, _| {
             assert!(search.composing(), "escape ended the composition");
             assert_eq!(search.text(), "ぴ");
@@ -903,28 +903,26 @@ mod tests {
     }
 
     /// Tab goes over the Library's controls in reading order and round again: from the field to
-    /// the section buttons, each a tab of the Sections list, and on to Back and the field, and
+    /// the section rows, each a tab of the Sections list, and on to Back and the field, and
     /// Shift+Tab goes the other way. ↓ moves along the sections, and Return shows the one the keys
     /// are on, which keeps them (#3238).
     #[gpui::test]
     fn tab_goes_over_the_librarys_controls(cx: &mut TestAppContext) {
         let (shell, _, cx) = window(Section::Archive, cx);
         run(&shell, Command::ViewLibrary, cx);
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         cx.simulate_keystrokes("shift-tab");
         assert_eq!(keyed(cx), (Role::Button, "Back".into()));
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         cx.simulate_keystrokes("up");
         assert_eq!(
             keyed(cx),
-            (Role::Tab, "Media".into()),
+            (Role::Tab, "Downloads".into()),
             "↑ left the first section"
         );
-        cx.simulate_keystrokes("down");
-        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         // Pressed and let go, as a keyboard sends it: Return clicks on the release.
         cx.simulate_keystrokes("enter");
         let keystroke = gpui::Keystroke::parse("enter").unwrap();
@@ -940,12 +938,12 @@ mod tests {
         );
         assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         cx.simulate_keystrokes("shift-tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
-        cx.simulate_keystrokes("shift-tab");
-        assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
-        // Escape closes the Library from any of its stops, not only the field.
+        assert_eq!(keyed(cx), (Role::TextInput, "Search downloads".into()));
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
+        cx.simulate_keystrokes("down");
+        assert_eq!(keyed(cx), (Role::Tab, "History".into()));
+        // Escape closes the Library from any of its stops, not only the field.
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
         cx.run_until_parked();
@@ -967,7 +965,7 @@ mod tests {
         cx.run_until_parked();
         assert!(root_keyed(&shell, cx));
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         assert!(
             !host.take().iter().any(|call| call.contains("sidebar")),
             "Tab rang the sidebar under the Library"
@@ -975,7 +973,7 @@ mod tests {
         cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
         cx.run_until_parked();
         cx.simulate_keystrokes("shift-tab");
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
     }
 
     /// Closed as a click closes it, the Library opened from the page gives the window the
@@ -1067,7 +1065,7 @@ mod tests {
                 Some(row),
                 "the menu's close took the ring off the row"
             );
-            assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+            assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         }
         assert_eq!(
             field_menus.get(),
@@ -1088,7 +1086,7 @@ mod tests {
             shell.sidebar_fade = None;
         });
         cx.run_until_parked();
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         shell.update(cx, |shell, cx| shell.clear_archive(cx));
         let (_, _, confirmed) = host
             .confirming
@@ -1098,7 +1096,7 @@ mod tests {
         cx.update(|_, cx| confirmed(cx));
         cx.run_until_parked();
         assert_eq!(host.take_edits(), ["archive clear as 9001"]);
-        assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         cx.simulate_keystrokes("cmd-z");
         assert_eq!(host.take_edits(), ["undo archive remove 9001"]);
         cx.simulate_keystrokes("cmd-shift-z");
@@ -1308,7 +1306,7 @@ mod tests {
         // A click leaves the keyboard in the search field, where the Library put it.
         for (made, key) in [(1, "space"), (2, "enter"), (3, "click")] {
             run(&shell, Command::ViewLibrary, cx);
-            assert_eq!(keyed(cx), (Role::TextInput, "Search Boards".into()));
+            assert_eq!(keyed(cx), (Role::TextInput, "Search boards".into()));
             if key == "click" {
                 let drawn = shell.read_with(cx, |shell, _| {
                     shell

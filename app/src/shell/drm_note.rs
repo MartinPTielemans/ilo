@@ -54,17 +54,17 @@ const SWITCH_WORDS: &str = "This site's video needs Safari's engine. Play it in 
 const SWITCH: &str = "Play in This Tab";
 const WORDS: &str = concat!(
     "This site's video needs a module ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " doesn't have yet."
 );
 const PLAYREADY_WINDOWS_11: &str = concat!(
     "This site's video needs Windows 11, where ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " plays it."
 );
 const PLAYREADY_X64: &str = concat!(
     "This site's video needs an Intel or AMD PC. ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " can't play it on ARM."
 );
 const PLAYREADY_HARDWARE: &str =
@@ -80,7 +80,7 @@ const OPEN_DEFAULT_PRIVATE: &str = "Open in Default Browser, not private";
 const WIDEVINE: &str = "com.widevine.alpha";
 const WIDEVINE_WORDS: &str = concat!(
     "This site's video needs Google's Widevine module, which ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " can download from Google."
 );
 const WIDEVINE_DOWNLOAD: &str = "Download from Google";
@@ -89,7 +89,7 @@ const WIDEVINE_RETRY: &str = "Try Again";
 const WIDEVINE_DOWNLOADING_WORDS: &str = "Downloading Google's Widevine module…";
 const WIDEVINE_RESTART_WORDS: &str = concat!(
     "Google's Widevine module is ready. Restart ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " to play this video."
 );
 const WIDEVINE_RESTART: &str = crate::widevine::RESTART;

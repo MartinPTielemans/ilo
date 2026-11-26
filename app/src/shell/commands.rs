@@ -1450,10 +1450,14 @@ impl Shell {
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
-        // ⌘W and ⇧⌘W in first run's window are its close, which leaves first run once; File's
-        // Close Tab and Close Window, which the same keys reach, close nothing else there.
-        if matches!(command, Command::CloseTab | Command::CloseWindow) && self.first_run_key(cx) {
-            return self.onboarding_skip_setup("close", cx);
+        // First run's card has no close, so ⌘W and ⇧⌘W there close nothing; ⌘[ is the card's own
+        // Back (onboarding_key), not a page's.
+        if matches!(
+            command,
+            Command::CloseTab | Command::CloseWindow | Command::Back
+        ) && self.first_run_key(cx)
+        {
+            return;
         }
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
@@ -2305,7 +2309,7 @@ impl Shell {
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             // Where the broom is drawn and takes a click: never in a private window or an agent's
-            // Space, and never with fewer than two tabs to sort or a sort running.
+            // Space, and never with fewer than four tabs to sort or a sort running.
             Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;

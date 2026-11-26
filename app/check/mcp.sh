@@ -320,7 +320,8 @@ esac
 if BROWSER_AGENT_TOKEN=0 "$bridge" "$socket" < /dev/null > /dev/null 2> "$out/mcp-refused"; then
   fail "the bridge got in without the agent's token"
 fi
-grep -q 'Settings › Agents' "$out/mcp-refused" || fail "a refused bridge said: $(cat "$out/mcp-refused")"
+grep -q 'Connect the client again in Settings › Other apps\.' "$out/mcp-refused" ||
+  fail "a refused bridge said: $(cat "$out/mcp-refused")"
 # A copy from the Store names its bridge to clients by the alias its MSIX declares, which Windows
 # keeps in the user's WindowsApps folder across updates, as the package's own folder is named for
 # its version (#1442). check-windows.yml installs an MSIX of this build and names it in CHECK_MSIX.
@@ -416,7 +417,7 @@ listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
 agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
 # Its Space is the agent's alone, which no window lists (#1080), and list_tabs alone starts no card.
-await_log "^browser: task space $agent MCP client\$" "the window didn't keep the agent's Space apart"
+await_log "^browser: task space $agent Another app\$" "the window didn't keep the agent's Space apart"
 grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
 grep -q '^browser: session ' "$log" && fail "list_tabs alone started the client's card"
 case "$listed" in
@@ -989,7 +990,6 @@ ilo_press() {
   case "$1" in
     "Take Over") ilo_button=TakeOver ;;
     "Give Full access") ilo_button='Raise(Full)' ;;
-    "Any site") ilo_button=AnySite ;;
     "Hand Back") ilo_button=HandBack ;;
     "Show Page") ilo_button=ShowPage ;;
     "Not Now") ilo_button=NotNow ;;
@@ -1471,22 +1471,22 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab that was put back answered: $split"
-  # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
-  # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
-  # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
-  # where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows alone, the
-  # change's.
+  # Tab round the ring never gives the watched agent's page the keyboard: its stop is the words of
+  # the panel's page row, so the handback into a page, which on Windows gives the shown page's pane
+  # the keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the
+  # page's stops, where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows
+  # alone, the change's.
   ring_strip() {
     windows || return 0
     ringed=$((step + 1))
     send key tab
-    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the strip under it"
+    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the page's stops beside it"
     for _ in 1 2 3 4 5 6 7 8; do
       send key tab
     done
     send state
     logged '^browser: strip keyed page$' "$ringed" ||
-      fail "Tab round the strip with the agent's split watched never rang its page's stop"
+      fail "Tab round the ring with the agent's split watched never rang its page's stop, the page row's words"
     ! logged '^browser: ring gave the page ' "$ringed" ||
       fail "Tab round the ring with the agent's split watched gave its page the keyboard"
     case "$key $focus" in
@@ -3461,22 +3461,23 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   watch "$agent_tab"
 
   # From the conversation, a press in the page watched takes the tab the agent is at work in over,
-  # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
-  # user hands it back. The strip then says the user drives.
+  # as Take Over in the panel's page row does (#1080), and the agent's next action there is refused
+  # until the user hands it back.
   before=$(grep -c "$back" "$log" || true)
   shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
   await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
   await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
   watch "$opened_tab"
-  await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
-  read -r sx sy sw _ <<STRIP
-$(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
-STRIP
-  # In the page, above the strip, where nothing on the page takes the click.
-  send click $((sx + sw / 2)) $((sy - 120))
-  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
+  await_log "^browser: task page $opened_tab at " "the page watched was never placed beside the panel"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-page.png" || fail "no window to capture"
+  read -r px py pw ph <<PAGE
+$(grep "^browser: task page $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+PAGE
+  # The middle of the page, from where the app logged it: the long page is plain text there,
+  # which takes no click, and the app draws nothing over it.
+  send click $((px + pw / 2)) $((py + ph / 2))
+  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the app"
   await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
   ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
   refused=$(call scroll "{\"tab\":$opened_tab}")
@@ -4445,7 +4446,8 @@ STOP
   kill -0 "$bridge_pid" 2>/dev/null && fail "the bridge stayed connected once the user stopped its client"
   exec 4>&- 5<&-
 
-  # Off in Settings › Threads takes the socket away and drops a client connected.
+  # Off in Settings › Threads leaves an app's client connected and answered; off in Settings ›
+  # Other apps too takes the socket away and drops it (#4260).
   bridge_on
   hellos=$(grep -c "$hello" "$log" || true)
   mcp "$initialize" > /dev/null
@@ -4461,14 +4463,22 @@ STOP
   settings_drew Threads
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   click_in_sight "switch agents"
-  expect '^browser: agents off$' "a click on the switch didn't turn agents off"
+  expect '^browser: agents off$' "a click on the switch didn't turn threads off"
+  [ -e "$socket" ] || fail "the socket went with threads off and other apps' agents on"
+  mcp '{"jsonrpc":"2.0","id":90,"method":"tools/list"}' > /dev/null
+  kill -0 "$bridge_pid" 2>/dev/null || fail "the client was dropped with threads off"
+  send clickkey $(drawn "toolbar Other apps")
+  expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
+  settings_drew 'Other apps'
+  click_in_sight "switch other apps"
+  expect '^browser: other apps off$' "a click on the switch didn't turn other apps' agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
-  [ -e "$socket" ] && fail "the socket stayed once agents were off"
+  [ -e "$socket" ] && fail "the socket stayed once both switches were off"
   for _ in $(seq 100); do kill -0 "$bridge_pid" 2>/dev/null || break; sleep 0.1; done
-  kill -0 "$bridge_pid" 2>/dev/null && fail "the client stayed connected once agents were off"
+  kill -0 "$bridge_pid" 2>/dev/null && fail "the client stayed connected once both were off"
   exec 4>&- 5<&-
   if BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < /dev/null > /dev/null 2>&1; then
-    fail "the bridge got in once agents were off"
+    fail "the bridge got in once both switches were off"
   fi
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"

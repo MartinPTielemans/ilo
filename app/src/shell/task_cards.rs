@@ -25,14 +25,14 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, Hsla, Pixels, Role, SharedString, Window, accesskit::Live, canvas,
-    div, point, prelude::*, px, rgb,
+    div, point, prelude::*, px,
 };
 
 use super::agent_bar;
 use super::page_ends::StripStop;
 use super::{
     Curve as RowCurve, Edit, FAVICON_X, HOVERED, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    ROW_HEIGHT, STATUS_AGENT, Shell, Slot, TITLE, TITLE_END_INSET, TITLE_GAP, What, title,
+    ROW_HEIGHT, Shell, Slot, TITLE, TITLE_END_INSET, TITLE_GAP, What, title,
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
@@ -45,8 +45,8 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
-    LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH,
+    GLYPH_GAP, ICON, LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -121,13 +121,7 @@ fn chip(card: &Card) -> Option<Chip> {
 /// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
 /// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
 fn state_line(card: &Card) -> SharedString {
-    let fuller = match card.word {
-        Word::Stopped => card.status.starts_with("Stopped"),
-        Word::Done => !card.replies && card.status.starts_with("Done"),
-        Word::Working => card.status.starts_with("Working · "),
-        _ => false,
-    };
-    let state = match fuller {
+    let state = match card.fuller {
         true => card.status.as_ref(),
         false => card.word.after_name(),
     };
@@ -238,7 +232,11 @@ fn room(card: &Card, form: Form, lines: usize) -> f32 {
         _ => 0.,
     };
     let third = if third > 0. { GAP + third } else { 0. };
-    2. * PADDING + TITLE_LINE + GAP + second + third + UNDER
+    let from = match card::outside(card) {
+        true => FROM_LINE + GAP,
+        false => 0.,
+    };
+    2. * PADDING + from + TITLE_LINE + GAP + second + third + UNDER
 }
 
 /// How many lines a card's `finding` takes in a list `width` wide, at most FINDING_LINES: what
@@ -380,8 +378,8 @@ pub(super) struct TaskList {
     /// The next ageing's wait.
     ageing: Option<gpui::Task<()>>,
     /// The task whose waiting card was clicked away from its home Space, whose conversation shows
-    /// once that Space does.
-    going: Option<SharedString>,
+    /// once that Space does, or the page it waits on where the click was its Show Page.
+    going: Option<(SharedString, bool)>,
     /// Each card as it fades in.
     coming: HashMap<SharedString, Ease>,
     /// The window has drawn its list, so what changes on it from now on moves.
@@ -546,8 +544,8 @@ impl Shell {
                 }
             }
         }
-        self.task_cards = cards;
-        self.keep_plates();
+        let before = std::mem::replace(&mut self.task_cards, cards);
+        self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {
             let telling = self
@@ -722,38 +720,54 @@ impl Shell {
     }
 
     /// The Space shown changed: a click on a waiting card away from its home Space went there, and
-    /// its conversation shows now.
+    /// its conversation shows now, or its Show Page's page while the task still waits.
     pub(super) fn card_space_shown(&mut self, cx: &mut Context<Self>) {
         // ⌘T's slot is in the Space shown alone.
         if self.task_list.slot {
             self.place_cards(cx);
         }
-        let Some(agent) = self.task_list.going.take() else {
+        let Some((agent, page)) = self.task_list.going.take() else {
             return;
         };
-        let home = (self.task_cards.iter()).find(|card| card.agent == agent);
-        if home.is_some_and(|card| card.home == self.space)
-            && self.talk_agent() != Some(agent.clone())
-        {
+        let Some(card) = (self.task_cards.iter()).find(|card| card.agent == agent) else {
+            return;
+        };
+        if card.home != self.space {
+            return;
+        }
+        if page {
+            if card.dot == Dot::Waiting {
+                self.card_button(agent, cx);
+            }
+        } else if self.talk_agent() != Some(agent.clone()) {
             self.show_task(agent, cx);
         }
     }
 
-    /// The glyph's colours: Signal, a title's ink and a state line's, and the stopped ring's, the
-    /// ink at `stopped`, under the floor text keeps, as it's a mark beside words that say the task
+    /// The glyph's colours: a title's ink and a state line's, and the stopped ring's, the ink at
+    /// `stopped`, under the floor text keeps, as it's a mark beside words that say the task
     /// stopped.
     fn glyph_inks(&self) -> glyph::Inks {
         glyph::Inks {
-            signal: rgb(STATUS_AGENT).into(),
             title: self.palette.text(TITLE),
             status: self.palette.gray(STATUS),
             stopped: Hsla::from(self.palette.ink).opacity(STOPPED),
         }
     }
 
-    /// A finished task's mark at rest, as the Library shows it: Done's tick, or the grey ring of
-    /// one stopped or failed, in the glyph's box.
-    pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
+    /// A task's mark at rest, as the Library shows it: Done's tick, or the grey ring of one stopped
+    /// or failed, in the glyph's box; at work the card's ring, held at the top.
+    pub(super) fn status_mark(&self, dot: Dot) -> AnyElement {
+        if let Some(mark) = glyph::at_rest(State::from(dot)) {
+            return div()
+                .flex_none()
+                .size(px(GLYPH))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(self.mark_canvas(mark))
+                .into_any_element();
+        }
         let look = Look::of(State::from(dot));
         let inks = self.glyph_inks();
         canvas(
@@ -761,6 +775,7 @@ impl Shell {
             move |bounds, _, window, _| glyph::paint(look, bounds, inks, false, window),
         )
         .size(px(GLYPH))
+        .into_any_element()
     }
 
     /// The mark of `agent`'s card as the list draws it now, for the strip under its page watched to
@@ -878,7 +893,7 @@ impl Shell {
             .map(|card| card.home);
         if let Some(home) = home.filter(|&home| home != self.space) {
             log!("browser: task {agent} shown in its home space {home}");
-            self.task_list.going = Some(agent);
+            self.task_list.going = Some((agent, false));
             return self.show_space(home, cx);
         }
         if self.talk_agent().as_ref() == Some(&agent) && self.watched_task_page().is_some() {
@@ -893,6 +908,13 @@ impl Shell {
             return;
         };
         if card.dot == Dot::Waiting {
+            // Away from its home Space, the page shows there, as any page of another Space does.
+            if card.home != self.space {
+                let home = card.home;
+                log!("browser: task {agent} page shown in its home space {home}");
+                self.task_list.going = Some((agent, true));
+                return self.show_space(home, cx);
+            }
             if let Some(tab) = self.waiting_page(card) {
                 log!("browser: command show-page via task card");
                 if self.talk_agent().as_ref() != Some(&agent) {

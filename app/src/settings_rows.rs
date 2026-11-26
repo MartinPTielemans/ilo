@@ -43,7 +43,8 @@ use crate::tokens::text::SMALL;
 
 mod assistant;
 pub use assistant::{
-    Act, SIGN_IN, another_agent_name_row, another_agent_row, assistant_name, assistant_row,
+    Act, SIGN_IN, SIGN_INS_STAY, another_agent_name_row, another_agent_row, assistant_name,
+    assistant_name_alone, assistant_row, first_run_row,
 };
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
@@ -76,10 +77,12 @@ impl DrawnLog {
         &self.logged
     }
 
-    /// Whether it logged `line`.
+    /// Whether it logged `line`, which is `what`'s: "browser: settings `what` at x y", or with
+    /// another view's word in "settings"' place.
     fn draw(&mut self, what: &str, line: String) -> bool {
         // Once a place: forget where it was drawn before.
-        let at = format!("browser: settings {what} at ");
+        let at = line.find(&format!(" {what} at "));
+        let at = line[..at.map_or(line.len(), |at| at + what.len() + 5)].to_owned();
         self.this_frame.retain(|each| !each.starts_with(&at));
         self.this_frame.push(line.clone());
         let new = !self.logged.contains(&line);
@@ -96,11 +99,16 @@ impl DrawnLog {
 /// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there, and
 /// after a frame without it where the view starts each frame (`DrawnLog::frame`).
 pub fn drawn(what: String, logged: Drawn) -> gpui::Canvas<()> {
+    drawn_of("settings", what, logged)
+}
+
+/// `drawn` for a view that isn't Settings: the line is "browser: `of` `what` at x y".
+pub fn drawn_of(of: &'static str, what: String, logged: Drawn) -> gpui::Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, _, _| {
             let (x, y) = (f32::from(bounds.center().x), f32::from(bounds.center().y));
-            let line = format!("browser: settings {what} at {x:.0} {y:.0}");
+            let line = format!("browser: {of} {what} at {x:.0} {y:.0}");
             logged.borrow_mut().draw(&what, line);
         },
     )
@@ -1135,6 +1143,17 @@ pub fn sent_part(
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }
 
+/// The name of the row for the `kept` threads, which is their count (table KT1), and whether it
+/// has Remove All…: not with none, where there is nothing to remove.
+pub fn kept_row(kept: usize) -> (String, bool) {
+    let name = match kept {
+        0 => "No threads on this computer".to_string(),
+        1 => "1 thread on this computer".to_string(),
+        kept => format!("{kept} threads on this computer"),
+    };
+    (name, kept > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1372,6 +1391,24 @@ mod tests {
         let settings = Look::settings(true);
         let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
         assert_eq!(elsewhere.primary, settings.accent);
+    }
+
+    /// The row for the threads kept is named by how many there are, in a form of its own for
+    /// none, for one and for more, and offers Remove All… only where there is one to remove.
+    #[test]
+    fn the_kept_row_is_named_by_its_count_and_removes_only_what_there_is() {
+        let (none, one, two, many) = (kept_row(0), kept_row(1), kept_row(2), kept_row(12));
+        assert!(!none.1, "Remove All… with nothing kept");
+        assert!(one.1 && two.1 && many.1);
+        // None is said in words, one is one thread, and more are counted.
+        assert!(!none.0.contains(|c: char| c.is_ascii_digit()), "{}", none.0);
+        assert!(one.0.starts_with("1 thread ") && !one.0.contains("threads"));
+        assert!(two.0.starts_with("2 threads ") && many.0.starts_with("12 threads "));
+        // Where they are is said the same way in each.
+        let (_, place) = one.0.split_once("thread").unwrap();
+        for name in [&none.0, &two.0, &many.0] {
+            assert!(name.ends_with(place), "{name}");
+        }
     }
 }
 

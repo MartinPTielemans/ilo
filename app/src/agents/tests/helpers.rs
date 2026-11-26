@@ -134,7 +134,7 @@ fn limit_line(run: &Run, agent: &str, cx: &mut TestAppContext) -> Option<IloLine
         })
 }
 
-/// With the switch as it ships, off, a task starts with none of its assistant's own tools and
+/// With the switch as it ships, off, a task starts with only its assistant's own search and
 /// what it's told is what it was told before helpers, to the byte. Its CLI saying helpers started
 /// changes nothing, as it has none.
 #[gpui::test]
@@ -142,7 +142,7 @@ fn off_a_task_starts_as_it_did_and_counts_no_helpers(cx: &mut TestAppContext) {
     let run = Run::new("off", cx);
     let agent = run.start(Cli::Claude, cx);
     let (args, _) = run.ran(1);
-    assert_eq!(after(&args, "--tools"), Some(""));
+    assert_eq!(after(&args, "--tools"), Some("WebSearch"));
     assert!(!args.iter().any(|arg| arg == "--agents"), "{args:?}");
     let told = std::fs::read_to_string(after(&args, "--append-system-prompt-file").unwrap());
     assert_eq!(told.unwrap(), tools::TASK_INSTRUCTIONS);
@@ -161,10 +161,7 @@ fn off_a_task_starts_as_it_did_and_counts_no_helpers(cx: &mut TestAppContext) {
 fn with_helpers_a_task_is_told_the_two_numbers_at_its_start(cx: &mut TestAppContext) {
     let (run, _) = with_helpers("told", cx);
     let (args, _) = run.ran(1);
-    assert_eq!(
-        after(&args, "--tools"),
-        Some(crate::agents::helpers::TOOLS[0])
-    );
+    assert_eq!(after(&args, "--tools"), Some("Agent,WebSearch"));
     assert!(args.iter().any(|arg| arg == "--agents"), "{args:?}");
     let told = std::fs::read_to_string(after(&args, "--append-system-prompt-file").unwrap());
     let told = told.unwrap();
@@ -542,6 +539,33 @@ fn a_helpers_lines_are_never_the_tasks_finding(cx: &mut TestAppContext) {
     assert_eq!(card(&run, cx).finding, "Two seats at 9:05, car 4.");
 }
 
+/// A card's maker says where its status is its state's word in the fuller form, which its line
+/// then says in the word's place: the helpers' line and how far a stopped task got are, a step of
+/// the task's own isn't.
+#[gpui::test]
+fn a_card_says_where_its_status_is_its_words_fuller_form(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("fuller", cx);
+    pages(&run, 1);
+    outline(&run, &agent, PAGES[0].0, cx);
+    let step = card(&run, cx);
+    assert_eq!(
+        (step.dot, step.fuller),
+        (Dot::Working, false),
+        "{}",
+        step.status
+    );
+    begun(&run, &agent, "toolu_a", cx);
+    let helpers = card(&run, cx);
+    assert_eq!(helpers.status, live(&run, &agent, cx).line());
+    assert!(helpers.fuller, "the helpers' line isn't the word's form");
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::Stop, cx)
+    });
+    let stopped = card(&run, cx);
+    assert_eq!(stopped.dot, Dot::Ended);
+    assert!(stopped.fuller, "{}", stopped.status);
+}
+
 /// A helper is counted and shown from its start: before it has done anything its line stands,
 /// under way, with the name its task gave it, and the live line and the card count it. The page
 /// it opens is its own, never a step of the task's nor a group of them, and has its own step on
@@ -617,6 +641,81 @@ fn a_helper_shows_and_counts_from_its_start(cx: &mut TestAppContext) {
     assert!(helpers_of(&trace).iter().all(|(.., running)| !running));
 }
 
+/// A helper's step under way keeps moving while the task's own step waits on the user (#4320):
+/// only a step that waits holds still. A helper's line is told from the task's steps by what it
+/// is, never by its place: in the stretch after the one it started in its key is its first
+/// step's, which here waits on a page the user took while the step it shows is under way on
+/// another, and a helper with no step yet has a key apart from every place.
+#[gpui::test]
+fn a_helpers_step_under_way_keeps_moving_while_the_tasks_own_waits_on_the_user(
+    cx: &mut TestAppContext,
+) {
+    let (run, agent) = with_helpers("waits", cx);
+    pages(&run, 3);
+    let [first, second, third] = [PAGES[0].0, PAGES[1].0, PAGES[2].0];
+    begun(&run, &agent, "toolu_a", cx);
+    let hand = json!({ "tab": third, "reason": "Sign in, please." });
+    let handed = call(&run.agents, &agent, "hand_off", hand, cx);
+
+    // The helper works on, in the stretch after the hand-off's line.
+    told(&run, &agent, "toolu_a", Helper::On(first), cx);
+    let _first = call(
+        &run.agents,
+        &agent,
+        "read_page",
+        json!({ "tab": first }),
+        cx,
+    );
+    told(&run, &agent, "toolu_a", Helper::On(second), cx);
+    let _latest = call(
+        &run.agents,
+        &agent,
+        "read_page",
+        json!({ "tab": second }),
+        cx,
+    );
+    begun(&run, &agent, "toolu_b", cx);
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::TakeOver(first), cx)
+    });
+    assert!(handed.try_recv().is_err(), "the hand-off was answered");
+
+    let talk = run.talk(&agent, cx);
+    assert_eq!(talk.live, crate::agents::task::Live::Handed);
+    let trace = live(&run, &agent, cx);
+    assert!(
+        trace.running,
+        "the stretch heads as worked with a helper at work"
+    );
+    let keys: Vec<usize> = (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Helper { step, .. } => Some(step.key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, [1, crate::agents::helpers::BEGAN + 1]);
+    let helpers = [
+        ("Shop toolu_a", Some(second), true),
+        ("Shop toolu_b", None, true),
+    ];
+    assert_eq!(helpers_of(&trace), helpers);
+    let own = (talk.lines.iter())
+        .filter_map(|line| match line {
+            Line::Trace(trace) => Some(&trace.items),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|item| match item {
+            TraceItem::Step(step) => Some(step.running),
+            _ => None,
+        });
+    assert_eq!(
+        own.collect::<Vec<_>>(),
+        [false],
+        "the task's own step moved as it waited on the user"
+    );
+}
+
 /// A page opened while helpers work is the helper's whose line asked for it, in the order the
 /// lines and the calls came, whichever came first; the task's own stays the task's step. Where
 /// the order gave a page to the wrong helper, the helper's own line that names it puts it right.
@@ -679,7 +778,7 @@ fn a_first_line_with_another_kind_starts_the_task_again_without_helpers(cx: &mut
 
     let (args, again) = run.ran(2);
     assert_eq!(again, first);
-    assert_eq!(after(&args, "--tools"), Some(""));
+    assert_eq!(after(&args, "--tools"), Some("WebSearch"));
     for flag in ["--agents", "--disallowedTools"] {
         assert!(!args.iter().any(|arg| arg == flag), "{flag} in {args:?}");
     }
@@ -866,6 +965,33 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     }
 }
 
+/// A helper's noted step has its note on that helper's own line, which draws it under itself,
+/// never on the task's steps; the task's own noted step keeps its own.
+#[gpui::test]
+fn a_helpers_note_is_on_its_own_line_and_not_the_tasks(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("notes", cx);
+    pages(&run, 2);
+    helper(&run, &agent, "toolu_a", PAGES[0].0, cx);
+    let noted = |tab: u64, note: &str| json!({ "tab": tab, "direction": "down", "note": note });
+    let helpers = noted(PAGES[0].0, "Finding two seats together");
+    let _a = call(&run.agents, &agent, "scroll", helpers, cx);
+    let own = noted(PAGES[1].0, "Checking the stalls");
+    let _own = call(&run.agents, &agent, "scroll", own, cx);
+    let trace = live(&run, &agent, cx);
+    let says: Vec<(bool, &str)> = (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Helper { step, .. } => Some((true, step.says.as_ref())),
+            TraceItem::Step(step) => Some((false, step.says.as_ref())),
+            TraceItem::Said(_) => None,
+        })
+        .collect();
+    let wanted = [
+        (true, "Finding two seats together"),
+        (false, "Checking the stalls"),
+    ];
+    assert_eq!(says, wanted);
+}
+
 /// A card is made again whenever any task changes, so one of a task with helpers at work costs no
 /// fold of the task's conversation, and still says what the conversation's live line says: after a
 /// question the task asked and the user answered too, where the stretch under way starts again
@@ -969,4 +1095,30 @@ fn a_turn_that_ends_leaves_no_helpers_line_under_way(cx: &mut TestAppContext) {
     assert_eq!(trace.counted(), (2, Counted::Helpers));
     assert_eq!(under_way(&trace), 0);
     assert_eq!(card(&run, cx).page_steps, []);
+}
+
+/// A helper's search is a step of its own, with its words, under its line alone and never as the
+/// task's; the thread's one activity entry counts it.
+#[gpui::test]
+fn a_helpers_search_stands_under_its_own_line(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("search", cx);
+    begun(&run, &agent, "a", cx);
+    let search = json!({ "type": "assistant", "parent_tool_use_id": "a", "message": { "content": [
+        { "type": "tool_use", "id": "s", "name": "WebSearch", "input": { "query": "stalls on Saturday" } },
+    ] } });
+    line(&run, &agent, search, cx);
+    let said = "Searched the web for “stalls on Saturday”";
+    let live = live(&run, &agent, cx);
+    let under =
+        |item: &TraceItem| matches!(item, TraceItem::Helper { step, .. } if step.title == said);
+    let own = |item: &TraceItem| matches!(item, TraceItem::Step(step) if step.title == said);
+    assert!(live.items.iter().any(under), "{live:?}");
+    assert!(!live.items.iter().any(own), "{live:?}");
+    let counted: Vec<String> = (run.agents).read_with(cx, |agents, _| {
+        (agents.activity(&agent))
+            .filter(|entry| entry.action == tools::SEARCHED)
+            .map(|entry| entry.target.to_string())
+            .collect()
+    });
+    assert_eq!(counted, ["1"]);
 }

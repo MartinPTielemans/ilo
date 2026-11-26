@@ -6,13 +6,8 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
-/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
-/// the pages the user added to it.
-pub const ANY_SITE: &str = "Any site";
-pub const ONLY_ADDED: &str = "Only the sites you add";
-
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
-pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
+pub const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 
 /// A task's access, lowest first, which their order follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -89,10 +84,11 @@ impl Tier {
     pub fn promise(self) -> &'static str {
         match self {
             Tier::Look => "Opens pages and reads them, and does nothing on them.",
-            Tier::Work => {
-                "Clicks, types and submits forms. ilo stops at paying, ordering, sending messages as \
-                 you and bank sites."
-            }
+            Tier::Work => concat!(
+                "Clicks, types and submits forms. ",
+                env!("PRODUCT_NAME"),
+                " stops at paying, ordering, sending messages as you and bank sites."
+            ),
             Tier::Full => {
                 "Everything you can do on a page, including paying, ordering, messages and bank \
                  sites."
@@ -121,8 +117,6 @@ pub enum Why {
     Request,
     /// A site on the user's Off limits list, which no tier lifts.
     Fenced,
-    /// A site outside the task's Sites, which no tier lifts either.
-    OtherSite,
     /// A site the user answered Never for this agent, which no tier lifts until they revoke it in
     /// Settings.
     Never,
@@ -140,12 +134,12 @@ struct Row {
     why: Why,
     allowed: [bool; 3],
     /// The user's line's whole sentence on the refusal, `{level}` standing for the tier: one per
-    /// act, whose first words also name the act in the activity log. Fenced, OtherSite, Never and
-    /// InUse name the site instead (`why_line`).
+    /// act, whose first words also name the act in the activity log. Fenced, Never and InUse name
+    /// the site instead (`why_line`).
     refused: &'static str,
 }
 
-const ROWS: [Row; 13] = [
+const ROWS: [Row; 12] = [
     Row {
         why: Why::Act,
         allowed: [false, true, true],
@@ -187,11 +181,6 @@ const ROWS: [Row; 13] = [
         refused: "",
     },
     Row {
-        why: Why::OtherSite,
-        allowed: [false, false, false],
-        refused: "",
-    },
-    Row {
         why: Why::Never,
         allowed: [false, false, false],
         refused: "",
@@ -213,27 +202,7 @@ const ROWS: [Row; 13] = [
     },
 ];
 
-/// The sites a task may use (#4094's Sites): any, or only the registrable domains of the pages the
-/// user gave it. A site outside them is refused at every tier.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Sites {
-    #[default]
-    Any,
-    Only(Vec<String>),
-}
-
-impl Sites {
-    /// Whether the site whose registrable domain is `domain` is one of them. A page with none,
-    /// off the web, is the core's to refuse.
-    pub fn allows(&self, domain: Option<&str>) -> bool {
-        match (self, domain) {
-            (Sites::Any, _) | (_, None) => true,
-            (Sites::Only(domains), Some(domain)) => domains.iter().any(|each| each == domain),
-        }
-    }
-}
-
-/// How long after a refusal's line appears a press on its step up or Any site is ignored, as an
+/// How long after a refusal's line appears a press on its step up is ignored, as an
 /// agent card's buttons ignore keys (agent_card_keys::PROTECT): a click meant for what was there
 /// lands on a button that has just come. Where a line moves is the view's to protect.
 pub const PROTECT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -273,7 +242,6 @@ impl Stop {
 pub fn why_line(why: Why, tier: Tier, site: &str) -> String {
     match why {
         Why::Fenced => format!("{site} is on your Off limits list."),
-        Why::OtherSite => format!("{site} isn't one of the sites you added."),
         Why::Never => format!("{site} is set to Never for this agent."),
         // A page with no host to give is named as the page it is.
         Why::InUse if site.is_empty() => IN_USE_NO_SITE.to_string(),
@@ -308,11 +276,6 @@ pub fn told(why: Why, tier: Tier, what: &str, site: &str) -> String {
         Why::Fenced => format!(
             "ilo stopped this: {what}. {site} is off limits to agents, whatever a task's access. \
              Only the user can change that, in ilo. Don't try another way to the same end."
-        ),
-        Why::OtherSite => format!(
-            "ilo stopped this: {what}. {site} is outside the sites this task may use. Only the user \
-             can change that, in ilo. Don't try another way to the same end; if they change it, \
-             the same call will go through."
         ),
         Why::Never => format!(
             "ilo stopped this: {what}. The user set {site} to Never for this agent, whatever a \
@@ -362,17 +325,6 @@ pub struct StartedWith {
     pub left_out: bool,
 }
 
-/// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
-/// its level: the menu's names with how many sites, never an address.
-pub fn sites_logged(from: &Sites, to: &Sites) -> String {
-    let name = |sites: &Sites| match sites {
-        Sites::Any => ANY_SITE.to_string(),
-        Sites::Only(only) if only.len() == 1 => format!("{ONLY_ADDED} · 1 site"),
-        Sites::Only(only) => format!("{ONLY_ADDED} · {} sites", only.len()),
-    };
-    format!("{} → {}", name(from), name(to))
-}
-
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
 /// target, as a change's keeps `changed_logged`, with what it starts with, in this order: pages,
 /// folder, files.
@@ -411,7 +363,7 @@ pub fn plain(text: &str) -> String {
 
 /// `text` as one line of at most `most` characters, its control characters spaces and its
 /// direction marks gone, so it can't run on into ilo's words or turn them around.
-fn capped(text: &str, most: usize) -> String {
+pub fn capped(text: &str, most: usize) -> String {
     let line: String = (text.chars())
         .filter(|c| !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
         .map(|c| match c.is_control() {
@@ -486,9 +438,8 @@ mod tests {
         assert_eq!(at(Download), [false, true, true]);
         assert_eq!(at(Discard), [false, false, true]);
         assert_eq!(at(Request), [false, false, true]);
-        // A fence and the task's Sites are the user's own, and no tier lifts them.
+        // A fence is the user's own, and no tier lifts it.
         assert_eq!(at(Fenced), [false, false, false]);
-        assert_eq!(at(OtherSite), [false, false, false]);
         assert_eq!(at(Never), [false, false, false]);
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
@@ -530,7 +481,7 @@ mod tests {
                 let line = why_line(row.why, tier, "shop.example");
                 assert!(line.ends_with('.') && !line.contains('{'), "{line}");
                 match row.why {
-                    Why::Fenced | Why::OtherSite | Why::Never | Why::InUse => {
+                    Why::Fenced | Why::Never | Why::InUse => {
                         assert!(line.starts_with("shop.example "))
                     }
                     _ => assert!(

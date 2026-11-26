@@ -421,7 +421,7 @@ impl gpui::Render for PicturesPage {
                     feature(
                         "icons/terminal.svg",
                         "Claude Code",
-                        "Connected in ~/.claude.json",
+                        "Set up in ~/.claude.json",
                         vec![button("disconnect-claude", "Disconnect")],
                     ),
                     feature(
@@ -432,7 +432,7 @@ impl gpui::Render for PicturesPage {
                     ),
                     feature(
                         "icons/cable.svg",
-                        "MCP client",
+                        "Another app",
                         "Any MCP client",
                         vec![button("connect-other", "Connect")],
                     ),
@@ -522,6 +522,8 @@ impl gpui::Render for PicturesPage {
                 // A made-up assistant's words, as a failed sign-in shows them.
                 let said = "Your workspace doesn't allow Codex".to_string();
                 nested = vec![(0, 1), (0, 3)];
+                // Under the assistants, as Settings draws it.
+                under = Some(browser::settings_rows::SIGN_INS_STAY);
                 match self.shown {
                     Pictures::Models => {
                         use browser::agents::tier::{ACCESS, Tier};

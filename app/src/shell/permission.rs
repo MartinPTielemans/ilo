@@ -328,7 +328,7 @@ pub(super) fn part_listener(
 }
 
 /// Logs where a card is in its window when that changes, and says whether it did.
-fn logged_at(
+pub(super) fn logged_at(
     what: &str,
     drawn: &Rc<Cell<Option<Bounds<Pixels>>>>,
     tab: u64,

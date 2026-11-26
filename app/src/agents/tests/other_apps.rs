@@ -40,8 +40,8 @@ fn a_new_profile_has_other_apps_off_and_the_switch_comes_back(cx: &mut TestAppCo
     let path = settings();
     let agents = launch(&path, cx);
     assert!(!other_apps(&agents, cx));
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
-    assert!(!other_apps(&agents, cx), "agents on turned other apps on");
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    assert!(!other_apps(&agents, cx), "threads on turned other apps on");
     assert_eq!(saved(&path), Some(false));
 
     agents.update(cx, |agents, cx| agents.set_other_apps(true, cx));
@@ -66,7 +66,7 @@ fn agents_on_carries_other_apps_on_once(cx: &mut TestAppContext) {
     std::fs::write(&path, json!({ "on": false }).to_string()).unwrap();
     let first = launch(&path, cx);
     assert!(!other_apps(&first, cx));
-    first.update(cx, |agents, cx| agents.set_on(true, cx));
+    first.update(cx, |agents, cx| agents.set_threads(true, cx));
     assert!(
         !other_apps(&launch(&path, cx), cx),
         "carried over a later on"
@@ -110,7 +110,7 @@ fn with_other_apps_off_an_apps_connection_makes_nothing_and_a_task_starts(cx: &m
     let (agents, _, _) = connected(cx);
     agents.update(cx, |agents, cx| {
         agents.set_other_apps(false, cx);
-        agents.set_on(true, cx);
+        agents.set_threads(true, cx);
     });
     let token = token_of(&agents, "claude-code", cx);
     // What the user's Connect logged, before the connection.
@@ -152,7 +152,7 @@ fn with_other_apps_off_an_apps_connection_makes_nothing_and_a_task_starts(cx: &m
 #[gpui::test]
 fn turning_other_apps_off_ends_their_sessions(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     let token = token_of(&agents, "claude-code", cx);
     let (answer, mut read) = open(&agents, &token, cx);
     assert_eq!(answer, json!({ "ok": true }));

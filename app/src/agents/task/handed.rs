@@ -10,7 +10,6 @@ use std::sync::mpsc;
 use gpui::{App, Context, SharedString};
 use serde_json::Value;
 
-use crate::agents::tier::Sites;
 use crate::agents::{Agents, Gone, TabInfo, ToolResult, held, site, tools};
 
 /// The activity log's entry of a tab the user handed to a thread, as the log file names it. The
@@ -269,25 +268,12 @@ impl Sends {
 struct Handed {
     agent: String,
     tab: u64,
-    /// The site it was on at the give, its registrable domain.
-    site: Option<String>,
 }
 
 /// The tabs the threads hold of the user's, in the order handed. In memory alone.
 #[derive(Default)]
 pub(in crate::agents) struct Records {
     held: Vec<Handed>,
-    /// The sites the gives added to those a thread may use, each with its thread: a site that
-    /// wasn't the thread's before, which leaves with the last handed tab of it.
-    joined: Vec<(String, String)>,
-}
-
-impl Records {
-    /// The user set the sites `agent`'s thread may use themselves: they're as set, whatever the
-    /// gives had added, and no return changes them.
-    pub(in crate::agents) fn sites_set(&mut self, agent: &str) {
-        self.joined.retain(|(whose, _)| whose != agent);
-    }
 }
 
 /// What the activity log says of a handed tab's entry, if `action` is one: the whole sentence,
@@ -352,8 +338,7 @@ impl Agents {
         if !self.may_hand(agent, from, tab, cx) {
             return false;
         }
-        let url = self.browser.tab(tab, cx).url;
-        let (site, domain) = (site(&url), self.browser.url_site(&url));
+        let site = site(&self.browser.tab(tab, cx).url);
         // Its Space is made by now at a start, and here for a thread taken up again.
         let space = self.space(agent, cx);
         if !self.browser.give_tab(tab, space, cx) {
@@ -362,11 +347,9 @@ impl Agents {
         // Whatever it left an agent's Space for before, it's this thread's page now.
         self.gone.remove(&tab);
         let agent = agent.to_string();
-        self.site_joins(&agent, domain.as_deref());
         self.tasks.handed.held.push(Handed {
             agent: agent.clone(),
             tab,
-            site: domain,
         });
         self.note_page(&agent, (0, tab), HANDED, &site, "");
         cx.notify();
@@ -383,7 +366,7 @@ impl Agents {
     fn thread_space(&self, agent: &str) -> Option<u64> {
         // A ⌘T thread alone is handed a tab, and none while tasks are off.
         let thread = (self.task(agent)).filter(|task| task.cli.is_some() && task.session.is_none());
-        let task = thread.filter(|_| self.tasks_on())?;
+        let task = thread.filter(|_| self.threads())?;
         Some(match task.space {
             0 => task.home,
             space => space,
@@ -432,7 +415,7 @@ impl Agents {
     ) -> Vec<u64> {
         let own = match agent {
             Some(agent) => self.thread_space(agent),
-            None => self.tasks_on().then_some(space_in_view),
+            None => self.threads().then_some(space_in_view),
         };
         if !own.is_some_and(|own| self.space_fits(own, space_in_view)) {
             return Vec::new();
@@ -445,7 +428,7 @@ impl Agents {
     /// as far as the app knows before there is a thread: with no words, a start needs one.
     pub(super) fn any_to_hand(&self, home: u64, picked: &Picked, cx: &App) -> bool {
         let fits = |tab: &u64| self.fits(home, picked.space, *tab, cx);
-        self.tasks_on() && picked.tabs.iter().any(fits)
+        self.threads() && picked.tabs.iter().any(fits)
     }
 
     /// The titles of the tabs `picked`, in their order, as they are now: read at the user's send,
@@ -540,7 +523,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> bool {
         // No longer the thread's from here, whatever the core's report of the move then asks.
-        if !self.forget_handed_of(agent, tab, cx) {
+        if !self.forget_handed_of(agent, tab) {
             return false;
         }
         let site = site(&self.browser.tab(tab, cx).url);
@@ -711,7 +694,7 @@ impl Agents {
             if self.browser.space_of(tab, cx) == 0 {
                 continue;
             }
-            self.forget_handed_of(&agent, tab, cx);
+            self.forget_handed_of(&agent, tab);
             let site = site(&self.browser.tab(tab, cx).url);
             self.let_go(tab, held::Event::GivenBack { stopped: false }, cx);
             self.forget_page(tab);
@@ -749,67 +732,22 @@ impl Agents {
         self.current.retain(|_, last| *last != tab);
     }
 
-    /// `tab` is no longer one `agent`'s thread holds, and with the last of its site neither is a
-    /// site the give added. Whether it was one.
-    fn forget_handed_of(&mut self, agent: &str, tab: u64, cx: &mut Context<Self>) -> bool {
+    /// `tab` is no longer one `agent`'s thread holds. Whether it was one.
+    fn forget_handed_of(&mut self, agent: &str, tab: u64) -> bool {
         let held = &mut self.tasks.handed.held;
         let Some(at) = (held.iter()).position(|each| each.tab == tab && each.agent == agent) else {
             return false;
         };
-        let was = held.remove(at);
-        self.site_leaves(agent, was.site.as_deref(), cx);
+        held.remove(at);
         true
     }
 
     /// `tab` closed: no thread holds it.
-    pub(in crate::agents) fn forget_handed(&mut self, tab: u64, cx: &mut Context<Self>) {
+    pub(in crate::agents) fn forget_handed(&mut self, tab: u64) {
         let held = &self.tasks.handed.held;
         let whose = (held.iter().find(|each| each.tab == tab)).map(|each| each.agent.clone());
         if let Some(agent) = whose {
-            self.forget_handed_of(&agent, tab, cx);
-        }
-    }
-
-    /// The site of a tab handed to `agent`'s thread joins the sites the thread may use, that one
-    /// site, where it has only those the user gave it: the page they handed it is one they gave.
-    /// The log's entry of the give says it; no change of access is the user's to read here.
-    fn site_joins(&mut self, agent: &str, domain: Option<&str>) {
-        let (Some(domain), Some(task)) = (domain, self.task_mut(agent)) else {
-            return;
-        };
-        let Sites::Only(only) = &mut task.sites else {
-            return;
-        };
-        if only.iter().any(|each| each == domain) {
-            return;
-        }
-        only.push(domain.into());
-        let joined = &mut self.tasks.handed.joined;
-        joined.push((agent.into(), domain.into()));
-    }
-
-    /// A site the give added doesn't outlive the hold: once `agent`'s thread holds no handed tab
-    /// of `domain`, whoever returned the last, the site is no longer one it may use. One that was
-    /// the thread's before the give, or that the user set since, stays.
-    fn site_leaves(&mut self, agent: &str, domain: Option<&str>, cx: &mut Context<Self>) {
-        let Some(domain) = domain else {
-            return;
-        };
-        let records = &mut self.tasks.handed;
-        let of_site = |each: &Handed| each.agent == agent && each.site.as_deref() == Some(domain);
-        if records.held.iter().any(of_site) {
-            return;
-        }
-        let added = |(whose, site): &(String, String)| whose == agent && site == domain;
-        let Some(at) = records.joined.iter().position(added) else {
-            return;
-        };
-        records.joined.remove(at);
-        if let Some(task) = self.task_mut(agent)
-            && let Sites::Only(only) = &mut task.sites
-        {
-            only.retain(|each| each != domain);
-            cx.notify();
+            self.forget_handed_of(&agent, tab);
         }
     }
 

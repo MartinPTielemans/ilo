@@ -1,67 +1,45 @@
 //! The card of a window that shows no page, which is a fresh ⌘N window, a Space with no tab shown
 //! and what's left after the last Today tab closes (docs/ux-spec.md › Window › Card, no page).
 //! Nothing native covers it, since the core lays out no page view with no tab shown
-//! (`Window::ShowNothing`), so GPUI draws ilo's mark, the Space's name and one quiet line on it and
-//! takes its clicks. On the first run it shows the welcome instead, until a page shows.
+//! (`Window::ShowNothing`), so GPUI draws the bar at rest on it under the product's mark
+//! (`composer`) and takes its clicks. On the first run it shows the welcome instead, until a page shows.
 
 use std::time::Instant;
 
-use gpui::{
-    Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba,
-};
+use gpui::{Context, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba};
 
+use super::onboarding;
 use super::{
     Command, SECONDARY, Shell,
     display_face::{cap_top, display_text},
     fade_at,
     keys::user_keys,
 };
-use crate::palette::Palette;
-use crate::tokens::text;
+use crate::palette::{Palette, Tone};
 
 /// The mark and the line fade in over this long on the scroll edge's curve, as the hover card's
 /// opacity does, from nothing, so a window that shows a page a frame later never shows them.
 pub(super) const FADE: f32 = 0.1;
+use crate::product;
+use crate::product::PRODUCT;
+use crate::tokens::shell::empty::BUTTON_GAP;
+use crate::tokens::shell::empty::HINT_BOTTOM;
 use crate::tokens::shell::empty::KEYS_FILL;
 use crate::tokens::shell::empty::KEYS_GAP;
 use crate::tokens::shell::empty::KEYS_HEIGHT;
 use crate::tokens::shell::empty::KEYS_INSET;
 use crate::tokens::shell::empty::KEYS_RADIUS;
 use crate::tokens::shell::empty::KEYS_SIZE;
-use crate::tokens::shell::empty::WORDS_SIZE;
-/// ilo's mark, the app icon's lowercase i (branding/ilo.icon) drawn from its 1024 pt canvas at a
-/// sixteenth, so 39 tall: a 184.4 dot 81.9 over a 133.1 × 358.4 stem with round ends.
-const MARK_SCALE: f32 = 1. / 16.;
-const MARK_DOT: f32 = 184.4 * MARK_SCALE;
-const MARK_DOT_GAP: f32 = 81.9 * MARK_SCALE;
-const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
-const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
-/// How tall the mark is at its own size.
-const MARK_HEIGHT: f32 = MARK_DOT + MARK_DOT_GAP + MARK_STEM_HEIGHT;
-use crate::tokens::shell::empty::BUTTON_FILL;
-use crate::tokens::shell::empty::BUTTON_GAP;
-use crate::tokens::shell::empty::BUTTON_HEIGHT;
-use crate::tokens::shell::empty::BUTTON_INSET;
-use crate::tokens::shell::empty::BUTTON_KEYS;
-use crate::tokens::shell::empty::BUTTON_KEYS_HEIGHT;
-use crate::tokens::shell::empty::BUTTON_KEYS_INSET;
-use crate::tokens::shell::empty::BUTTON_KEYS_RADIUS;
-use crate::tokens::shell::empty::BUTTON_RADIUS;
-use crate::tokens::shell::empty::BUTTON_TEXT;
-use crate::tokens::shell::empty::HINT_BOTTOM;
-use crate::tokens::shell::empty::MARK_DOT_FILL;
 use crate::tokens::shell::empty::MARK_GAP;
-use crate::tokens::shell::empty::MARK_STEM_FILL;
+use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::shell::empty::NAME;
 use crate::tokens::shell::empty::NAME_GAP;
 use crate::tokens::shell::empty::NAME_LINE;
 use crate::tokens::shell::empty::NAME_SIZE;
-use crate::tokens::shell::empty::TAGLINE;
-use crate::tokens::shell::empty::TAGLINE_LINE;
-use crate::tokens::shell::empty::TAGLINE_SIZE;
 use crate::tokens::shell::empty::WELCOME_LINE;
 use crate::tokens::shell::empty::WELCOME_MARK;
 use crate::tokens::shell::empty::WELCOME_SIZE;
+use crate::tokens::shell::empty::WORDS_SIZE;
 
 impl Shell {
     /// Shows the first run's welcome on the empty card until a page shows: the launch had no
@@ -161,18 +139,18 @@ impl Shell {
     /// ilo's mark over the Space's name and the card's one line, the next step and its key,
     /// centred, while no page is shown, or the welcome on the first run. A click anywhere on the
     /// card does what that key does: ⌘T's command bar, centred on the window. With the bar at
-    /// rest on it, the card is the composer page instead, and a click on it gives its field the
+    /// rest on it, the card is the bar's page instead, and a click on it gives its field the
     /// keyboard.
-    pub(super) fn empty_card(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Stateful<gpui::Div>> {
+    pub(super) fn empty_card(&mut self, cx: &mut Context<Self>) -> Option<Stateful<gpui::Div>> {
         if self.selected != 0 {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
-        if let Some(page) = self.composer_page(frame, window, cx) {
+        let page = match self.rests_on_bar() {
+            true => self.resting_page(frame, cx),
+            false => None,
+        };
+        if let Some(page) = page {
             let opacity = self.empty_opacity(cx.background_executor().now());
             return Some(
                 div()
@@ -269,7 +247,7 @@ impl Shell {
             .flex()
             .flex_col()
             .items_center()
-            .child(mark(1., &self.palette));
+            .child(product::mark(MARK_SIZE, &self.palette));
         match self
             .shown_space()
             .map(|space| space.name.clone())
@@ -288,75 +266,38 @@ impl Shell {
     }
 }
 
-/// ilo's mark, the app icon's i, at `scale` of its size on the card. Its stem takes the window's
-/// ink, as the icon's does on its light tile.
-fn mark(scale: f32, palette: &Palette) -> gpui::Div {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(MARK_DOT_GAP * scale))
-        .child(
-            div()
-                .size(px(MARK_DOT * scale))
-                .rounded_full()
-                .bg(rgba(MARK_DOT_FILL)),
-        )
-        .child(
-            div()
-                .w(px(MARK_STEM_WIDTH * scale))
-                .h(px(MARK_STEM_HEIGHT * scale))
-                .rounded_full()
-                .bg(palette.plate(rgba(MARK_STEM_FILL).a)),
-        )
-}
-
-/// The first run's welcome: a bigger mark, "Welcome to ilo" and "a good tool." in the display
-/// face, and a button that opens a new tab, as a click anywhere on the card does.
+/// The first run's welcome: a bigger mark, "Welcome to" the product in the display face, and
+/// first run's main button, which opens a new tab as a click anywhere on the card does.
 fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
-    let keys = user_keys(cx).label(Command::NewTab).map(|keys| {
-        div()
-            .h(px(BUTTON_KEYS_HEIGHT))
-            .px(px(BUTTON_KEYS_INSET))
-            .flex()
-            .items_center()
-            .rounded(px(BUTTON_KEYS_RADIUS))
-            .bg(rgba(BUTTON_KEYS))
-            .text_size(px(text::SMALL))
-            .child(keys)
-    });
+    let keys = user_keys(cx).label(Command::NewTab).map(Into::into);
     let button = div()
+        .id("welcome-button")
+        .debug_selector(|| "welcome-button".into())
         .mt(px(BUTTON_GAP))
-        .h(px(BUTTON_HEIGHT))
-        .px(px(BUTTON_INSET))
-        .flex()
-        .items_center()
-        .gap(px(KEYS_GAP))
-        .rounded(px(BUTTON_RADIUS))
-        .bg(rgba(BUTTON_FILL))
-        .text_color(rgba(BUTTON_TEXT))
-        .text_size(px(text::BODY))
-        .font_weight(FontWeight::MEDIUM)
-        .child("Open a new tab")
-        .children(keys);
+        .child("Open a new tab");
     div()
         .flex()
         .flex_col()
         .items_center()
-        .child(mark(WELCOME_MARK, palette))
+        .child(product::mark(MARK_SIZE * WELCOME_MARK, palette))
         .child(
-            display_text("Welcome to ilo", WELCOME_SIZE, WELCOME_LINE, cx)
-                .mt(px(MARK_GAP - cap_top(WELCOME_SIZE, WELCOME_LINE)))
-                .text_color(palette.text(rgba(NAME).a)),
+            display_text(
+                format!("Welcome to {PRODUCT}"),
+                WELCOME_SIZE,
+                WELCOME_LINE,
+                cx,
+            )
+            .debug_selector(|| "welcome-title".into())
+            .mt(px(MARK_GAP - cap_top(WELCOME_SIZE, WELCOME_LINE)))
+            .text_color(palette.text(rgba(NAME).a)),
         )
-        .child(
-            display_text("a good tool.", TAGLINE_SIZE, TAGLINE_LINE, cx)
-                .text_color(palette.text(rgba(TAGLINE).a)),
-        )
-        .child(button)
+        .child(onboarding::main_button(
+            button,
+            keys,
+            palette.tone == Tone::Light,
+        ))
 }
 
 pub(super) mod composer;
-mod folder_panel;
 #[cfg(test)]
 mod tests;

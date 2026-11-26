@@ -64,14 +64,14 @@ const FRAME: &str = concat!(env!("APP_NAME"), "'s notes for ");
 /// Settings › Agents' heading over the list, its switch and the sentence under it.
 pub const HEADING: &str = "Site notes";
 pub const SWITCH_LINE: &str = concat!(
-    "A task gets what ",
-    env!("APP_NAME"),
+    "A thread gets what ",
+    env!("PRODUCT_NAME"),
     " knows about a site when its tab lands there."
 );
-pub const SWITCH_OFF_LINE: &str = "Off: tasks find their way on every site by reading it.";
+pub const SWITCH_OFF_LINE: &str = "Off: threads find their way on every site by reading it.";
 pub const FOOT: &str = concat!(
     "Notes are part of ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     ": written by us, shipped in the app, never fetched. Each is plain text you can read here."
 );
 /// A row's button, closed and open.
@@ -99,9 +99,14 @@ impl Note {
         format!("{FRAME}{}:\n{}", self.name, self.text.trim_end())
     }
 
-    /// The line under a task's step whose answer carried it.
+    /// The line under a thread's step whose answer carried it, the words table's D5, the product
+    /// by its name.
     pub fn with(&self) -> String {
-        format!("With {FRAME}{}", self.name)
+        format!(
+            "Included {}\u{2019}s notes on {}",
+            crate::product::PRODUCT,
+            self.name
+        )
     }
 }
 
@@ -135,6 +140,19 @@ impl Given {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line under a step whose answer carried a note names the product and the site.
+    #[test]
+    fn a_notes_line_under_its_step_names_the_product_and_the_site() {
+        let github = note_for("https://github.com/").expect("GitHub's note");
+        assert_eq!(
+            github.with(),
+            format!(
+                "Included {}\u{2019}s notes on GitHub",
+                crate::product::PRODUCT
+            )
+        );
+    }
 
     /// A note is for its own host over https alone: not a subdomain, a lookalike, another port,
     /// http or a page off the web.

@@ -14,13 +14,18 @@ use super::{
     access::Accessible,
     space_order::{Along, DraggedSpace},
 };
-use crate::palette::over;
 use crate::space_icon::{GLYPHS, SpaceIcon};
-use crate::tokens::shell::{FOOT_GLYPH, ICON_INK, SPACE_DOT_TONE};
+use crate::tokens::shell::{FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, PLUS_PLATE};
 use crate::tooltip::{Anchor, Tip};
 
 /// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
 const GLYPH_INK: f32 = 20. / 24.;
+
+/// How far the +'s box is from the sidebar's side: centred where the first row's size of button
+/// would be, so the glyph stays where it was drawn.
+pub(super) fn plus_right() -> f32 {
+    PLUS_INSET + (NAV_SIZE - FOOT_PLATE) / 2.
+}
 
 /// How wide each Space's cell is in a switcher `span` wide, from its own pitch in `pitches`, a
 /// dot's or an icon's, with the `shown`th shown. While they don't all fit, the ones whose pitch is
@@ -195,14 +200,10 @@ impl Shell {
                 let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
                 let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
                 // The Space shown's is the only dot in colour, a tone of its first colour toward
-                // the ink, so it reads on its own window, or the ink without one; the others' are
-                // the quietest ink, a step firmer under the pointer.
+                // the ink that reads on its own window (`Palette::space_dot`), or the ink without
+                // one; the others' are the quietest ink, a step firmer under the pointer.
                 match (shown, self.space_theme(id).is_some()) {
-                    (true, true) => {
-                        let main = self.palette_of(id).swatch.main();
-                        let toned = over(main, self.palette.ink, SPACE_DOT_TONE);
-                        dot(squeezed(size, cell), toned.into())
-                    }
+                    (true, true) => dot(squeezed(size, cell), self.palette_of(id).space_dot.into()),
                     (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
                     (false, _) => dot(
                         squeezed(size, cell),
@@ -261,7 +262,13 @@ impl Shell {
         )
     }
 
-    /// The footer's + at its right (Arc), whose menu makes a Space or a folder.
+    /// Whether the + wears its plate: while the menu up is its own.
+    pub(super) fn plus_lit(&self) -> bool {
+        self.plus_menu && self.menu_open
+    }
+
+    /// The footer's + at its right (Arc), whose menu makes a Space or a folder. Its box is the
+    /// plate it wears while that menu is up.
     pub(super) fn plus_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("plus")
@@ -270,15 +277,19 @@ impl Shell {
                     .pressed_by_mouse_down(true, false)
             })
             .absolute()
-            .right(px(PLUS_INSET))
-            .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
-            .size(px(NAV_SIZE))
+            .right(px(plus_right()))
+            .bottom(px((FOOTER_HEIGHT - FOOT_PLATE) / 2.))
+            .size(px(FOOT_PLATE))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(NAV_RADIUS))
+            .rounded(px(FOOT_PLATE_RADIUS))
             .block_mouse_except_scroll()
-            .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+            // One plate, under the pointer and while its menu is up.
+            .when(self.plus_lit(), |plus| {
+                plus.bg(self.palette.plate(PLUS_PLATE))
+            })
+            .hover(|style| style.bg(self.palette.plate(PLUS_PLATE)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|shell, event: &MouseDownEvent, _, cx| {
@@ -357,8 +368,130 @@ const MENU_CONTROL_NAME: &str = concat!(env!("APP_NAME"), " menu");
 
 #[cfg(test)]
 mod tests {
-    use super::{icon_opacity, space_cells, squeezed};
+    use std::rc::Rc;
+
+    use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
+
+    use super::{icon_opacity, plus_right, space_cells, squeezed};
     use crate::palette::{TEXT_SECONDARY, TEXT_TERTIARY};
+    use crate::shell::{FOOTER_HEIGHT, Shell, library::LIBRARY_BACK_INSET, recorder::Recorder};
+    use crate::tokens::shell::{FOOT_PLATE, LIBRARY_BUTTON};
+
+    /// A window with two Spaces, so its foot has the +.
+    fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        cx.update(|window, _| window.activate_window());
+        shell.update(cx, |shell, cx| {
+            let spaces = [1, 2]
+                .map(|id| {
+                    (
+                        id,
+                        format!("Space {id}").into(),
+                        None,
+                        1,
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                    )
+                })
+                .to_vec();
+            shell.set_spaces(spaces, cx);
+            shell.set_space(1, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (shell, cx, host)
+    }
+
+    /// The middle of the foot's row, this far from the sidebar's far side.
+    fn foot(shell: &Entity<Shell>, cx: &mut VisualTestContext, from_right: f32) -> Point<Pixels> {
+        shell.read_with(cx, |shell, _| {
+            let y = f32::from(shell.viewport.height) - FOOTER_HEIGHT / 2.;
+            point(px(shell.width() - from_right), px(y))
+        })
+    }
+
+    /// The + wears its plate from the click that opens its menu until the menu closes, chosen
+    /// from or not, and another menu doesn't give it one.
+    #[gpui::test]
+    fn the_plus_wears_its_plate_while_its_menu_is_up(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        assert!(!shell.read_with(cx, |shell, _| shell.plus_lit()));
+        let middle = foot(&shell, cx, plus_right() + FOOT_PLATE / 2.);
+        cx.simulate_click(middle, Modifiers::none());
+        cx.run_until_parked();
+        let titles = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert!(
+            titles.iter().any(|(title, _)| title == "New Space…"),
+            "the click opened no menu"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.plus_lit()),
+            "no plate while its menu is up"
+        );
+        cx.update(|_, cx| host.dismiss(cx));
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.plus_lit()),
+            "the plate outlived the menu"
+        );
+
+        // A Space's own menu is not the +'s.
+        shell.update(cx, |shell, cx| shell.space_menu(1, middle, cx));
+        cx.run_until_parked();
+        assert!(shell.read_with(cx, |shell, _| shell.menu_open && !shell.plus_lit()));
+        cx.update(|_, cx| host.dismiss(cx));
+    }
+
+    /// The + takes the pointer in the box its plate fills, 28 across about the glyph, and not
+    /// past it.
+    #[gpui::test]
+    fn the_plus_takes_the_pointer_in_its_plates_box(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        let middle = plus_right() + FOOT_PLATE / 2.;
+        let past = foot(&shell, cx, middle + FOOT_PLATE / 2. + 1.);
+        cx.simulate_click(past, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            host.menus.borrow().is_empty(),
+            "a click past the box opened it"
+        );
+        let inside = foot(&shell, cx, middle + FOOT_PLATE / 2. - 1.);
+        cx.simulate_click(inside, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            host.menus.borrow().len(),
+            1,
+            "a click in the box opened none"
+        );
+        cx.update(|_, cx| host.dismiss(cx));
+    }
+
+    /// The Library button wears its plate while the Library is open, from the click that opens it,
+    /// and not once it's closed.
+    #[gpui::test]
+    fn the_library_button_wears_its_plate_while_the_library_is_open(cx: &mut TestAppContext) {
+        let (shell, cx, _host) = window(cx);
+        assert!(!shell.read_with(cx, |shell, _| shell.library_lit()));
+        let y = shell.read_with(cx, |shell, _| {
+            f32::from(shell.viewport.height) - FOOTER_HEIGHT / 2.
+        });
+        let button = point(px(LIBRARY_BACK_INSET + LIBRARY_BUTTON / 2.), px(y));
+        cx.simulate_click(button, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.library_open && shell.library_lit()),
+            "no plate with the Library open"
+        );
+        shell.update(cx, |shell, cx| shell.set_library(false, cx));
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.library_lit()),
+            "the plate outlived the Library"
+        );
+    }
 
     /// The switcher's cells in a sidebar 300 wide, 212 between the insets: a dot's pitch of 17 while
     /// they fit, and once an even share is under that the Space shown keeps it and the others

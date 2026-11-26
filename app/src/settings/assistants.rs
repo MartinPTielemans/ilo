@@ -17,7 +17,32 @@ impl Settings {
             .collect();
         let model = agents.read(cx);
         let marked = model.default_task_agent();
+        // With the inside switch off, drawing runs nothing of an assistant's program: a row is
+        // its name alone until the user clicks it, which looks it up (spec-settings.md › S9).
+        let (alone, looking) = (!model.threads(), model.looking());
+        let models = (models.into_iter().zip(&providers))
+            .map(|(model, (cli, ..))| model.filter(|_| !alone || self.looked_up.contains(cli)));
+        let models: Vec<_> = models.collect();
         let assistants = providers.into_iter().map(|(cli, shown, _)| {
+            if alone && !self.looked_up.contains(&cli) {
+                let (settings, agents) = (cx.weak_entity(), agents.clone());
+                let on_look = move |_: &mut Window, cx: &mut App| {
+                    log!("browser: assistant looked up {}", cli.id());
+                    let clicked = |settings: &mut Settings, cx: &mut Context<Settings>| {
+                        settings.looked_up.insert(cli);
+                        cx.notify();
+                    };
+                    settings.update(cx, clicked).ok();
+                    agents.update(cx, |agents, cx| agents.look_up_assistant(cli, cx));
+                };
+                let row = assistant_name_alone(look, cli, false, self.a11y, Rc::new(on_look));
+                return (row, ROW_X);
+            }
+            // The ring on a clicked row while its look runs, its controls once it has ended.
+            if alone && looking {
+                let row = assistant_name_alone(look, cli, true, self.a11y, Rc::new(|_, _| {}));
+                return (row, ROW_X);
+            }
             let act = {
                 let (settings, agents) = (cx.weak_entity(), agents.clone());
                 move |act: Act, window: &mut Window, cx: &mut App| {
@@ -213,7 +238,7 @@ impl Settings {
         let message = format!("Sign out of {name}?");
         let detail = format!(
             "This signs {name} out everywhere you use it, not just in {}.",
-            env!("APP_NAME")
+            env!("PRODUCT_NAME")
         );
         let agents = agents.clone();
         let sign_out = move |cx: &mut App| {

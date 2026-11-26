@@ -64,6 +64,7 @@ fn launch() -> Launch {
             token: "secret".into(),
         },
         model: None,
+        effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
@@ -73,17 +74,13 @@ fn launch() -> Launch {
 
 #[test]
 fn the_table_has_a_row_for_each_assistant() {
-    assert_eq!(keeps(Cli::Claude), Keeps::WhenWanted);
+    assert_eq!(keeps(Cli::Claude), Keeps::Always);
     assert_eq!(keeps(Cli::Codex), Keeps::Never);
-    assert!(matches!(decide(Cli::Claude, true, false), Keep::New(_)));
-    assert_eq!(decide(Cli::Claude, false, false), Keep::Nothing);
-    // Codex keeps nothing, whatever the switch says.
-    assert_eq!(decide(Cli::Codex, true, false), Keep::Nothing);
-    assert_eq!(decide(Cli::Codex, false, false), Keep::Nothing);
-    // A task with files keeps nothing, whatever the switch says, as one with the switch off.
+    assert!(matches!(decide(Cli::Claude, false), Keep::New(_)));
+    // Codex keeps nothing, and a task with files keeps nothing, whose assistant it is.
+    assert_eq!(decide(Cli::Codex, false), Keep::Nothing);
     for cli in [Cli::Claude, Cli::Codex] {
-        assert_eq!(decide(cli, true, true), decide(cli, false, false));
-        assert_eq!(decide(cli, false, true), Keep::Nothing);
+        assert_eq!(decide(cli, true), Keep::Nothing);
     }
 }
 
@@ -304,9 +301,10 @@ fn a_task_under_way_has_a_row_that_reads_as_one_that_broke_off() {
     kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2", STARTED);
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let card = kept.of("task-1").unwrap().card.clone();
     let row = json!({
         "id": id.as_str(), "cli": "claude", "title": "", "state": "failed",
-        "ended": STARTED, "profile": "Profile 2",
+        "ended": STARTED, "profile": "Profile 2", "card": card.as_str(),
     });
     assert_eq!(saved, json!([row]));
     kept.of_mut("task-1").unwrap().past.as_mut().unwrap().title = "Lisbon seats".into();
@@ -319,8 +317,8 @@ fn a_task_under_way_has_a_row_that_reads_as_one_that_broke_off() {
     assert_eq!(after.removing(|record| record.past.is_none()), []);
 }
 
-/// Of a task that has ended the file says its title, how and when it ended and its profile, and
-/// no more; a run after takes them back as they were written, and of a file someone changed,
+/// Of a task that has ended the file says its title, how and when it ended, its profile and its
+/// card's id, and no more; a run after takes them back as they were written, and of a file someone changed,
 /// only what has their shape: an end it doesn't know leaves an id alone, a profile with a path
 /// in it names none, and a title is one line of a title's length.
 #[test]
@@ -335,9 +333,10 @@ fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
     });
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let card = kept.of("task-1").unwrap().card.clone();
     let row = json!({
         "id": id.as_str(), "cli": "claude", "title": "Lisbon seats", "state": "limit",
-        "ended": 1_795_000_000u64, "profile": "Profile 2",
+        "ended": 1_795_000_000u64, "profile": "Profile 2", "card": card.as_str(),
     });
     assert_eq!(saved, json!([row]));
     let mut after = Kept::default();
@@ -347,6 +346,7 @@ fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
     assert_eq!(left[0].2, kept.of("task-1").unwrap().past.clone().unwrap());
     after.give(&id, "task-9");
     assert_eq!(after.of("task-9").unwrap().profile, "Profile 2");
+    assert_eq!(after.of("task-9").unwrap().card, card);
     assert_eq!(after.listed().collect::<Vec<_>>(), ["task-9"]);
     assert!(after.left().is_empty());
 
@@ -414,4 +414,32 @@ fn a_task_that_takes_no_reply_has_an_id_alone_in_the_file() {
     assert_eq!(kept.removing(|_| true).len(), 1);
     assert_eq!(rows(&kept), alone);
     assert_eq!(kept.listed().count(), 0);
+}
+
+/// A task's row carries the names of the places its runs left something running in, and nothing
+/// else of them: read again, it holds each, and drops what isn't a place's name. A sweep of one
+/// that came clean takes it off the row that carried it, once.
+#[test]
+fn a_row_carries_the_places_its_runs_left_by_name_alone() {
+    const PLACE: &str = "0123456789abcdef";
+    let root = profile("left").join(FOLDER);
+    let mut kept = Kept::default();
+    kept.hold("task-1", Cli::Claude, Id::new(), "Default", 7);
+    kept.of_mut("task-1").unwrap().left.push(PLACE.into());
+    kept.write(&root);
+    let saved = std::fs::read(root.join(INDEX)).unwrap();
+    let mut saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved[0]["left"], json!([PLACE]));
+    // As anything else could have written it.
+    let other = ["../../tmp", "0123", "ABCDEF0123456789"];
+    saved[0]["left"] = json!([PLACE, other[0], other[1], other[2], 5]);
+    std::fs::write(root.join(INDEX), saved.to_string()).unwrap();
+    let mut again = Kept::default();
+    assert!(again.read(&root));
+    for name in other {
+        assert_eq!(again.came_clean(name), None, "{name}");
+    }
+    assert_eq!(again.came_clean("fedcba9876543210"), None);
+    assert_eq!(again.came_clean(PLACE), Some(None));
+    assert_eq!(again.came_clean(PLACE), None);
 }

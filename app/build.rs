@@ -51,6 +51,12 @@ fn main() {
     let name_text = std::fs::read_to_string(&name).expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
     println!("cargo:rerun-if-changed={}", name.display());
+    // The product's name as the app's own strings say it (src/product.rs), which a fork changes
+    // as it does the name above; the bundle, its file and data folder keep branding/name.
+    let product = root.join("branding/product");
+    let product_text = std::fs::read_to_string(&product).expect("no branding/product");
+    println!("cargo:rustc-env=PRODUCT_NAME={}", product_text.trim());
+    println!("cargo:rerun-if-changed={}", product.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).
     for (file, variable) in [
@@ -444,12 +450,20 @@ fn tokens_rs(toml: &str) -> String {
             }
             name.replace('-', "_")
         };
+        // A word is quoted letters, digits and spaces, so it needs no escapes and holds no `,` or
+        // `#` the lines here split on.
         let number = |value: &str| match value.strip_prefix("0x") {
             Some(hex) if hex.chars().all(|c| c.is_ascii_hexdigit() || c == '_') => "u32",
             Some(_) => fail(n, line, "not a hex number"),
             None if value.chars().all(|c| c.is_ascii_digit() || c == '_') => "u32",
             None if value.replace('_', "").parse::<f64>().is_ok() => "f32",
-            None => fail(n, line, "not a number"),
+            None => match value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+            {
+                Some(word) if word.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') => "&str",
+                _ => fail(n, line, "not a number or a word"),
+            },
         };
         if line.is_empty() {
             docs.clear();

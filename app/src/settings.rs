@@ -44,10 +44,10 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
-    command_text, detailed_row, end, folder_popup, frame, glyph_plate, group, group_lined,
-    mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button, stop_chip,
-    stop_popup, stop_restore, stop_switch, text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
+    command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
+    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
+    stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -176,7 +177,7 @@ impl Page {
 }
 
 /// The choice that has a command's keys reach ilo before the page.
-const PREFER_ILO: &str = concat!("Prefer ", env!("APP_NAME"));
+const PREFER_ILO: &str = concat!("Prefer ", env!("PRODUCT_NAME"));
 
 /// General's rows, as drawn, which their controls are named by too.
 const DEFAULT_BROWSER: &str = "Default browser";
@@ -293,6 +294,12 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The loose ends Overview's ✕ put away, read from the profile's folder at Overview's first
+    /// draw, never at launch, when the search's index makes Settings.
+    put_away: Option<browser::settings_overview::PutAway>,
+    /// The assistants the user clicked on Models while the inside switch is off, looked up and
+    /// shown as usual until the page is left.
+    looked_up: HashSet<Cli>,
     /// Made when Import & Export first shows, so the other browsers' files are read only once the
     /// user asks.
     import: Option<Entity<ImportView>>,
@@ -837,6 +844,8 @@ fn show_now(cx: &mut App) {
             // Each show logs where its controls are drawn again, so check.sh can take a place from
             // this show rather than from one before it, which a hidden window's scroll left (#3841).
             settings.drawn_logged.borrow_mut().clear();
+            // A show is the page shown again: Models' rows show the name alone again.
+            settings.looked_up.clear();
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
@@ -1185,6 +1194,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            put_away: None,
+            looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
@@ -1421,6 +1432,8 @@ impl Settings {
         self.refused = None;
         // Read again each time it shows: a profile closed since has the core forget it was asked.
         self.asked.clear();
+        // Models' rows show the name alone again once left, while the inside switch is off.
+        self.looked_up.clear();
         // check.sh waits for this line.
         log!("browser: settings tab {}", section.name());
         self.section = section;
@@ -1536,7 +1549,7 @@ impl Settings {
         // The one page whose heading is the app's name, with the line the first launch shows
         // under the wordmark.
         let title = match section {
-            Section::About => env!("APP_NAME"),
+            Section::About => env!("PRODUCT_NAME"),
             section => section.name(),
         };
         let base = self.base();
@@ -2327,7 +2340,7 @@ impl Settings {
         let little_on = unsafe { bc::bc_little_windows() };
         let little_switch = self.toggle(
             "little windows",
-            "Little ilo",
+            "Little Window",
             little_on,
             set_little_windows,
             accent,
@@ -2347,7 +2360,7 @@ impl Settings {
         let little = feature(
             look,
             "icons/app-window.svg",
-            concat!("Little ", env!("APP_NAME")),
+            "Little Window",
             Some(little_line.into()),
             vec![little_switch],
         );
@@ -2379,7 +2392,7 @@ impl Settings {
         let sign_in_close = nested(setting(
             look,
             "Close sign-in pages when done",
-            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            Some("When an app's sign-in finishes in a Little Window, the window closes.".into()),
             vec![sign_in_close],
         ));
         // Its own settings only while it's on.
@@ -2543,7 +2556,7 @@ impl Settings {
         Page::new(
             Section::General,
             concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
             ),
             blocks,
@@ -2710,7 +2723,7 @@ impl Settings {
                 accent,
                 cx,
             );
-            let line = browser::daily_count::words(env!("APP_NAME"));
+            let line = browser::daily_count::words(env!("PRODUCT_NAME"));
             let row = setting(
                 look,
                 "Send a daily usage count",
@@ -2730,7 +2743,7 @@ impl Settings {
             .child(self.drawn("open privacy policy".into()))
             .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
         let line = concat!(
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " never sees the sites you visit or what you type, and never sells your data. ",
             "The policy names every service it talks to."
         );
@@ -2743,7 +2756,11 @@ impl Settings {
         blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
-            concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
+            concat!(
+                "What sites may do, and what ",
+                env!("PRODUCT_NAME"),
+                " sends."
+            ),
             blocks,
         )
     }
@@ -2800,11 +2817,11 @@ impl Settings {
             }
             (false, false) => "uBlock Origin, built in, with the filter lists you turn on.",
             (true, true) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists your organization chose."
             ),
             (true, false) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists you turn on."
             ),
         };
@@ -3516,7 +3533,7 @@ impl Settings {
     fn passwords(&mut self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         const LEDE: &str = concat!(
             "What each profile saves and fills in. ",
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " shows a login's site and username, never its password."
         );
         let Some(profile) = self.passwords_profile(profiles) else {
@@ -3828,7 +3845,7 @@ impl Settings {
             true => format!("Remove the card “{}”?", saved.title),
             false => format!("Remove the address for “{}”?", saved.title),
         };
-        let detail = format!("{} won't fill it in again.", env!("APP_NAME"));
+        let detail = format!("{} won't fill it in again.", env!("PRODUCT_NAME"));
         let remove = move || {
             // check.sh waits for this line, which names nothing saved.
             log!(
@@ -3867,12 +3884,13 @@ impl Settings {
     /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
-        let on = agents.read(cx).is_on();
+        let on = agents.read(cx).threads();
         // The inside switch: the user's own assistant, for threads. Other apps have theirs.
         let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
-            let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_threads(on, cx));
             self.toggle("agents", name.clone(), on, set, accent, cx)
         };
         // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
@@ -3887,52 +3905,24 @@ impl Settings {
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Asking your own Claude from ⌘T and letting an app connect are two trust decisions, so
-        // tasks have their switch under agents', shown while agents are on.
-        let tasks_on = agents.read(cx).tasks_on();
-        let tasks = on.then(|| {
-            let switch = {
-                let agents = agents.clone();
-                let set = move |on, cx: &mut App| {
-                    agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
-                };
-                self.toggle(
-                    "agent tasks",
-                    "Tasks from the command bar",
-                    tasks_on,
-                    set,
-                    accent,
-                    cx,
-                )
-            };
-            let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
-            let bar = shell::keystroke_label("cmd-t");
-            let line = match tasks_on {
-                true => format!("{tab} in {bar} gives what you typed to Claude or Codex here."),
-                false => format!("Off: {tab} in {bar} makes no task. Apps that connect still can."),
-            };
-            nested(setting(
-                look,
-                "Tasks from the command bar",
-                Some(line.into()),
-                vec![switch],
-            ))
-        });
-        // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
-        let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
+        // Under the inside switch, while it's on: what is kept of them (#4105).
+        let keeps = on.then(|| self.kept_tasks(agents, cx));
         // And under that, each one kept, which is the list of what is.
-        let kept = match on && tasks_on {
+        let kept = match on {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
+        let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
         models.push(Block::Group(self.assistants(agents, cx)));
-        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-        if tasks_on {
+        models.push(Block::Under(foot(
+            look,
+            browser::settings_rows::SIGN_INS_STAY,
+        )));
+        if on {
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
@@ -4018,9 +4008,13 @@ impl Settings {
                 continue;
             }
             listed_any = true;
-            blocks.push(Block::Heading(
-                format!("What {} may do", agents.read(cx).agent_name(client.id())).into(),
-            ));
+            // An app with no name of its own is "this app" here, as Another app would read as a
+            // name (table OA1).
+            let heading = match model.nameless(client.id()) {
+                true => "What this app may do".into(),
+                false => format!("What {} may do", model.agent_name(client.id())).into(),
+            };
+            blocks.push(Block::Heading(heading));
             blocks.extend(grants.map(Block::Group));
             if !entries.is_empty() {
                 blocks.push(Block::Group(group(look, entries)));
@@ -4078,7 +4072,7 @@ impl Settings {
             };
             self.toggle("other apps", name.clone(), on, set, accent, cx)
         };
-        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        // S30, batch 12: off says what off does; on, the row is bare.
         let line = (!on).then(|| "Off: no app connects.".into());
         setting(&self.look, name, line, vec![switch])
     }
@@ -4509,47 +4503,27 @@ impl Settings {
         cx.notify();
     }
 
-    /// Keep finished tasks: its switch, how many ilo holds a conversation's id for, which isn't a
-    /// promise each still takes a reply, and Remove All…, which asks first, as nothing brings a
-    /// conversation back. Turning it off offers the same. The line under it says what is kept and
-    /// where, then names who keeps none, from kept.rs's table.
-    fn kept_tasks(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+    /// What is kept of the threads, which no setting turns off: the row is named by how many ilo
+    /// holds a conversation's id for, which isn't a promise each still takes a reply, and has
+    /// Remove All…, which asks first, as nothing brings a conversation back. With none the row
+    /// stays, so what a Remove All did can be seen.
+    fn kept_tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
-        let model = agents.read(cx);
-        let (kept, stuck) = model.kept_tasks();
-        let switch = {
-            let agents = agents.clone();
-            let set = move |on, cx: &mut App| {
-                agents.update(cx, |agents, cx| agents.set_keeps_tasks(on, cx));
-                if !on && kept > 0 {
-                    ask_remove_kept(agents.clone(), kept, None, cx);
-                }
-            };
-            self.toggle(
-                "keep tasks",
-                KEEP_TASKS,
-                model.keeps_tasks(),
-                set,
-                accent,
-                cx,
-            )
-        };
-        let count = (kept > 0).then(|| {
-            let said = match stuck {
-                0 => format!("{kept} kept"),
-                // Every id held is counted, so those are among them.
-                stuck => format!("{kept} kept · {stuck} of them couldn't be removed"),
-            };
+        let (kept, stuck) = agents.read(cx).kept_tasks();
+        let (name, removes) = browser::settings_rows::kept_row(kept);
+        // Every id held is counted, so those are among them.
+        let stuck = (stuck > 0).then(|| {
+            let said = format!("{stuck} of them couldn't be removed");
             div().text_color(look.detail).child(said).into_any_element()
         });
-        let remove = (kept > 0).then(|| {
+        let remove = removes.then(|| {
             let agents = agents.clone();
             self.button("remove-kept-tasks", REMOVE_ALL)
                 .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
                 .into_any_element()
         });
-        let controls = count.into_iter().chain(remove).chain([switch]).collect();
-        nested(setting(look, KEEP_TASKS, Some(KEPT_WHERE.into()), controls))
+        let controls = stuck.into_iter().chain(remove).collect();
+        nested(setting(look, name, Some(KEPT_AS.into()), controls))
     }
 
     /// The finished tasks kept, the last to end first, each by its title and the Archive's own
@@ -4584,12 +4558,12 @@ impl Settings {
     ) {
         let (message, detail, action) = match kept {
             1 => (
-                "Remove 1 finished task?".to_string(),
+                "Remove 1 thread?".to_string(),
                 "The conversation is removed from this computer.".to_string(),
                 REMOVE,
             ),
             kept => (
-                format!("Remove {kept} finished tasks?"),
+                format!("Remove {kept} threads?"),
                 "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),
@@ -4734,7 +4708,7 @@ impl Settings {
             )
             .into()
         } else if connected {
-            format!("Connected in {}", client.config()).into()
+            client.set_up_line().into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
             let missing: Vec<&str> = (Client::APPS.into_iter())
@@ -5105,8 +5079,10 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
+    /// Bring in, take out: the import's view, as it is, then Export Spaces as Markdown, under one
+    /// heading as drawn (S6); inside an import, the crumb that names its browser.
     fn import_export(&self, cx: &mut Context<Self>) -> Page {
+        const BRING_IN: &str = "Bring in, take out";
         let look = &self.look;
         let export = self
             .button("export-spaces", "Export…")
@@ -5115,7 +5091,7 @@ impl Settings {
             .on_click(|_, _, cx| crate::export_spaces(cx));
         let export = setting(
             look,
-            "Spaces as Markdown",
+            "Export Spaces as Markdown",
             None,
             vec![export.into_any_element()],
         );
@@ -5124,7 +5100,7 @@ impl Settings {
         let inside = import.and_then(ImportView::crumb).is_some();
         let heading = match import.and_then(ImportView::crumb) {
             Some(inside) => Block::Crumb("Import".into(), inside),
-            None => Block::Heading("Import".into()),
+            None => Block::Heading(BRING_IN.into()),
         };
         let under_way = import.is_some_and(ImportView::under_way);
         let mut blocks = vec![heading];
@@ -5134,7 +5110,6 @@ impl Settings {
                 .map(|import| Block::View(import.into_any_element())),
         );
         if !under_way {
-            blocks.push(Block::Heading("Export".into()));
             blocks.push(Block::Rows(vec![export]));
         }
         // Inside an import the crumb says where it is, so the page's sentence gives way.
@@ -5186,7 +5161,7 @@ impl Settings {
                 look,
                 "Licence",
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " is free software: you may use, study, share and change it under the GNU \
                      General Public License, version 3."
                 ),
@@ -5245,7 +5220,7 @@ impl Settings {
                 true => "Every 8 hours, and it downloads them in the background.".to_string(),
                 false => format!(
                     "{} won't look for new versions until you choose Check for Updates.",
-                    env!("APP_NAME")
+                    env!("PRODUCT_NAME")
                 ),
             };
             setting(
@@ -5840,10 +5815,6 @@ fn method(target: &str) -> &str {
 /// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
-/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
-/// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
-
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
     div()
@@ -5880,11 +5851,10 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
-/// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
-/// has no task in the list, which says it.
-const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
-const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
+/// The line under Settings › Agents' row for the threads kept (table KT2), and the buttons: a
+/// kept task's own, and the one for them all. An assistant that keeps none has no task in the
+/// list, which says it.
+const KEPT_AS: &str = "Threads are kept as you saw them. Your assistant keeps the conversation.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
@@ -6358,6 +6328,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
+            Section::Overview => self.overview(cx),
             Section::General => {
                 let profiles = profiles();
                 let general = self.general(&profiles, accent, cx);

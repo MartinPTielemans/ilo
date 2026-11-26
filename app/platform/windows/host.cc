@@ -5464,6 +5464,9 @@ void host_show_first_run(void) {
   fprintf(stderr, "browser: first run shown\n");
 }
 
+// Not yet: the window keeps Windows' own frame round the card.
+void host_set_first_run_frame(double width, double height, double radius) {}
+
 void host_close_first_run(void) {
   if (g_first_run) {
     ShowWindow(g_first_run, SW_HIDE);

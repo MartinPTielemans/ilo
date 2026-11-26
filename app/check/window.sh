@@ -1072,10 +1072,15 @@ overshoot() {
   # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
   # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
   # Recorded, for a look at the sidebar coming out (overshoot.mp4).
+  # The strip is the card's inset wide, where the page starts with the sidebar hidden.
+  send layout
+  strip_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),.*/\1/p')
+  [ -n "$strip_x" ] || fail "the layout named no page with the sidebar hidden"
   record overshoot 3
   send move 400 300
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   from=$((step + 1))
   send move -20 300
   expect '^browser: reveal left across the edge$' \
@@ -1092,8 +1097,8 @@ overshoot() {
   expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
   send move 400 300
   from=$((step + 1))
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   send move -20 300
   sleep 1.2 # past the second a return counts in
   send move 3 300
@@ -1671,15 +1676,20 @@ check_layout "after a double-click on the sidebar's edge"
 # which a capture of the window alone leaves out, so this captures the screen, and only a check
 # VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
 # turns it light for the light pass and back after.
-# Colours the Space black from the theme picker's field, which is black at its middle.
+# Colours the Space black from the theme panel's value field, which is there once the Space has a
+# colour: the first palette, then 000000 typed into it and return.
 black_space() {
   post rightclick 100 112
   expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  send clickkey 191.5 178.5
-  expect '^browser: colored space [0-9]* 000000$' "the field's middle didn't colour the Space black"
+  send clickkey $(panel_at palette 1)
+  expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+  send clickkey $(panel_at value)
+  send type 000000
+  send key return
+  expect '^browser: colored space [0-9]* 000000$' "000000 in the value field didn't colour the Space black"
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point

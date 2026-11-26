@@ -307,8 +307,7 @@ sent_all=
 synced_line="browser: synced today [0-9]* in space [0-9]* at [0-9]* unloaded ${site}login.html?today"
 device a
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open A's command bar"
+resting_key t "device A window"
 send insert "${site}login.html?today-1"
 had=$(grep -c "$synced_line-1\$" "$b_log" || true)
 a_had=$(wc -l < "$a_log")
@@ -394,9 +393,15 @@ busy_commits=$(commits)
 busy_kept=$(kept)
 busy_sent=$(sent_lines)
 busy_started=$(now_ms)
+# Archiving A's only tab above left its window with no page, so the first ⌘T gives its resting bar
+# the keyboard, and each after it, with a page there, opens the command bar.
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  if [ "$i" = 1 ]; then
+    resting_key t "device A window"
+  else
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  fi
   send insert "${site}login.html?busy-$i"
   send key return
 done
@@ -438,8 +443,10 @@ await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's 
 forward
 send key n cmd alt
 expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window on A"
+# The new window has no page, so it rests on its field, which ⌘L gives the keyboard.
 send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar"
+expect '^browser: resting field has the keyboard$' \
+  "⌘L didn't give the Little ilo window's field the keyboard"
 send insert "${site}login.html?users-own"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "A's Little ilo tab didn't load"

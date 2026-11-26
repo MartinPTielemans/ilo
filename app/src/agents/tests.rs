@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::runner::Cli;
 use super::sign_in::Offer;
-use super::tier::{Sites, Stop, Tier, Why};
+use super::tier::{Stop, Tier, Why};
 use super::*;
 
 /// The core's refusal of a tab the user holds.
@@ -668,7 +668,7 @@ fn agents_running(
     // Other apps' agents on, as the agents of most tests are the user's connected apps: a new
     // profile's off is other_apps.rs's.
     agents.update(cx, |agents, _| {
-        (agents.others).store(true, std::sync::atomic::Ordering::SeqCst)
+        (agents.switches.others).store(true, std::sync::atomic::Ordering::SeqCst)
     });
     agents
 }
@@ -679,8 +679,18 @@ pub(crate) fn stand_in(
     looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    stand_in_with(looked, Vec::new(), cx)
+}
+
+/// As `stand_in`, with `found` the clients whose files the stat finds on the made-up computer.
+pub(crate) fn stand_in_with(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    found: Vec<Client>,
+    cx: &mut App,
+) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
     let configs = Arc::new(Configs::default());
     *configs.looked.lock().unwrap() = looked;
+    *configs.found.lock().unwrap() = found;
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let number = NEXT.fetch_add(1, Ordering::SeqCst);
     let folder = std::env::temp_dir().join(format!("agents-in-{}-{number}", std::process::id()));
@@ -814,12 +824,13 @@ fn shown(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Option<Question> {
 fn agents_are_off_until_the_user_turns_them_on(cx: &mut TestAppContext) {
     let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
     let agents = agents(&browser, &configs, None, cx);
-    assert!(!agents.read_with(cx, |agents, _| agents.is_on()));
+    agents.update(cx, |agents, cx| agents.set_other_apps(false, cx));
+    assert!(!agents.read_with(cx, |agents, _| agents.listening()));
     assert!(agents.read_with(cx, |agents, _| agents.server.is_none()));
     let socket = agents.read_with(cx, |agents, _| agents.socket.clone());
     assert!(server::connect(&socket).is_err());
 
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -828,7 +839,7 @@ fn agents_are_off_until_the_user_turns_them_on(cx: &mut TestAppContext) {
     }
     assert!(server::connect(&socket).is_ok());
 
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(false, cx));
     assert!(agents.read_with(cx, |agents, _| agents.server.is_none()));
     #[cfg(unix)]
     assert!(!socket.exists());
@@ -909,7 +920,9 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
         };
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, found)];
         let agents = agents(&browser, &configs, None, cx);
+        // The assistants' look runs only with the inside switch on.
         agents.update(cx, |agents, cx| {
+            agents.set_threads(true, cx);
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
@@ -942,12 +955,65 @@ fn providers_found(
         agents.tasks.found.insert(Cli::Claude, found);
     });
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.tasks_on(), "the page is drawn with tasks off");
+        assert!(!agents.threads(), "the page is drawn with threads off");
         let listed = agents.providers().into_iter();
         listed
             .map(|(cli, row, model)| (cli, row.offer, model))
             .collect()
     })
+}
+
+/// Overview's loose ends read what the app already found and ask nothing: a sign-in is one only
+/// for an assistant known signed out or missing while another is signed in, none while its state
+/// is unknown or threads are off, none once put away, and no assistant is looked for to list them.
+#[gpui::test]
+fn overview_lists_only_what_the_app_already_knows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::settings_overview::{LooseEnd, PutAway, loose_ends};
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let found = |cli, ready, cx: &mut TestAppContext| {
+        agents.update(cx, |agents, _| {
+            let found = Found {
+                ready,
+                ..Default::default()
+            };
+            agents.tasks.found.insert(cli, found);
+        })
+    };
+    let listed = |away: &PutAway, cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| loose_ends(agents, away))
+    };
+    let away = PutAway::default();
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(true, Ordering::SeqCst)
+    });
+    let looks = configs.looks.load(Ordering::SeqCst);
+    assert_eq!(listed(&away, cx), [], "nothing known, nothing listed");
+    found(Cli::Claude, Ready::SignedIn, cx);
+    assert_eq!(listed(&away, cx), [], "ChatGPT's state isn't known");
+    found(Cli::Codex, Ready::SignedOut, cx);
+    assert_eq!(listed(&away, cx), [LooseEnd::SignIn(Cli::Codex)]);
+    found(Cli::Claude, Ready::SignedOut, cx);
+    assert_eq!(
+        listed(&away, cx),
+        [],
+        "with none signed in, threads don't run without it"
+    );
+    found(Cli::Claude, Ready::SignedIn, cx);
+    let mut away = PutAway::default();
+    away.put_away(&LooseEnd::SignIn(Cli::Codex).key());
+    assert_eq!(listed(&away, cx), [], "a put-away loose end came back");
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(false, Ordering::SeqCst)
+    });
+    assert_eq!(listed(&PutAway::default(), cx), [], "threads are off");
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        looks,
+        "Overview looked for an assistant"
+    );
 }
 
 /// Models is never only its title: an assistant not on this computer is listed with what Settings
@@ -984,8 +1050,46 @@ fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
     );
 }
 
-/// With agents never turned on, nothing looks for an assistant until Models opens: each row reads
-/// Checking… with nothing offered, and opening Models looks once and says what it found.
+/// With the inside switch off, a click on a row while a look runs is looked for once it ends, and
+/// a look no click asked for waits for none: each assistant clicked ends looked up, and nothing
+/// else is.
+#[gpui::test]
+fn a_click_while_a_look_runs_is_looked_for_after_it(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let looks = || configs.looks.load(Ordering::SeqCst);
+    let found = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            Cli::ALL.map(|cli| agents.tasks.found.contains_key(&cli))
+        })
+    };
+    agents.update(cx, |agents, cx| {
+        agents.look_up_assistant(Cli::Claude, cx);
+        // While Claude's look runs: Codex's row, and what no click asks for.
+        agents.look_up_assistant(Cli::Codex, cx);
+        agents.models_shown(cx);
+        agents.look_for_task_agents(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "Claude's, then Codex's after it");
+    assert_eq!(found(cx), [true, true]);
+
+    // A look for every one asked for with the switch on, which goes off while one runs, waits
+    // for nothing; the row clicked meanwhile is still looked for.
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.look_up_assistant(Cli::Claude, cx);
+        agents.look_for_task_agents(cx);
+        agents.look_up_assistant(Cli::Codex, cx);
+        agents.set_threads(false, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(looks(), 4, "Claude's, then the click on Codex's alone");
+}
+
+/// With the inside switch off, nothing of an assistant's program runs at launch or as Models
+/// opens: each row reads Checking… with nothing offered, and a click on a row looks that one up
+/// alone. With the switch on, opening Models looks once for every one and says what it found.
 #[gpui::test]
 fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
     use crate::agents::ready::{Found, Ready};
@@ -1003,17 +1107,48 @@ fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(configs.looks.load(Ordering::SeqCst), 0, "nothing looked");
     let before = agents.read_with(cx, |agents, _| {
-        assert!(!agents.tasks_on());
+        assert!(!agents.threads());
         let listed = agents.providers().into_iter();
         listed.map(|(_, row, _)| row.offer).collect::<Vec<_>>()
     });
     assert_eq!(before, vec![Offer::Nothing; Cli::ALL.len()]);
-    agents.update(cx, |agents, cx| agents.models_shown(cx));
+    agents.update(cx, |agents, cx| {
+        agents.models_shown(cx);
+        agents.look_for_clients(cx);
+        agents.task_ask_shown(cx);
+    });
     cx.run_until_parked();
     assert_eq!(
         configs.looks.load(Ordering::SeqCst),
-        Cli::ALL.len(),
-        "one look"
+        0,
+        "Models, Other apps and the bar ran nothing with threads off"
+    );
+    agents.update(cx, |agents, cx| agents.look_up_assistant(Cli::Claude, cx));
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 1, "the row clicked");
+    let clicked = agents.read_with(cx, |agents, _| {
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, _)| (cli, row.offer))
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        clicked.contains(&(Cli::Claude, Offer::SignIn)),
+        "{clicked:?}"
+    );
+    assert!(
+        clicked.contains(&(Cli::Codex, Offer::Nothing)),
+        "{clicked:?}"
+    );
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.models_shown(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        1 + Cli::ALL.len(),
+        "one look for every one"
     );
     let after = agents.read_with(cx, |agents, _| {
         let listed = agents.providers().into_iter();
@@ -1039,15 +1174,19 @@ fn models_sign_in_with_agents_off_turns_nothing_on(cx: &mut TestAppContext) {
     assert_eq!(started, vec![Cli::Claude]);
     assert_eq!(configs.looks.load(Ordering::SeqCst), 0);
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+        assert!(!agents.threads(), "threads stay off");
     });
     let heard = configs.sign_ins.lock().unwrap()[0].1.clone();
     let done = crate::agents::sign_in::Heard::Ended(crate::agents::sign_in::Ended::Done);
     heard.unbounded_send(done).unwrap();
     cx.run_until_parked();
-    assert_eq!(configs.looks.load(Ordering::SeqCst), Cli::ALL.len());
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        1,
+        "the row signed in to, alone"
+    );
     agents.read_with(cx, |agents, _| {
-        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+        assert!(!agents.threads(), "threads stay off");
     });
 }
 
@@ -1924,12 +2063,12 @@ fn disconnect_ends_the_agents_sessions_and_forgets_its_token(cx: &mut TestAppCon
     assert!(answer.error);
 }
 
-/// Turning agents off ends every live agent's sessions and answers the calls waiting, and keeps
-/// the agents connected for when it's on again.
+/// Turning other apps' agents off ends every live one's sessions and answers the calls waiting,
+/// and keeps the apps connected for when it's on again.
 #[gpui::test]
 fn turning_agents_off_ends_their_sessions(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     let waiting = call(
         &agents,
         "claude-code",
@@ -1937,14 +2076,86 @@ fn turning_agents_off_ends_their_sessions(cx: &mut TestAppContext) {
         json!({ "tab": 20 }),
         cx,
     );
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_other_apps(false, cx));
     assert!(waiting.recv().is_err());
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
     assert!(agents.read_with(cx, |agents, _| agents.is_connected(Client::ClaudeCode)));
 }
 
-/// What's saved: the switch and each agent's token, in a file only the user can read, which a
-/// later launch loads, starting the server if it was on.
+/// The two switches are two: flipping one, from either state of both, never moves the other.
+#[gpui::test]
+fn flipping_one_switch_never_touches_the_other(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    let both = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| (agents.threads(), agents.other_apps()))
+    };
+    for threads in [false, true] {
+        for others in [false, true] {
+            agents.update(cx, |agents, cx| {
+                agents.set_threads(threads, cx);
+                agents.set_other_apps(others, cx);
+            });
+            agents.update(cx, |agents, cx| agents.set_threads(!threads, cx));
+            assert_eq!(
+                both(cx),
+                (!threads, others),
+                "threads flipped from {threads}"
+            );
+            agents.update(cx, |agents, cx| agents.set_threads(threads, cx));
+            agents.update(cx, |agents, cx| agents.set_other_apps(!others, cx));
+            assert_eq!(
+                both(cx),
+                (threads, !others),
+                "other apps flipped from {others}"
+            );
+        }
+    }
+}
+
+/// Only the user's click sets either switch: no tool, of an outside app's or a thread's, is
+/// named for a switch or for Settings.
+#[test]
+fn no_tool_sets_either_switch() {
+    for agent in ["claude-code", "task-1"] {
+        for name in tools::names(agent) {
+            for word in ["switch", "setting", "other_apps", "threads", "listen"] {
+                assert!(!name.contains(word), "{agent} has {name}");
+            }
+        }
+    }
+}
+
+/// With other apps' agents off, an app that says hello or calls a tool is never at work, so no
+/// row of Apps that connect says one is.
+#[gpui::test]
+fn with_other_apps_off_no_app_is_at_work(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.set_other_apps(false, cx);
+    });
+    let hello = Event::Hello {
+        agent: "claude-code".into(),
+        connection: 1,
+        client: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(hello, cx));
+    let answer = call(&agents, "claude-code", "list_tabs", json!({}), cx);
+    cx.run_until_parked();
+    assert!(
+        !answer.try_recv().is_ok_and(|answer| !answer.error),
+        "a call was done while off"
+    );
+    for client in Client::ALL {
+        let (live, connecting) = agents.read_with(cx, |agents, _| {
+            (agents.is_live(client), agents.is_connecting(client))
+        });
+        assert!(!live && !connecting, "{client:?} shows at work while off");
+    }
+}
+
+/// What's saved: the switches and each agent's token, in a file only the user can read, which a
+/// later launch loads, starting the server if either was on.
 #[gpui::test]
 fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     let dir = std::env::temp_dir().join(format!("agents-test-{}", random_token()));
@@ -1954,7 +2165,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     let agents = agents(&browser, &configs, Some(path.clone()), cx);
     agents.update(cx, |agents, cx| agents.connect(Client::Codex, cx));
     cx.run_until_parked();
-    agents.update(cx, |agents, cx| agents.set_on(true, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     let saved = std::fs::read_to_string(&path).unwrap();
     #[cfg(unix)]
     {
@@ -1962,18 +2173,18 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    agents.update(cx, |agents, cx| agents.set_on(false, cx));
+    agents.update(cx, |agents, cx| agents.set_threads(false, cx));
 
     let later = self::agents(&browser, &configs, None, cx);
     later.update(cx, |agents, cx| agents.load(&saved, cx));
-    assert!(later.read_with(cx, |agents, _| agents.is_on() && agents.server.is_some()));
+    assert!(later.read_with(cx, |agents, _| agents.threads() && agents.server.is_some()));
     assert!(later.read_with(cx, |agents, _| agents.is_connected(Client::Codex)));
     let token = configs.connected.lock().unwrap()[0].1.token.clone();
     let tokens = later.read_with(cx, |agents, _| agents.tokens.lock().unwrap().clone());
     assert_eq!(tokens.get(&token).map(String::as_str), Some("codex"));
     later.update(cx, |agents, cx| agents.load("", cx));
     assert!(
-        later.read_with(cx, |agents, _| !agents.is_on()),
+        later.read_with(cx, |agents, _| !agents.listening()),
         "a lost file left agents on"
     );
     std::fs::remove_dir_all(dir).ok();
@@ -3288,6 +3499,65 @@ fn no_tool_touches_secure_connections() {
     }
 }
 
+/// No tool names or picks a thread's model, for an agent from outside or a thread ilo runs, and
+/// outside the tests a pick is made in one place, the model menu's click in the thread's view
+/// (shell/conversation.rs), which agents/task.rs takes: no agent's call reaches it.
+#[test]
+fn only_the_model_menus_click_picks_a_threads_model() {
+    for agent in ["claude-code", "task-1"] {
+        let listed = tools::list(agent).to_string().to_lowercase();
+        assert!(!listed.contains("model"), "{agent}'s tools say model");
+        for name in tools::names(agent) {
+            assert!(!name.contains("model"), "{agent} has {name}");
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let (mut paths, mut made) = (vec![src.clone()], Vec::new());
+    while let Some(path) = paths.pop() {
+        if path.is_dir() {
+            let entries = std::fs::read_dir(&path).unwrap();
+            paths.extend(entries.map(|entry| entry.unwrap().path()));
+            continue;
+        }
+        let file = path
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let tests = file.ends_with("tests.rs") || file.contains("/tests/");
+        if tests || !file.ends_with(".rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in text.match_indices("TaskAction::PickModel(") {
+            let line = text[at..]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            made.push(format!("{file}: {line}"));
+        }
+    }
+    made.sort();
+    assert_eq!(made.len(), 2, "{made:#?}");
+    assert!(
+        made[0].starts_with("agents/task.rs: TaskAction::PickModel(id) =>"),
+        "{made:#?}"
+    );
+    assert!(made[1].starts_with("shell/conversation.rs: "), "{made:#?}");
+    let view = std::fs::read_to_string(src.join("shell/conversation.rs")).unwrap();
+    let at = view.find("TaskAction::PickModel(").unwrap();
+    let menu = view[..at]
+        .rfind("fn ")
+        .map(|start| &view[start..])
+        .unwrap_or_default();
+    assert!(
+        menu.starts_with("fn model_menu("),
+        "made outside the model menu"
+    );
+}
+
 /// No tool reads a task's card or another task's steps: a card is made only for the windows
 /// (`Agents::cards` and `shown_cards`, which the windows' observer alone calls), and no tool's
 /// name offers one.
@@ -3368,6 +3638,25 @@ fn every_tool_and_step_is_in_one_class() {
         })
         .collect();
     assert_eq!(acts, super::access::ACTS);
+}
+
+/// No tool lists or reads the user's downloads: the sidebar's plate of recent downloads and the
+/// Library's Downloads are the user's own, and an agent's only word of one is the activity log's
+/// line for a file its own page started.
+#[test]
+fn no_tool_reads_the_downloads() {
+    let every: Vec<String> = ["claude-code", "task-1"]
+        .into_iter()
+        .flat_map(tools::names)
+        .chain(tools::STEPS.map(String::from))
+        .collect();
+    assert!(!every.is_empty());
+    for name in &every {
+        assert!(
+            !name.contains("download") && !name.contains("librar"),
+            "{name} would read the downloads"
+        );
+    }
 }
 
 /// Lowered mid-task, the next act above the new tier is refused, the log keeps the change, and the
@@ -3538,7 +3827,6 @@ fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContex
     coupon(cx);
 
     press(TaskAction::SetTier(Tier::Work), cx);
-    press(TaskAction::AnySite, cx);
     assert_eq!(
         tier(cx),
         Tier::Look,
@@ -3631,77 +3919,6 @@ fn the_live_line_follows_the_cards_word(cx: &mut TestAppContext) {
     let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
     let _handed = call(&agents, "claude-code", "hand_off", reason, cx);
     assert_eq!(now(cx), (Live::Handed, Word::NeedsYou));
-}
-
-/// A task's Sites, set to the pages the user gave it, refuse a page on another site at every tier,
-/// and Any site settles the refusal and lets it go.
-#[gpui::test]
-fn a_task_keeps_to_its_sites(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
-    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    page_done(&agents, &browser, answer, shop_tree(), cx);
-    let key = session_key(&agents, "claude-code", cx);
-    let only = Sites::Only(vec!["example.com".into()]);
-    agents.update(cx, |agents, cx| agents.set_sites(&key, only, cx));
-    give(&agents, Tier::Full, cx);
-    let open = |cx: &mut TestAppContext| {
-        call(
-            &agents,
-            "claude-code",
-            "open_tab",
-            json!({ "url": "example.org" }),
-            cx,
-        )
-    };
-    let told = refused(
-        &agents,
-        &browser,
-        open(cx),
-        "open example.org",
-        Why::OtherSite,
-        "example.org",
-        cx,
-    );
-    assert!(
-        told.text.contains("outside the sites this task may use"),
-        "{}",
-        told.text
-    );
-    assert!(
-        browser.tabs.borrow().iter().all(|tab| tab.0 != 30),
-        "it opened"
-    );
-
-    agents.update(cx, |agents, cx| agents.set_sites(&key, Sites::Any, cx));
-    assert!(
-        stops(&agents, cx).is_empty(),
-        "Any site left the refusal unsettled"
-    );
-    // Each change of sites is in the log as a level's is, by count, never by address.
-    let changes = agents.read_with(cx, |agents, _| {
-        (agents.activity("claude-code"))
-            .filter(|entry| entry.action == super::access::ACCESS_ACTION)
-            .map(|entry| entry.target.to_string())
-            .filter(|target| target.contains("site"))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        changes,
-        [
-            "Only the sites you add · 1 site → Any site",
-            "Any site → Only the sites you add · 1 site"
-        ],
-        "the log's entries for the task's sites, newest first"
-    );
-    assert!(
-        changes.iter().all(|change| !change.contains("example")),
-        "an entry named a site: {changes:?}"
-    );
-    let _answer = open(cx);
-    assert!(
-        browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
-        "it didn't open"
-    );
 }
 
 /// The tree for tab 20's page with a message in its field and a Send, which sends it.
@@ -6931,6 +7148,50 @@ fn agents_never_get_a_login_address_or_card(cx: &mut TestAppContext) {
 /// was asked from, and a card that says what it does.
 mod tasks {
     use super::*;
+
+    /// What a user reads calls the user's work a thread (Z0), while what an assistant is told keeps
+    /// "task", which the sweep leaves until its own change.
+    #[test]
+    fn a_user_reads_thread_and_an_assistant_is_still_told_task() {
+        let says_task = |text: &str| {
+            text.to_lowercase()
+                .split(|c: char| !c.is_alphabetic())
+                .any(|word| word == "task" || word == "tasks")
+        };
+        let mut read: Vec<String> = [
+            crate::agents::tier::NEVER_GETS,
+            crate::agents::notes::SWITCH_LINE,
+            crate::agents::notes::SWITCH_OFF_LINE,
+            crate::agents::notes::FOOT,
+            crate::agents::fence::FOOT,
+        ]
+        .map(String::from)
+        .into();
+        for agent in ["task-1", "claude-code"] {
+            read.extend(
+                tools::names(agent)
+                    .iter()
+                    .map(|name| tools::describe(name).to_string()),
+            );
+        }
+        let said: Vec<&String> = read.iter().filter(|text| says_task(text)).collect();
+        assert!(
+            said.is_empty(),
+            "these strings a user reads still say task, not thread: {said:#?}"
+        );
+
+        let told = tools::list("task-1").to_string();
+        for (what, text) in [
+            ("the instructions", tools::INSTRUCTIONS),
+            ("a task's instructions", tools::TASK_INSTRUCTIONS),
+            ("a task's tools", told.as_str()),
+        ] {
+            assert!(
+                says_task(text),
+                "{what} an assistant is told no longer say task, which they keep for now: {text}"
+            );
+        }
+    }
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::sign_in::Offer;
@@ -6989,7 +7250,7 @@ mod tasks {
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             let found = Found {
                 ready: Ready::SignedIn,
                 program,
@@ -7024,7 +7285,7 @@ mod tasks {
         let saved = std::fs::read_to_string(path).unwrap_or_default();
         agents.update(cx, |agents, cx| {
             agents.load(&saved, cx);
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             for cli in Cli::ALL {
                 let found = Found {
                     ready: Ready::SignedIn,
@@ -7071,9 +7332,9 @@ mod tasks {
         assert!(sort(cx).is_none(), "signed out");
         assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
         set_found(&agents, Ready::SignedIn, cx);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
-        assert!(sort(cx).is_none(), "tasks off");
-        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(false, cx));
+        assert!(sort(cx).is_none(), "threads off");
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         agents.update(cx, |agents, cx| {
             let found = Found {
                 ready: Ready::SignedIn,
@@ -7175,9 +7436,35 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
-    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
-    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
-    /// apps that connect, and on again it's as it was.
+    /// The card offers the install for the fact that the program isn't there, never for a
+    /// failure's words: what a CLI says of something of its own that "isn't installed" is its
+    /// own failure, said as it said it, with no fix of the assistant's.
+    #[gpui::test]
+    fn the_install_is_offered_for_the_program_missing_not_for_a_failures_words(
+        cx: &mut TestAppContext,
+    ) {
+        let (agents, _) = ready(None, cx);
+        start(&agents, "Find a flight", cx);
+        set_found(&agents, Ready::NotFound, cx);
+        let agent = card_of(&agents, cx).agent.clone();
+        let fails = |failure: Failure, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| agents.fail(&agent, failure, cx));
+            card_of(&agents, cx)
+        };
+
+        let words = "The plugin it needs isn't installed.";
+        let card = fails(Failure::Other(words.into()), cx);
+        assert_eq!(card.status.as_ref(), words);
+        assert_eq!(card.fix, None, "a failure's words chose the card's form");
+
+        let card = fails(Failure::NotInstalled, cx);
+        assert_eq!(card.status.as_ref(), "Claude isn't installed.");
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+    }
+
+    /// The inside switch off: ⌘T's ask lists no agent, no thread starts, and one at its limit
+    /// offers no Retry and takes no reply or retry; other apps' agents work on, and on again a
+    /// thread starts.
     #[gpui::test]
     fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -7187,10 +7474,13 @@ mod tasks {
             task.state = State::Limit { resets: None };
         });
         assert!(card_of(&agents, cx).retry);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.update(cx, |agents, cx| {
+            agents.set_other_apps(true, cx);
+            agents.set_threads(false, cx);
+        });
         agents.read_with(cx, |agents, _| {
-            assert!(agents.is_on(), "tasks off turned agents off");
-            assert!(!agents.tasks_on());
+            assert!(agents.listening(), "threads off turned other apps off");
+            assert!(!agents.threads());
             assert!(
                 agents.ask_agents().is_empty(),
                 "⌘T's ask still lists agents"
@@ -7218,12 +7508,13 @@ mod tasks {
             agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
             State::Limit { .. }
         ));
-        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
         assert!(card_of(&agents, cx).retry);
     }
 
-    /// With tasks off, a reply to the agent's ask still answers it, so the task can finish.
+    /// The inside switch off ends a thread as Stop does: its ask under way has its answer, a
+    /// reply after reaches nothing, its token goes and its connection closes.
     #[gpui::test]
     fn with_tasks_off_a_reply_still_answers_the_ask(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -7233,11 +7524,76 @@ mod tasks {
         });
         let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
         let asked = call(&agents, &agent, "ask", ask, cx);
-        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        let token = agents.read_with(cx, |agents, _| {
+            agents.task(&agent).unwrap().token().to_string()
+        });
+        agents.update(cx, |agents, cx| agents.set_threads(false, cx));
+        assert!(
+            asked.recv().map_or(true, |answer| answer.error),
+            "the ask went on"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert!(matches!(agents.task(&agent).unwrap().state, State::Stopped));
+            assert!(!agents.tokens.lock().unwrap().contains_key(&token));
+        });
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
         agents.update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
         });
-        assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached a thread with threads off"
+        );
+    }
+
+    /// Every tool `dispatch` runs is listed for an agent that may call it, as a call by any other
+    /// name is answered as no tool before it gets there: an arm listed for nobody would never run,
+    /// and one only a task runs is listed for a task's. A made-up name is no tool, and leaves no
+    /// entry.
+    #[gpui::test]
+    fn every_tool_dispatch_runs_is_listed_and_no_other_is_one(cx: &mut TestAppContext) {
+        let source = include_str!("../agents.rs");
+        let body = &source[source.find("    fn dispatch(").expect("no dispatch")..];
+        let body = &body[..body[1..]
+            .find("\n    fn ")
+            .map_or(body.len(), |end| end + 1)];
+        let (task, outside) = (tools::names("task-1"), tools::names("claude-code"));
+        let mut arms = Vec::new();
+        for line in body.lines() {
+            // An arm of its match, at its depth, by a name or a few.
+            let Some(arm) = line.strip_prefix("            \"") else {
+                continue;
+            };
+            let Some((pattern, _)) = arm.split_once("=>") else {
+                continue;
+            };
+            let pattern = format!("\"{pattern}");
+            for name in pattern.split('"').skip(1).step_by(2) {
+                let listed = match pattern.contains("if is_task(") {
+                    true => task.iter().any(|each| each == name),
+                    false => task.iter().chain(&outside).any(|each| each == name),
+                };
+                assert!(
+                    listed,
+                    "dispatch runs {name}, which no agent that may call it is listed"
+                );
+                arms.push(name.to_string());
+            }
+        }
+        assert!(arms.len() > 15, "dispatch's arms weren't found: {arms:?}");
+
+        let (agents, _, _) = connected(cx);
+        let before = log(&agents, "claude-code", cx);
+        let answer = call(&agents, "claude-code", "sum_the_receipts", json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error("There's no tool sum_the_receipts.")
+        );
+        assert_eq!(log(&agents, "claude-code", cx), before);
     }
 
     #[gpui::test]
@@ -7721,6 +8077,50 @@ mod tasks {
         assert!(
             matches!(&lines[..], [Line::Trace(trace)] if said_in(trace)),
             "{lines:?}"
+        );
+    }
+
+    /// A thought says how long it took in its own words, from 1 s, with nothing at its end
+    /// (Z15).
+    #[gpui::test]
+    fn a_thought_says_how_long_it_thought(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on at MAAT?", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        for took in [72_000, 300] {
+            said(
+                &agents,
+                &agent,
+                Out::Thought {
+                    text: "Look at its page.".into(),
+                    took: Duration::from_millis(took),
+                },
+                cx,
+            );
+        }
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let Some(Line::Trace(trace)) = lines.first() else {
+            panic!("no trace: {lines:?}");
+        };
+        let said: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => {
+                    Some((step.title.to_string(), step.description.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("Thought for 1 min 12 s".to_string(), String::new()),
+                ("Thought for 1 s".to_string(), String::new()),
+            ]
         );
     }
 
@@ -8292,6 +8692,263 @@ mod tasks {
         heads_as_worked(live, head);
     }
 
+    /// Calls `tool` as the server does and leaves it unanswered, a step under way: its reply, which
+    /// a wait's answer comes on.
+    fn begun(
+        agents: &Entity<Agents>,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 40);
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            agent: agent.into(),
+            connection: 1,
+            tool: tool.into(),
+            arguments,
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        cx.run_until_parked();
+        answer
+    }
+
+    /// The tool of each step a task's conversation shows as under way, which is what moves in
+    /// it, and "Thinking" for a turn's.
+    fn moving(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        agents.read_with(cx, |agents, cx| {
+            let trace = &agents.task(agent).unwrap().trace;
+            let tool = |step: &task::TraceStep| trace[step.key].did.tool.clone();
+            let lines = agents.conversation(agent, cx).unwrap().lines;
+            (lines.iter())
+                .flat_map(|line| match line {
+                    task::Line::Trace(trace) => (trace.items.iter())
+                        .filter_map(|item| match item {
+                            task::TraceItem::Step(step) if step.running => Some(tool(step)),
+                            _ => None,
+                        })
+                        .collect(),
+                    task::Line::Step(step) if step.running => vec![tool(step)],
+                    task::Line::Thinking { failed: None, .. } => vec!["Thinking".into()],
+                    _ => Vec::new(),
+                })
+                .collect()
+        })
+    }
+
+    /// `at_work`, after a refusal the user hasn't settled that its task carried on past, if
+    /// `refused`: a click at Look only, then a look at the page.
+    fn at_work_past(refused: bool, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, String) {
+        let (agents, browser, agent) = at_work(cx);
+        if refused {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&agent).unwrap().tier = Tier::Look
+            });
+            let click = json!({ "tab": 30, "ref": "e1" });
+            assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+            let look = json!({ "tab": 30 });
+            traced(
+                &agents,
+                &browser,
+                &agent,
+                "snapshot",
+                look,
+                Some(shop_tree()),
+                cx,
+            );
+            let (live, title, running) = stretch_head(&agents, &agent, cx);
+            assert_eq!(
+                (live, title.as_str(), running),
+                (task::Live::Refused, "Working", true),
+                "a task that carried on past a refusal heads as at work"
+            );
+        }
+        (agents, browser, agent)
+    }
+
+    /// The four waits on the user: the task's own hand-off of page 31, a sign-in its load of page
+    /// 30 met, its ask for page 30 back and its question, as `agent` calls for the thread `task`.
+    /// Gives the wait's call, unanswered.
+    fn waits_on_user(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        task: &str,
+        wait: &str,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        match wait {
+            "hand_off" => {
+                let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+                begun(agents, agent, "hand_off", reason, cx)
+            }
+            "sign-in" => {
+                let load = json!({ "tab": 30, "url": "shop.example/account" });
+                let loads = begun(agents, agent, "navigate", load, cx);
+                asks_for_sign_in(agents, browser, 30, "http://auth.example:8080", cx);
+                assert!(
+                    loads.try_recv().is_err(),
+                    "the load answered at the sign-in"
+                );
+                loads
+            }
+            "ask_for_tab" => {
+                agents.update(cx, |agents, cx| {
+                    agents.task_action(task, TaskAction::TakeOver(30), cx)
+                });
+                let reason = json!({ "reason": "To go on", "tab": 30 });
+                begun(agents, agent, "ask_for_tab", reason, cx)
+            }
+            _ => {
+                let question = json!({ "question": "Which size?" });
+                begun(agents, agent, "ask", question, cx)
+            }
+        }
+    }
+
+    /// A wait on the user isn't work (#4320): while a task waits at its own hand_off, at a
+    /// sign-in its page met, at its ask for a tab back or at its question, with nothing else under
+    /// way, nothing of its conversation moves and its stretch heads as worked, whether or not it
+    /// carried on past a refusal before.
+    #[gpui::test]
+    fn nothing_moves_at_a_wait_on_the_user_whatever_was_refused_before(cx: &mut TestAppContext) {
+        for refused in [false, true] {
+            for wait in ["hand_off", "sign-in", "ask_for_tab", "ask"] {
+                let (agents, browser, agent) = at_work_past(refused, cx);
+                let _waits = waits_on_user(&agents, &browser, &agent, &agent, wait, cx);
+                let (live, title, running) = stretch_head(&agents, &agent, cx);
+                assert!(
+                    matches!(live, task::Live::Handed | task::Live::Asked),
+                    "{wait}, refused before {refused}: {live:?}"
+                );
+                assert!(
+                    title.starts_with("Worked for") && !running,
+                    "{wait}, refused before {refused}: headed {title:?}, under way {running}"
+                );
+                assert_eq!(
+                    moving(&agents, &agent, cx),
+                    [""; 0],
+                    "{wait}, refused before {refused}"
+                );
+            }
+        }
+    }
+
+    /// The one case that moves: a task that carries on in another of its pages through a wait.
+    /// That step alone moves, the waiting step never, whichever of the two began first, and the
+    /// stretch heads as at work. A step from before a question is in the stretch the question
+    /// closed, as one above any message is, so the question's wait has the one order.
+    #[gpui::test]
+    fn a_step_in_another_page_alone_moves_through_a_wait(cx: &mut TestAppContext) {
+        let orders = [
+            ("hand_off", false),
+            ("hand_off", true),
+            ("sign-in", false),
+            ("sign-in", true),
+            ("ask_for_tab", false),
+            ("ask_for_tab", true),
+            ("ask", false),
+        ];
+        for refused in [false, true] {
+            for (wait, step_first) in orders {
+                let (agents, browser, agent) = at_work_past(refused, cx);
+                let other = if wait == "hand_off" { 30 } else { 31 };
+                let looks = |cx: &mut TestAppContext| {
+                    begun(&agents, &agent, "snapshot", json!({ "tab": other }), cx)
+                };
+                let before = step_first.then(|| looks(cx));
+                let _waits = waits_on_user(&agents, &browser, &agent, &agent, wait, cx);
+                let _after = before.is_none().then(|| looks(cx));
+                let case = format!("{wait}, step first {step_first}, refused before {refused}");
+                let (live, title, running) = stretch_head(&agents, &agent, cx);
+                assert!(
+                    matches!(live, task::Live::Handed | task::Live::Asked),
+                    "{case}: {live:?}"
+                );
+                assert_eq!((title.as_str(), running), ("Working", true), "{case}");
+                assert_eq!(moving(&agents, &agent, cx), ["snapshot"], "{case}");
+            }
+        }
+    }
+
+    /// One road for both kinds of agent: an outside app's thread, whose conversation is its steps
+    /// one by one, holds still at each of its waits, and with a step under way in another of its
+    /// pages that step alone moves, whichever of the two began first.
+    #[gpui::test]
+    fn an_outside_apps_thread_moves_through_a_wait_by_its_other_pages_step_alone(
+        cx: &mut TestAppContext,
+    ) {
+        for wait in ["hand_off", "sign-in", "ask_for_tab"] {
+            // No step in the other page, one begun before the wait, one begun after.
+            for step_first in [None, Some(true), Some(false)] {
+                let (agents, browser, _configs) = connected(cx);
+                // Page 30 it opened; page 31 is in its Space as one it opened before is.
+                let opened = json!({ "url": "shop.example" });
+                let page = Some(shop_tree());
+                traced(
+                    &agents,
+                    &browser,
+                    "claude-code",
+                    "open_tab",
+                    opened,
+                    page,
+                    cx,
+                );
+                (browser.tabs.borrow_mut()).push((31, 2, "Sign in", "https://example.com/login"));
+                let key = session_key(&agents, "claude-code", cx);
+                let other = if wait == "hand_off" { 30 } else { 31 };
+                let looks = |cx: &mut TestAppContext| {
+                    let page = json!({ "tab": other });
+                    begun(&agents, "claude-code", "snapshot", page, cx)
+                };
+                let before = (step_first == Some(true)).then(|| looks(cx));
+                let _waits = waits_on_user(&agents, &browser, "claude-code", &key, wait, cx);
+                let _after = (step_first == Some(false)).then(|| looks(cx));
+                let case = format!("{wait}, step first {step_first:?}");
+                let talk =
+                    agents.read_with(cx, |agents, cx| agents.conversation(&key, cx).unwrap());
+                assert!(
+                    matches!(talk.live, task::Live::Handed | task::Live::Asked),
+                    "{case}: {:?}",
+                    talk.live
+                );
+                assert!(
+                    (talk.lines.iter()).all(|line| !matches!(line, task::Line::Trace(_))),
+                    "{case}: a stretch in an outside app's conversation"
+                );
+                let under_way: &[&str] = match step_first {
+                    Some(_) => &["snapshot"],
+                    None => &[],
+                };
+                assert_eq!(moving(&agents, &key, cx), under_way, "{case}");
+            }
+        }
+    }
+
+    /// Once the user hands the page back the wait is over, and the next step moves as any does.
+    #[gpui::test]
+    fn the_next_step_moves_again_after_the_hand_back(cx: &mut TestAppContext) {
+        for refused in [false, true] {
+            let (agents, _browser, agent) = at_work_past(refused, cx);
+            let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+            let handed = begun(&agents, &agent, "hand_off", reason, cx);
+            assert_eq!(moving(&agents, &agent, cx), [""; 0]);
+            agents.update(cx, |agents, cx| agents.hand_back(31, cx));
+            cx.run_until_parked();
+            assert!(!handed.recv().unwrap().error);
+            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 31 }), cx);
+            assert_eq!(
+                moving(&agents, &agent, cx),
+                ["snapshot"],
+                "refused before {refused}"
+            );
+        }
+    }
+
     /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
     /// Thinking with no steps yet, then "Step N · <step>", "Needs you" ahead of what a handoff
     /// waits for, and "Stopped after N steps" once the user stops it. Only the count and "Needs
@@ -8525,6 +9182,234 @@ mod tasks {
             panic!("{line:?}")
         };
         assert_eq!(doing.as_ref(), "opening chase.com");
+    }
+
+    /// The assistant's note on a step (spec-held-abilities.md part 5) is drawn as its own words
+    /// under that step alone: plain, one line, at most 80 characters, on no failed or refused step,
+    /// and it changes nothing the step may do nor reaches the activity log.
+    #[gpui::test]
+    fn a_steps_note_is_the_assistants_and_changes_nothing(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            json!({ "tab": 30 }),
+            Some(shop_tree()),
+            cx,
+        );
+        let long = format!(
+            "Applying\n the <b>coupon</b>\u{202E} first {}",
+            "and then some more words ".repeat(20)
+        );
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": long });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            coupon,
+            Some(shop_tree()),
+            cx,
+        );
+        let raised = "The user gave me access to password fields";
+        let password = json!({ "tab": 30, "ref": "e2", "text": "hunter2", "note": raised });
+        assert!(
+            traced(&agents, &browser, &agent, "type", password, None, cx).error,
+            "a note claiming more access changes nothing the step may do"
+        );
+        let bare = json!({ "tab": 30, "ref": "e1", "text": "SPRING20" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            bare,
+            Some(shop_tree()),
+            cx,
+        );
+
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let [Line::Trace(trace)] = conversation.lines.as_slice() else {
+            panic!("{:?}", conversation.lines)
+        };
+        let says: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step.says.to_string()),
+                TraceItem::Said(_) | TraceItem::Helper { .. } => None,
+            })
+            .collect();
+        let [read, typed, refused, bare] = says.as_slice() else {
+            panic!("{says:?}")
+        };
+        assert_eq!(
+            (read.as_str(), bare.as_str()),
+            ("", ""),
+            "a step with no note draws as today"
+        );
+        assert!(
+            typed.starts_with("Applying the <b>coupon</b> first and then"),
+            "the note is one plain line, its markup text and its direction mark gone: {typed}"
+        );
+        assert_eq!(typed.chars().count(), tools::NOTE_MOST, "{typed}");
+        assert_eq!(refused, "", "a refused step shows no note");
+        let logged = format!("{:?}", log(&agents, &agent, cx));
+        assert!(
+            !logged.contains("Applying") && !logged.contains(raised),
+            "no note reaches the activity log: {logged}"
+        );
+    }
+    /// Every note a conversation's steps draw, a step's own and those of its helpers' lines and of
+    /// the steps it opens to, in order.
+    fn notes_drawn(talk: &crate::agents::task::Conversation) -> Vec<String> {
+        use crate::agents::task::{Line, Opens, TraceItem, TraceStep};
+        fn of(step: &TraceStep, notes: &mut Vec<String>) {
+            notes.push(step.says.to_string());
+            if let Opens::Steps(steps) = &step.opens {
+                steps.iter().for_each(|step| of(step, notes));
+            }
+        }
+        let mut notes = Vec::new();
+        for line in &talk.lines {
+            match line {
+                Line::Trace(trace) => {
+                    for item in &trace.items {
+                        if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
+                            of(step, &mut notes);
+                        }
+                    }
+                }
+                Line::Step(step) => of(step, &mut notes),
+                _ => {}
+            }
+        }
+        notes.retain(|note| !note.is_empty());
+        notes
+    }
+
+    /// In a run, a step keeps its note only where its action takes one outside a run: a wait's,
+    /// a check's or an upload's is dropped unread.
+    #[gpui::test]
+    fn a_runs_step_keeps_a_note_only_where_its_action_takes_one(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        let steps = json!({ "tab": 30, "steps": [
+            { "action": "scroll", "note": "Looking for the coupon field" },
+            { "action": "wait", "until": "quiet", "seconds": 10, "note": "Letting it settle" },
+        ] });
+        let ran = traced_by(&agents, &agent, "run_steps", steps, cx, |answer, cx| {
+            for _ in 0..2 {
+                shop_done(&agents, &browser, cx);
+                cx.run_until_parked();
+            }
+            answer.recv().unwrap()
+        });
+        assert!(!ran.error, "{}", ran.text);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        assert_eq!(notes_drawn(&talk), ["Looking for the coupon field"]);
+    }
+
+    /// An address the browser can't make out heads its step's page by the kind, a page, never by
+    /// the assistant's words, which would head a group of the log as if they were a site.
+    #[gpui::test]
+    fn an_address_that_doesnt_resolve_heads_its_step_as_a_page(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        const WORDS: &str = "Buy now at the best prices anywhere\0";
+        let (agents, _, agent) = at_work(cx);
+        let went = json!({ "tab": 30, "url": WORDS });
+        traced_by(&agents, &agent, "navigate", went, cx, |answer, _| {
+            answer.recv().unwrap()
+        });
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let sites: Vec<String> = (talk.lines.iter())
+            .filter_map(|line| match line {
+                Line::Trace(trace) => Some(trace.items.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => step.page.map(|page| page.site.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sites.last().map(String::as_str),
+            Some("page"),
+            "the step's page is headed by its kind, not the words: {sites:?}"
+        );
+        assert!(!sites.iter().any(|site| site.contains("Buy")), "{sites:?}");
+    }
+
+    /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
+    /// else: not on the card's live line or anywhere on the card, the strip's line, the system
+    /// notification, the kept list's row, nor the answer a screen reader is told, which is the
+    /// task's last message.
+    #[gpui::test]
+    fn a_steps_note_is_nowhere_but_under_its_step(cx: &mut TestAppContext) {
+        use crate::agents::task::Line;
+        use crate::needs_you::{self, Host, Notify};
+        #[derive(Default)]
+        struct Posted(RefCell<Vec<String>>);
+        impl Host for Posted {
+            fn badge(&self, _: usize) {}
+            fn active(&self) -> bool {
+                false
+            }
+            fn notify(&self, _: u64, title: &str, body: &str) {
+                self.0.borrow_mut().push(format!("{title}\n{body}"));
+            }
+        }
+        const NOTE: &str = "Applying the coupon first";
+        let (agents, browser, agent) = at_work(cx);
+        let posted = Rc::new(Posted::default());
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        let mut seen = Vec::new();
+        let mut look = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            let cards = agents.read_with(cx, |agents, cx| agents.cards(1, cx));
+            cx.update(|cx| needs_you::follow(&cards, Notify::Away, cx));
+            seen.push(format!("{cards:?}"));
+            let strips = agents.read_with(cx, |agents, _| agents.status());
+            seen.extend(strips.iter().map(|strip| strip.doing.to_string()));
+        };
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": NOTE });
+        let typed = traced_by(&agents, &agent, "type", coupon, cx, |answer, cx| {
+            // While it's under way, the card's live line is the step's.
+            look(&agents, cx);
+            page_done(&agents, &browser, answer, shop_tree(), cx)
+        });
+        assert!(!typed.error, "{}", typed.text);
+        look(&agents, cx);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        assert_eq!(notes_drawn(&talk), [NOTE], "the note is under its step");
+        let done =
+            json!({ "result": "Applied SPRING10.", "summary": "Coupon applied", "tabs": [30] });
+        let finished = call(&agents, &agent, "finish", done, cx).recv().unwrap();
+        assert!(!finished.error, "{}", finished.text);
+        look(&agents, cx);
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        seen.extend(talk.lines.iter().filter_map(|line| match line {
+            Line::Said(text) => Some(text.to_string()),
+            _ => None,
+        }));
+        let posted = posted.0.take();
+        assert!(!posted.is_empty(), "Done is posted");
+        seen.extend(posted);
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        seen.push(kept[0].1.to_json().to_string());
+        for words in seen {
+            assert!(!words.contains(NOTE), "{words}");
+        }
     }
 
     #[gpui::test]
@@ -9221,11 +10106,14 @@ mod tasks {
             failed: false,
             opens,
             under: "".into(),
+            page: None,
+            says: "".into(),
         };
         let trace = Trace {
             key: 0,
             running: false,
             took: Some(4),
+            started: None,
             items: vec![TraceItem::Step(step(
                 0,
                 Opens::Steps(vec![step(1, Opens::Nothing), step(2, Opens::Nothing)]),
@@ -9780,49 +10668,74 @@ mod tasks {
         assert_eq!(tier(&second, cx), Tier::Work);
     }
 
-    /// Pages the user added reach the task as their addresses, http(s) only; Only the pages you
-    /// add limits it to their sites; and the start's entry gains their count, never an address.
+    /// Pages the user added reach the task as their addresses, http(s) only, and the start's entry
+    /// gains their count, never an address. They open as its own tabs and keep it to nothing: it
+    /// goes to another site at its level, and a site on the Off limits list is still refused.
     #[gpui::test]
-    fn added_pages_limit_the_task_to_their_sites_and_the_log_counts_them(cx: &mut TestAppContext) {
+    fn added_pages_keep_the_task_to_no_site_but_off_limits_still_refuses(cx: &mut TestAppContext) {
         use crate::agents::task::Start;
-        let (agents, _) = ready(None, cx);
-        let start = |only_added: bool| Start {
+        let (agents, browser) = ready(None, cx);
+        agents.update(cx, |agents, cx| {
+            assert!(agents.fence("https://www.mybank.example/", cx).is_some());
+        });
+        let start = Start {
             pages: vec![
                 "https://fieldbook.example/lakeside".into(),
                 "https://www.atlas.example/parks".into(),
                 "file:///etc/passwd".into(),
             ],
-            only_added,
             ..Start::default()
         };
-        let only = agents.update(cx, |agents, cx| {
-            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(true), cx)
+        let agent = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start, cx)
         });
-        let any = agents.update(cx, |agents, cx| {
-            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(false), cx)
+        let agent = agent.expect("started");
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
         });
-        let [only, any] = [only, any].map(|agent| agent.expect("started"));
         agents.read_with(cx, |agents, _| {
-            let task = agents.task(&only).unwrap();
-            let sites = [
-                "https://fieldbook.example/lakeside",
-                "https://www.atlas.example/parks",
-            ]
-            .map(|url| crate::sort_by_site::made_up_site(url).unwrap())
-            .to_vec();
             assert_eq!(
-                task.sites,
-                Sites::Only(sites),
-                "only the added pages' sites"
+                agents.task(&agent).unwrap().added.len(),
+                2,
+                "no page off the web is added"
             );
-            assert_eq!(task.added.len(), 2, "no page off the web is added");
-            assert_eq!(agents.task(&any).unwrap().sites, Sites::Any);
-            let logged: Vec<String> = (agents.activity(&only))
+            let logged: Vec<String> = (agents.activity(&agent))
                 .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
                 .map(|entry| entry.target.to_string())
                 .collect();
             assert_eq!(logged, ["Started at Work on pages · 2 pages"]);
         });
+
+        let tabs = browser.tabs.borrow().len();
+        let other = json!({ "url": "https://www.trailmap.example/" });
+        let opening = call(&agents, &agent, "open_tab", other, cx);
+        assert!(
+            opening.try_recv().is_err(),
+            "an open of another site was answered at once"
+        );
+        assert_eq!(
+            browser.tabs.borrow().len(),
+            tabs + 1,
+            "another site didn't open"
+        );
+        let stops =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.stops(&agent));
+        assert!(stops(cx).is_empty(), "another site was refused");
+
+        let fenced = json!({ "url": "https://www.mybank.example/" });
+        let refused = call(&agents, &agent, "open_tab", fenced, cx)
+            .recv()
+            .unwrap();
+        assert!(refused.error, "{}", refused.text);
+        assert_eq!(
+            browser.tabs.borrow().len(),
+            tabs + 1,
+            "the fenced site opened"
+        );
+        let whys: Vec<Why> = stops(cx).iter().map(|stop| stop.why).collect();
+        assert_eq!(whys, [Why::Fenced]);
     }
 
     /// The pages the user added reach the task each on a line of its own under the sentence, so an
@@ -9980,7 +10893,9 @@ mod tasks {
                 tabs: Vec::new(),
             };
         });
-        assert_eq!(card_of(&agents, cx).line, None, "Finished says Done twice");
+        let card = card_of(&agents, cx);
+        assert_eq!(card.line, None, "a line would say Done twice");
+        assert_eq!(card.status.as_ref(), card.word.after_name());
     }
 
     /// A done card's line is cleaned as a title is: a link shows its label alone, what wouldn't
@@ -10013,8 +10928,7 @@ mod tasks {
         assert_eq!(answer(&long, cx), Some(kept));
     }
 
-    /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
-    /// does, and a task outside its Sites goes on once the user has said any site.
+    /// A Stopped line's step up reaches the task through the user's press, as Stop does.
     #[gpui::test]
     fn the_lines_buttons_change_the_tasks_access(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
@@ -10023,21 +10937,13 @@ mod tasks {
             let task = agents.task_mut(&agent).unwrap();
             task.ended = None;
             task.state = State::Working;
-            task.sites = Sites::Only(vec!["example.com".into()]);
         });
-        let mut act = |action| {
-            agents.update(cx, |agents, cx| {
-                agents.task_action(&agent, action, cx);
-            })
-        };
-        // Any site first: the step up tells the task, which here has no CLI to run it again.
-        act(TaskAction::AnySite);
-        act(TaskAction::SetTier(Tier::Full));
-        let (tier, sites) = agents.read_with(cx, |agents, _| {
-            let task = agents.task(&agent).unwrap();
-            (task.tier, task.sites.clone())
+        // The step up tells the task, which here has no CLI to run it again.
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::SetTier(Tier::Full), cx);
         });
-        assert_eq!((tier, sites), (Tier::Full, Sites::Any));
+        let tier = agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().tier);
+        assert_eq!(tier, Tier::Full);
     }
 
     #[gpui::test]
@@ -10531,7 +11437,7 @@ mod tasks {
         assert_eq!(listed, [Cli::Codex, Cli::Claude]);
         agents.update(cx, |agents, cx| {
             agents.tasks.found.get_mut(&Cli::Codex).unwrap().ready = Ready::SignedOut;
-            agents.set_on(false, cx);
+            agents.set_threads(false, cx);
         });
         assert!(
             agents
@@ -10539,6 +11445,82 @@ mod tasks {
                 .is_empty(),
             "off lists none"
         );
+    }
+
+    /// A going thread's model opens its assistant's group alone where its program takes another
+    /// model for the next message, Codex's; Claude's keeps the one it started on, with no menu. A
+    /// pick holds only a model of the list the menu was built from, and is the next run's too.
+    #[gpui::test]
+    fn a_going_codex_thread_takes_another_model_and_claudes_keeps_its_own(cx: &mut TestAppContext) {
+        use crate::agents::ready::Models;
+        let (agents, _) = ready(None, cx);
+        agents.update(cx, |agents, _| {
+            let listed = Models {
+                listed: [("gpt-a", "GPT A"), ("gpt-b", "GPT B")]
+                    .map(|(id, name)| (id.to_string(), name.to_string()))
+                    .into(),
+                default: Some("GPT A".into()),
+            };
+            let found = Found {
+                ready: Ready::SignedIn,
+                program: Some("/opt/codex".into()),
+                models: Some(listed),
+                ..Default::default()
+            };
+            agents.tasks.found.insert(Cli::Codex, found);
+        });
+        let codex = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Codex, "Compare passes", page(), 1, Tier::default(), cx)
+            })
+            .expect("started");
+        let claude = start(&agents, "Find a flight", cx);
+        let menu = |agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (agents.thread_model_menu(agent)).map(|(_, items)| crate::menu::described(&items))
+            })
+        };
+        let model = |agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| {
+                agents.conversation(agent, cx).unwrap().model
+            })
+        };
+        assert_eq!(
+            menu(&claude, cx),
+            None,
+            "Claude's program can't take another model"
+        );
+        assert!(
+            !model(&claude, cx).unwrap().2,
+            "Claude's model opens nothing"
+        );
+        assert!(model(&codex, cx).unwrap().2, "Codex's model opens its menu");
+        assert_eq!(
+            menu(&codex, cx).as_deref(),
+            Some("Codex's default [GPT A] (checked), GPT A, GPT B")
+        );
+
+        let pick = |agent: &str, id: &str, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| {
+                agents.task_action(agent, TaskAction::PickModel(id.into()), cx)
+            });
+        };
+        pick(&codex, "gpt-b", cx);
+        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        assert_eq!(
+            menu(&codex, cx).as_deref(),
+            Some("Codex's default [GPT A], GPT A, GPT B (checked)")
+        );
+        let next_run = |agent: &str, cli, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.launch_model(agent, cli))
+        };
+        assert_eq!(next_run(&codex, Cli::Codex, cx).as_deref(), Some("gpt-b"));
+        // A model the list doesn't have changes nothing, nor does a pick on Claude's thread.
+        pick(&codex, "gpt-z", cx);
+        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        let before = model(&claude, cx);
+        pick(&claude, "gpt-b", cx);
+        assert_eq!(model(&claude, cx), before);
     }
 
     /// The Model menu as the user sees it.
@@ -10568,7 +11550,7 @@ mod tasks {
         };
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "haiku", cx);
         });
         // Till Claude lists its own, ilo's names for them, its default naming none.
@@ -10627,7 +11609,7 @@ mod tasks {
         let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "sonnet", cx);
             for unlisted in ["Sonnet", "opus --verbose", "claude-sonnet", " sonnet"] {
                 agents.set_task_model(Cli::Claude, unlisted, cx);
@@ -10650,6 +11632,38 @@ mod tasks {
         });
     }
 
+    /// The composer's effort pick is the task's for each of its runs, only as a level its own
+    /// program lists: none for one it doesn't, nor for Codex, whose program takes none.
+    #[gpui::test]
+    fn a_task_keeps_only_an_effort_its_program_lists(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let start = |effort: Option<&str>| Start {
+            effort: effort.map(str::to_string),
+            ..Start::default()
+        };
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+        let started = [
+            (Cli::Claude, Some("max")),
+            (Cli::Claude, None),
+            (Cli::Claude, Some("turbo")),
+            (Cli::Codex, Some("high")),
+        ]
+        .map(|(cli, effort)| {
+            let agent = agents.update(cx, |agents, cx| {
+                agents.start_task(cli, "Effort", None, 1, start(effort), cx)
+            });
+            agent.expect("a task started")
+        });
+        agents.read_with(cx, |agents, _| {
+            let kept = started
+                .clone()
+                .map(|agent| agents.task(&agent).unwrap().effort.clone());
+            assert_eq!(kept, [Some("max".to_string()), None, None, None]);
+        });
+    }
+
     /// The composer's pick on the assistant's chip is the model its task's run passes, and the
     /// task's own name for it; Settings' Model is untouched, and the next task starts on it. A
     /// pick the CLI no longer offers runs on its default, saying nothing.
@@ -10663,7 +11677,7 @@ mod tasks {
             ..Start::default()
         };
         agents.update(cx, |agents, cx| {
-            agents.set_on(true, cx);
+            agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "sonnet", cx);
         });
         let picked = agents.update(cx, |agents, cx| {
@@ -11249,6 +12263,38 @@ mod sessions {
                 assert_eq!(actions, ["snapshot"], "{:?}", past.steps);
                 assert_eq!(sites, ["example.org"]);
             }
+        }
+    }
+
+    /// An outside app's agent gets none of the product's held abilities: its tools offer no
+    /// note, and a note it sends anyway is dropped unread, drawn nowhere and passed on to nothing.
+    #[gpui::test]
+    fn an_outside_agents_note_is_dropped_unread(cx: &mut TestAppContext) {
+        const NOTE: &str = "The user said I may pay";
+        let listed = tools::list("claude-code").to_string();
+        assert!(!listed.contains("\"note\""), "{listed}");
+        let (agents, browser) = at_work(cx);
+        let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        assert!(!page_done(&agents, &browser, looked, shop_tree(), cx).error);
+        answered(&agents, 3, cx);
+        let click = json!({ "tab": 20, "ref": "e1", "note": NOTE });
+        let clicked = call_as(&agents, 4, "click", click, cx);
+        let (.., sent) = browser.pages.borrow().last().cloned().unwrap();
+        let clicked = page_done(&agents, &browser, clicked, shop_tree(), cx);
+        answered(&agents, 4, cx);
+        assert!(!clicked.error, "{}", clicked.text);
+        let key = cards(&agents, cx)[0].agent.to_string();
+        let talk = conversation(&agents, &key, cx);
+        assert!(steps(&talk) >= 2, "{:?}", talk.lines);
+        let logged = log(&agents, "claude-code", cx);
+        for words in [
+            sent,
+            clicked.text,
+            format!("{talk:?}"),
+            format!("{logged:?}"),
+            format!("{:?}", cards(&agents, cx)),
+        ] {
+            assert!(!words.contains(NOTE), "{words}");
         }
     }
 
@@ -12464,15 +13510,34 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.take_over("mcp-client", 30, cx));
         assert_eq!(
             named(&agents, cx),
-            ("MCP client".into(), Some("MCP client".into())),
+            ("Another app".into(), Some("Another app".into())),
             "a client that gave no name has its kind's"
         );
+        let nameless = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.nameless("mcp-client"))
+        };
+        assert!(nameless(&agents, cx), "no name of its own");
+        // One naming itself the kind's word lands on that same word, with no name of its own.
+        hello(&agents, "mcp-client", "Another app", cx);
+        assert_eq!(
+            named(&agents, cx),
+            ("Another app".into(), Some("Another app".into()))
+        );
+        assert!(nameless(&agents, cx), "Another app passed as a name");
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's.
+        // its kind's: the app's name, and the product's as the user reads it, in any case.
         let app = env!("APP_NAME");
+        let product = crate::product::PRODUCT;
+        let mut capital = product.chars();
+        let capital = capital.next().map_or(String::new(), |first| {
+            first.to_uppercase().chain(capital).collect()
+        });
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
+            product.to_string(),
+            format!("{} agent", product.to_uppercase()),
+            format!("My {capital} helper"),
             "The browser".into(),
             "Checked by your browser".into(),
             // Another client's name is that client's, however it's spaced, joined or stopped, and
@@ -12508,11 +13573,14 @@ mod sessions {
             "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
-            assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
+            assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
+            assert!(nameless(&agents, cx), "{posing} passed as a name");
         }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
         for taken in [
+            // The kind's old word is a name like any other.
+            "MCP client",
             "Browser Use",
             "Checker",
             "Ren\u{00E9}e",
@@ -12528,6 +13596,7 @@ mod sessions {
         assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+        assert!(!nameless(&agents, cx), "a name of its own");
 
         // Its session's card has that name, and keeps it while it works.
         let (reply, _answer) = mpsc::channel();
@@ -12806,6 +13875,7 @@ mod sessions {
             (card.dot, card.status.as_ref()),
             (Dot::Done, "Done · 1 order placed")
         );
+        assert!(card.fuller, "a session's receipt isn't its word's form");
         assert_eq!(card.open, vec![(20, "example.com".into())]);
         assert!(
             (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
@@ -12854,6 +13924,44 @@ mod sessions {
         assert!(card.question.is_some());
     }
 
+    /// What a `done` came to is a fact, which its caller logs by whatever its answer says: one
+    /// refused for a call still under way is in the activity log with why, the one that ends the
+    /// task is there too, and one with nothing under way is no error and isn't logged.
+    #[gpui::test]
+    fn done_is_logged_by_what_it_came_to(cx: &mut TestAppContext) {
+        use crate::agents::task::SaidDone;
+        let (agents, _browser) = at_work(cx);
+        let dones = |cx: &mut TestAppContext| -> Vec<String> {
+            (log(&agents, "claude-code", cx).into_iter())
+                .filter(|entry| entry.0 == "done")
+                .map(|entry| entry.2)
+                .collect()
+        };
+        // Its read_page, call 2, is still under way.
+        let refused = call_as(&agents, 3, "done", json!({}), cx).recv().unwrap();
+        answered(&agents, 3, cx);
+        assert!(refused.error, "{}", refused.text);
+        assert_eq!(dones(cx), [refused.text.clone()]);
+        answered(&agents, 2, cx);
+        let said = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        answered(&agents, 4, cx);
+        assert_eq!(said, SaidDone::Ended.answer());
+        let mut logged = dones(cx);
+        logged.sort();
+        assert_eq!(logged, [String::new(), refused.text]);
+        // Nothing under way: answered as such, with nothing more in the log.
+        let nothing = agents.update(cx, |agents, cx| agents.said_done("claude-code", 5, cx));
+        assert_eq!(nothing, SaidDone::NoTask);
+        let again = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(again, SaidDone::NoTask.answer());
+        assert!(!again.error, "{}", again.text);
+        assert_eq!(
+            dones(cx).len(),
+            2,
+            "a done with nothing under way was logged"
+        );
+    }
+
     /// Either card's Stop stops the client on every connection, and each connection's card, which
     /// says it stopped: its calls under way are answered that the user stopped it, and its
     /// connections close, so it shows the browser's server as gone, with one "stopped by the user"
@@ -12863,7 +13971,7 @@ mod sessions {
     #[gpui::test]
     fn stop_closes_the_clients_connections_and_their_cards(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
-        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
         let (socket, token) = agents.read_with(cx, |agents, _| {
             let tokens = agents.tokens.lock().unwrap();
             let token = tokens.iter().find(|(_, agent)| *agent == "claude-code");
@@ -13046,7 +14154,7 @@ mod sessions {
             " CODEX",
             "Claude-Code.",
             "My Codex",
-            "MCP  client",
+            "Another  app",
             "C\u{043E}dex",
         ] {
             hello(&agents, agent, posing, cx);
@@ -13616,7 +14724,10 @@ mod other_apps;
 mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
+#[cfg(unix)]
+mod searches;
 mod sign_ins;
+mod switches;
 mod uploads;
 mod went_to;
 

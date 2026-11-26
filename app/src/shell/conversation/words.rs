@@ -8,18 +8,13 @@ use crate::agents::task::ilo::{
     HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
 };
 use crate::agents::tier::{self, Tier, Why};
+use crate::product::PRODUCT;
 
-/// ilo's mark, before each of its lines' words.
-pub const MARK: &str = "ilo";
+/// The product's name, before each of its lines' words.
+pub const MARK: &str = PRODUCT;
 /// The live line's button, and a Stopped line's first.
 pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
-
-/// The live line while no step is under way: between steps, and after Hand Back or a change of
-/// access, until the next step starts.
-pub fn working(agent: &str) -> String {
-    format!("{agent} is working")
-}
 
 /// The assistant's own words as a screen reader is told them, the first line of its answer: the
 /// mark before them is the app's, and spoken only, so nothing an assistant writes is heard as a
@@ -30,6 +25,24 @@ pub fn says(assistant: &str, said: &str) -> String {
 
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
+
+/// The button under an answer that copies it, as a screen reader names it (Z18).
+pub const COPY_ANSWER: &str = "Copy Answer";
+
+/// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
+pub fn split(strands: usize) -> Option<String> {
+    (strands > 1).then(|| format!("Split into {strands} strands"))
+}
+
+/// The fold over a stretch of work (Z14), the one place the weaving pair stands: at work, its word
+/// and the time so far; done, the time it took.
+pub fn fold(took: Option<u64>, so_far: u64) -> (String, String) {
+    use crate::agents::task::duration;
+    match took {
+        Some(took) => (format!("Woven in {}", duration(took)), String::new()),
+        None => ("Weaving".to_string(), duration(so_far)),
+    }
+}
 
 /// The live line's button while the user has the task's page.
 pub const HAND_BACK: &str = "Hand Back";
@@ -55,7 +68,7 @@ pub fn live(live: &Live) -> Option<String> {
 pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
     match kind {
         IloKind::Stopped {
-            why: Why::Fenced | Why::OtherSite,
+            why: Why::Fenced,
             at,
             ..
         } => (
@@ -75,7 +88,9 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Yours { .. } => ("handed this step to you".into(), None),
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
-        IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
+        IloKind::TierChanged { to, .. } => {
+            (format!("· You set this thread to {}", to.label()), None)
+        }
         // The pages it held then, by their count alone (Z17).
         IloKind::YouStopped { pages } => (
             match crate::agents::tools::pages_counted(*pages) {
@@ -88,14 +103,14 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Helpers { limit, .. } => (
             match (*limit, crate::tokens::agents::helpers::MOST) {
                 (Limit::Depth, _) => {
-                    format!("stopped {agent} when a helper started a helper of its own")
+                    format!("stopped {agent} when a strand started a strand of its own")
                 }
                 (Limit::Kind, _) => {
-                    format!("stopped {agent} after it started a helper ilo doesn't allow")
+                    format!("stopped {agent} after it started a strand that isn't allowed")
                 }
-                (Limit::Count, 1) => format!("stopped {agent} after it started more than 1 helper"),
+                (Limit::Count, 1) => format!("stopped {agent} after it started more than 1 strand"),
                 (Limit::Count, most) => {
-                    format!("stopped {agent} after it started more than {most} helpers")
+                    format!("stopped {agent} after it started more than {most} strands")
                 }
             },
             None,
@@ -103,25 +118,25 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         // A wall ilo couldn't put up (#4101). Each names what the user gave, and `tail` ends it.
         IloKind::StartedWithout {
             left: LeftOut::Folder(name) | LeftOut::File(name),
-        } => ("started this task without".into(), Some(name.to_string())),
+        } => ("started this thread without".into(), Some(name.to_string())),
         IloKind::StartedWithout {
             left: LeftOut::Files(files),
         } => (
             format!(
-                "started this task without your {files} files: ilo couldn't limit {agent} to them"
+                "started this thread without your {files} files: {PRODUCT} couldn't limit {agent} to them"
             ),
             None,
         ),
         IloKind::KeptAt { at, folder, .. } => (
             format!(
-                "kept this task at {}: ilo couldn't limit {agent} to",
+                "kept this thread at {}: {PRODUCT} couldn't limit {agent} to",
                 at.label()
             ),
             Some(folder.to_string()),
         ),
         IloKind::SetBack { at, folder, .. } => (
             format!(
-                "set this task back to {}: ilo couldn't limit {agent} to",
+                "set this thread back to {}: {PRODUCT} couldn't limit {agent} to",
                 at.label()
             ),
             Some(folder.to_string()),
@@ -129,18 +144,20 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::NotRestarted {
             left: LeftOut::Folder(name) | LeftOut::File(name),
         } => (
-            format!("stopped this task: ilo couldn't restart {agent} without"),
+            format!("stopped this thread: {PRODUCT} couldn't restart {agent} without"),
             Some(name.to_string()),
         ),
         IloKind::NotRestarted {
             left: LeftOut::Files(files),
         } => (
-            format!("stopped this task: ilo couldn't restart {agent} without your {files} files"),
+            format!(
+                "stopped this thread: {PRODUCT} couldn't restart {agent} without your {files} files"
+            ),
             None,
         ),
         IloKind::NotRaised { refused } => (
             format!(
-                "stopped this task: ilo couldn't restart {agent} at {}",
+                "stopped this thread: {PRODUCT} couldn't restart {agent} at {}",
                 refused.label()
             ),
             None,
@@ -157,7 +174,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         } => (
             format!(
                 "couldn't end everything {agent} started: what's left can still reach this \
-                 task's files{RESTART_ENDS}"
+                 thread's files{RESTART_ENDS}"
             ),
             None,
         ),
@@ -168,23 +185,23 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         // X6c: what the copy that failed would have given, by its count.
         IloKind::NotCopied {
             left: LeftOut::File(name) | LeftOut::Folder(name),
-        } => ("started this task without".into(), Some(name.to_string())),
+        } => ("started this thread without".into(), Some(name.to_string())),
         IloKind::NotCopied {
             left: LeftOut::Files(files),
         } => (
-            format!("started this task without {files} files: ilo couldn't copy them"),
+            format!("started this thread without {files} files: {PRODUCT} couldn't copy them"),
             None,
         ),
-        IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
+        IloKind::Resumed { tier } => (format!("resumed this thread at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply after a quit too, so the words name no end; the reply field
         // says reply, and Settings is where one is removed, so the line says neither.
         IloKind::KeptHere => (format!("· {agent} still has this conversation."), None),
         IloKind::Gone => (format!("· {}", kept::gone_words(agent)), None),
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
-        IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
-        IloKind::NoProfile => ("· This task's profile was deleted.".into(), None),
-        IloKind::NoSpace => ("· This task's profile has no Space left.".into(), None),
+        IloKind::KeepsNothing => (format!("· {agent} doesn't keep conversations."), None),
+        IloKind::NoProfile => ("· This thread's profile was deleted.".into(), None),
+        IloKind::NoSpace => ("· This thread's profile has no Space left.".into(), None),
     }
 }
 
@@ -195,7 +212,7 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
     let site = matches!(
         kind,
         IloKind::Stopped {
-            why: Why::Fenced | Why::OtherSite,
+            why: Why::Fenced,
             ..
         } | IloKind::SignedIn { .. }
             | IloKind::Yours { .. }
@@ -222,10 +239,10 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
     match kind {
         IloKind::StartedWithout {
             left: LeftOut::Folder(_),
-        } => Some(format!(": ilo couldn't limit {agent} to that folder")),
+        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that folder")),
         IloKind::StartedWithout {
             left: LeftOut::File(_),
-        } => Some(format!(": ilo couldn't limit {agent} to that file")),
+        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that file")),
         IloKind::KeptAt { refused, .. } | IloKind::SetBack { refused, .. } => {
             Some(format!(" at {}", refused.label()))
         }
@@ -234,11 +251,11 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         } => Some(RESTART_ENDS.into()),
         IloKind::LeftRunning {
             reach: Reach::Both(_),
-        } => Some(format!(" and this task's files{RESTART_ENDS}")),
-        IloKind::FolderGone { .. } => Some(": ilo couldn't find it".into()),
+        } => Some(format!(" and this thread's files{RESTART_ENDS}")),
+        IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),
-        } => Some(": ilo couldn't copy it".into()),
+        } => Some(format!(": {PRODUCT} couldn't copy it")),
         _ => None,
     }
 }
@@ -301,7 +318,6 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Look) => "Look only",
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
-        IloButton::AnySite => "Any site",
         IloButton::HandBack | IloButton::PagesBack => "Hand Back",
         IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
@@ -310,7 +326,32 @@ pub fn button(button: IloButton) -> &'static str {
 }
 
 /// What a line's buttons promise, under them, if anything.
+/// Under Full access, how long it lasts: the behaviours menu's foot, word for word (C3).
 pub fn note(buttons: &[IloButton]) -> Option<&'static str> {
-    (buttons.contains(&IloButton::Raise(Tier::Full)))
-        .then_some("Full access lasts for this task only.")
+    (buttons.contains(&IloButton::Raise(Tier::Full))).then_some("For this thread only")
+}
+
+/// The quiet line in the reply field's place, if any: on an outside app's session, which `name`
+/// is, where to reply (C2); while Settings › Threads' switch is off, that it is (C1).
+pub fn in_reply_place(replies: bool, threads_off: bool, name: &str) -> Option<String> {
+    match (replies, threads_off) {
+        (false, _) => Some(format!("Reply in {name}.")),
+        (true, true) => Some("Threads are off in Settings › Threads.".to_string()),
+        (true, false) => None,
+    }
+}
+
+/// The reply field's placeholder while its thread is at work (Z-who): typing there steers it.
+pub const STEER: &str = "Steer it, or ask";
+
+/// The reply field's placeholder otherwise (Z-who), and the name of the button that sends what's
+/// typed, whoever is at work: the user reads ilo as the one at work, never the assistant.
+pub const REPLY: &str = "Reply";
+
+/// The reply field's placeholder, as its thread is `at_work` or not.
+pub fn reply_field(at_work: bool) -> &'static str {
+    match at_work {
+        true => STEER,
+        false => REPLY,
+    }
 }

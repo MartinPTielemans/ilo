@@ -74,11 +74,12 @@ fn flatpak_name(info: &str) -> Option<String> {
         .map(|name| name.trim().into())
 }
 
-/// What a client is told while agents are off, and while other apps' agents are (#4260): the one
-/// answer either way, so a client can't tell them apart.
+/// What a client is told with nothing listening and while other apps' agents are off (#4260): the
+/// one answer either way, so a client can't tell them apart, nor whether threads are on.
 pub fn off() -> String {
     format!(
-        "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
+        "{0} isn't running, or access for other apps is off. Open {0} and turn it on in Settings › \
+         Other apps.",
         env!("APP_NAME")
     )
 }

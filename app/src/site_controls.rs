@@ -2047,8 +2047,14 @@ impl SiteControls {
                     .absolute()
                     .size_full()
                     .rounded(px(TILE_RADIUS))
-                    .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
-                    .active(move |style| style.bg(palette.plate(STATE_PRESSED))),
+                    .hover(move |style| {
+                        style
+                            .bg(palette.on_float(Float::SiteControls, palette.plate(STATE_HOVERED)))
+                    })
+                    .active(move |style| {
+                        style
+                            .bg(palette.on_float(Float::SiteControls, palette.plate(STATE_PRESSED)))
+                    }),
             )
             .child(
                 svg()
@@ -2067,20 +2073,27 @@ impl SiteControls {
             let (column, line) = (index % EXTENSIONS_PER_ROW, index / EXTENSIONS_PER_ROW);
             let x = PADDING + column as f32 * (TILE_WIDTH + GAP);
             let frame = Self::tile_frame(x, y + line as f32 * (TILE_HEIGHT + GAP));
-            let element = div()
-                .id(id)
-                .absolute()
-                .left(frame.origin.x)
-                .top(frame.origin.y)
-                .w(frame.size.width)
-                .h(frame.size.height)
-                .rounded(px(TILE_RADIUS))
-                .bg(palette.plate(PLATE))
-                .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
-                .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
-                .flex()
-                .items_center()
-                .justify_center();
+            let element =
+                div()
+                    .id(id)
+                    .absolute()
+                    .left(frame.origin.x)
+                    .top(frame.origin.y)
+                    .w(frame.size.width)
+                    .h(frame.size.height)
+                    .rounded(px(TILE_RADIUS))
+                    .bg(palette.on_float(Float::SiteControls, palette.plate(PLATE)))
+                    .hover(move |style| {
+                        style.bg(palette
+                            .on_float(Float::SiteControls, palette.state(PLATE, STATE_HOVERED)))
+                    })
+                    .active(move |style| {
+                        style.bg(palette
+                            .on_float(Float::SiteControls, palette.state(PLATE, STATE_PRESSED)))
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center();
             (element, frame)
         };
         let mut tiles: Vec<gpui::AnyElement> = (open.extensions.iter().enumerate())
@@ -2234,8 +2247,12 @@ impl SiteControls {
                 .hover(move |style| style.bg(tint(TINT_HOVERED)))
                 .active(move |style| style.bg(tint(TINT_PRESSED))),
             false => state
-                .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
-                .active(move |style| style.bg(palette.plate(STATE_PRESSED))),
+                .hover(move |style| {
+                    style.bg(palette.on_float(Float::SiteControls, palette.plate(STATE_HOVERED)))
+                })
+                .active(move |style| {
+                    style.bg(palette.on_float(Float::SiteControls, palette.plate(STATE_PRESSED)))
+                }),
         };
         div()
             .id(id)
@@ -2362,7 +2379,10 @@ impl SiteControls {
         name: SharedString,
         value: Option<SharedString>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (hovered, pressed) = (palette.plate(STATE_HOVERED), palette.plate(STATE_PRESSED));
+        let (hovered, pressed) = (
+            palette.on_float(Float::SiteControls, palette.plate(STATE_HOVERED)),
+            palette.on_float(Float::SiteControls, palette.plate(STATE_PRESSED)),
+        );
         let ink: gpui::Hsla = match on {
             true => palette.accent.into(),
             false => palette.on_overlay_glyph(ITEM_GLYPH_OFF),
@@ -2564,7 +2584,7 @@ impl SiteControls {
             .h(px(FOOTER))
             .max_w(px(room))
             .rounded(px(LOCK_RADIUS))
-            .bg(palette.plate(PLATE))
+            .bg(palette.on_float(Float::SiteControls, palette.plate(PLATE)))
             .flex()
             .items_start()
             .when(!alone, |button| button.pl(px(LOCK_LEFT)).pr(px(LOCK_RIGHT)))
@@ -2607,8 +2627,14 @@ impl SiteControls {
             })
             .map(|button| match site.certificate {
                 true => button
-                    .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
-                    .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
+                    .hover(move |style| {
+                        style.bg(palette
+                            .on_float(Float::SiteControls, palette.state(PLATE, STATE_HOVERED)))
+                    })
+                    .active(move |style| {
+                        style.bg(palette
+                            .on_float(Float::SiteControls, palette.state(PLATE, STATE_PRESSED)))
+                    })
                     .on_click(cx.listener(|panel, event, _, cx| {
                         panel.run("certificate", Run::Certificate, By::of(event), cx)
                     })),
@@ -2625,9 +2651,17 @@ impl SiteControls {
             .top(px(y))
             .size(px(FOOTER))
             .rounded_full()
-            .bg(palette.plate(MORE_FILL))
-            .hover(move |style| style.bg(palette.state(MORE_FILL, STATE_HOVERED)))
-            .active(move |style| style.bg(palette.state(MORE_FILL, STATE_PRESSED)))
+            .bg(palette.on_float(Float::SiteControls, palette.plate(MORE_FILL)))
+            .hover(move |style| {
+                style
+                    .bg(palette
+                        .on_float(Float::SiteControls, palette.state(MORE_FILL, STATE_HOVERED)))
+            })
+            .active(move |style| {
+                style
+                    .bg(palette
+                        .on_float(Float::SiteControls, palette.state(MORE_FILL, STATE_PRESSED)))
+            })
             .flex()
             .items_center()
             .justify_center()
@@ -2670,75 +2704,80 @@ impl SiteControls {
             size(px(FOOTER), px(FOOTER)),
         );
         let name = profiles.name.clone();
-        let chip =
-            div()
-                .id("site-profile")
-                .when(self.a11y, |chip| {
-                    button_named(chip, said("Profile", &name), (true, true, false))
-                })
-                .h(px(FOOTER))
-                .min_w_0()
-                .rounded(px(LOCK_RADIUS))
-                .bg(palette.plate(PLATE))
-                .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
-                .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
-                .flex()
-                .items_start()
-                .pl(px(LOCK_LEFT))
-                .pr(px(LOCK_RIGHT))
-                .child(
+        let chip = div()
+            .id("site-profile")
+            .when(self.a11y, |chip| {
+                button_named(chip, said("Profile", &name), (true, true, false))
+            })
+            .h(px(FOOTER))
+            .min_w_0()
+            .rounded(px(LOCK_RADIUS))
+            .bg(palette.on_float(Float::SiteControls, palette.plate(PLATE)))
+            .hover(move |style| {
+                style.bg(palette.on_float(Float::SiteControls, palette.state(PLATE, STATE_HOVERED)))
+            })
+            .active(move |style| {
+                style.bg(palette.on_float(Float::SiteControls, palette.state(PLATE, STATE_PRESSED)))
+            })
+            .flex()
+            .items_start()
+            .pl(px(LOCK_LEFT))
+            .pr(px(LOCK_RIGHT))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(LOCK_SLOT))
+                    .h(px(FOOTER))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .path("icons/users.svg")
+                            .size(px(LOCK_GLYPH))
+                            .text_color(palette.on_overlay_glyph(TEXT)),
+                    ),
+            )
+            .when(!alone, |chip| {
+                chip.child(
                     div()
-                        .flex_none()
-                        .w(px(LOCK_SLOT))
-                        .h(px(FOOTER))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            svg()
-                                .path("icons/users.svg")
-                                .size(px(LOCK_GLYPH))
-                                .text_color(palette.on_overlay_glyph(TEXT)),
-                        ),
+                        .min_w_0()
+                        .ml(px(LOCK_TEXT_GAP))
+                        .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
+                        .h(px(LINE))
+                        .line_height(px(LINE))
+                        .text_size(px(NAME_SIZE))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(palette.on_overlay(TEXT))
+                        .truncate()
+                        .child(name.clone()),
                 )
-                .when(!alone, |chip| {
-                    chip.child(
-                        div()
-                            .min_w_0()
-                            .ml(px(LOCK_TEXT_GAP))
-                            .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
-                            .h(px(LINE))
-                            .line_height(px(LINE))
-                            .text_size(px(NAME_SIZE))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(palette.on_overlay(TEXT))
-                            .truncate()
-                            .child(name.clone()),
-                    )
-                })
-                .when(cut, |chip| {
-                    chip.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
-                        panel.tooltip(name.clone(), square, *hovered, cx)
-                    }))
-                })
-                .child(
-                    div()
-                        .flex_none()
-                        .ml(px(PROFILE_CHEVRON_GAP))
-                        .h(px(FOOTER))
-                        .flex()
-                        .items_center()
-                        .child(
-                            svg()
-                                .path("icons/chevron-down.svg")
-                                .size(px(PROFILE_CHEVRON))
-                                .text_color(palette.on_overlay(SECONDARY)),
-                        ),
-                )
-                .on_click(cx.listener(|panel, event: &ClickEvent, _, cx| {
-                    panel.profiles(event.position(), cx)
+            })
+            .when(cut, |chip| {
+                chip.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+                    panel.tooltip(name.clone(), square, *hovered, cx)
                 }))
-                .children(self.ring(&Stop::Profile, LOCK_RADIUS, cx));
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .ml(px(PROFILE_CHEVRON_GAP))
+                    .h(px(FOOTER))
+                    .flex()
+                    .items_center()
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(PROFILE_CHEVRON))
+                            .text_color(palette.on_overlay(SECONDARY)),
+                    ),
+            )
+            .on_click(
+                cx.listener(|panel, event: &ClickEvent, _, cx| {
+                    panel.profiles(event.position(), cx)
+                }),
+            )
+            .children(self.ring(&Stop::Profile, LOCK_RADIUS, cx));
         // Against "…", the name giving way first.
         div()
             .absolute()

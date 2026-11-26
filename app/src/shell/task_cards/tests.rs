@@ -12,9 +12,11 @@ use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, 
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
+use crate::tokens::shell::task_card::{FROM_LINE, GAP};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
+        kept_picture: None,
         agent: format!("task-{n}").into(),
         home: 1,
         space: 100 + n,
@@ -39,6 +41,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -251,6 +254,7 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     working.status = "Step 3 · Opening tap.pt".into();
     assert_eq!(state_line(&working).as_ref(), "Claude · Working");
     working.status = "Working · 3 helpers".into();
+    working.fuller = true;
     assert_eq!(
         state_line(&working).as_ref(),
         "Claude · Working · 3 helpers"
@@ -272,12 +276,14 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     // An ended task says which of the three it is, from its card's word.
     let mut ended = card(4, Dot::Ended);
     ended.status = "Stopped after 6 steps".into();
+    ended.fuller = true;
     assert_eq!(
         state_line(&ended).as_ref(),
         "Claude · Stopped after 6 steps"
     );
     ended.word = Word::Interrupted;
     ended.status = "Claude Code quit".into();
+    ended.fuller = false;
     assert_eq!(state_line(&ended).as_ref(), "Claude · Interrupted");
     ended.word = Word::AtLimit;
     assert_eq!(state_line(&ended).as_ref(), "Claude · At limit");
@@ -286,6 +292,7 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     session.replies = false;
     session.name = "Flights".into();
     session.status = "Done · 10:42".into();
+    session.fuller = true;
     assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
 
     // As a whole card says them: waiting, the site and Needs you, never the question; done, when
@@ -305,6 +312,96 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// An outside app's card has its line from the kind of its connection alone, a session with no
+/// task's token, and a task's never does, whatever either is named. The name, however long or made
+/// of whatever state words, moves nothing and changes no rim, mark or button.
+#[test]
+fn an_outside_apps_line_comes_from_its_connection_alone() {
+    let long = "Flights ".repeat(25);
+    let names = [
+        "Flights",
+        "Needs you",
+        "Done · 13:31",
+        "Working",
+        "Claude",
+        "",
+        long.as_str(),
+    ];
+    let forms = [
+        Form::Working,
+        Form::Waits,
+        Form::DoneUnseen,
+        Form::Ended,
+        Form::WorkingLine,
+        Form::DoneLine,
+        Form::EndedLine,
+    ];
+    for name in names {
+        for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
+            let task = Card {
+                name: name.into(),
+                ..paged(1, dot, &[30])
+            };
+            let session = Card {
+                replies: false,
+                ..task.clone()
+            };
+            let short = Card {
+                name: "Flights".into(),
+                ..session.clone()
+            };
+            for form in forms {
+                let (theirs, ours) = (look(&task, form, true), look(&session, form, true));
+                assert!(!theirs.from && ours.from, "{name:?} {form:?}");
+                assert_eq!(
+                    Look {
+                        from: false,
+                        ..ours
+                    },
+                    theirs,
+                    "{name:?} {form:?}"
+                );
+                assert_eq!(
+                    super::room(&session, form, 1),
+                    super::room(&short, form, 1),
+                    "{form:?}"
+                );
+                // A whole card makes room for the line over its first row; a folded one carries
+                // only the mark, in its one line.
+                let more = super::room(&session, form, 1) - super::room(&task, form, 1);
+                let line = FROM_LINE + GAP;
+                assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
+            }
+        }
+    }
+}
+
+/// Whether a card's line says its status in its word's place is a fact its maker set, never read
+/// off the status: words that begin as ilo's own fuller forms do, a session's client named as a
+/// state among them, leave the line at the word.
+#[test]
+fn a_cards_line_says_its_status_only_where_its_maker_said_so() {
+    let posing = [
+        (Dot::Working, "Working · Opening tap.pt", "Claude · Working"),
+        (Dot::Ended, "Stopped by a page", "Claude · Stopped"),
+        (Dot::Done, "Done · 3 flights found", "Claude · Done"),
+    ];
+    for (dot, status, line) in posing {
+        for replies in [true, false] {
+            let mut card = card(1, dot);
+            card.status = status.into();
+            card.replies = replies;
+            assert_eq!(state_line(&card).as_ref(), line, "{status:?}");
+        }
+    }
+    // And where it did, the line is the status whatever it begins with.
+    let mut session = card(2, Dot::Done);
+    session.replies = false;
+    session.status = "1 order placed".into();
+    session.fuller = true;
+    assert_eq!(state_line(&session).as_ref(), "Claude · 1 order placed");
 }
 
 /// A card's mark, its rim and its button come from its task's state alone. Whatever the assistant
@@ -333,6 +430,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -343,6 +441,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: true,
                 button: true,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -356,6 +455,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: true,
+                from: false,
             },
             "{status}"
         );
@@ -436,6 +536,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
     let done = |n: u64, finding: &str| Card {
         finding: finding.into(),
         ended_time: "10:42".into(),
+        fuller: false,
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -492,6 +593,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         finding: finding.into(),
         told: finding.into(),
         ended_time: "10:42".into(),
+        fuller: false,
         ..card(1, Dot::Done)
     };
     assert_eq!(
@@ -712,6 +814,142 @@ fn a_waiting_card_lists_in_every_space(cx: &mut TestAppContext) {
     );
     // In its home Space it stands where it stood.
     assert_eq!(today(&shell, cx), ["task-2", "task-1", "10", "11"]);
+}
+
+/// Spaces 1 and 2 of the user's and task 1's own, with Space 2 of `profile` showing its tab 20.
+fn away_in_space_2(
+    cx: &mut TestAppContext,
+    first: Vec<Card>,
+    profile: u64,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let (shell, host, cx) = with_task_spaces(cx, first);
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64, name: &str, profile: u64, agent: &str| {
+            (
+                id,
+                name.to_string().into(),
+                None,
+                profile,
+                "".into(),
+                agent.to_string().into(),
+                "".into(),
+            )
+        };
+        shell.set_spaces(
+            vec![
+                space(1, "Space 1", 0, ""),
+                space(2, "Space 2", profile, ""),
+                space(101, "Find a flight to Lisbon", 0, "Claude"),
+            ],
+            cx,
+        );
+        let tabs = vec![20, 21];
+        shell.set_tabs(2, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_space(2, cx);
+        shell.set_selected(20, cx);
+        // Space 2 in place, as its slide in from the side has ended.
+        shell.settle = None;
+        shell.slides.clear();
+    });
+    cx.run_until_parked();
+    host.take();
+    (shell, host, cx)
+}
+
+/// A waiting task's card lists at the top of the Space looked at, and goes from there the moment
+/// the task stops waiting, answered, stopped or done; its card in its own Space stays. At work,
+/// stopped or done, a card never lists outside its own Space.
+#[gpui::test]
+fn a_waiting_card_leaves_the_space_looked_at_when_it_stops_waiting(cx: &mut TestAppContext) {
+    let (shell, _, cx) = away_in_space_2(cx, cards(&[(1, Dot::Working)]), 0);
+    assert_eq!(today(&shell, cx), ["20", "21"]);
+    for (stops, dot) in [
+        ("answered", Dot::Working),
+        ("stopped", Dot::Ended),
+        ("done", Dot::Done),
+    ] {
+        shell.update(cx, |shell, cx| {
+            shell.set_task_cards(cards(&[(1, Dot::Waiting)]), cx)
+        });
+        assert_eq!(today(&shell, cx), ["task-1", "20", "21"], "waiting");
+        assert_eq!(form(&shell, "task-1", cx), Some(Form::Waits));
+        shell.update(cx, |shell, cx| shell.set_task_cards(cards(&[(1, dot)]), cx));
+        assert_eq!(today(&shell, cx), ["20", "21"], "{stops}");
+        let home = shell.read_with(cx, |shell, _| {
+            let space = shell.spaces.iter().find(|space| space.id == 1).unwrap();
+            space
+                .placed
+                .iter()
+                .map(|card| card.agent.clone())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(home, ["task-1"], "{stops}: its own Space");
+    }
+}
+
+/// The walkers pass a waiting card by in the Space looked at as in its own: ⌘1–9 and the next and
+/// previous tab land on that Space's tabs alone.
+#[gpui::test]
+fn the_walkers_pass_a_waiting_card_by_away_from_its_space(cx: &mut TestAppContext) {
+    let (shell, host, cx) = away_in_space_2(cx, cards(&[(1, Dot::Waiting)]), 0);
+    assert_eq!(today(&shell, cx), ["task-1", "20", "21"]);
+    let run = |command: Command, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run(command, "test", cx));
+        cx.run_until_parked();
+        let asked = host.take();
+        let selected: Vec<String> = (asked.iter())
+            .filter(|line| line.starts_with("select "))
+            .cloned()
+            .collect();
+        assert!(
+            !asked.iter().any(|line| line.starts_with("task ")),
+            "{command:?} touched the task: {asked:?}"
+        );
+        if let Some(tab) = selected.last() {
+            let tab: u64 = tab.trim_start_matches("select ").parse().unwrap();
+            shell.update(cx, |shell, cx| shell.set_selected(tab, cx));
+        }
+        selected
+    };
+    assert_eq!(run(Command::SelectTab(1), &shell, cx), ["select 21"]);
+    assert_eq!(run(Command::SelectTab(0), &shell, cx), ["select 20"]);
+    assert!(run(Command::SelectTab(2), &shell, cx).is_empty());
+    assert_eq!(run(Command::SelectLastTab, &shell, cx), ["select 21"]);
+    assert_eq!(run(Command::NextTab, &shell, cx), ["select 20"]);
+    assert_eq!(run(Command::PreviousTab, &shell, cx), ["select 21"]);
+    assert_eq!(shell.read_with(cx, |shell, _| shell.space), 2);
+}
+
+/// A waiting card shows in a Space of another profile too, and its Show Page goes to the task's
+/// own Space, as showing a page of another Space does, and stands on the page it waits on.
+#[gpui::test]
+fn show_page_away_goes_to_the_tasks_space_across_profiles(cx: &mut TestAppContext) {
+    let first = vec![paged(1, Dot::Waiting, &[1010, 1011])];
+    let (shell, host, cx) = away_in_space_2(cx, first, 7);
+    assert_eq!(today(&shell, cx), ["task-1", "20", "21"]);
+    still(cx);
+    tick(5.);
+    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    draw(&shell, cx);
+    host.take();
+    host.shown.borrow_mut().clear();
+    let button = STOPS_DRAWN
+        .with(|drawn| drawn.borrow().get(&StripStop::Chip(1)).copied())
+        .expect("Show Page");
+    cx.simulate_click(button.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*host.shown.borrow(), [1]);
+    // The core shows Space 1, as it does for any Space shown.
+    shell.update(cx, |shell, cx| shell.set_space(1, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((101, 1010))
+    );
+    let asked = host.take();
+    assert!(asked.contains(&"select 1010".to_string()), "{asked:?}");
+    let told = |line: &&String| line.starts_with("task ") || line.starts_with("focus page");
+    assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
 }
 
 /// A card whose home Space is gone lists in no Space, waiting or not, a session's as a task's: the
@@ -1355,4 +1593,113 @@ fn a_title_standing_in_is_in_no_log_line(cx: &mut TestAppContext) {
         lines.contains(&format!("browser: task card task-1 titled {TABS}")),
         "{lines:?}"
     );
+}
+
+/// The shown thread's card joins its stage, on the stage's ground rather than the sidebar's: its
+/// title still reads there at 4.5:1, Dark and Light, on every theme.
+#[test]
+fn the_joined_cards_title_reads_on_its_stage() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::{Appearance, Theme};
+    let mut palettes = vec![Palette::default()];
+    for appearance in Appearance::ALL {
+        for step in 0..24 {
+            let angle = step as f32 * std::f32::consts::TAU / 24.;
+            for distance in [0., 0.35, 0.7, 1.] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(distance * angle.cos(), distance * angle.sin())
+                };
+                palettes
+                    .extend([Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(&theme), tone)));
+            }
+        }
+    }
+    for palette in &palettes {
+        let stage = super::super::conversation::stage_fill(palette);
+        let ground = gpui::Rgba { a: 1., ..stage };
+        let ink = gpui::Rgba::from(super::super::title_ink(palette, true));
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(
+            ratio >= 4.5,
+            "the joined card's title is {ratio:.2}:1 on {stage:?}"
+        );
+    }
+}
+
+/// The shown thread's card is one shape with its stage (spec-thread-stage, the join): it takes the
+/// stage's fill, has no outline of its own and reaches the sidebar's edge. A card not shown keeps
+/// its state's outline, and a waiting one shown gives up its rim and has it back once another
+/// thread is shown.
+#[gpui::test]
+fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+    use super::card::Framed;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
+    let two = vec![
+        paged(2, Dot::Waiting, &[1020]),
+        paged(1, Dot::Working, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two);
+    still(cx);
+    tick(5.);
+    draw(&shell, cx);
+    let framed = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let card = (shell.task_cards.iter())
+                .find(|card| card.agent.as_ref() == agent)
+                .expect("its card");
+            let space = shell.shown_space().expect("a Space shown");
+            let placed = (space.placed.iter())
+                .find(|placed| placed.agent.as_ref() == agent)
+                .expect("its place");
+            shell.card_framed(card, placed.form, shell.task_list.unseen.contains(agent))
+        })
+    };
+    let rim = Framed::Outlined {
+        outline: RIM,
+        width: RIM_WIDTH,
+    };
+    let outline = Framed::Outlined {
+        outline: OUTLINE,
+        width: OUTLINE_WIDTH,
+    };
+    assert_eq!(framed(&shell, "task-2", cx), rim);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let show = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        let at = (shell.read_with(cx, |shell, _| shell.task_plate_drawn(agent)))
+            .expect("its card")
+            .origin
+            + gpui::point(gpui::px(24.), gpui::px(8.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        draw(shell, cx);
+    };
+    show(&shell, "task-2", cx);
+    assert_eq!(
+        shell
+            .read_with(cx, |shell, _| shell.talk_agent())
+            .as_deref(),
+        Some("task-2")
+    );
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let (edge, plate) = shell.read_with(cx, |shell, _| {
+        (
+            shell.width(),
+            shell.task_plate_drawn("task-2").expect("its card"),
+        )
+    });
+    assert_eq!(
+        f32::from(plate.right()),
+        edge,
+        "the joined card's right end"
+    );
+    let joined = crate::shell::join::JOINED.take().expect("the card's join");
+    let palette = shell.read_with(cx, |shell, _| shell.palette);
+    let stage = crate::shell::conversation::stage_fill(&palette);
+    assert_eq!(joined.fill, gpui::Hsla::from(stage));
+    assert_eq!(joined.line, plate);
+    show(&shell, "task-1", cx);
+    assert_eq!(framed(&shell, "task-1", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-2", cx), rim);
 }

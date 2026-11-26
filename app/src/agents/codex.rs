@@ -37,6 +37,8 @@ struct Inner {
     failure: Option<Failure>,
     /// When the reasoning under way started.
     thinking: Option<Instant>,
+    /// The model the user picked for its next turns, by id, which each turn names from then on.
+    model: Option<String>,
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
@@ -58,6 +60,11 @@ pub fn begin(stdin: &Mutex<Option<ChildStdin>>, state: &State, first: &str) -> s
             },
         }),
     )
+}
+
+/// The model the next turns run on, from the user's pick.
+pub fn set_model(state: &State, model: &str) {
+    state.inner.lock().unwrap().model = Some(model.to_string());
 }
 
 /// Sends the user's message as a turn, or keeps it for when the thread is there or the turn under
@@ -97,14 +104,21 @@ fn next_turn(stdin: &Mutex<Option<ChildStdin>>, inner: &mut Inner) -> std::io::R
     };
     inner.starting = true;
     inner.next += 1;
+    let params = turn_params(&thread, &text, inner.model.as_deref());
     write_line(
         stdin,
-        &json!({
-            "id": TURNS + inner.next,
-            "method": "turn/start",
-            "params": { "threadId": thread, "input": [{ "type": "text", "text": text }] },
-        }),
+        &json!({ "id": TURNS + inner.next, "method": "turn/start", "params": params }),
     )
+}
+
+/// A turn's params: the thread, the message, and the model the user picked for it, if they did,
+/// which holds for the turns after it too.
+fn turn_params(thread: &str, text: &str, model: Option<&str>) -> Value {
+    let mut params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text }] });
+    if let Some(model) = model {
+        params["model"] = json!(model);
+    }
+    params
 }
 
 /// What a line of Codex's says, answering what it asks on the way.
@@ -184,6 +198,7 @@ pub fn read(
                 (Some("agentMessage"), Some(text)) if !text.is_empty() => {
                     vec![Out::Said(text.to_string())]
                 }
+                (Some("webSearch"), _) => searched(item),
                 (Some("reasoning"), _) => {
                     let took = inner
                         .thinking
@@ -290,6 +305,28 @@ fn decline(method: &str) -> Value {
     }
 }
 
+/// A search item's words: a search action's query, else each of its queries. Its other actions,
+/// a page opened or a word found in one, say nothing, nor does the item's own `query`, which is an
+/// address for those, or what it found.
+fn searched(item: &Value) -> Vec<Out> {
+    let action = item.get("action").unwrap_or(&Value::Null);
+    if action.get("type").and_then(Value::as_str) != Some("search") {
+        return Vec::new();
+    }
+    let query = action.get("query").and_then(Value::as_str);
+    let queries = action.get("queries").and_then(Value::as_array);
+    let words: Vec<&str> = match query.filter(|query| !query.trim().is_empty()) {
+        Some(query) => vec![query],
+        None => (queries.into_iter().flatten())
+            .filter_map(Value::as_str)
+            .collect(),
+    };
+    (words.into_iter())
+        .filter(|words| !words.trim().is_empty())
+        .map(|words| Out::Searched(words.into()))
+        .collect()
+}
+
 /// The thread's settings: the browser's server as its tools, every feature of Codex's own off,
 /// and none of the user's MCP servers, each turned off by name as config.toml lists them. A model
 /// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
@@ -300,7 +337,10 @@ pub fn thread_params(launch: &Launch) -> Value {
     for feature in FEATURES_OFF {
         config.insert(format!("features.{feature}"), json!(false));
     }
-    config.insert("web_search".into(), json!("disabled"));
+    // Its provider's search over the provider's own index, which opens no page: neither from this
+    // computer nor on the provider's side, as "live" and "indexed" may, unseen. Set so the user's
+    // own config can't change it.
+    config.insert("web_search".into(), json!("cached"));
     config.insert("notify".into(), json!([]));
     config.insert("project_doc_max_bytes".into(), json!(0));
     config.insert("tools.update_plan.enabled".into(), json!(false));
@@ -411,4 +451,17 @@ pub fn servers_in(text: &str) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+#[cfg(test)]
+mod tests {
+    /// A turn names the model only once the user picked one, and then its id.
+    #[test]
+    fn a_turn_names_the_model_the_user_picked() {
+        let plain = super::turn_params("t1", "Go on", None);
+        assert_eq!(plain.get("model"), None);
+        let picked = super::turn_params("t1", "Go on", Some("gpt-b"));
+        assert_eq!(picked["model"], "gpt-b");
+        assert_eq!(picked["input"][0]["text"], "Go on");
+    }
 }

@@ -34,6 +34,7 @@ pub mod leftovers;
 #[cfg(unix)]
 mod links;
 pub mod listener;
+pub mod rules;
 /// The Mac's answers for ending what a walled task left running, which nothing asks yet.
 #[cfg(target_os = "macos")]
 #[path = "../../platform/mac/wall_walk.rs"]
@@ -112,6 +113,45 @@ pub struct WallFor<'a> {
     pub task_dir: &'a Path,
     /// The task's MCP config, which holds its agent's token.
     pub config: &'a Path,
+    /// The assistant's program, as ilo found it.
+    pub program: &'a Path,
+    /// The user's home, and ilo's own data: the profile the tasks' folder is in.
+    pub home: &'a Path,
+    pub data: &'a Path,
+    /// ilo's own executable.
+    pub ilo: &'a Path,
+    /// ilo's MCP socket, which the assistant's bridge reaches.
+    pub socket: &'a Path,
+    /// ilo's MCP bridge, as `bridge` finds it.
+    pub bridge: &'a Path,
+    /// Where each walled task's place is made: `Tasks/.tmp`.
+    pub places: &'a Path,
+    /// The assistant's own home, `CODEX_HOME` or Claude Code's, and Claude Code's `.claude.json`.
+    pub cli_home: &'a Path,
+    pub claude_config: Option<&'a Path>,
+}
+
+/// Where `cli` keeps its own files on this computer, as it reads its variables: its home, and
+/// for Claude Code its `.claude.json`, which `CLAUDE_CONFIG_DIR` moves into its home.
+pub fn cli_home(cli: Cli) -> (PathBuf, Option<PathBuf>) {
+    let home = super::clients::home();
+    let from = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    match cli {
+        Cli::Codex => (
+            from("CODEX_HOME").map_or(home.join(".codex"), PathBuf::from),
+            None,
+        ),
+        Cli::Claude => match from("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+            Some(dir) => (dir.clone(), Some(dir.join(".claude.json"))),
+            None => (home.join(".claude"), Some(home.join(".claude.json"))),
+        },
+    }
+}
+
+/// ilo's MCP bridge, beside ilo's own executable: never from a variable, a setting or a task.
+pub fn bridge() -> Option<PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    Some(program.with_file_name(super::bridge::NAME))
 }
 
 /// What a walled task may read of ilo's own: its folder, its MCP config and the instructions beside
@@ -157,6 +197,8 @@ pub struct Wall {
     tmp: Option<PathBuf>,
     /// The task's TMP and mark, which its rules allow: what tells what is inside this wall.
     place: Option<std::sync::Arc<leftovers::Place>>,
+    /// The one way out of its network, alive while the wall is held.
+    listener: Option<listener::Listener>,
 }
 
 impl std::fmt::Debug for Wall {
@@ -208,6 +250,12 @@ impl Wall {
         self.tmp.as_deref()
     }
 
+    /// The port of its listener, which a walled start's HTTPS_PROXY, HTTP_PROXY and ALL_PROXY
+    /// name, with NO_PROXY cleared (runner.rs, `sets` and `environment`).
+    pub fn port(&self) -> Option<u16> {
+        self.listener.as_ref().map(listener::Listener::port)
+    }
+
     /// A wall as put_up answers one for a task with files, for a test of what starts inside it:
     /// no launcher, so the test's stand-in starts as any program, and no folder's name.
     #[cfg(test)]
@@ -218,7 +266,16 @@ impl Wall {
             launcher: None,
             tmp,
             place: None,
+            listener: None,
         }
+    }
+
+    /// As `for_test`, with its listener started, as put_up starts one.
+    #[cfg(test)]
+    pub(crate) fn for_test_listening(cli: crate::agents::runner::Cli) -> Wall {
+        let mut wall = Wall::for_test(None);
+        wall.listener = Some(listener::Listener::start(cli).unwrap());
+        wall
     }
 }
 
@@ -275,6 +332,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
             launcher: None,
             tmp: None,
             place: None,
+            listener: None,
         });
     }
     // The folder at its path is still the one picked, or nothing is granted.
@@ -282,7 +340,153 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
         return Err(WallRefused::Refused(Refusal::Gone));
     }
     available().map_err(WallRefused::Unavailable)?;
-    Err(WallRefused::Failed("the launcher isn't built".into()))
+    build(task)
+}
+
+/// Why a wall wasn't put up, each a sentence for the dev log that names no path and no count.
+const SIGN_IN_LINK: &str = "the assistant's sign-in is a link";
+const NO_PROGRAM: &str = "the assistant's program couldn't be resolved";
+const NO_BRIDGE: &str = "ilo's bridge isn't beside its program";
+const NO_PLACE: &str = "the task's place couldn't be made";
+const NO_LISTENER: &str = "the task's listener couldn't be started";
+const NOT_RESOLVED: &str = "a path the rules name couldn't be resolved";
+const OVERLAPS: &str = "the granted folder holds, or is inside, the assistant's own files or ilo's";
+
+/// The wall for a task with files, once the system can wall one in: the granted folder still
+/// where it was picked, the assistant's sign-in plain files, then a place of its own, its
+/// listener, and its rules. A place made for a wall that isn't put up is removed at once.
+fn build(task: &WallFor) -> Result<Wall, WallRefused> {
+    let failed = |sentence: &str| WallRefused::Failed(sentence.into());
+    let folder = match task.folder {
+        Some(granted) => Some(still_there(granted)?),
+        None => None,
+    };
+    // Its own save replaces a sign-in by a rename, so a link there is none of its making.
+    for name in rules::sign_in(task.cli) {
+        let meta = std::fs::symlink_metadata(task.cli_home.join(name));
+        if meta.is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(failed(SIGN_IN_LINK));
+        }
+    }
+    let program = std::fs::canonicalize(task.program).map_err(|_| failed(NO_PROGRAM))?;
+    let program_dir = program.parent().ok_or_else(|| failed(NO_PROGRAM))?;
+    // A path the checks below compare that can't be resolved could hide an overlap behind a
+    // link, so it refuses the wall: never the path as given. One not made yet is its folder
+    // resolved and its own name, as `resolved` answers.
+    let resolve = |path: &Path| rules::resolved(path).map_err(|_| failed(NOT_RESOLVED));
+    let (cli_home, data, home) = (
+        resolve(task.cli_home)?,
+        resolve(task.data)?,
+        resolve(task.home)?,
+    );
+    let mut kept_out = vec![cli_home.as_path(), data.as_path()];
+    kept_out.extend(folder.as_ref().map(Granted::root));
+    let program_named = match program_folder_whole(program_dir, &home, &kept_out) {
+        true => rules::Program::Folder(program_dir),
+        false => rules::Program::File(&program),
+    };
+    // A walled task with no bridge would start with no tools, so it starts without its files.
+    let bridge = (task.bridge.is_absolute())
+        .then(|| std::fs::canonicalize(task.bridge).ok())
+        .flatten()
+        .filter(|bridge| bridge.is_file())
+        .ok_or_else(|| failed(NO_BRIDGE))?;
+    // The folder is read whole at the task's level, and only the home's writes are kept out, so
+    // a folder over what the assistant or ilo runs on would open it to the task. The pick refuses
+    // such a folder first; this is where the wall is made.
+    if let Some(granted) = &folder {
+        let root = granted.root();
+        // An ilo that can't be named, as an empty path, resolves to nothing and refuses too.
+        let ilo = resolve(task.ilo)?;
+        let claude_config = task.claude_config.map(resolve).transpose()?;
+        let files = [
+            Some(&program),
+            Some(&bridge),
+            Some(&ilo),
+            claude_config.as_ref(),
+        ];
+        if cli_home.starts_with(root)
+            || root.starts_with(&cli_home)
+            || (files.into_iter().flatten()).any(|file| file.starts_with(root))
+        {
+            return Err(failed(OVERLAPS));
+        }
+    }
+    // The app's developer tools, if the system's link picks an app an administrator installed:
+    // read once here, so a link moved later doesn't move the wall. Anything else, today's wall.
+    #[cfg(target_os = "macos")]
+    let developer = rules::developer::developer(Path::new("/"), 0, &home);
+    #[cfg(not(target_os = "macos"))]
+    let developer: Option<PathBuf> = None;
+    let place = leftovers::Place::make(task.places).map_err(|_| failed(NO_PLACE))?;
+    let walled: Result<(Wall, listener::Listener), WallRefused> = (|| {
+        let listener = listener::Listener::start(task.cli).map_err(|_| failed(NO_LISTENER))?;
+        let paths = rules::Paths {
+            folder: folder.as_ref().map(Granted::root),
+            attached: task.attached,
+            task_dir: task.task_dir,
+            config: task.config,
+            tmp: place.tmp(),
+            socket: task.socket,
+            program: program_named,
+            bridge: &bridge,
+            cli_home: task.cli_home,
+            claude_config: task.claude_config,
+            developer: developer.as_deref(),
+        };
+        let rules = rules::rules(task.cli, task.level, listener.port(), &paths, place.mark())
+            .map_err(|why| match why.to_string() == rules::TOO_DEEP {
+                true => failed(rules::TOO_DEEP),
+                false => failed(NOT_RESOLVED),
+            })?;
+        let wall = Wall::inside(folder.clone(), &rules, &super::runner::kept(task.cli))?;
+        Ok((wall, listener))
+    })();
+    match walled {
+        Ok((mut wall, listener)) => {
+            wall.listener = Some(listener);
+            Ok(wall.in_place(std::sync::Arc::new(place)))
+        }
+        Err(refused) => {
+            place.discard();
+            Err(refused)
+        }
+    }
+}
+
+/// Whether the rules may name the assistant's program by `dir`, the folder it's in, whole, every
+/// path resolved: outside the user's `home`, or inside it in `~/bin` or below one of its
+/// dot-folders, never a dot-folder itself; and never a folder that is, holds or is above the home
+/// or one of `kept_out`. A program kept loose in a folder of the user's would open that folder
+/// to the task, so anywhere else the rules name the program's one file.
+pub fn program_folder_whole(dir: &Path, home: &Path, kept_out: &[&Path]) -> bool {
+    if (kept_out.iter())
+        .chain([&home])
+        .any(|kept| kept.starts_with(dir))
+    {
+        return false;
+    }
+    let Ok(inside) = dir.strip_prefix(home) else {
+        return true;
+    };
+    let mut names = inside
+        .components()
+        .map(|name| name.as_os_str().to_string_lossy());
+    match (names.next(), names.next()) {
+        (Some(first), _) if first == "bin" => true,
+        (Some(first), Some(_)) => first.starts_with('.'),
+        _ => false,
+    }
+}
+
+/// The granted folder, if it's still the folder the user picked: the same folder, at the path its
+/// pick resolved, with no link in it now. Moved, gone or replaced, it can't be granted now.
+fn still_there(granted: &Granted) -> Result<Granted, WallRefused> {
+    let root = granted.root();
+    match std::fs::canonicalize(root) {
+        Ok(now) if now == root && granted.still_picked() => Ok(granted.clone()),
+        _ => Err(WallRefused::Refused(Refusal::Gone)),
+    }
 }
 
 /// A link in the granted folder that leads out of it.
@@ -371,6 +575,324 @@ mod tests {
             attached,
             task_dir: Path::new("/nonexistent/Tasks/task"),
             config: Path::new("/nonexistent/Tasks/task.json"),
+            program: Path::new("/nonexistent/codex"),
+            home: Path::new("/nonexistent/home"),
+            data: Path::new("/nonexistent"),
+            ilo: Path::new("/nonexistent/ilo"),
+            socket: Path::new("/nonexistent/Agents.sock"),
+            bridge: Path::new("/nonexistent/mcp-bridge"),
+            places: Path::new("/nonexistent/Tasks/.tmp"),
+            cli_home: Path::new("/nonexistent/home/.codex"),
+            claude_config: None,
+        }
+    }
+
+    /// A made-up profile and home of a test's own under the system's temp folder, gone with it:
+    /// never the user's.
+    struct Made(PathBuf);
+
+    impl Made {
+        fn new(name: &str) -> Made {
+            let root =
+                std::env::temp_dir().join(format!("ilo-put-up-{name}-{}", std::process::id()));
+            _ = std::fs::remove_dir_all(&root);
+            let folders = [
+                "granted",
+                "Tasks/task",
+                "home/.codex",
+                "home/.claude",
+                "bin",
+                "ilo",
+                "app",
+                "conf",
+            ];
+            for folder in folders {
+                std::fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            std::fs::write(root.join("bin/codex"), "").unwrap();
+            std::fs::write(root.join("ilo/mcp-bridge"), "").unwrap();
+            Made(std::fs::canonicalize(&root).unwrap())
+        }
+
+        fn at(&self, path: &str) -> PathBuf {
+            self.0.join(path)
+        }
+
+        /// The places made under its `Tasks/.tmp`, marks and folders.
+        fn places(&self) -> usize {
+            std::fs::read_dir(self.at("Tasks/.tmp")).map_or(0, |entries| entries.count())
+        }
+    }
+
+    impl Drop for Made {
+        fn drop(&mut self) {
+            _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// What build is handed for a task of `made`'s with `granted`, with each path its own.
+    fn built(made: &Made, granted: &Granted) -> Result<Wall, WallRefused> {
+        built_as(made, granted, Cli::Codex, None)
+    }
+
+    /// As `built`, for `cli`'s task: Claude Code's has its own home and its `.claude.json`.
+    /// As `built`, for `cli`'s task: Claude Code's has its own home and its `.claude.json`. `odd`
+    /// replaces one of ilo's own paths, `"ilo"` or `"data"`, by the one given.
+    fn built_as(
+        made: &Made,
+        granted: &Granted,
+        cli: Cli,
+        odd: Option<(&str, &Path)>,
+    ) -> Result<Wall, WallRefused> {
+        let given = |name: &str, default: PathBuf| match odd {
+            Some((odd, path)) if odd == name => path.to_path_buf(),
+            _ => default,
+        };
+        let paths = [
+            "Tasks/task",
+            "Tasks/task.json",
+            "bin/codex",
+            "Agents.sock",
+            "Tasks/.tmp",
+            "home/.codex",
+            "ilo/mcp-bridge",
+            "home",
+            "profile",
+        ]
+        .map(|path| made.at(path));
+        let [
+            task_dir,
+            config,
+            program,
+            socket,
+            places,
+            cli_home,
+            bridge,
+            home,
+            data,
+        ] = &paths;
+        build(&WallFor {
+            folder: Some(granted),
+            task_dir,
+            config,
+            program,
+            home,
+            data: &given("data", data.clone()),
+            socket,
+            bridge,
+            places,
+            cli_home: &match cli {
+                Cli::Codex => cli_home.clone(),
+                Cli::Claude => made.at("home/.claude"),
+            },
+            claude_config: (cli == Cli::Claude)
+                .then(|| made.at("conf/.claude.json"))
+                .as_deref(),
+            ilo: &given("ilo", made.at("app/browser")),
+            cli,
+            ..task(None, None)
+        })
+    }
+
+    /// A granted folder over what the assistant or ilo runs on, or inside the assistant's home,
+    /// isn't walled and leaves no place, and the sentence names no path.
+    fn overlaps(made: &Made, at: &str, cli: Cli) {
+        std::fs::create_dir_all(made.at(at)).unwrap();
+        let granted = Granted::picked(made.at(at)).unwrap();
+        let refused = built_as(made, &granted, cli, None).unwrap_err();
+        assert_eq!(refused, WallRefused::Failed(OVERLAPS.into()), "{at}");
+        assert!(!OVERLAPS.contains('/'));
+        assert_eq!(made.places(), 0, "{at}");
+    }
+
+    /// A path the overlap checks compare that can't be resolved refuses the wall, never compared
+    /// as given: here ilo's data two folders below one that is there.
+    #[test]
+    fn a_path_the_checks_compare_that_cant_be_resolved_isnt_walled() {
+        let made = Made::new("unresolved");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        let deep = made.at("missing/profile");
+        let refused = built_as(&made, &granted, Cli::Codex, Some(("data", &deep))).unwrap_err();
+        assert_eq!(refused, WallRefused::Failed(NOT_RESOLVED.into()));
+        assert_eq!(made.places(), 0);
+    }
+
+    /// An ilo whose executable can't be named, which put_up hands as an empty path, isn't walled.
+    #[test]
+    fn an_ilo_that_cant_be_named_isnt_walled() {
+        let made = Made::new("no-ilo");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        let empty = Path::new("");
+        let refused = built_as(&made, &granted, Cli::Codex, Some(("ilo", empty))).unwrap_err();
+        assert_eq!(refused, WallRefused::Failed(NOT_RESOLVED.into()));
+        assert_eq!(made.places(), 0);
+    }
+
+    #[test]
+    fn a_folder_that_holds_the_assistants_home_isnt_walled() {
+        overlaps(&Made::new("holds-home"), "home", Cli::Codex);
+    }
+
+    #[test]
+    fn a_folder_inside_the_assistants_home_isnt_walled() {
+        overlaps(&Made::new("in-home"), "home/.codex/sessions", Cli::Codex);
+        overlaps(
+            &Made::new("in-claude-home"),
+            "home/.claude/projects",
+            Cli::Claude,
+        );
+    }
+
+    #[test]
+    fn a_folder_that_holds_claude_codes_config_isnt_walled() {
+        overlaps(&Made::new("holds-config"), "conf", Cli::Claude);
+    }
+
+    #[test]
+    fn a_folder_that_holds_the_program_isnt_walled() {
+        overlaps(&Made::new("holds-program"), "bin", Cli::Codex);
+    }
+
+    #[test]
+    fn a_folder_that_holds_the_bridge_isnt_walled() {
+        overlaps(&Made::new("holds-bridge"), "ilo", Cli::Codex);
+    }
+
+    #[test]
+    fn a_folder_that_holds_ilo_isnt_walled() {
+        overlaps(&Made::new("holds-ilo"), "app", Cli::Codex);
+    }
+
+    /// A program's folder is read whole only where no folder of the user's is: outside the home,
+    /// or in `~/bin` or below a dot-folder of it; never the home, a folder above it, one of its
+    /// own folders, a dot-folder itself, or a folder that is or holds one kept out.
+    #[test]
+    fn a_programs_folder_is_read_whole_only_where_no_folder_of_the_users_is() {
+        let home = Path::new("/Users/someone");
+        let cli_home = home.join(".codex");
+        let data = home.join("Library/Application Support/ilo");
+        let granted = Path::new("/Volumes/Work/project");
+        let kept_out = [cli_home.as_path(), data.as_path(), granted];
+        let whole = |dir: &str| program_folder_whole(Path::new(dir), home, &kept_out);
+        for dir in [
+            "/opt/homebrew/Cellar/codex/1.0.0/bin",
+            "/usr/local/lib/node_modules/@openai/codex/bin",
+            "/Users/someone/.local/share/claude/versions",
+            "/Users/someone/.nvm/versions/node/v22.0.0/bin",
+            "/Users/someone/.local/bin",
+            "/Users/someone/bin",
+            "/Users/someone/bin/tools",
+        ] {
+            assert!(whole(dir), "{dir} isn't read whole");
+        }
+        for dir in [
+            "/",
+            "/Users",
+            "/Users/someone",
+            "/Users/someone/Desktop",
+            "/Users/someone/Documents/tools",
+            "/Users/someone/Downloads",
+            "/Users/someone/.local",
+            "/Users/someone/.codex",
+            "/Users/someone/Library/Application Support",
+            "/Users/someone/Library/Application Support/ilo",
+            "/Volumes/Work",
+            "/Volumes/Work/project",
+        ] {
+            assert!(!whole(dir), "{dir} is read whole");
+        }
+        // An assistant's home outside the user's keeps the folders above it out too.
+        let elsewhere = [Path::new("/opt/codex-home")];
+        assert!(!program_folder_whole(Path::new("/opt"), home, &elsewhere));
+        assert!(program_folder_whole(
+            Path::new("/opt/bin"),
+            home,
+            &elsewhere
+        ));
+    }
+
+    #[test]
+    fn a_folder_moved_gone_or_now_a_link_isnt_walled_and_leaves_no_place() {
+        let made = Made::new("gone");
+        let gone = Granted::picked(made.at("granted")).unwrap();
+        std::fs::rename(made.at("granted"), made.at("moved-away")).unwrap();
+        assert_eq!(
+            built(&made, &gone).unwrap_err(),
+            WallRefused::Refused(Refusal::Gone)
+        );
+        #[cfg(unix)]
+        {
+            std::fs::create_dir(made.at("now-a-link")).unwrap();
+            let linked = Granted::picked(made.at("now-a-link")).unwrap();
+            std::fs::remove_dir(made.at("now-a-link")).unwrap();
+            std::os::unix::fs::symlink(made.at("moved-away"), made.at("now-a-link")).unwrap();
+            assert_eq!(
+                built(&made, &linked).unwrap_err(),
+                WallRefused::Refused(Refusal::Gone)
+            );
+        }
+        assert_eq!(made.places(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sign_in_that_is_a_link_isnt_walled_and_leaves_no_place() {
+        let made = Made::new("sign-in");
+        std::fs::write(made.at("elsewhere.json"), "").unwrap();
+        std::os::unix::fs::symlink(made.at("elsewhere.json"), made.at("home/.codex/auth.json"))
+            .unwrap();
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        assert_eq!(
+            built(&made, &granted).unwrap_err(),
+            WallRefused::Failed(SIGN_IN_LINK.into())
+        );
+        assert_eq!(made.places(), 0);
+    }
+
+    #[test]
+    fn a_folder_too_deep_for_the_rules_isnt_walled_and_leaves_no_place() {
+        let made = Made::new("deep");
+        let deep = (0..launch::PARAMETERS_MAX)
+            .fold(made.at("granted"), |path, at| path.join(at.to_string()));
+        std::fs::create_dir_all(&deep).unwrap();
+        let granted = Granted::picked(deep).unwrap();
+        assert_eq!(
+            built(&made, &granted).unwrap_err(),
+            WallRefused::Failed(rules::TOO_DEEP.into())
+        );
+        assert_eq!(made.places(), 0);
+    }
+
+    #[test]
+    fn a_task_with_no_bridge_beside_ilo_isnt_walled_and_leaves_no_place() {
+        let made = Made::new("bridge");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        std::fs::remove_file(made.at("ilo/mcp-bridge")).unwrap();
+        let no_bridge = WallRefused::Failed(NO_BRIDGE.into());
+        assert_eq!(built(&made, &granted).unwrap_err(), no_bridge);
+        // A folder by its name is no bridge either.
+        std::fs::create_dir(made.at("ilo/mcp-bridge")).unwrap();
+        assert_eq!(built(&made, &granted).unwrap_err(), no_bridge);
+        assert_eq!(made.places(), 0);
+    }
+
+    /// Where there's no launcher the wall isn't put up and its place goes; on the Mac it's up,
+    /// in a place of its own under the tasks' and with its listener.
+    #[test]
+    fn a_wall_is_put_up_in_a_place_of_its_own_or_leaves_none() {
+        let made = Made::new("up");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        let built = built(&made, &granted);
+        if cfg!(target_os = "macos") {
+            let wall = built.unwrap();
+            assert_eq!(wall.folder(), Some(made.at("granted").as_path()));
+            assert!(wall.tmp().unwrap().starts_with(made.at("Tasks/.tmp")));
+            assert!(wall.port().is_some());
+            // Its folder and its mark.
+            assert_eq!(made.places(), 2);
+        } else {
+            assert!(matches!(built, Err(WallRefused::Failed(_))));
+            assert_eq!(made.places(), 0);
         }
     }
 
@@ -412,6 +934,7 @@ mod tests {
             launcher: None,
             tmp: None,
             place: None,
+            listener: None,
         };
         let printed = format!("{wall:?}");
         assert!(printed.contains("folder: true"), "{printed}");
@@ -539,8 +1062,9 @@ mod tests {
                 }
             }
         }
-        // The composer's panel, and this file's tests.
+        // This file's tests alone: no surface grants one until the composer's `+` brings the
+        // system's panel back (#4140).
         makers.sort();
-        assert_eq!(makers, ["folder_panel.rs", "wall.rs"]);
+        assert_eq!(makers, ["wall.rs"]);
     }
 }

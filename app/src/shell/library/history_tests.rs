@@ -10,9 +10,9 @@ use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, po
 
 use super::history_list::history_text_end;
 use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived, COLUMN_WIDTH,
-    FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH,
-    Pointed, SEARCH_HEIGHT, SEARCH_TOP, Visited, history_when,
+    ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived,
+    COLUMN_WIDTH, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP,
+    Item, LIBRARY_WIDTH, Pointed, SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, Visited, history_when,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::{Command, Folders, Section, Shell, recorder::Recorder};
@@ -141,6 +141,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let library = shell.library.as_ref().unwrap();
         let named = library.items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("closed {}", shell.archive[*index].title),
             Item::Visit(index) => {
                 let visit = &library.history.pages[*index];
@@ -166,7 +167,7 @@ fn row(row: usize) -> gpui::Point<gpui::Pixels> {
 
 fn filter(host: &Recorder, choice: &str, cx: &mut VisualTestContext) {
     let filter = point(
-        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + ARCHIVE_WIDTH - SEARCH_RIGHT - FILTER_PAD_RIGHT - FILTER_CHEVRON / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());
@@ -574,7 +575,7 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
     assert_eq!(shown(cx), None);
 }
 
-/// The search field's "Search History…" follows a switch between light and dark while the Library
+/// The search field's "Search history" follows a switch between light and dark while the Library
 /// stays open, in the placeholder gray of the palette it's drawn in: a field that kept the gray of
 /// the look it opened in drew Paper on a light window's field, almost the field's own colour.
 #[gpui::test]
@@ -998,6 +999,7 @@ fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
         let library = shell.library.as_ref().unwrap();
         let named = library.items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Task(index) => shell.archived_task_about(&shell.archived_tasks[*index]),
             _ => "a tab".to_string(),
         });

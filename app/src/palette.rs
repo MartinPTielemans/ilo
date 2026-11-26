@@ -13,14 +13,15 @@
 //! component to WCAG's minimums.
 
 use gpui::{
-    BoxShadow, ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba,
+    ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop, linear_gradient,
+    prelude::*, px, rgb, rgba,
 };
 
+use crate::space_transparency::solid_share;
 use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
 
 use crate::tokens::icon_picker::{
-    FILL as CARD, HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
+    HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
@@ -38,12 +39,12 @@ use crate::tokens::palette::{
     NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
+use crate::tokens::palette::{
+    FLOAT_MATERIAL, FLOAT_MATERIAL_MORE, LIGHT_FLOAT_MATERIAL, LIGHT_FLOAT_MATERIAL_MORE,
+};
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
-use crate::tokens::palette::{
-    LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
-    LIGHT_SELECTED_SHADOW_Y,
-};
+use crate::tokens::palette::{LIGHT_PLATE_GRAY, LIGHT_STATE_SELECTED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
@@ -51,6 +52,11 @@ pub use crate::tokens::palette::{
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
 use crate::tokens::shell::{DROP, LIGHT_UNPAINTED, UNPAINTED};
+use crate::tokens::site_controls::{
+    TILE_BOTTOM as SITE_CONTROLS_TILE_BOTTOM, TILE_TOP as SITE_CONTROLS_TILE_TOP,
+    TINT as SITE_CONTROLS_TINT,
+};
+use crate::tokens::space_transparency::SOLID as SPACE_SOLID;
 use crate::transparency::Transparency;
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
@@ -75,6 +81,8 @@ const CLEAR: Rgba = Rgba {
 };
 /// The steps a plate's shade rises by from none, and a theme's alpha falls by.
 const SHADE_STEP: f32 = 0.05;
+/// A row's plate on a float under the pointer: the most a control's states reach.
+const FLOAT_HOVERED: f32 = state_alpha(OVERLAY_REST, STATE_HOVERED);
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
 pub const TEXT: f32 = 4.5;
 pub const GLYPH: f32 = 3.;
@@ -139,9 +147,15 @@ impl Tone {
         }
     }
 
-    /// How much of `tint_color` lies over the material, at the user's transparency level.
-    fn tint(self) -> f32 {
-        transparency().tint(self == Tone::Dark)
+    /// What lies over the material where the Space's glass is `glass`: `tint_color` at the bar's
+    /// alpha, and in a dark window the drawing's solid ground in its place toward the solid end.
+    fn tint(self, glass: f32) -> Rgba {
+        let a = crate::space_transparency::tint(glass, self == Tone::Dark);
+        let color = match self {
+            Tone::Dark => over(BLACK, rgb(SPACE_SOLID), solid_share(glass)),
+            Tone::Light => WHITE,
+        };
+        Rgba { a, ..color }
     }
 
     /// The end of the scale the ink runs toward, which an accent has to stand out from the window
@@ -153,12 +167,12 @@ impl Tone {
         }
     }
 
-    /// The tinted material at its darkest and its lightest: over a black backdrop on a black
-    /// desktop, and over a white one with the most a desktop picture lifts it.
-    fn grounds(self) -> [Rgba; 2] {
+    /// The material under `tint` of `tint_color` at its darkest and its lightest: over a black
+    /// backdrop on a black desktop, and over a white one with the most a desktop picture lifts it.
+    fn grounds(self, tint: Rgba) -> [Rgba; 2] {
         let [black, ..] = self.materials(0.);
         let [.., white] = self.materials(1.);
-        [black, white].map(|under| over(under, self.tint_color(), self.tint()))
+        [black, white].map(|under| over(under, tint, tint.a))
     }
 
     /// What AppKit draws in the material's place with Reduce Transparency or Increase Contrast.
@@ -214,12 +228,12 @@ impl Tone {
         }
     }
 
-    /// The selected row's plate, at rest and under the pointer: the ink on a dark window, as
-    /// Arc's dark rows are, and white on a light one, as its light rows are.
+    /// The selected row's plate, at rest and under the pointer: the ink in both looks, a step
+    /// weaker on a light window, which has no firmer step under the pointer (#4276).
     fn selected(self) -> (Rgba, f32, f32) {
         match self {
             Tone::Dark => (rgb(PAPER), STATE_SELECTED, STATE_SELECTED_HOVERED),
-            Tone::Light => (WHITE, LIGHT_SELECTED, LIGHT_SELECTED_HOVERED),
+            Tone::Light => (rgb(INK), LIGHT_STATE_SELECTED, LIGHT_STATE_SELECTED),
         }
     }
 
@@ -253,6 +267,142 @@ impl Tone {
             Tone::Dark => (rgb(OVERLAY_DARK), rgb(DIALOG_DARK)),
             Tone::Light => (rgb(OVERLAY_LIGHT), rgb(DIALOG_LIGHT)),
         }
+    }
+}
+
+/// How `tone`'s ink reads on what floats at a transparency level (#4090).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatInk {
+    /// The least alpha at which it reads as text at rest on the overlay's fill, the dialog's and
+    /// the floating one's (`Float::fill_index`), for a float whose row under the pointer draws its
+    /// words whole, as the menu's.
+    pub rest: [f32; 3],
+    /// The least alpha at which it reads as text, and as a glyph, at rest and on a plate under the
+    /// pointer as it is opaque.
+    pub text: f32,
+    pub glyph: f32,
+    /// The least shade of the overlay's colour, the dialog's and the floating one's, over a row's
+    /// plate under the pointer at which its words read there at those alphas.
+    pub shades: [f32; 3],
+}
+
+/// The material under a float at its worst for `tone`'s ink at `level`, as the check VM measured
+/// it (`float-material`).
+fn float_worst(tone: Tone, level: Option<Transparency>) -> Rgba {
+    rgb(match (tone, level) {
+        (Tone::Dark, Some(Transparency::More)) => FLOAT_MATERIAL_MORE,
+        (Tone::Dark, _) => FLOAT_MATERIAL,
+        (Tone::Light, Some(Transparency::More)) => LIGHT_FLOAT_MATERIAL_MORE,
+        (Tone::Light, _) => LIGHT_FLOAT_MATERIAL,
+    })
+}
+
+/// What text on a float lies on at its worst, as `(ground, colour)` for the overlay's fill, the
+/// dialog's and the floating one's (`Float::fill_index`): the colour at its alpha over the
+/// material's worst for the ink at `level`, or opaque with `None`, where the host has no material
+/// under it.
+fn float_grounds(tone: Tone, level: Option<Transparency>) -> [(Rgba, Rgba); 3] {
+    let worst = float_worst(tone, level);
+    [Float::SiteControls, Float::Dialog, Float::Menu].map(|float| {
+        let fill = float.fill_at(tone, level);
+        let colour = Rgba { a: 1., ..fill };
+        (over(worst, colour, fill.a), colour)
+    })
+}
+
+/// How `tone`'s ink reads on a float at `level`, or opaque with `None`: every word holds TEXT at
+/// rest and under the pointer. Its floors are never under what they are opaque with a plate under
+/// the pointer, so a float off the material reads as it did. Where a row's plate under the pointer
+/// takes its words under, the plate takes the least shade of the float's own colour that brings
+/// them back, as the window's plates take the tint's (`solve_ground`).
+pub fn float_ink(tone: Tone, level: Option<Transparency>) -> FloatInk {
+    let ink = tone.ink();
+    let grounds = float_grounds(tone, level);
+    let opaque: Vec<Rgba> = float_grounds(tone, None)
+        .iter()
+        .flat_map(|&(ground, _)| [ground, over(ground, ink, FLOAT_HOVERED)])
+        .collect();
+    let at_rest = grounds.map(|(ground, _)| ground);
+    let floor = |minimum: f32| {
+        least_alpha(ink, &at_rest, minimum + BETWEEN).max(least_alpha(
+            ink,
+            &opaque,
+            minimum + BETWEEN,
+        ))
+    };
+    let (text, glyph) = (floor(TEXT), floor(GLYPH));
+    let reads = |at: Rgba| {
+        contrast(over(at, ink, text), at) >= TEXT + BETWEEN
+            && contrast(over(at, ink, glyph), at) >= GLYPH + BETWEEN
+    };
+    let steps = (1. / SHADE_STEP).round() as i32;
+    let shades = grounds.map(|(ground, colour)| {
+        let plate = over(ground, ink, FLOAT_HOVERED);
+        (0..=steps)
+            .map(|step| step as f32 * SHADE_STEP)
+            .find(|&shade| reads(over(plate, colour, shade)))
+            .unwrap_or(1.)
+    });
+    FloatInk {
+        rest: at_rest.map(|ground| least_alpha(ink, &[ground], TEXT + BETWEEN)),
+        text,
+        glyph,
+        shades,
+    }
+}
+
+impl FloatInk {
+    /// The alpha a word drawn at `alpha` takes at rest on a float's `fill`, lying on `ground`: its
+    /// own where it reads there, or the floor.
+    pub fn word(self, ink: Rgba, ground: Rgba, fill: usize, alpha: f32) -> f32 {
+        let reads = contrast(over(ground, ink, alpha), ground) >= TEXT + BETWEEN;
+        match alpha >= self.rest[fill] || reads {
+            true => alpha,
+            false => self.rest[fill],
+        }
+    }
+}
+
+thread_local! {
+    /// `float_ink` as last worked out for each tone, with the level it was for.
+    static FLOAT_INK: std::cell::Cell<[Option<(Option<Transparency>, FloatInk)>; 2]> =
+        const { std::cell::Cell::new([None; 2]) };
+}
+
+/// The level what floats is worked out for: the user's, where the host has a material.
+fn float_level() -> Option<Transparency> {
+    window_material().then(transparency)
+}
+
+/// `float_ink` at the level now, where the host has a material.
+fn float_ink_now(tone: Tone) -> FloatInk {
+    let level = float_level();
+    let index = (tone == Tone::Light) as usize;
+    let mut known = FLOAT_INK.get();
+    match known[index] {
+        Some((at, ink)) if at == level => ink,
+        _ => {
+            let ink = float_ink(tone, level);
+            known[index] = Some((level, ink));
+            FLOAT_INK.set(known);
+            ink
+        }
+    }
+}
+
+/// `plate` with `shade` of `colour` over it, as one colour at one alpha, so it's drawn as one fill.
+/// A plate not drawn takes no shade.
+fn shaded(plate: Rgba, colour: Rgba, shade: f32) -> Rgba {
+    if shade == 0. || plate.a == 0. {
+        return plate;
+    }
+    let a = 1. - (1. - plate.a) * (1. - shade);
+    let mix = |p: f32, c: f32| (p * plate.a * (1. - shade) + c * shade) / a;
+    Rgba {
+        r: mix(plate.r, colour.r),
+        g: mix(plate.g, colour.g),
+        b: mix(plate.b, colour.b),
+        a,
     }
 }
 
@@ -314,10 +464,13 @@ pub enum Float {
     TabSwitcher,
     Dialog,
     FindBar,
+    /// The theme picker's, the icon picker's and the boost editor's card.
+    Picker,
+    FolderPreview,
 }
 
 impl Float {
-    pub const ALL: [Float; 10] = [
+    pub const ALL: [Float; 12] = [
         Float::Menu,
         Float::SiteControls,
         Float::Toast,
@@ -328,6 +481,8 @@ impl Float {
         Float::TabSwitcher,
         Float::Dialog,
         Float::FindBar,
+        Float::Picker,
+        Float::FolderPreview,
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
@@ -339,22 +494,59 @@ impl Float {
                 Float::Menu
                     | Float::SiteControls
                     | Float::TabSwitcher
+                    | Float::Picker
+                    | Float::FolderPreview
                     | Float::Toast
                     | Float::ZoomHud
             )
     }
 
-    /// Its fill in a `tone` window, as drawn on this host.
+    /// The alpha a word drawn at `alpha` takes at rest on it in a `tone` window on this host, where
+    /// its row under the pointer draws its words whole (`float_ink`).
+    pub fn word(self, tone: Tone, alpha: f32) -> f32 {
+        let (tone, fill) = (self.tone(tone), self.fill_index());
+        let (ground, _) = float_grounds(tone, float_level())[fill];
+        float_ink_now(tone).word(tone.ink(), ground, fill, alpha)
+    }
+
+    /// Its fill in a `tone` window, as drawn on this host, at the app's level whatever the Spaces'
+    /// glass.
     pub fn fill(self, tone: Tone) -> Rgba {
         self.fill_at(tone, self.over_material().then(transparency))
     }
 
-    /// Its fill at `level` over the host's material, or opaque with none.
+    /// Which of the fills it wears, as `float_grounds` lists them: the overlay's, the dialog's or
+    /// the floating one's.
+    pub(crate) fn fill_index(self) -> usize {
+        match self {
+            Float::Dialog => 1,
+            Float::Menu | Float::Picker => 2,
+            _ => 0,
+        }
+    }
+
+    /// The floating fill (the lead, 25 Nov) for what wears it, a menu and the pickers' card, at its
+    /// own alpha: the Transparency bar changes the window's glass only.
+    fn floating(self, tone: Tone) -> Option<Rgba> {
+        use crate::tokens::floating::{FILL, LIGHT_FILL};
+        (self.fill_index() == 2).then(|| {
+            rgba(match self.tone(tone) {
+                Tone::Dark => FILL,
+                Tone::Light => LIGHT_FILL,
+            })
+        })
+    }
+
+    /// Its fill at `level` over the host's material, or opaque with none. The floating fill keeps
+    /// its own alpha at every level.
     pub fn fill_at(self, tone: Tone, level: Option<Transparency>) -> Rgba {
         let colour = self.colour(tone);
         let Some(level) = level else {
             return colour;
         };
+        if let Some(floating) = self.floating(tone) {
+            return floating;
+        }
         let [dark, light, light_dialog] = float_alphas(level);
         let a = match (self, self.tone(tone)) {
             (_, Tone::Dark) => dark,
@@ -364,17 +556,25 @@ impl Float {
         Rgba { a, ..colour }
     }
 
-    /// The look it's drawn in: the find bar and tooltips are dark in both, so their white text
-    /// holds on any page.
+    /// The look it's drawn in: the find bar, tooltips and the pickers are dark in both, so their
+    /// white text holds on any page.
     fn tone(self, tone: Tone) -> Tone {
         match self {
-            Float::FindBar | Float::Tooltip => Tone::Dark,
+            Float::FindBar | Float::Tooltip | Float::Picker => Tone::Dark,
             _ => tone,
         }
     }
 
+    /// The pickers' card's fill over what blurs behind it: the floating fill, dark in both looks.
+    fn card(self) -> Rgba {
+        self.floating(Tone::Dark).unwrap_or(rgb(OVERLAY_DARK))
+    }
+
     /// Its colour, opaque.
     fn colour(self, tone: Tone) -> Rgba {
+        if let Some(floating) = self.floating(tone) {
+            return Rgba { a: 1., ..floating };
+        }
         rgb(match (self, self.tone(tone)) {
             (Float::Dialog, Tone::Dark) => DIALOG_DARK,
             (Float::Dialog, Tone::Light) => DIALOG_LIGHT,
@@ -396,6 +596,8 @@ pub struct Palette {
     pub tone: Tone,
     /// Black or white over the window's material at the tone's tint, with a theme or without.
     pub tint: Rgba,
+    /// Where the Space's glass sits on its Transparency bar, which `tint` is worked out from.
+    pub glass: f32,
     /// The window's ground where it has to be opaque, under rows it covers or in the reveal's
     /// panel over the page.
     pub underlay: Rgba,
@@ -432,18 +634,22 @@ pub struct Palette {
     pub overlay: Rgba,
     /// A dialog's fill.
     pub dialog: Rgba,
-    /// The least alpha at which `ink` reads as text, and as a glyph, on the overlay and the
-    /// dialog.
+    /// The least alpha at which `ink` reads as text, and as a glyph, on the overlay, the dialog and
+    /// the floating fill, and their shades over a row's plate under the pointer (`float_ink`).
     pub overlay_floor: f32,
     pub overlay_glyph_floor: f32,
+    pub float_shades: [f32; 3],
     /// The card the pages lie in, over the window.
     pub page: Rgba,
-    /// The icon and theme pickers' card, over what's behind it: Arc's grey where the card's text
-    /// reads on it over the window, and otherwise the least step toward the dark overlay, opaque,
+    /// The icon and theme pickers' card, over what's behind it: the floating fill where the card's
+    /// text reads on it over the window, and otherwise the least step toward its colour, opaque,
     /// at which it does.
     pub card: Rgba,
     /// The Space's mark.
     pub swatch: Swatch,
+    /// The dot of the Space shown in the foot's switcher (`solve_space_dot`); the ink with no
+    /// theme.
+    pub space_dot: Rgba,
     /// Each ground's shade, by `Ground`: the least step of the tint's colour over its plate at
     /// which the ink reads on it in every state, worked out with the palette.
     pub ground_shades: [f32; Ground::ALL.len()],
@@ -513,12 +719,22 @@ impl Default for Palette {
 }
 
 impl Palette {
-    /// The palette for a Space with `theme`, or none, in a window of `tone`.
+    /// The palette for a Space with `theme`, or none, in a window of `tone`, at the app's level.
     pub fn of(theme: Option<&Theme>, tone: Tone) -> Palette {
+        Palette::at(
+            theme,
+            tone,
+            crate::space_transparency::of_level(transparency()),
+        )
+    }
+
+    /// The palette for a Space with `theme`, or none, in a window of `tone`, with its glass at
+    /// `glass` on the Space's Transparency bar.
+    pub fn at(theme: Option<&Theme>, tone: Tone, glass: f32) -> Palette {
         let Some(theme) = theme else {
-            return Palette::untinted(tone);
+            return Palette::untinted(tone, glass);
         };
-        let window = Window::of(theme, tone);
+        let window = Window::of(theme, tone, glass);
         let layer_alpha = window.fit();
         let main = rgb(theme.main_color());
         let shown = solve_shown(main, tone, &window.samples(layer_alpha));
@@ -534,19 +750,21 @@ impl Palette {
         let accent = palette.solve_accent(main, &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(Some(theme), &window);
+        let space_dot = palette.solve_space_dot(swatch.main(), &window);
         Palette {
             accent,
             accent_label: label_on(accent),
             section_glyph,
             swatch,
+            space_dot,
             ..palette
         }
     }
 
     /// No theme: the tinted material alone, and ilo green, as light as it has to
     /// be to read on it, as the accent.
-    fn untinted(tone: Tone) -> Palette {
-        let window = Window::of_none(tone);
+    fn untinted(tone: Tone, glass: f32) -> Palette {
+        let window = Window::of_none(tone, glass);
         let palette = Palette::with(0., &window, None);
         let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
@@ -566,10 +784,8 @@ impl Palette {
         let (overlay, dialog) = tone.overlays();
         let mut palette = Palette {
             tone,
-            tint: Rgba {
-                a: tone.tint(),
-                ..tone.tint_color()
-            },
+            tint: tone.tint(window.glass),
+            glass: window.glass,
             underlay: tone.stand_in(),
             layer_alpha,
             glow: CLEAR,
@@ -582,24 +798,24 @@ impl Palette {
             accent: ink,
             accent_label: ink,
             section_glyph: ink,
+            space_dot: ink,
             overlay,
             dialog,
             overlay_floor: 0.,
             overlay_glyph_floor: 0.,
+            float_shades: [0.; 3],
             page: tone.page(),
-            card: rgba(CARD),
+            card: Float::Picker.card(),
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
             pointed_shade: 0.,
         };
-        // Text and glyphs on an overlay read on it and on a control's plate under the pointer.
-        let under = state_alpha(OVERLAY_REST, STATE_HOVERED);
-        let overlays: Vec<Rgba> = [palette.overlay, palette.dialog]
-            .into_iter()
-            .flat_map(|fill| [fill, over(fill, ink, under)])
-            .collect();
-        palette.overlay_floor = least_alpha(ink, &overlays, TEXT + BETWEEN);
-        palette.overlay_glyph_floor = least_alpha(ink, &overlays, GLYPH + BETWEEN);
+        // Text and glyphs on what floats read on it, over the material, and on a control's plate
+        // under the pointer.
+        let float = float_ink_now(tone);
+        palette.overlay_floor = float.text;
+        palette.overlay_glyph_floor = float.glyph;
+        palette.float_shades = float.shades;
         palette.card = palette.solve_card(window);
         let mut shades = Ground::ALL.map(|ground| palette.solve_ground(ground, window));
         // A row's plate under the pointer lies beside the selected row's and the tab shown's, and
@@ -612,7 +828,8 @@ impl Palette {
         let grounds = palette.grounds(window);
         palette.text_floor = least_alpha(ink, &grounds, TEXT + BETWEEN);
         palette.glyph_floor = least_alpha(ink, &grounds, GLYPH + BETWEEN);
-        palette.gray_floor = least_alpha(ink, &grounds, gray_text(transparency()) + BETWEEN);
+        let gray = gray_text_at(window.glass);
+        palette.gray_floor = least_alpha(ink, &grounds, gray + BETWEEN);
         // With Reduce Transparency the window is solid at every level, the level's tint over it,
         // and nothing shows through, so gray text there holds what it does at Less.
         let solid = palette.grounds_on(&[over(tone.solid(), palette.tint, palette.tint.a)], 0.);
@@ -634,8 +851,8 @@ impl Palette {
             .iter()
             .map(|&at| over(at, self.ink, GRAIN_SHIFT * grain))
             .collect();
-        // A light window's selected row is white, and a control's states still reach the ink's
-        // selected plate.
+        // A light window's selected row is a step weaker than the ladder's selected plate, which a
+        // control's states still reach.
         let (selected, alpha, _) = self.tone.selected();
         grounds.extend(plain.iter().map(|&at| over(at, selected, alpha)));
         if let Some(shown) = self.shown {
@@ -652,7 +869,7 @@ impl Palette {
 
     /// The colour of `ground`'s plate and its alphas in each state it's drawn in.
     fn ground_plates(&self, ground: Ground) -> (Rgba, Vec<f32>) {
-        use crate::tokens::shell::{HOVERED, LIGHT_HOVERED, TILE};
+        use crate::tokens::shell::{HOVERED, TILE};
         let pressable = |rest: f32| {
             vec![
                 rest,
@@ -663,12 +880,9 @@ impl Palette {
         let ink = self.ink;
         match ground {
             Ground::Selected => {
-                let (colour, rest, under) = self.tone.selected();
-                // A dark window's selected plate keeps its strength under the pointer (`shown`).
-                match self.tone {
-                    Tone::Dark => (colour, vec![rest]),
-                    Tone::Light => (colour, vec![rest, under]),
-                }
+                // The selected plate keeps its strength under the pointer (`shown`).
+                let (colour, rest, _) = self.tone.selected();
+                (colour, vec![rest])
             }
             Ground::Shown => match self.shown {
                 Some(colour) => {
@@ -677,13 +891,7 @@ impl Palette {
                 }
                 None => (ink, Vec::new()),
             },
-            Ground::Hovered => (
-                ink,
-                vec![match self.tone {
-                    Tone::Dark => HOVERED,
-                    Tone::Light => LIGHT_HOVERED,
-                }],
-            ),
+            Ground::Hovered => (ink, vec![HOVERED]),
             Ground::Library => (ink, vec![STATE_HOVERED, STATE_PRESSED]),
             Ground::Field => {
                 let mut alphas = pressable(FIELD_PLATE);
@@ -756,7 +964,7 @@ impl Palette {
     /// falls on, on the colour a screen shows, 8 bits a channel. It has nothing more to spare
     /// there, and needs none: that window is its material alone, one colour over each backdrop,
     /// with no points between to dip. A plate that tells already keeps its shade, and so does any
-    /// with a Space's colour or on a light window, where what tells is the plate's shadow.
+    /// with a Space's colour or on a light window, whose plate is the darker of the two.
     fn solve_selected(&self, window: &Window) -> f32 {
         let coarse = self.ground_shades[Ground::Selected as usize];
         if self.tone == Tone::Light || self.shown.is_some() {
@@ -801,16 +1009,20 @@ impl Palette {
         if shade == 0. || plate.a == 0. {
             return plate;
         }
-        let (p, tint) = (plate.to_rgb(), self.tone.tint_color());
-        let a = 1. - (1. - p.a) * (1. - shade);
-        let mix = |plate: f32, tint: f32| (plate * p.a * (1. - shade) + tint * shade) / a;
-        Rgba {
-            r: mix(p.r, tint.r),
-            g: mix(p.g, tint.g),
-            b: mix(p.b, tint.b),
-            a,
+        shaded(plate.to_rgb(), self.tone.tint_color(), shade).into()
+    }
+
+    /// `plate` under a row's words on `float`, with the float's shade of its own colour over it
+    /// where it lies on the material (`float_ink`).
+    pub fn on_float(&self, float: Float, plate: Hsla) -> Hsla {
+        let shade = match float.over_material() {
+            true => self.float_shades[float.fill_index()],
+            false => 0.,
+        };
+        if shade == 0. {
+            return plate;
         }
-        .into()
+        shaded(plate.to_rgb(), float.colour(self.tone), shade).into()
     }
 
     /// A plate of the ink at `alpha` drawn on `ground`.
@@ -847,6 +1059,7 @@ impl Palette {
             tone: near.tone,
             underlay: mix(self.underlay, other.underlay),
             tint: mix(self.tint, other.tint),
+            glass: self.glass + (other.glass - self.glass) * t,
             layer_alpha: self.layer_alpha + (other.layer_alpha - self.layer_alpha) * t,
             glow: near.glow,
             far_glow: near.far_glow,
@@ -861,10 +1074,14 @@ impl Palette {
             accent: mix(self.accent, other.accent),
             accent_label: near.accent_label,
             section_glyph: mix(self.section_glyph, other.section_glyph),
+            space_dot: mix(self.space_dot, other.space_dot),
             overlay: near.overlay,
             dialog: near.dialog,
             overlay_floor: self.overlay_floor.max(other.overlay_floor),
             overlay_glyph_floor: self.overlay_glyph_floor.max(other.overlay_glyph_floor),
+            float_shades: std::array::from_fn(|fill| {
+                self.float_shades[fill].max(other.float_shades[fill])
+            }),
             page: mix(self.page, other.page),
             card: near.card,
             swatch: near.swatch,
@@ -937,12 +1154,10 @@ impl Palette {
     /// Gray text at `alpha` on a row's or a card's plate. A dark window's plate is lighter than
     /// the window beside it, so gray reads less on it than off it, and there it is one ink
     /// wherever it lies, PLATE_GRAY, or more where `alpha` or the floor asks more. A light
-    /// window's plate is lighter than its gray's ground too, which the ink gains by.
+    /// window's plate is darker than the window beside it, the ink's or a Space's colour, and
+    /// gray on it is the ink at LIGHT_PLATE_GRAY at least.
     pub fn gray_on_plate(&self, alpha: f32) -> Hsla {
-        match self.tone {
-            Tone::Dark => self.gray(alpha.max(PLATE_GRAY)),
-            Tone::Light => self.gray(alpha),
-        }
+        self.gray(alpha.max(self.toned(PLATE_GRAY, LIGHT_PLATE_GRAY)))
     }
 
     /// This palette for what lies on `fill`, an opaque colour that isn't the window's, such as a
@@ -1064,26 +1279,15 @@ impl Palette {
     pub fn shown(&self, hover: f32) -> Hsla {
         let Some(color) = self.shown else {
             // On a dark window the ladder's hovered plate is Paper too strong for Paper's text to
-            // read on, so without a colour the plate keeps its strength under the pointer.
-            return match self.tone {
-                Tone::Dark => self.selected(0.),
-                Tone::Light => self.selected(hover),
-            };
+            // read on, so without a colour the plate keeps its strength under the pointer, and a
+            // light window's has no firmer step.
+            return self.selected(0.);
         };
         let (rest, under) = self.tone.shown();
         self.on_ground(
             Ground::Shown,
             Hsla::from(color).opacity(rest + (under - rest) * hover),
         )
-    }
-
-    /// What lifts the tab shown's plate off a light window, at `opacity`: the selected plate's,
-    /// for a Space without a colour; a plate of the Space's colour lies flat.
-    pub fn shown_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
-        match self.shown {
-            Some(_) => Vec::new(),
-            None => self.selected_shadow(opacity),
-        }
     }
 
     /// The window's colour over its ground, `foot` of the way to the foot glow's full strength and
@@ -1102,21 +1306,6 @@ impl Palette {
         composite(foot, far)
     }
 
-    /// What lifts the selected row's plate off a light window, at `opacity`; nothing on a dark
-    /// one.
-    pub fn selected_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
-        if self.tone == Tone::Dark {
-            return Vec::new();
-        }
-        vec![BoxShadow {
-            color: Hsla::from(BLACK).opacity(LIGHT_SELECTED_SHADOW * opacity),
-            offset: point(px(0.), px(LIGHT_SELECTED_SHADOW_Y)),
-            blur_radius: px(LIGHT_SELECTED_SHADOW_BLUR),
-            spread_radius: px(0.),
-            inset: false,
-        }]
-    }
-
     /// A plate under a row or a field, the ink at `alpha`.
     pub fn plate(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha)
@@ -1132,11 +1321,11 @@ impl Palette {
 
     /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a
     /// dark window the plate anything has under the pointer, so a row's and a card's are one and
-    /// both are seen; on a light one the ink at a row's fainter step.
+    /// both are seen; on a light one the ink at the same step, with a row's own shade.
     pub fn hovered_row(&self) -> Hsla {
         match self.tone {
             Tone::Dark => self.hovered_plate(),
-            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::LIGHT_HOVERED),
+            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::HOVERED),
         }
     }
 
@@ -1155,7 +1344,8 @@ impl Palette {
     /// its, as it's seen over a black and over a white backdrop.
     pub fn window_at(&self, foot: f32, far: f32) -> [Rgba; 2] {
         let glow = self.glow_at(foot, far);
-        self.tone.grounds().map(|ground| over(ground, glow, glow.a))
+        let grounds = self.tone.grounds(self.tint);
+        grounds.map(|ground| over(ground, glow, glow.a))
     }
 
     /// The window over a grey backdrop at black, grey 128 and white, the three its material was
@@ -1173,9 +1363,7 @@ impl Palette {
     /// The window where its theme's colour is `layer`, translucent, over a black and over a
     /// white backdrop: what a mark on it is judged against.
     pub fn over_backdrops(&self, layer: Hsla) -> [Rgba; 2] {
-        self.tone
-            .grounds()
-            .map(|ground| Hsla::from(ground).blend(layer).to_rgb())
+        (self.tone.grounds(self.tint)).map(|ground| Hsla::from(ground).blend(layer).to_rgb())
     }
 
     /// The hairline ring a swatch of `theme`'s colours needs on `behind`, opaque: Ink or Paper,
@@ -1199,17 +1387,20 @@ impl Palette {
     /// Where a swatch ring is checked against this palette's window: every point checked, over
     /// both backdrops.
     pub fn window_samples(&self, theme: Option<&Theme>) -> Vec<Rgba> {
-        let window = theme.map_or(Window::of_none(self.tone), |theme| {
-            Window::of(theme, self.tone)
+        let window = theme.map_or(Window::of_none(self.tone, self.glass), |theme| {
+            Window::of(theme, self.tone, self.glass)
         });
         window.samples(self.layer_alpha)
     }
 
-    /// The pickers' card as they draw it: translucent where the host blurs what's behind a
-    /// picker, the Mac's always and Linux's where its compositor can. Elsewhere what's behind
-    /// shows sharp through the card and reads as noise, so there the card is opaque over the dark
-    /// overlay.
+    /// The pickers' card as they draw it: what floats' fill where the host has its material under
+    /// them; translucent where the host blurs what's behind a picker otherwise, as Linux's
+    /// compositor can. Elsewhere what's behind shows sharp through the card and reads as noise, so
+    /// there the card is opaque over the floating fill's colour.
     pub fn card_drawn(&self) -> Rgba {
+        if Float::Picker.over_material() {
+            return Float::Picker.fill(self.tone);
+        }
         #[cfg(target_os = "linux")]
         let blurred = gpui_linux::overlays_blur();
         #[cfg(not(target_os = "linux"))]
@@ -1222,13 +1413,13 @@ impl Palette {
         if blurred {
             return self.card;
         }
-        over(rgb(OVERLAY_DARK), self.card, self.card.a)
+        over(Float::Picker.colour(self.tone), self.card, self.card.a)
     }
 
-    /// The pickers' card: Arc's measured grey, then a step at a time toward the dark overlay,
-    /// opaque, until its hint and its segments' labels read on it over every point of the window.
+    /// The pickers' card: the floating fill, then a step at a time toward its colour, opaque,
+    /// until its hint and its segments' labels read on it over every point of the window.
     fn solve_card(&self, window: &Window) -> Rgba {
-        let (measured, opaque) = (rgba(CARD), rgb(OVERLAY_DARK));
+        let (measured, opaque) = (Float::Picker.card(), Float::Picker.colour(self.tone));
         let behind = window.samples(self.layer_alpha);
         let steps = (1. / SHADE_STEP).round() as i32;
         let toward = |t: f32| Rgba {
@@ -1263,6 +1454,10 @@ impl Palette {
             .iter()
             .map(|&at| over(at, self.ink, TARGET_PLATE))
             .collect();
+        // A switch's or the shield's glyph, on Site Controls' tile tinted with the accent: on a
+        // window dark enough, the accent that reads on the window is too dark for it.
+        let tiles = [SITE_CONTROLS_TILE_TOP, SITE_CONTROLS_TILE_BOTTOM]
+            .map(|plate| over(self.overlay, self.ink, plate));
         let passes = |c: Rgba| {
             contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
                 && contrast(c, self.overlay) >= GLYPH
@@ -1274,6 +1469,9 @@ impl Palette {
                 && target
                     .iter()
                     .all(|&at| contrast(c, over(at, c, TARGET_ACCENT)) >= GLYPH + BETWEEN)
+                && tiles
+                    .iter()
+                    .all(|&at| contrast(c, over(at, c, SITE_CONTROLS_TINT)) >= GLYPH)
         };
         nearest(main, passes).unwrap_or(self.ink)
     }
@@ -1290,6 +1488,37 @@ impl Palette {
                 .all(|&at| contrast(c, at) >= GLYPH + BETWEEN)
         };
         nearest(accent, passes).unwrap_or(self.ink)
+    }
+
+    /// The dot of the Space shown in the foot's switcher: its first colour `SPACE_DOT_TONE` of the
+    /// way to the ink where that reads at 3:1 on the window everywhere, grain and all; otherwise
+    /// only as much nearer the ink as 3:1 needs, a hundredth at a time. It's never weaker there
+    /// than the other Spaces' dots, the ink at the quietest text's alpha. Both hold with BETWEEN to
+    /// spare, as the window between the points checked can dip under them.
+    fn solve_space_dot(&self, main: Rgba, window: &Window) -> Rgba {
+        use crate::tokens::shell::SPACE_DOT_TONE;
+        let grounds: Vec<Rgba> = (window.samples(self.layer_alpha).into_iter())
+            .flat_map(|at| [at, over(at, self.ink, GRAIN_SHIFT * window.grain)])
+            .collect();
+        let others = self.tertiary().max(self.glyph_floor);
+        let reads = |dot: Rgba| {
+            grounds.iter().all(|&at| {
+                let ratio = contrast(dot, at);
+                ratio >= GLYPH + BETWEEN
+                    && ratio >= contrast(over(at, self.ink, others), at) + BETWEEN
+            })
+        };
+        let steps = ((1. - SPACE_DOT_TONE) * 100.).round() as i32;
+        (0..=steps)
+            .map(|step| {
+                over(
+                    main,
+                    self.ink,
+                    (SPACE_DOT_TONE + step as f32 * 0.01).min(1.),
+                )
+            })
+            .find(|&dot| reads(dot))
+            .unwrap_or(self.ink)
     }
 }
 
@@ -1319,9 +1548,10 @@ fn nearest(main: Rgba, passes: impl Fn(Rgba) -> bool) -> Option<Rgba> {
 impl Swatch {
     /// `theme`'s swatch, or ilo green's for none, without the rest of its palette.
     pub fn of_theme(theme: Option<&Theme>) -> Swatch {
+        let glass = crate::space_transparency::START;
         match theme {
-            Some(theme) => Swatch::of(Some(theme), &Window::of(theme, Tone::Dark)),
-            None => Swatch::of(None, &Window::of_none(Tone::Dark)),
+            Some(theme) => Swatch::of(Some(theme), &Window::of(theme, Tone::Dark, glass)),
+            None => Swatch::of(None, &Window::of_none(Tone::Dark, glass)),
         }
     }
 
@@ -1471,6 +1701,8 @@ struct Window {
     far: Rgba,
     grain: f32,
     swatch: Vec<Rgba>,
+    /// Where the Space's glass sits on its Transparency bar.
+    glass: f32,
 }
 
 /// The theme's colour at one point of its swatch's run: the gradient's, and a third colour over it
@@ -1518,9 +1750,10 @@ impl Layer {
 
 impl Window {
     /// No theme: the ground alone.
-    fn of_none(tone: Tone) -> Window {
+    fn of_none(tone: Tone, glass: f32) -> Window {
         Window {
             tone,
+            glass,
             alpha: 0.,
             far_alpha: 0.,
             main: BLACK,
@@ -1530,7 +1763,7 @@ impl Window {
         }
     }
 
-    fn of(theme: &Theme, tone: Tone) -> Window {
+    fn of(theme: &Theme, tone: Tone, glass: f32) -> Window {
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         let alongs: &[f32] = if colors.len() == 1 { &[0.] } else { &ALONG };
         let swatch = alongs
@@ -1548,6 +1781,7 @@ impl Window {
             far: colors.get(1).copied().unwrap_or(colors[0]),
             grain: theme.grain,
             swatch,
+            glass,
         }
     }
 
@@ -1563,8 +1797,7 @@ impl Window {
     /// at `alpha` at its centre and the far one with it, each anywhere from none to full.
     fn samples(&self, alpha: f32) -> Vec<Rgba> {
         let far_alpha = self.far_at(alpha);
-        self.tone
-            .grounds()
+        (self.tone.grounds(self.tone.tint(self.glass)))
             .into_iter()
             .flat_map(|ground| {
                 FOOT.iter().flat_map(move |&foot| {
@@ -1642,6 +1875,29 @@ fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
     };
     let at = |intensity: f32| INTENSITY_FLOOR + INTENSITY_SPAN * intensity;
     alpha * at(theme.intensity) / at(DEFAULT_INTENSITY)
+}
+
+/// The least contrast gray text holds where a Space's glass is `glass`: Less's from solid up to
+/// where Less sits, then toward Standard's and More's where they sit, as the tint goes.
+pub fn gray_text_at(glass: f32) -> f32 {
+    use crate::space_transparency::of_level;
+    let stops = [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ]
+    .map(|level| (of_level(level), gray_text(level)));
+    let glass = glass.clamp(0., 1.);
+    let mut pairs = stops.windows(2);
+    pairs
+        .find(|pair| glass <= pair[1].0)
+        .map_or(GRAY_TEXT_MORE, |pair| {
+            let [(from, at_from), (to, at_to)] = [pair[0], pair[1]];
+            match glass <= from {
+                true => at_from,
+                false => at_from + (at_to - at_from) * (glass - from) / (to - from),
+            }
+        })
 }
 
 /// The least contrast gray text holds at `level`, from the table beside the window's tints;

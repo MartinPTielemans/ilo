@@ -9,8 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
-    HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP,
+    ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH,
+    FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item,
+    SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
 };
 use crate::agents::task::{ArchivedTask, Card, Dot, Word};
 use crate::shell::recorder::Recorder;
@@ -41,6 +42,7 @@ fn task(n: u64, ended: f64) -> ArchivedTask {
 /// Task 1's card, back at the foot, in its own Space 101.
 fn card() -> Card {
     Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 101,
@@ -65,6 +67,7 @@ fn card() -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -125,6 +128,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let items = &shell.library.as_ref().unwrap().items;
         let named = items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("tab {}", shell.archive[*index].id),
             Item::Task(index) => shell.archived_tasks[*index].agent.to_string(),
             _ => "other".to_string(),
@@ -144,7 +148,7 @@ fn row(row: usize) -> gpui::Point<gpui::Pixels> {
 
 fn filter(cx: &mut VisualTestContext) {
     let filter = point(
-        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + ARCHIVE_WIDTH - SEARCH_RIGHT - FILTER_PAD_RIGHT - FILTER_CHEVRON / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());
@@ -277,7 +281,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             ("All".into(), true),
             ("".into(), false),
             ("Closed Tabs".into(), true),
-            ("Tasks".into(), true),
+            ("Threads".into(), true),
             ("".into(), false),
             ("Visited".into(), true)
         ]
@@ -290,7 +294,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             .collect::<Vec<_>>(),
         [true, false, false, false, false, false]
     );
-    cx.update(|_, cx| host.choose("Tasks", cx));
+    cx.update(|_, cx| host.choose("Threads", cx));
     cx.run_until_parked();
     assert_eq!(items(&shell, cx), ["Today", "task-1"]);
     filter(cx);
@@ -312,10 +316,10 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
     assert!(items(&shell, cx).is_empty());
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.empty_line(Section::Archive, true)),
-        "Finished tasks stay here until ilo quits."
+        "Archived threads show here."
     );
     filter(cx);
-    cx.update(|_, cx| host.choose("Little ilo", cx));
+    cx.update(|_, cx| host.choose("Little Window", cx));
     cx.run_until_parked();
     assert_eq!(items(&shell, cx), ["Today", "tab 9"]);
     assert_eq!(
@@ -362,7 +366,7 @@ fn clear_archive_takes_the_tasks_with_the_tabs(cx: &mut TestAppContext) {
     let (message, detail, confirmed) = host.confirming.borrow_mut().take().expect("it didn't ask");
     assert_eq!(message, "Clear the archive?");
     assert!(
-        detail.starts_with("Its 2 tabs and 2 tasks leave the archive. "),
+        detail.starts_with("Its 2 tabs and 2 threads leave the archive. "),
         "{detail}"
     );
     cx.update(|_, cx| confirmed(cx));

@@ -6,15 +6,18 @@ use std::{
 };
 
 use gpui::{
-    Entity, Modifiers, Pixels, Point, SharedString, TestAppContext, VisualTestContext, point, px,
+    Entity, EntityInputHandler, Modifiers, Pixels, Point, SharedString, TestAppContext,
+    VisualTestContext, point, px,
 };
 
 use crate::agents::task::{Card, Dot};
-use crate::agents::tier::Tier;
-use crate::command_bar::{Given, PLACEHOLDER_TEXT};
+use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
-    empty::{FADE, MARK_HEIGHT, composer::group_top},
+    empty::{
+        FADE,
+        composer::{group_top, mark_top},
+    },
     recorder::Recorder,
     task_cards::tests::card,
 };
@@ -240,28 +243,57 @@ fn the_welcome_opens_a_new_tab(cx: &mut TestAppContext) {
     assert_eq!(host.command_bars.take(), [None]);
 }
 
-/// Whether the empty card's field is on Ask, and what it says with nothing typed.
-fn switch(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (bool, String) {
+/// The welcome is the mark, its one line and the button: nothing stands between the line and the
+/// button, and the bar's mark isn't there with it.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_welcome_has_no_line_under_its_title(cx: &mut TestAppContext) {
+    use crate::tokens::shell::empty::BUTTON_GAP;
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| shell.set_welcome(cx));
+    cx.run_until_parked();
+    let title = cx.debug_bounds("welcome-title").expect("no welcome");
+    let button = cx.debug_bounds("welcome-button").expect("no button");
+    let gap = f32::from(button.top() - title.bottom());
+    assert!(
+        (gap - BUTTON_GAP).abs() < 0.5,
+        "the button is {gap} under the title: something stands between them"
+    );
+    assert_eq!(cx.debug_bounds("resting-mark"), None);
+}
+
+/// Whether the empty page's bar is the composer, and what its field says with nothing typed.
+fn composer(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (bool, String) {
     cx.update(|_, cx| {
         let resting = shell
             .read(cx)
             .resting
             .as_ref()
-            .expect("no field on the empty card");
+            .expect("no bar on the empty page");
         let bar = resting.bar.read(cx);
-        (bar.on_ask(), bar.placeholder(cx).to_string())
+        (bar.composing_thread(), bar.placeholder(cx).to_string())
     })
 }
 
+/// What the empty page's bar asked of the core, without the assistants it looked for.
+fn rested(host: &Recorder) -> Vec<String> {
+    (host.resting.take().into_iter())
+        .filter(|call| call != "task agents" && call != "look for agents")
+        .collect()
+}
+
 /// The empty card's field is made with the card's first frame and asks the core nothing for it:
-/// no suggestion, no assistant, no task, until the user types or flips to Ask (#4140).
+/// no suggestion, no assistant, no task, until the user types or grows it with ⇥ (#4140).
 #[gpui::test]
 fn the_empty_card_rests_on_a_field_that_asks_nothing(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
     assert!(host.take().contains(&"command bar in place".to_string()));
     assert_eq!(*host.resting.borrow(), Vec::<String>::new());
     assert_eq!(
-        switch(&shell, cx),
+        composer(&shell, cx),
         (false, "Search or enter address".into())
     );
 }
@@ -288,47 +320,296 @@ fn a_page_shown_drops_the_field(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"command bar in place".to_string()));
 }
 
-/// ⇥ flips the field to Ask, naming the assistant, and back; Esc in Ask goes back to Search, and
-/// in Search does nothing, leaving the card as it is.
+/// ⇥ grows the page's bar into ⌘T's composer where it rests, and ⇥ again, ⇧⇥ or Esc take it back
+/// to search with what's typed; Esc in search leaves the page as it is, the field keeping the
+/// keyboard. Nothing opens at Today's top for it.
 #[gpui::test]
-fn tab_flips_the_field_and_escape_goes_back_to_search(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    assert_eq!(
-        switch(&shell, cx),
-        (true, "Ask Claude to do something".into())
-    );
-    cx.simulate_keystrokes("tab");
-    assert_eq!(switch(&shell, cx).0, false);
-    cx.simulate_keystrokes("tab escape");
-    assert_eq!(
-        switch(&shell, cx),
-        (false, "Search or enter address".into())
-    );
-    cx.simulate_keystrokes("escape");
-    assert_eq!(switch(&shell, cx).0, false);
-    assert!(
-        field_focused(&shell, cx),
-        "Esc in Search let the keyboard go"
-    );
-    assert!(shell.read_with(cx, |shell, _| shell.resting.is_some()));
-}
-
-/// ↩ in Ask starts what was typed as a task on the assistant, from the card's Space, and empties
-/// the field; with nothing typed it starts nothing.
-#[gpui::test]
-fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
+fn tab_grows_the_bar_in_place_and_back_keeps_the_words(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab enter");
-    host.take();
     cx.simulate_input("book a table");
+    host.resting.take();
+    cx.simulate_keystrokes("tab");
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    for back in ["tab", "shift-tab", "escape"] {
+        cx.simulate_keystrokes(back);
+        let typed = cx.update(|_, cx| {
+            let resting = shell.read(cx).resting.as_ref().unwrap();
+            resting.bar.read(cx).typed_text(cx)
+        });
+        assert_eq!(
+            (composer(&shell, cx).0, typed.as_str()),
+            (false, "book a table"),
+            "{back} back lost the words"
+        );
+        cx.simulate_keystrokes("tab");
+    }
+    cx.simulate_keystrokes("escape escape");
+    assert!(!composer(&shell, cx).0);
+    assert!(
+        field_focused(&shell, cx),
+        "Esc in search let the keyboard go"
+    );
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_some()));
+    assert!(
+        !rested(&host).iter().any(|call| call.starts_with("asking")),
+        "the composer at rest opened Today's slot"
+    );
+}
+
+/// Another empty Space shown while the composer is open at rest: the bar there is search, with
+/// the words kept (the bar's own test holds that the picks go).
+#[gpui::test]
+fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
+                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("tab");
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    shell.update(cx, |shell, cx| {
+        shell.set_space(2, cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(
+        (composer(&shell, cx).0, typed.as_str()),
+        (false, "book a table"),
+        "the composer came into the other Space"
+    );
+}
+
+/// Under the bar at rest are the threads whose home is the window's Space alone, those a run
+/// before left there too: another Space's never show, and a Space with none lists none.
+#[gpui::test]
+fn the_bar_at_rest_lists_its_own_spaces_threads_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    let at = |n: u64, home: u64| Card {
+        home,
+        ..card(n, Dot::Working)
+    };
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64| (id, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space(1), space(2), space(3)], cx);
+        shell.set_space(1, cx);
+        shell.set_task_cards(vec![at(1, 1), at(2, 2), at(3, 1)], cx);
+        shell.set_kept_cards(vec![at(4, 2), at(5, 1)], cx);
+    });
+    let listed = |space: u64, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_space(space, cx));
+        shell.read_with(cx, |shell, _| {
+            (shell.latest_tasks(5).into_iter())
+                .map(|card| card.agent.to_string())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(listed(1, cx), ["task-1", "task-3", "task-5"]);
+    assert_eq!(listed(2, cx), ["task-2", "task-4"]);
+    assert_eq!(listed(3, cx), Vec::<String>::new());
+}
+
+/// A window whose one Space has the unloaded pinned tab 20 and shows no page, so its field at
+/// rest has the keyboard, by itself.
+fn resting_by_a_pinned_tab(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    // ⌘Z and ⇧⌘Z are the window's keys and a field's, as the app binds them.
+    cx.update(crate::shell::bind_keys);
+    cx.update(crate::text_input::bind_keys);
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![20], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        field_focused(&shell, cx),
+        "the field didn't take the keyboard"
+    );
+    (shell, cx, host)
+}
+
+/// Removes the pinned tab 20, as its row's button does, and the core reports it gone.
+fn remove_the_pinned_tab(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    shell.update(cx, |shell, cx| {
+        shell.remove_pinned(20, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    host.take_edits();
+}
+
+/// The field at rest takes the keyboard by itself as the last page leaves, so while it holds no
+/// text the user changed, ⌘Z is for what they did last: a pinned tab removed is pinned again.
+#[gpui::test]
+fn command_z_in_the_empty_field_at_rest_undoes_the_windows_last_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    assert!(field_focused(&shell, cx));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 20 as 1001", "move 1001 true 0 0"],
+        "⌘Z stopped in the field"
+    );
+    // The core reports the tab pinned again, under its new id.
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![1001], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-cmd-z");
+    assert!(!host.take_edits().is_empty(), "⇧⌘Z stopped in the field");
+}
+
+/// Once the user has typed in the field at rest, ⌘Z is the field's, as in any field, and undoes
+/// nothing of the window's, even once what was typed is gone.
+#[gpui::test]
+fn command_z_after_typing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    cx.simulate_input("book");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(typed, "book", "⌘Z changed what was typed");
+    cx.simulate_keystrokes("backspace backspace backspace backspace cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+}
+
+/// While an input method composes in the field at rest, as Japanese does before it commits,
+/// ⌘Z is the field's, and the composition stays.
+#[gpui::test]
+fn command_z_while_composing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    let field = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).field()
+    });
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.composing()),
+        "the composition went"
+    );
+}
+
+/// On a new profile ilo hasn't looked for an assistant yet: ⇥ grows the bar at rest into the
+/// composer and looks, once, as ⌘T's does. The assistant the browser finds after is the
+/// composer's, and ↩ starts the thread on it; before, ↩ starts nothing.
+#[gpui::test]
+fn an_assistant_found_later_shows_at_rest(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.unlearned.set(true);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    host.resting.take();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    let asked = host.resting.take();
+    assert_eq!(
+        (asked.iter())
+            .filter(|call| *call == "look for agents")
+            .count(),
+        1,
+        "⇥ looks for the assistants, once: {asked:?}"
+    );
+    let agent = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let resting = shell.read(cx).resting.as_ref().unwrap();
+            resting.bar.read(cx).composer_agent().map(String::from)
+        })
+    };
+    assert_eq!(agent(&shell, cx), None, "none found yet");
     cx.simulate_keystrokes("enter");
     assert!(
-        host.take()
-            .contains(&"start task claude book a table from 1 at Work on pages".to_string()),
-        "no task started"
+        !rested(&host)
+            .iter()
+            .any(|call| call.starts_with("run task")),
+        "a thread started with no assistant"
+    );
+
+    // The browser found Claude, and the window is sent what it knows (send_agents).
+    host.unlearned.set(false);
+    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
+    cx.run_until_parked();
+    assert_eq!(agent(&shell, cx).as_deref(), Some("claude"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        rested(&host),
+        ["run task at rest claude book a table at work"]
+    );
+}
+
+/// ↩ in the composer at rest starts what was typed as a thread on the assistant, where the bar
+/// rests, at the level the composer shows, and empties the field.
+#[gpui::test]
+fn return_in_the_composer_at_rest_starts_the_thread(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    host.resting.take();
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        host.resting.take(),
+        ["look for agents"],
+        "⇥ asked the core for more than the assistants"
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        rested(&host),
+        ["run task at rest claude book a table at work"]
     );
     let typed = cx.update(|_, cx| {
         let resting = shell.read(cx).resting.as_ref().unwrap();
@@ -337,13 +618,18 @@ fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
     assert_eq!(typed, "");
 }
 
-/// ↩ in Ask with "book a table" typed, on a window with no tab.
+/// ↩ in the composer at rest with "book a table" typed, on a window with no tab, as the host
+/// takes it: the start is the Space's, over the empty page.
 fn composed(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = window_with_no_tab(cx);
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
     cx.simulate_input("book a table");
-    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("tab enter");
+    assert!(
+        (host.resting.borrow().iter()).any(|call| call.starts_with("run task at rest")),
+        "↩ started nothing"
+    );
+    shell.update(cx, |shell, _| shell.bar_starting());
     (shell, cx, host)
 }
 
@@ -511,9 +797,9 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     made(&[seen.clone(), later.clone()], &shell, &host, cx);
     assert_eq!(opened(&shell, vec![seen.clone()], cx), None);
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
     cx.simulate_input("book a table");
-    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("tab enter");
+    shell.update(cx, |shell, _| shell.bar_starting());
     shell.update(cx, |shell, cx| shell.show_task("task-3".into(), cx));
     cx.run_until_parked();
     shell.update(cx, |shell, cx| shell.close_task(cx));
@@ -526,482 +812,20 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     );
 }
 
-/// The level the next task starts at, as the chip on Ask's line shows it.
-fn tier(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Tier {
-    shell.read_with(cx, |shell, _| shell.composer_tier())
-}
-
-/// The user's pick on the level menu, as its item does.
-fn pick(shell: &Entity<Shell>, tier: Tier, cx: &mut VisualTestContext) {
-    shell.update(cx, |shell, cx| shell.pick_tier(tier, cx));
-}
-
-/// The level's menu shows names only: the levels, where the task may go, and Settings, which opens
-/// Settings › Agents at Access. Only the sites you add waits for a page the user added. It hangs
-/// 4 under the chip, its names under the chip's word.
-#[gpui::test]
-fn the_level_menu_names_the_levels_the_sites_and_settings(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let chip = shell.read_with(cx, |shell, _| {
-        shell
-            .resting
-            .as_ref()
-            .and_then(|resting| resting.tier_chip.get())
-    });
-    let chip = chip.expect("the level chip drawn on Ask's line");
-    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
-    let titles = host.menus.borrow().last().cloned().expect("a menu shown");
-    let titles: Vec<(String, bool)> = (titles.into_iter())
-        .map(|(title, enabled)| (title.to_string(), enabled))
-        .collect();
-    let row = |title: &str, enabled: bool| (title.to_string(), enabled);
-    assert_eq!(
-        titles,
-        vec![
-            row("Look only", true),
-            row("Work on pages", true),
-            row("Full access", true),
-            row("", false),
-            row("Any site", true),
-            row("Only the sites you add", false),
-            row("", false),
-            row("Settings…", true),
-        ],
-        "the level menu's rows"
-    );
-    let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
-    assert_eq!(
-        checked,
-        [false, true, false, false, true, false, false, false],
-        "Work on pages and Any site checked"
-    );
-    let at = host.menu_at.get().expect("where the menu was shown");
-    assert_eq!(
-        at.y,
-        chip.bottom() + px(4.),
-        "the menu hangs 4 under the chip"
-    );
-    assert!(
-        at.x < chip.left(),
-        "the menu's check column sits left of the chip's word"
-    );
-    host.take();
-    cx.update(|_, cx| host.choose("Settings…", cx));
-    assert_eq!(
-        host.take(),
-        vec!["agent access".to_string()],
-        "Settings… opens Access"
-    );
-    assert_eq!(
-        tier(&shell, cx),
-        Tier::Work,
-        "Settings… left the level as it was"
-    );
-}
-
-/// The assistant's chip names the model the next task starts on, Settings' (Opus here) till the
-/// user picks on its menu: its default first, then the models from Settings' list. The pick starts
-/// that task alone; the next starts on Settings' again, as does a trip out of Ask.
-#[gpui::test]
-fn the_model_chip_picks_for_one_task(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let chip = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| {
-            let resting = shell.resting.as_ref().unwrap();
-            let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx)).unwrap();
-            super::composer::model_words(
-                &agent,
-                &super::composer::next_model(resting.model.as_ref(), &agent),
-            )
-        })
-    };
-    assert_eq!(
-        chip(&shell, cx),
-        "Claude · Opus",
-        "the chip says Settings' model"
-    );
-    shell.update(cx, |shell, cx| shell.model_menu(point(px(0.), px(0.)), cx));
-    let rows: Vec<String> = (host.entries.borrow().iter())
-        .map(|entry| {
-            format!(
-                "{}{}",
-                entry.title,
-                if entry.checked { " (checked)" } else { "" }
-            )
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        ["Claude Code's default", "Opus (checked)", "Sonnet", "Haiku"],
-        "the model menu's rows"
-    );
-    cx.update(|_, cx| host.choose("Haiku", cx));
-    assert_eq!(chip(&shell, cx), "Claude · Haiku", "the chip says the pick");
-    host.take();
-    cx.simulate_input("book a table");
-    cx.simulate_keystrokes("enter");
-    let calls = host.take();
-    assert!(
-        calls.contains(
-            &"start task claude book a table from 1 at Work on pages on \"haiku\"".to_string()
-        ),
-        "the pick didn't reach its task: {calls:?}"
-    );
-    assert_eq!(
-        chip(&shell, cx),
-        "Claude · Opus",
-        "the next task starts on Settings' again"
-    );
-
-    shell.update(cx, |shell, cx| {
-        shell.pick_model("claude".into(), String::new(), cx)
-    });
-    assert_eq!(
-        chip(&shell, cx),
-        "Claude Code's default",
-        "the default picked"
-    );
-    cx.simulate_keystrokes("tab");
-    cx.simulate_keystrokes("tab");
-    assert_eq!(
-        chip(&shell, cx),
-        "Claude · Opus",
-        "out of Ask forgets the pick"
-    );
-}
-
-/// The `+` menu lists the Space's http(s) pages by title (Add a Page's list, a menu of its own till
-/// files and folders join it), and a pick adds one, whose
-/// title shows on Ask's line and whose address alone the task gets; Only the sites you add waits
-/// for one. A second pick takes it off, and the picks go with the run. Files and folders aren't
-/// offered yet.
-#[gpui::test]
-fn add_a_page_gives_the_task_its_address_alone(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    shell.update(cx, |shell, cx| {
-        let page = |url: &str| Page {
-            url: url.into(),
-            ..Page::default()
-        };
-        shell.set_page(1, page("https://fieldbook.example/lakeside"), cx);
-        shell.set_title(1, "The Lakeside loop".into(), cx);
-        shell.set_page(2, page("file:///Users/someone/notes.txt"), cx);
-    });
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let rows = |host: &Recorder| -> Vec<String> {
-        (host.entries.borrow().iter())
-            .map(|entry| {
-                let under = if entry.parent.is_some() { "  " } else { "" };
-                let on = if entry.checked { " (checked)" } else { "" };
-                let off = if entry.enabled { "" } else { " (off)" };
-                format!("{under}{}{on}{off}", entry.title)
-            })
-            .collect()
-    };
-    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
-    assert!(
-        rows(&host).contains(&"Only the sites you add (off)".to_string()),
-        "Only the sites you add waits for a page"
-    );
-    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
-    assert_eq!(
-        rows(&host),
-        ["The Lakeside loop"],
-        "the + menu lists the Space's web page, and no file"
-    );
-    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
-    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
-    assert_eq!(rows(&host), ["The Lakeside loop (checked)"]);
-    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
-    let added = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().pages.len())
-    };
-    assert_eq!(added(&shell, cx), 0, "a second pick takes it off");
-
-    shell.update(cx, |shell, cx| {
-        shell.toggle_page(1, cx);
-        shell.tier_menu(point(px(0.), px(0.)), cx);
-    });
-    cx.update(|_, cx| host.choose("Only the sites you add", cx));
-    host.take();
-    cx.simulate_input("find a place to stay");
-    cx.simulate_keystrokes("enter");
-    let calls = host.take();
-    let started = "start task claude find a place to stay from 1 at Work on pages \
-                   with [\"https://fieldbook.example/lakeside\"] only them";
-    assert!(
-        calls.contains(&started.to_string()),
-        "the page's address didn't reach the task: {calls:?}"
-    );
-    assert_eq!(added(&shell, cx), 0, "the pages go with the run");
-    let only = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().only_added);
-    assert!(!only, "the next task may go to any site");
-}
-
-/// On a new profile, ilo hasn't looked for an assistant yet: the switch to Ask looks, as ⌘T's ask
-/// does, and once the browser has found one its chip is on Ask's line and the field names it.
-#[gpui::test]
-fn ask_on_a_new_profile_looks_for_the_assistant_and_shows_it(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    host.unlearned.set(true);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    host.resting.borrow_mut().clear();
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let asked = host.resting.borrow().clone();
-    assert_eq!(
-        (asked.iter())
-            .filter(|call| *call == "look for agents")
-            .count(),
-        1,
-        "the switch to Ask looks for the assistants, once: {asked:?}"
-    );
-    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| {
-            let resting = shell.resting.as_ref().unwrap();
-            let placeholder = resting.bar.read(cx).placeholder(cx);
-            (resting.model_chip.get().is_some(), placeholder.to_string())
-        })
-    };
-    assert_eq!(
-        shown(&shell, cx),
-        (false, "Ask an assistant to do something".into()),
-        "none found yet"
-    );
-
-    // The browser found Claude, and the window is sent what it knows (send_agents).
-    host.unlearned.set(false);
-    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
-    cx.run_until_parked();
-    assert_eq!(
-        shown(&shell, cx),
-        (true, "Ask Claude to do something".into()),
-        "the assistant's chip is there, and the field names it"
-    );
-}
-
-/// With no page of the Space's to add, the `+` is disabled in its place: there, and a click on it
-/// shows no menu. Once a page can be added the same click lists it.
-#[gpui::test]
-fn the_plus_with_nothing_to_add_is_disabled(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let plus = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        let chip = shell.read_with(cx, |shell, _| {
-            (shell.resting.as_ref()).and_then(|resting| resting.plus_chip.get())
-        });
-        chip.expect("the + drawn on Ask's line, disabled or not")
-            .center()
-    };
-    let offers = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, cx| shell.plus_offers(cx))
-    };
-    assert!(!offers(&shell, cx), "the Space's tabs have no page to add");
-    let at = plus(&shell, cx);
-    cx.simulate_click(at, Modifiers::none());
-    cx.run_until_parked();
-    assert!(
-        host.menus.borrow().is_empty() && host.entries.borrow().is_empty(),
-        "a click on the disabled + shows nothing"
-    );
-
-    shell.update(cx, |shell, cx| {
-        let page = Page {
-            url: "https://fieldbook.example/lakeside".into(),
-            ..Page::default()
-        };
-        shell.set_page(1, page, cx);
-        shell.set_title(1, "The Lakeside loop".into(), cx);
-    });
-    cx.run_until_parked();
-    assert!(offers(&shell, cx));
-    let at = plus(&shell, cx);
-    cx.simulate_click(at, Modifiers::none());
-    cx.run_until_parked();
-    let titles: Vec<String> = (host.entries.borrow().iter())
-        .map(|entry| entry.title.to_string())
-        .collect();
-    assert_eq!(
-        titles,
-        ["The Lakeside loop"],
-        "the same click lists the page"
-    );
-}
-
-/// A tab's address can carry a user name and password, which the task never gets; a page whose
-/// address is too long to give a task isn't offered.
-#[gpui::test]
-fn an_added_page_carries_no_login_and_a_long_one_isnt_offered(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    let long = format!("https://fieldbook.example/{}", "a".repeat(2048));
-    shell.update(cx, |shell, cx| {
-        let page = |url: &str| Page {
-            url: url.into(),
-            ..Page::default()
-        };
-        shell.set_page(
-            1,
-            page("https://sam:hunter2@fieldbook.example/lakeside"),
-            cx,
-        );
-        shell.set_title(1, "The Lakeside loop".into(), cx);
-        shell.set_page(2, page(&long), cx);
-        shell.set_title(2, "A long one".into(), cx);
-    });
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
-    let titles: Vec<String> = (host.entries.borrow().iter())
-        .map(|entry| entry.title.to_string())
-        .collect();
-    assert_eq!(
-        titles,
-        ["The Lakeside loop"],
-        "a page over the cap is offered"
-    );
-    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
-    host.take();
-    cx.simulate_input("find a place to stay");
-    cx.simulate_keystrokes("enter");
-    let started = "start task claude find a place to stay from 1 at Work on pages \
-                   with [\"https://fieldbook.example/lakeside\"]";
-    let calls = host.take();
-    assert!(
-        calls.contains(&started.to_string()),
-        "the task got more than the page's address: {calls:?}"
-    );
-}
-
-/// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
-/// run. The chip shows the level each ↩ starts at.
-#[gpui::test]
-fn a_run_after_a_run_starts_at_work_on_pages(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    assert_eq!(tier(&shell, cx), Tier::Work);
-    pick(&shell, Tier::Full, cx);
-    assert_eq!(tier(&shell, cx), Tier::Full);
-    host.take();
-    cx.simulate_input("book a table");
-    cx.simulate_keystrokes("enter");
-    assert!(
-        host.take()
-            .contains(&"start task claude book a table from 1 at Full access".to_string()),
-        "the task didn't start at the level picked"
-    );
-    assert_eq!(tier(&shell, cx), Tier::Work, "the pick outlived its run");
-    cx.simulate_input("and a taxi");
-    cx.simulate_keystrokes("enter");
-    assert!(
-        host.take()
-            .contains(&"start task claude and a taxi from 1 at Work on pages".to_string()),
-        "the next task didn't start at Work on pages"
-    );
-}
-
-/// Out of Ask the pick goes: Ask → Search → Ask reads Work on pages, and in Search there's no
-/// level to pick.
-#[gpui::test]
-fn ask_then_search_then_ask_reads_work_on_pages(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    pick(&shell, Tier::Look, cx);
-    cx.simulate_keystrokes("tab tab");
-    assert_eq!(tier(&shell, cx), Tier::Work, "⇥ to Search kept the pick");
-    pick(&shell, Tier::Full, cx);
-    cx.simulate_keystrokes("escape");
-    assert_eq!(tier(&shell, cx), Tier::Work, "Esc to Search kept the pick");
-    pick(&shell, Tier::Full, cx);
-    assert_eq!(tier(&shell, cx), Tier::Work, "a pick in Search took");
-}
-
-/// A pick doesn't survive the user leaving the page: a page shown, or another Space.
-#[gpui::test]
-fn a_pick_doesnt_survive_leaving_and_coming_back(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    pick(&shell, Tier::Full, cx);
-    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.run_until_parked();
-    shell.update(cx, |shell, cx| shell.set_selected(0, cx));
-    cx.run_until_parked();
-    assert_eq!(tier(&shell, cx), Tier::Work, "a page shown kept the pick");
-
-    shell.update(cx, |shell, cx| {
-        shell.set_spaces(
-            vec![
-                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
-                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
-            ],
-            cx,
-        )
-    });
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    pick(&shell, Tier::Full, cx);
-    for space in [2, 1] {
-        shell.update(cx, |shell, cx| {
-            shell.set_space(space, cx);
-            shell.set_tabs(
-                space,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Folders::default(),
-                cx,
-            );
-        });
-        cx.run_until_parked();
-    }
-    assert_eq!(tier(&shell, cx), Tier::Work, "another Space kept the pick");
-}
-
-/// The pick lives in the page's memory alone: nothing the shell asks of the core while it's
-/// picked, saving included, carries it, and a run's start is the only call that does.
-#[gpui::test]
-fn nothing_of_a_pick_is_saved(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    host.take();
-    pick(&shell, Tier::Full, cx);
-    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.run_until_parked();
-    let calls = host.take();
-    assert!(
-        !calls.iter().any(|call| call.contains(Tier::Full.label())),
-        "a call carried the pick: {calls:?}"
-    );
-}
-
-/// The field's row rests level with ⌘T's bar's, and the group moves up only as far as it needs to
-/// fit the card, never nearer its top than `TOP`.
+/// The bar rests with its input row level with ⌘T's bar's, and the group moves up only as far as
+/// it needs to fit the card, never nearer its top than `TOP`.
 #[test]
-fn the_field_rests_where_the_bar_opens_and_rises_only_to_fit() {
-    use crate::tokens::shell::composer::{FIELD_HEIGHT, MARK_GAP, TOP};
+fn the_bar_rests_where_the_bar_opens_and_rises_only_to_fit() {
+    use crate::tokens::command_bar::HEIGHT;
+    use crate::tokens::shell::composer::TOP;
     let row = crate::command_bar::centered_row_middle(800.) - 40.;
     let top = group_top(row, 720., false, false);
-    let field = top + MARK_HEIGHT + MARK_GAP;
     assert!(
-        (field + FIELD_HEIGHT / 2. - row).abs() < 1e-3,
-        "the field's middle is at {}, the bar's row's at {row}",
-        field + FIELD_HEIGHT / 2.
+        (top + HEIGHT / 2. - row).abs() < 1e-3,
+        "the bar's row's middle is at {}, ⌘T's at {row}",
+        top + HEIGHT / 2.
     );
-    // A card 560 tall has room for the field there, but not for the cards under it.
+    // A card 560 tall has room for the bar there, but not for the cards under it.
     let cards = group_top(row, 560., true, true);
     assert!(cards < top, "the cards didn't lift the group");
     assert!(group_top(row, 400., true, true) == TOP, "it went above TOP");
@@ -1012,22 +836,71 @@ fn the_field_rests_where_the_bar_opens_and_rises_only_to_fit() {
     );
 }
 
-/// An ended task's Start Again asks again at Work on pages, whatever the composer had picked.
+/// The mark stands its gap over the bar where the card has that room over it. A Little Window
+/// has none, and neither has a card so short that the group was lifted to its top.
+#[test]
+fn the_mark_stands_its_gap_over_the_bar_and_gives_way() {
+    use crate::tokens::shell::composer::{MARK_GAP, TOP};
+    use crate::tokens::shell::empty::MARK_SIZE;
+    let row = crate::command_bar::centered_row_middle(800.) - 40.;
+    let top = group_top(row, 720., false, false);
+    assert_eq!(mark_top(top, false), Some(top - MARK_GAP - MARK_SIZE));
+    assert_eq!(mark_top(top, true), None, "a Little Window drew the mark");
+    assert_eq!(mark_top(TOP, false), None, "it stands over the card's top");
+}
+
+/// The product's mark stands over the bar at rest: in the bar's column, its gap over the bar, at
+/// the size the tokens give it. GPUI records where an element was drawn only in a debug build.
 #[gpui::test]
-fn start_again_asks_at_work_on_pages(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    pick(&shell, Tier::Full, cx);
-    host.take();
-    shell.update(cx, |shell, cx| {
-        shell.ask_again("Find two tickets".into(), cx)
-    });
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_mark_stands_over_the_resting_bar_in_its_column(cx: &mut TestAppContext) {
+    use crate::tokens::shell::composer::MARK_GAP;
+    use crate::tokens::shell::empty::MARK_SIZE;
+    let (_, cx, _) = window_with_no_tab(cx);
+    let mark = cx
+        .debug_bounds("resting-mark")
+        .expect("the bar at rest has no mark over it");
+    let bar = cx.debug_bounds("resting-bar").expect("no bar at rest");
+    let off = f32::from(mark.center().x - bar.center().x);
+    assert!(off.abs() < 0.5, "the mark is {off} off the bar's column");
+    let gap = f32::from(bar.top() - mark.bottom());
     assert!(
-        host.take()
-            .contains(&"ask again Find two tickets".to_string())
+        (gap - MARK_GAP).abs() < 0.5,
+        "the mark is {gap} over the bar"
     );
-    assert_eq!(tier(&shell, cx), Tier::Work);
+    assert_eq!(mark.size, gpui::size(px(MARK_SIZE), px(MARK_SIZE)));
+}
+
+/// A Little Window is a look at one page, so its card with no page has no mark, whatever else
+/// it rests on.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn a_little_window_with_no_page_draws_no_mark(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            9,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.little.is_some() && shell.selected == 0),
+        "it isn't a Little Window with no page"
+    );
+    assert_eq!(cx.debug_bounds("resting-mark"), None);
 }
 
 /// Makes the test's window the key one, as the user's window is when they're in it.
@@ -1062,9 +935,9 @@ fn an_empty_space_gives_its_field_the_keyboard_once_the_window_is_key(cx: &mut T
 }
 
 /// A fresh window on an empty Space, with no click: the field the caret is drawn in has the
-/// keyboard, in GPUI and in the window, so ⇥ flips it to Ask. GPUI's focus alone draws the caret,
+/// keyboard, in GPUI and in the window, so ⇥ grows it into the composer. GPUI's focus alone draws the caret,
 /// while the Mac sends a key to its window's first responder, which only the host's hold gives
-/// the UI; a click gives it by itself, so ⇥ reached Ask only after one.
+/// the UI; a click gives it by itself, so ⇥ reached the composer only after one.
 #[gpui::test]
 fn a_fresh_windows_field_takes_tab_without_a_click(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
@@ -1079,10 +952,10 @@ fn a_fresh_windows_field_takes_tab_without_a_click(cx: &mut TestAppContext) {
         ["hold keyboard for page"],
         "the field took GPUI's focus, but the window's keys weren't given to the UI"
     );
+    cx.simulate_input("book");
     cx.simulate_keystrokes("tab");
-    assert_eq!(
-        switch(&shell, cx),
-        (true, "Ask Claude to do something".into()),
+    assert!(
+        composer(&shell, cx).0,
         "⇥ with no click didn't reach the field"
     );
 }
@@ -1233,14 +1106,15 @@ fn another_empty_space_takes_the_keyboard_when_its_page_settles(cx: &mut TestApp
     );
 }
 
-/// Closing the last tab rests the Space on its field again, in Search and with the keyboard,
-/// whatever it was on before the tab showed.
+/// Closing the last tab rests the Space on its bar again, in search and with the keyboard,
+/// though it was the composer before the tab showed.
 #[gpui::test]
 fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) {
     let (shell, cx, _) = window_with_no_tab(cx);
     key_window(cx);
+    cx.simulate_input("book");
     cx.simulate_keystrokes("tab");
-    assert!(switch(&shell, cx).0, "⇥ didn't go to Ask");
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.blur(cx));
@@ -1250,7 +1124,7 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
     });
     cx.run_until_parked();
     assert_eq!(
-        switch(&shell, cx),
+        composer(&shell, cx),
         (false, "Search or enter address".into())
     );
     assert!(
@@ -1259,233 +1133,23 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
     );
 }
 
-/// A page added is a chip in the field, before what's typed, as ⌘T's ask has its page; nothing on
-/// Ask's line moves for it. ⌫ at the field's start takes the last one off, and a run takes them
-/// all.
+/// A private window starts no thread, so its empty page's bar doesn't grow into the composer: ⇥
+/// there is search's. A window of the profile's grows it.
 #[gpui::test]
-fn an_added_page_is_a_chip_in_the_field(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    cx.update(|_, cx| crate::text_input::bind_keys(cx));
-    shell.update(cx, |shell, cx| {
-        let page = Page {
-            url: "https://fieldbook.example/lakeside".into(),
-            ..Page::default()
-        };
-        shell.set_page(1, page, cx);
-        shell.set_title(1, "The Lakeside loop".into(), cx);
-    });
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    let line = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| {
-            let resting = shell.resting.as_ref().unwrap();
-            (resting.tier_chip.get(), resting.model_chip.get())
-        })
-    };
-    let chips = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            let bar = shell.read(cx).resting.as_ref().unwrap().bar.read(cx);
-            (bar.added().iter())
-                .map(|(url, title)| format!("{title} {url}"))
-                .collect::<Vec<_>>()
-        })
-    };
-    let before = line(&shell, cx);
-    assert!(before.0.is_some(), "the level's chip wasn't drawn");
-    shell.update(cx, |shell, cx| shell.toggle_page(1, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        chips(&shell, cx),
-        ["The Lakeside loop https://fieldbook.example/lakeside"],
-        "the page added isn't a chip in the field"
-    );
-    assert_eq!(line(&shell, cx), before, "Ask's line moved for the page");
-
-    cx.simulate_input("plan");
-    cx.simulate_keystrokes("backspace");
-    assert_eq!(
-        chips(&shell, cx).len(),
-        1,
-        "⌫ after typing took the page off"
-    );
-    cx.simulate_keystrokes("backspace backspace backspace backspace");
-    cx.run_until_parked();
-    assert!(chips(&shell, cx).is_empty(), "⌫ at the start left the page");
-    let pages = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().pages.len());
-    assert_eq!(
-        pages, 0,
-        "the chip went but the task would still have the page"
-    );
-
-    shell.update(cx, |shell, cx| shell.toggle_page(1, cx));
-    cx.simulate_input("plan a walk");
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert!(chips(&shell, cx).is_empty(), "the run left the page's chip");
-}
-
-/// Where files and folders are available, the `+` menu is Add Page, Add Files… and Add Folder…;
-/// the files attached and the folder granted are chips in the field after the pages, ⌫ takes the
-/// last off, and the start gets them, which the record counts and never names. A folder ilo never
-/// gives is said under Ask's line, and nothing is granted.
-#[gpui::test]
-fn files_and_a_folder_are_chips_in_the_field_and_go_with_the_start(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    cx.update(|_, cx| crate::text_input::bind_keys(cx));
-    host.files.set(true);
-    // Not the system's temporary folder, which is under /private on the Mac, where ilo gives none.
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("target/ilo-composer-files-{}", std::process::id()));
-    let work = dir.join("Lakeside walk");
-    std::fs::create_dir_all(&work).unwrap();
-    let (map, notes) = (work.join("map.pdf"), work.join("notes.txt"));
-    std::fs::write(&map, "map").unwrap();
-    std::fs::write(&notes, "notes").unwrap();
-
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    assert!(
-        shell.read_with(cx, |shell, cx| shell.plus_offers(cx)),
-        "with no page to add, the + still offers files and folders"
-    );
-    shell.update(cx, |shell, cx| {
-        shell.composer_plus_menu(point(px(0.), px(0.)), cx)
-    });
-    let rows: Vec<(String, bool)> = (host.menus.borrow().last().unwrap().iter())
-        .map(|(title, enabled)| (title.to_string(), *enabled))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Add Page".to_string(), false),
-            ("Add Files…".to_string(), true),
-            ("Add Folder…".to_string(), true),
-        ],
-        "the + menu's rows, Add Page off with no page to add"
-    );
-
-    let given = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            let bar = shell.read(cx).resting.as_ref().unwrap().bar.read(cx);
-            (bar.given().iter())
-                .map(|given| match given {
-                    Given::Files(count) => format!("Files {count}"),
-                    Given::Folder(name) => format!("Folder {name}"),
-                })
-                .collect::<Vec<_>>()
-        })
-    };
-    shell.update(cx, |shell, cx| {
-        shell.attach_files(vec![map.clone(), notes.clone(), map.clone()], cx);
-        shell.grant_folder(work.clone(), cx);
-    });
-    cx.run_until_parked();
-    assert_eq!(
-        given(&shell, cx),
-        ["Files 2 files", "Folder Lakeside walk"],
-        "each file once, by count, then the folder by its name"
-    );
-
-    cx.simulate_keystrokes("backspace");
-    cx.run_until_parked();
-    assert_eq!(
-        given(&shell, cx),
-        ["Files 2 files"],
-        "⌫ at the start took the folder off first"
-    );
-    cx.simulate_keystrokes("backspace");
-    cx.run_until_parked();
-    assert_eq!(given(&shell, cx), ["Files 1 file"], "then a file");
-
-    shell.update(cx, |shell, cx| shell.grant_folder("/".into(), cx));
-    let (folder, refused) = shell.read_with(cx, |shell, _| {
-        let resting = shell.resting.as_ref().unwrap();
-        (resting.folder.is_some(), resting.refused.clone())
-    });
-    assert!(!folder, "a folder ilo never gives was granted");
-    assert!(
-        refused.is_some_and(|line| line.starts_with("ilo doesn't give")),
-        "the refusal isn't said under the line"
-    );
-
-    shell.update(cx, |shell, cx| shell.grant_folder(work.clone(), cx));
-    host.take();
-    cx.simulate_input("plan a walk");
-    cx.simulate_keystrokes("enter");
-    let calls = host.take();
-    let started = "start task claude plan a walk from 1 at Work on pages and 1 files and a folder";
-    assert!(
-        calls.contains(&started.to_string()),
-        "the files and the folder didn't reach the task: {calls:?}"
-    );
-    assert!(
-        !calls
-            .iter()
-            .any(|call| call.contains("Lakeside") || call.contains("map.pdf")),
-        "a name reached a record: {calls:?}"
-    );
-    assert!(given(&shell, cx).is_empty(), "the run left the chips");
-    let refused = shell.read_with(cx, |shell, _| {
-        shell.resting.as_ref().unwrap().refused.clone()
-    });
-    assert!(refused.is_none(), "the run left the refusal");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-/// A private window starts no task, so its empty page offers none: Search alone, with no switch,
-/// no ⇥ key and no Ask with its line. A window of the profile's offers them.
-#[gpui::test]
-fn a_private_window_composes_no_task(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    cx.simulate_click(middle(&shell, cx), Modifiers::none());
-    cx.run_until_parked();
-    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            let shell = shell.read(cx);
-            let resting = shell.resting.as_ref().unwrap();
-            (shell.offers_tasks(), resting.bar.read(cx).on_ask())
-        })
-    };
-    assert_eq!(shown(&shell, cx), (true, false), "a profile's window");
-
-    shell.update(cx, |shell, _| shell.private = true);
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    assert_eq!(
-        shown(&shell, cx),
-        (false, false),
-        "⇥ went to Ask in a private window"
-    );
-    shell.update_in(cx, |shell, window, cx| shell.set_on_ask(true, window, cx));
-    cx.run_until_parked();
-    let drawn = shell.read_with(cx, |shell, _| {
-        let resting = shell.resting.as_ref().unwrap();
-        resting.tier_chip.get().is_some() || resting.plus_chip.get().is_some()
-    });
-    assert_eq!(
-        shown(&shell, cx),
-        (false, false),
-        "Ask's side opened in a private window"
-    );
-    assert!(!drawn, "Ask's line was drawn in a private window");
-
-    shell.update(cx, |shell, _| shell.private = false);
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    assert_eq!(
-        shown(&shell, cx),
-        (true, true),
-        "⇥ didn't go to Ask in a profile's window"
-    );
-}
-
-/// A chip of what the next task is given says its kind alone wherever it's logged: never the
-/// folder's name, nor the count of files (#3656).
-#[test]
-fn a_given_chip_is_logged_by_its_kind_alone() {
-    let folder = Given::Folder("Lakeside walk".into());
-    let files = Given::Files("2 files".into());
-    assert_eq!(format!("{folder:?} {files:?}"), "Folder Files");
+fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
+    for private in [true, false] {
+        let (shell, cx, host) = window_with_no_tab(cx);
+        host.private_bar.set(private);
+        cx.simulate_click(middle(&shell, cx), Modifiers::none());
+        cx.simulate_input("book a table");
+        cx.simulate_keystrokes("tab");
+        assert_eq!(
+            composer(&shell, cx).0,
+            !private,
+            "⇥ grew the bar, private: {private}"
+        );
+        cx.simulate_keystrokes("enter");
+        let ran = rested(&host).iter().any(|c| c.starts_with("run task"));
+        assert_eq!(ran, !private, "↩ started a thread, private: {private}");
+    }
 }
