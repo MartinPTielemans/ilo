@@ -3266,6 +3266,17 @@ impl Agents {
         self.held.insert(tab, held);
     }
 
+    /// What `act` types or chooses in `element` on `tab`, where it may not be shown again
+    /// (`page::typed_shown`): kept off a kept card's picture until a new document, as only the
+    /// agent's screenshot hatches it, and off a refusal's line, which names the site instead. The
+    /// agent's own answer still says it.
+    fn unshown(&mut self, act: &mut Act, element: &page::Element, tab: u64) {
+        if !element.shows_typed() {
+            self.unkept.mark(tab);
+            act.asks.clear();
+        }
+    }
+
     /// `tab`'s address and whether it loads, as the core said them (tabs::tab_state_changed).
     pub fn tab_state(&mut self, tab: u64, url: &str, loading: bool) {
         let holding = self.held.contains_key(&tab);
@@ -3761,11 +3772,6 @@ impl Agents {
                     let refused = Refused::of(tools::Kind::Password, PASSWORDS);
                     return self.refuse(act, &host, refused, cx);
                 }
-                // Text that may not be shown is kept off a kept card's picture too, as only the
-                // agent's screenshot hatches it.
-                if !element.shows_typed() {
-                    self.unkept.mark(tab);
-                }
                 let submit = arguments
                     .get("submit")
                     .and_then(Value::as_bool)
@@ -3810,6 +3816,7 @@ impl Agents {
                     }
                     None => enter.then(|| page::risk(&host, "send", false)).flatten(),
                 };
+                self.unshown(&mut act, element, tab);
                 act.text = text;
             }
             "select" => {
@@ -3839,6 +3846,7 @@ impl Agents {
                 let message = outline.is_some_and(|outline| outline.sends_message(element.form));
                 risk = page::risk(&host, &element.name, message)
                     .or_else(|| page::risk(&host, &option, message));
+                self.unshown(&mut act, element, tab);
                 act.text = option;
             }
             "press_key" => {

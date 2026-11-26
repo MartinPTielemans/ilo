@@ -2929,8 +2929,17 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let answer = call(&agents, "claude-code", "select", paying, cx);
     let what = "choose “Pay now” in “Payment” on example.com";
-    let at = "choose “Pay now” in “Payment”";
-    refused(&agents, &browser, answer, what, Why::Order, at, cx);
+    // A list the core says nothing of keeps the option out of the refusal's line, which names
+    // the site (page::typed_shown); the agent's answer still says it.
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert_eq!(browser.pages.borrow().len(), pages, "it chose");
 }
 
@@ -3027,7 +3036,24 @@ fn a_key_press_that_activates_a_control_is_refused_as_a_click_on_it(cx: &mut Tes
     snapshot(None, cx);
     let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
     let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
-    asks("type", card, what, cx);
+    // A field the core says nothing of keeps what was typed out of the refusal's line, which
+    // names the site (page::typed_shown); the agent's answer still says it.
+    let pages = browser.pages.borrow().len();
+    let answer = call(&agents, "claude-code", "type", card, cx);
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "{what} reached the page"
+    );
     goes(
         "type",
         json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
@@ -3465,8 +3491,15 @@ fn a_names_direction_marks_dont_reach_the_refusals(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "type", typed, cx);
     let what = "press Enter, which may click \u{201C}Pay now 'moc.buhtig\u{201D} on example.com, \
                 after typing \u{201C}4242\u{201D} into \u{201C}Card 'number\u{201D}";
-    let at = what.replace(" on example.com", "");
-    let told = refused(&agents, &browser, answer, what, Why::Order, &at, cx);
+    let told = refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert!(
         !told.text.contains(['\u{202E}', '\u{2066}', '"']),
         "{:?}",
@@ -8043,9 +8076,8 @@ mod tasks {
             agents
                 .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
                 .expect("its conversation")
-                .about
-                .as_ref(),
-            "Claude · Needs you",
+                .about,
+            format!("{PRODUCT} · Needs you"),
             "the header and the card say different things at a refusal"
         );
         assert_eq!(shown(&agents, cx), None);
@@ -9054,6 +9086,85 @@ mod tasks {
         assert!(!sites.iter().any(|site| site.contains("Buy")), "{sites:?}");
     }
 
+    /// What each page's line of the trace says: the title its steps kept, else its site.
+    fn page_lines(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        use crate::agents::task::Line;
+        use crate::shell::conversation::pages::{Paged, paged};
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(agent, cx).unwrap());
+        let traces = talk.lines.iter().filter_map(|line| match line {
+            Line::Trace(trace) => Some(trace),
+            _ => None,
+        });
+        traces
+            .flat_map(|trace| {
+                (paged(&trace.items).into_iter()).filter_map(|each| match each {
+                    Paged::Page(page) if page.title.is_empty() => Some(page.site.to_string()),
+                    Paged::Page(page) => Some(page.title.to_string()),
+                    Paged::Item(..) => None,
+                })
+            })
+            .collect()
+    }
+
+    /// Moves `tab` of the made-up browser on to the page at `url` titled `title`.
+    fn tab_goes(browser: &Made, tab: u64, title: &'static str, url: &'static str) {
+        for each in browser
+            .tabs
+            .borrow_mut()
+            .iter_mut()
+            .filter(|each| each.0 == tab)
+        {
+            (each.2, each.3) = (title, url);
+        }
+    }
+
+    /// A step keeps the title its page had as it ran: once its tab goes on to another page, the
+    /// steps before still read the first, not what the tab says now.
+    #[gpui::test]
+    fn a_step_keeps_the_title_its_page_had_as_it_ran(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        let went = json!({ "tab": 30, "url": "https://slow.example/" });
+        // The core answers once it has read the page it went to; never waited on past that.
+        traced_by(&agents, &agent, "navigate", went, cx, |answer, cx| {
+            let request = browser.pages.borrow().last().unwrap().1;
+            agents.update(cx, |agents, cx| {
+                agents.page_done(request, shop_tree(), None, cx)
+            });
+            (answer.try_recv()).expect("navigate didn't answer once its page was read")
+        });
+        tab_goes(&browser, 30, "Slow page", "https://slow.example/");
+        let scroll = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "Slow page"]);
+    }
+
+    /// A step on a page with no title yet keeps its site, though the page has one later.
+    #[gpui::test]
+    fn a_step_on_a_page_with_no_title_keeps_its_site(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        tab_goes(&browser, 31, "", "https://example.com/login");
+        let scroll = json!({ "tab": 31 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "scroll",
+            scroll,
+            Some(shop_tree()),
+            cx,
+        );
+        tab_goes(&browser, 31, "Welcome", "https://example.com/login");
+        assert_eq!(page_lines(&agents, &agent, cx), ["Shop", "example.com"]);
+    }
+
     /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
     /// else: not on the card's live line or anywhere on the card, the strip's line, the system
     /// notification, the kept list's row, nor the answer a screen reader is told, which is the
@@ -9195,8 +9306,8 @@ mod tasks {
             "the card says how far it has got and the step it's on"
         );
         assert_eq!(
-            conversation.about.as_ref(),
-            "Claude · Working",
+            conversation.about,
+            format!("{PRODUCT} · Working"),
             "the conversation's header says where the task is, its pages in the rail beside it"
         );
         assert!(
@@ -10962,7 +11073,7 @@ mod tasks {
             let about = agents.read_with(cx, |agents, cx| {
                 agents.conversation(&agent, cx).unwrap().about.to_string()
             });
-            assert_eq!(about, format!("Claude · {after_name}"), "{state:?}");
+            assert_eq!(about, format!("{PRODUCT} · {after_name}"), "{state:?}");
             // Dismissing stops a task under way, so its row is read with the state put back.
             agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
             set(&agents, cx);
@@ -10971,7 +11082,7 @@ mod tasks {
                 rows.find(|row| row.agent.as_ref() == agent).unwrap()
             });
             // The row has when it left the foot to go on with.
-            assert_eq!(row.about, format!("Claude · {after_name}"), "{state:?}");
+            assert_eq!(row.about, format!("{PRODUCT} · {after_name}"), "{state:?}");
             assert!(row.ended > 0., "{state:?}");
         }
         assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
@@ -10988,7 +11099,7 @@ mod tasks {
         let about = agents.read_with(cx, |agents, cx| {
             agents.conversation(&agent, cx).unwrap().about.to_string()
         });
-        assert_eq!(about, "Claude · Limit resets at 18:00");
+        assert_eq!(about, format!("{PRODUCT} · Limit resets at 18:00"));
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Limit { resets: None };
         });
@@ -11065,10 +11176,10 @@ mod tasks {
         );
         assert_eq!(
             now[1],
-            (first.clone(), "Claude · Done then".to_string(), Dot::Done)
+            (first.clone(), format!("{PRODUCT} · Done then"), Dot::Done)
         );
         // Dismissed while it worked, it stopped then.
-        assert_eq!(now[0].1, "Claude · Stopped then");
+        assert_eq!(now[0].1, format!("{PRODUCT} · Stopped then"));
         assert_eq!(now[0].2, Dot::Ended);
         // The row has its end for History to list it by and say, however long after it left the
         // foot; one that had none has when it left.
@@ -11880,6 +11991,35 @@ mod sessions {
         assert_eq!(shown.len(), 3);
         assert_eq!(shown[0].dot, Dot::Working);
         assert!(![first, second].contains(&shown[0].agent.to_string()));
+    }
+
+    /// A thread's head and its rows name the product for a task of its own, but an outside app's
+    /// session keeps that app's own name in both: its head at work and done, and its row in
+    /// Settings' kept list and History once it leaves the foot.
+    #[gpui::test]
+    fn an_outside_apps_session_keeps_its_own_name_in_its_head_and_rows(cx: &mut TestAppContext) {
+        let (agents, _browser) = at_work(cx);
+        let session = cards(&agents, cx)[0].agent.to_string();
+        let about = conversation(&agents, &session, cx).about;
+        assert_eq!(about, "Claude Code · working");
+        answered(&agents, 2, cx);
+        closed(&agents, 1, cx);
+        let about = conversation(&agents, &session, cx).about;
+        assert!(about.starts_with("Claude Code · done"), "{about}");
+        assert!(!about.contains(PRODUCT), "{about}");
+
+        agents.update(cx, |agents, cx| agents.dismiss_task(&session, cx));
+        let (row, kept) = agents.read_with(cx, |agents, cx| {
+            let rows = agents.archived_tasks(cx).into_iter();
+            let row = rows.into_iter().find(|row| row.agent == session.as_str());
+            let task = agents.task(&session).expect("the session's task");
+            (row.expect("the session's row"), agents.about(task, cx))
+        });
+        assert_eq!(row.about, "Claude Code · Done");
+        assert!(
+            kept.starts_with("Claude Code · Done "),
+            "Settings' kept row named another: {kept}"
+        );
     }
 
     /// One connection's calls are one card's steps, those its subagents make beside each other on

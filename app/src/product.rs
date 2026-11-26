@@ -38,8 +38,8 @@ pub fn mark_path(size: f32) -> &'static str {
     }
 }
 
-/// The mark, `size` points across, in the text's colour. It never turns or moves: a thread at work
-/// shows the ring.
+/// The mark, `size` points across, in the text's colour. It never turns; the one that moves is the
+/// sign over the composer, a gap travelling along its cord (`gapped_mark_path`).
 pub fn mark(size: f32, palette: &Palette) -> Svg {
     svg()
         .path(mark_path(size))
@@ -120,9 +120,88 @@ fn drawn(svg: &str, fraction: f32) -> Option<String> {
     ))
 }
 
+/// Where the assets serve the small mark with a gap in its cord (gapped_mark).
+const GAPPED: &str = "brand/gap/";
+
+/// The small mark with a gap of `gap` of its cord's length, starting `at` of the way along it, as
+/// the sign over the composer moves (spec-thread-stage.md, "A wait on the user"). Each in
+/// thousandths, so a motion asks for at most a thousand drawings of a gap.
+pub fn gapped_mark_path(at: f32, gap: f32) -> String {
+    let at = (at.rem_euclid(1.) * 1000.).round() as u32 % 1000;
+    let gap = (gap.clamp(0., 1.) * 1000.).round() as u32;
+    format!("{GAPPED}{at}-{gap}.svg")
+}
+
+/// The drawing `gapped_mark_path` names: the small mark's own, its cord dashed to leave out the
+/// gap alone. The mark isn't redrawn.
+pub(crate) fn gapped_mark(path: &str) -> Option<String> {
+    let (at, gap) = path
+        .strip_prefix(GAPPED)?
+        .strip_suffix(".svg")?
+        .split_once('-')?;
+    let (at, gap) = (
+        at.parse::<f32>().ok()? / 1000.,
+        gap.parse::<f32>().ok()? / 1000.,
+    );
+    gapped(small()?, at, gap)
+}
+
+fn gapped(svg: &str, at: f32, gap: f32) -> Option<String> {
+    if gap <= 0. {
+        return Some(svg.to_owned());
+    }
+    let length = cord_length(cord_of(svg)?)?;
+    let gap = gap * length;
+    // The dash starts where the cord does, so it is set back to end where the gap starts.
+    let offset = (length - gap - at * length).rem_euclid(length);
+    let end = svg.find("/>")?;
+    Some(format!(
+        "{} stroke-dasharray=\"{:.3} {gap:.3}\" stroke-dashoffset=\"{offset:.3}\"{}",
+        &svg[..end],
+        length - gap,
+        &svg[end..]
+    ))
+}
+
+/// How far along the small mark's cord, as a fraction of it, the top of its upper right loop is:
+/// the cord's highest point right of its middle, where the waiting sign opens its gap.
+pub fn crown() -> f32 {
+    static CROWN: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *CROWN.get_or_init(|| {
+        let points = small().and_then(cord_of).and_then(cord).unwrap_or_default();
+        let length = points.last().map_or(1., |(_, along)| *along);
+        let (left, right) = (points.iter())
+            .fold((f32::MAX, f32::MIN), |(left, right), ((x, _), _)| {
+                (left.min(*x), right.max(*x))
+            });
+        let middle = (left + right) / 2.;
+        (points.iter())
+            .filter(|((x, _), _)| *x > middle)
+            .min_by(|((_, a), _), ((_, b), _)| a.total_cmp(b))
+            .map_or(0., |(_, along)| along / length)
+    })
+}
+
+/// The small drawing, which is one path: its cord.
+fn small() -> Option<&'static str> {
+    let (_, bytes) = MARKS.iter().find(|(drawing, _)| *drawing == SMALL)?;
+    std::str::from_utf8(bytes).ok()
+}
+
+/// The `d` of a drawing's first path.
+fn cord_of(svg: &str) -> Option<&str> {
+    let from = svg.find(" d=\"")? + 4;
+    Some(&svg[from..from + svg[from..].find('"')?])
+}
+
 /// The length of a path of absolute moves, cubic curves (C and S) and lines, as the drawings'
 /// cords are, measured along each curve in short chords.
 fn cord_length(d: &str) -> Option<f32> {
+    cord(d)?.last().map(|(_, along)| *along)
+}
+
+/// The points of such a path, each curve in short chords, with how far along the path each is.
+fn cord(d: &str) -> Option<Vec<((f32, f32), f32)>> {
     let mut words = Vec::new();
     let mut number = String::new();
     for c in d.chars() {
@@ -142,7 +221,7 @@ fn cord_length(d: &str) -> Option<f32> {
         words.push(Word::Number(number.parse().ok()?));
     }
     let (mut at, mut start, mut control) = ((0f32, 0f32), (0f32, 0f32), None);
-    let (mut length, mut command, mut index) = (0., 'M', 0);
+    let (mut points, mut command, mut index) = (Vec::new(), 'M', 0);
     let numbers = |index: &mut usize, n: usize| -> Option<Vec<f32>> {
         let mut taken = Vec::with_capacity(n);
         while taken.len() < n {
@@ -155,24 +234,21 @@ fn cord_length(d: &str) -> Option<f32> {
         Some(taken)
     };
     let curve = |from: (f32, f32), a: (f32, f32), b: (f32, f32), to: (f32, f32)| {
-        let point = |t: f32| {
+        (1..=16).map(move |step| {
+            let t = step as f32 / 16.;
             let u = 1. - t;
             let mix = |p: f32, q: f32, r: f32, s: f32| {
                 u * u * u * p + 3. * u * u * t * q + 3. * u * t * t * r + t * t * t * s
             };
             (mix(from.0, a.0, b.0, to.0), mix(from.1, a.1, b.1, to.1))
-        };
-        (1..=16)
-            .map(|step| (point((step - 1) as f32 / 16.), point(step as f32 / 16.)))
-            .map(|(p, q)| ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt())
-            .sum::<f32>()
+        })
     };
     while index < words.len() {
         if let Word::Command(c) = words[index] {
             command = c;
             index += 1;
             if c == 'Z' || c == 'z' {
-                length += ((start.0 - at.0).powi(2) + (start.1 - at.1).powi(2)).sqrt();
+                walk(&mut points, start);
                 at = start;
                 control = None;
                 continue;
@@ -184,19 +260,22 @@ fn cord_length(d: &str) -> Option<f32> {
                 at = (p[0], p[1]);
                 start = at;
                 control = None;
+                // A move goes nowhere along the cord.
+                let along = points.last().map_or(0., |(_, along)| *along);
+                points.push((at, along));
                 // Pairs after a move are lines.
                 command = 'L';
             }
             'L' => {
                 let p = numbers(&mut index, 2)?;
-                length += ((p[0] - at.0).powi(2) + (p[1] - at.1).powi(2)).sqrt();
                 at = (p[0], p[1]);
+                walk(&mut points, at);
                 control = None;
             }
             'C' => {
                 let p = numbers(&mut index, 6)?;
                 let (a, b, to) = ((p[0], p[1]), (p[2], p[3]), (p[4], p[5]));
-                length += curve(at, a, b, to);
+                curve(at, a, b, to).for_each(|point| walk(&mut points, point));
                 (at, control) = (to, Some(b));
             }
             'S' => {
@@ -204,13 +283,21 @@ fn cord_length(d: &str) -> Option<f32> {
                 // The first control is the last one's mirror, or the point itself after no curve.
                 let a = control.map_or(at, |(x, y)| (2. * at.0 - x, 2. * at.1 - y));
                 let (b, to) = ((p[0], p[1]), (p[2], p[3]));
-                length += curve(at, a, b, to);
+                curve(at, a, b, to).for_each(|point| walk(&mut points, point));
                 (at, control) = (to, Some(b));
             }
             _ => return None,
         }
     }
-    Some(length)
+    Some(points)
+}
+
+/// Goes on along the cord to `to`.
+fn walk(points: &mut Vec<((f32, f32), f32)>, to: (f32, f32)) {
+    let along = points.last().map_or(0., |&((x, y), along)| {
+        along + ((to.0 - x).powi(2) + (to.1 - y).powi(2)).sqrt()
+    });
+    points.push((to, along));
 }
 
 enum Word {
@@ -225,7 +312,9 @@ mod tests {
 
     use gpui::{AssetSource, SvgRenderer};
 
-    use super::{LARGE, MARKS, MIDDLE, PRODUCT, SMALL, drawn_mark_path, mark_path};
+    use super::{
+        LARGE, MARKS, MIDDLE, PRODUCT, SMALL, drawn_mark_path, gapped_mark_path, mark_path,
+    };
     use crate::shell::Assets;
 
     #[test]
@@ -304,6 +393,68 @@ mod tests {
             );
             assert!(steps[4] * 100 > whole * 98, "{size}: {steps:?} of {whole}");
         }
+    }
+
+    /// Each pixel's alpha in `bytes` drawn as GPUI draws a glyph.
+    fn alphas(bytes: &[u8]) -> Vec<u8> {
+        let renderer = SvgRenderer::new(Arc::new(Assets));
+        let image = renderer.render_single_frame(bytes, 1.).unwrap();
+        let pixels = image.as_bytes(0).unwrap();
+        pixels.chunks_exact(4).map(|pixel| pixel[3]).collect()
+    }
+
+    fn gapped(at: f32, gap: f32) -> Vec<u8> {
+        let path = gapped_mark_path(at, gap);
+        Assets
+            .load(&path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{path}"))
+            .into_owned()
+    }
+
+    /// The sign's gap leaves out about its share of the small mark's cord wherever along the cord
+    /// it is, across the cord's start too, in a different place at each; with no gap it is the
+    /// mark itself.
+    #[test]
+    fn a_gap_leaves_out_its_share_of_the_cord_where_it_is() {
+        let (_, small) = MARKS.iter().find(|(each, _)| *each == SMALL).unwrap();
+        let whole = ink(small);
+        let mut drawn = Vec::new();
+        for at in [0., 0.3, 0.75, 0.95] {
+            let bytes = gapped(at, 0.16);
+            let out = 1. - ink(&bytes) as f32 / whole as f32;
+            assert!(
+                (0.06..0.26).contains(&out),
+                "a gap of 0.16 at {at} left out {out} of the mark's ink"
+            );
+            drawn.push(alphas(&bytes));
+        }
+        assert!(
+            drawn.windows(2).all(|pair| pair[0] != pair[1]),
+            "the gap stood in one place"
+        );
+        assert_eq!(gapped(0.4, 0.), small.to_vec(), "no gap isn't the mark");
+    }
+
+    /// The waiting sign's gap opens at the top of the small mark's upper right loop: all the ink
+    /// it leaves out is in the drawing's upper right quarter.
+    #[test]
+    fn the_waiting_gap_is_at_the_top_of_the_upper_right_loop() {
+        let (_, small) = MARKS.iter().find(|(each, _)| *each == SMALL).unwrap();
+        let whole = alphas(small);
+        let crown = super::crown();
+        let cut = alphas(&gapped(crown - 0.07, 0.14));
+        let side = (whole.len() as f32).sqrt() as usize;
+        let out: Vec<(usize, usize)> = (whole.iter().zip(&cut).enumerate())
+            .filter(|(_, (whole, cut))| *whole > *cut)
+            .map(|(at, _)| (at % side, at / side))
+            .collect();
+        assert!(!out.is_empty(), "the gap left nothing out");
+        assert!(
+            out.iter().all(|(x, y)| *x >= side / 2 && *y < side / 2),
+            "the gap at {crown} left out ink outside the upper right quarter: {:?}",
+            out.iter().find(|(x, y)| *x < side / 2 || *y >= side / 2)
+        );
     }
 
     /// The small drawing has no under-passes to close, so the drawn mark never uses it.

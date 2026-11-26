@@ -1,13 +1,14 @@
 //! First run's exit (first-run v9 §10) and the hint it leaves under the landing field.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Entity, EntityInputHandler as _, Modifiers, TestAppContext, VisualTestContext, point, px, size,
+    AppContext as _, Entity, EntityInputHandler as _, Modifiers, TestAppContext,
+    VisualContext as _, VisualTestContext, point, px, size,
 };
 
 use super::super::card::KNOTS;
-use super::super::exit::{DRAWN, Plate};
+use super::super::exit::{DRAWN, Plate, frame};
 use super::{END_FADE, Step, card, first_window, kept, kept_dir, later, on_to, started, step};
 use crate::shell::browser::Browser as _;
 use crate::shell::recorder::Recorder;
@@ -124,7 +125,7 @@ fn without_a_grow_the_card_cross_fades(cx: &mut TestAppContext) {
 
 /// Where the host grows it, the card grows from its own size to the window's as the window is
 /// on each frame, the host's glass shaped after it, ending at the window's bounds and the
-/// window's corners, and the exit ends as the grow does.
+/// window's corners, and the exit ends with the grow.
 #[gpui::test]
 fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
@@ -152,8 +153,31 @@ fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
         (w - 1200.).abs() < 1. && (h - 800.).abs() < 1. && (radius - to_radius).abs() < 0.1,
         "ends at {w} {h} {radius}"
     );
-    later(&shell, cx, 0.01);
     assert_eq!(step(&shell, cx), None);
+}
+
+/// A grown exit ends once the card is within `rest` of its window on every side, before the
+/// grow's curve reaches its length, whose tail moves it less than that.
+#[gpui::test]
+fn a_grown_exit_ends_at_rest_before_the_curves_length(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    pressed_and_grown(&shell, cx, &host);
+    // When the curve brings the card within `rest` of the window, by the exit's own frames.
+    let rest = (0..=1000)
+        .map(|i| x::CONTENT + x::GROW * i as f32 / 1000.)
+        .find(|&at| {
+            let (_, _, w, h, _) = frame(at, true, GROWN).plate;
+            (GROWN.0 - w).max(GROWN.1 - h) / 2. <= x::REST
+        })
+        .unwrap();
+    assert!(
+        rest < x::CONTENT + x::GROW - 0.05,
+        "at rest well before the curve's length: {rest}"
+    );
+    later(&shell, cx, rest - x::CONTENT - 0.05);
+    assert_eq!(step(&shell, cx), Some(Step::Done), "still growing");
+    later(&shell, cx, 0.052);
+    assert_eq!(step(&shell, cx), None, "ended at rest");
 }
 
 /// The frame a grown exit ends on still draws the card, the whole window: first run's window
@@ -170,6 +194,26 @@ fn a_grown_exits_last_frame_is_the_grown_card(cx: &mut TestAppContext) {
     assert_eq!(plates().last(), Some(&Some(whole)), "the frame it ends on");
 }
 
+/// First run's end reaches the host with the shell free to draw, so the Mac's host can draw the
+/// browser window before it puts it on screen, and the window comes drawn rather than blank.
+#[gpui::test]
+fn the_browser_window_can_draw_as_first_run_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    let window = cx.window_handle();
+    let drew = Rc::new(Cell::new(false));
+    let drawn = drew.clone();
+    *host.first_run_end.borrow_mut() = Some(Box::new(move |cx| {
+        cx.update_window(window, |_, window, cx| window.draw_and_present(cx))
+            .unwrap();
+        drawn.set(true);
+    }));
+    pressed_and_grown(&shell, cx, &host);
+    later(&shell, cx, x::GROW);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    assert!(drew.get(), "the browser window drew as first run ended");
+    assert!(host.take().contains(&"first run ended".to_string()));
+}
+
 #[gpui::test]
 fn a_cross_fades_last_frame_draws_no_card(cx: &mut TestAppContext) {
     let (shell, cx, _) = at_the_end(cx);
@@ -182,8 +226,9 @@ fn a_cross_fades_last_frame_draws_no_card(cx: &mut TestAppContext) {
 /// As the card grows, the host's glass is given each frame's own shape and the card is drawn in
 /// the shape its glass had on the frame before, centred in its window: the glass reaches the
 /// screen a frame after the card the UI draws with it, so a frame behind it the fill and the
-/// glass grow together. The frame the exit ends on draws the grown card whole, its glass told
-/// the same.
+/// glass grow together. The grow's first shape follows the glass still through the content's fade
+/// and lands at once (f0053), so the grow's first frame draws the card in its own glass's shape.
+/// The frame the exit ends on draws the grown card whole, its glass told the same.
 #[gpui::test]
 fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
@@ -199,11 +244,21 @@ fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
         .map(|each| each.unwrap_or_else(|| panic!("the card on every frame: {drawn:?}")))
         .collect();
     let (ending, running) = frames.split_last().unwrap();
-    let mut grew = 0;
+    let (mut grew, mut first) = (0, 0);
     for pair in running.windows(2) {
         let (_, _, before) = pair[0];
         let ((x, y, w, h, radius), _, glass) = pair[1];
-        assert_eq!((w, h, radius), before, "its glass's shape a frame before");
+        // The grow's first step, a point or more past the card at rest.
+        if before.0 < t::WIDTH + 1. && glass.0 >= t::WIDTH + 1. {
+            first += 1;
+            assert_eq!(
+                (w, h, radius),
+                glass,
+                "the grow's first frame in its own glass's shape"
+            );
+        } else {
+            assert_eq!((w, h, radius), before, "its glass's shape a frame before");
+        }
         if glass.0 > before.0 {
             grew += 1;
             let centred = ((GROWN.0 - w) / 2., (GROWN.1 - h) / 2.);
@@ -211,6 +266,7 @@ fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
         }
     }
     assert!(grew >= 4, "the glass grew frame by frame: {drawn:?}");
+    assert_eq!(first, 1, "the grow has one first frame: {drawn:?}");
     // The frame it ends on is the grown card and its glass the same, the last the host was told.
     let ((_, _, w, h, radius), _, glass) = *ending;
     assert_eq!(glass, (w, h, radius));

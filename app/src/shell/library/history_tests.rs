@@ -14,6 +14,7 @@ use super::{
     SEARCH_RIGHT, SEARCH_TOP, Visited, history_when,
 };
 use crate::agent_history::{self, Past};
+use crate::product::PRODUCT;
 use crate::shell::{Command, Folders, Section, Shell, recorder::Recorder};
 use crate::tokens::shell::CLOSE_SIZE;
 use crate::tokens::shell::library::{HISTORY_GAP, HISTORY_PITCH, HISTORY_POINTED_RIGHT, SEARCH_X};
@@ -380,7 +381,7 @@ fn task() -> crate::agents::task::ArchivedTask {
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: crate::agents::task::Dot::Done,
-        about: "Claude · Done".into(),
+        about: format!("{PRODUCT} · Done").into(),
         ended: at(9, 13),
         pages: "1 page".into(),
     }
@@ -1013,7 +1014,7 @@ fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
         true => "11:05 PM",
         false => "23:05",
     };
-    let row = format!("Claude · Done {time} · 1 page");
+    let row = format!("{PRODUCT} · Done {time} · 1 page");
     assert_eq!(listed, ["Today", "a tab", "Yesterday", row.as_str()]);
 }
 

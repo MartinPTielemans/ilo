@@ -593,6 +593,26 @@ view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layou
 [ "$view" = "644,8 ${docked#* }" ] ||
   fail "the Library didn't push the page to 644 at its width: it's at $view, docked at $docked"
 ../tools/window-screenshot.sh "$pid" "$out/library.png" || fail "no window to capture"
+# Where the Library last drew History's top row of the kind $1, archived or visited, once History
+# had answered, as "x y". The Library and its History start afresh at its section's line.
+history_top() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk -v kind="$1" '/^browser: library section / { listed = 0; split("", at) }
+      /^browser: history listed [0-9]+$/ { listed = 1; split("", at) }
+      listed && $3 == "library" && $4 == kind && $6 == "at" { at[$5] = $7 " " $8 }
+      END {
+        for (row in at) {
+          split(at[row], p, " ")
+          if (top == "" || p[2] + 0 < top + 0) { top = p[2]; x = p[1] }
+        }
+        if (top == "") exit 1
+        print x " " top
+      }' "$log") && break
+    sleep 0.1
+  done
+  echo "$at"
+}
 # History lists the pages this run visited among its closed tabs (#2337). The pointer on a row
 # shows its trash, and its title truncates before it; a click on a visited page's row opens the
 # page in Peek, as a closed tab's does, and Esc closes it, leaving the Library.
@@ -600,21 +620,18 @@ send move 300 111
 expect '^browser: history pointed closed [0-9][0-9]*$' \
   "the pointer on History's first row, the tab ⌘W closed, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-closed.png" || fail "no window to capture"
-# The run's closed tabs come first, newest first, so its visited pages can start low on the list:
-# each row the window shows, 34 apart, down to its foot.
-visited_y=
-for y in $(seq 145 34 723); do
-  send move 300 $y
-  expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
-    "the pointer on History's row at y $y didn't point at it"
-  if sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: history pointed visited '; then
-    visited_y=$y
-    break
-  fi
-done
-[ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
+# The run's closed tabs come first, newest first, so its visited pages can start low on the list,
+# under another day's heading on a run across midnight (#4154): the pointer goes where the app drew
+# the first.
+visited_at=$(history_top visited)
+[ -n "$visited_at" ] || fail "the Library drew no visited page's row once History had answered"
+# shellcheck disable=SC2086 # x and y
+send move $visited_at
+expect '^browser: history pointed visited [0-9][0-9]*$' \
+  "the pointer on History's first visited page's row, drawn at $visited_at, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
-send click 300 $visited_y
+# shellcheck disable=SC2086 # x and y
+send click $visited_at
 expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
 none_since '^browser: history open$' || fail "a click on a visited page's row opened it at once"
 expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
@@ -654,27 +671,12 @@ expect '^browser: command view-library via ui$' "Open Library… didn't run"
 expect '^browser: library shown$' "Open Library… didn't open the Library"
 # Delete from Archive in a tab's menu takes it out, and the Library stays open. The tab ⌘-click
 # restored has loaded since, so its page can be newer than every closed tab and History's first
-# row: the closed tab is the first row the pointer finds closed.
+# row: the closed tab is History's top closed row, where the app drew it.
 archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f3)
-# The Library can open under the pointer, already on the first row, where a move to it says
-# nothing: the pointer starts on Today's heading, on no row.
-send move 300 71
-closed_y=
-rows=
-for y in $(seq 111 34 723); do
-  send move 300 $y
-  expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
-    "the pointer on History's row at y $y didn't point at it"
-  pointed=$(since | grep -m1 '^browser: history pointed \(closed\|visited\) ' | cut -d' ' -f4)
-  rows="$rows $pointed"
-  if [ "$pointed" = closed ]; then
-    closed_y=$y
-    break
-  fi
-done
-[ -n "$closed_y" ] ||
-  fail "History listed no closed tab in the rows the window shows, which were:$rows"
-post rightclick 300 $closed_y
+closed_at=$(history_top archived)
+[ -n "$closed_at" ] || fail "the Library drew no closed tab's row once History had answered"
+# shellcheck disable=SC2086 # x and y
+post rightclick $closed_at
 expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
   "a right-click on an archived tab didn't show its menu"
 send choose "$(cased 'Delete from Archive')"
@@ -1342,11 +1344,10 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   # A private window's tab at the site opens in Safari's engine too, in a session of its own that
   # starts from the private window's and ends with it: the regular window doesn't see what its page
   # stored, and nor does the next private window. The page names what it finds, never a value.
-  # Opens the session page at query $1 from ⌘T's bar in the key window, the private window $2, and
-  # sets $private_tab to its tab.
+  # Opens the session page at query $1 from the bar the empty Space of the key window, the private
+  # window $2, rests on, and sets $private_tab to its tab.
   private_session_page() {
-    send key t cmd
-    expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+    resting_key t "private window"
     send insert "127.0.0.1:$port/session$1"
     send key return
     expect "^browser: loaded [0-9]* http://127.0.0.1:$port/session$1\$" \

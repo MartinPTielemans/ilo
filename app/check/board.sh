@@ -884,8 +884,8 @@ offered=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
   grep '^browser: command bar \(commands\|lists\) "new board": ' | grep 'New Board' | head -1)
 [ -z "$offered" ] || fail "a private window's command bar offers New Board: $offered"
 send key escape
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the private window's command bar"
+# The private window's empty Space rests on its bar, which ⌘T gives the keyboard.
+resting_key t "private window"
 send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"

@@ -358,21 +358,10 @@ send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the Space's move"
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back in their order"
 # Until the dots have glided back, the second's is still drawn under the first's place (#2026). The
-# drop's own glide can settle after ⌘Z is sent and before the undo runs, so the settle waited for is
-# one after the order ⌘Z put back, which the app logs as it starts the dots' glide (#4059).
-wait_begins
-for _ in $(seq 100); do
-  since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' && break
-  kill -0 "$pid" 2>/dev/null || {
-    ran_out '^browser: spaces settled$' "$step" exited
-    fail "the app exited: the dots didn't settle after ⌘Z put the Spaces back"
-  }
-  sleep 0.1
-done
-since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' || {
-  ran_out '^browser: spaces settled$' "$step"
-  fail "the dots didn't settle after ⌘Z put the Spaces back: no \"spaces settled\" after \"spaces $first $second\""
-}
+# drop's own glide can settle after ⌘Z is sent, so the settle is the one after the order ⌘Z put back,
+# which the app logs as it starts the dots' glide (#4059).
+expect_after '^browser: spaces settled$' "the dots didn't settle after ⌘Z put the Spaces back" \
+  "^browser: spaces $first $second\$"
 send drag "$first_x" "$dot_y" $((second_x + 29)) "$dot_y"
 expect "^browser: dropped space $first after $second\$" "the first Space's dot flicked past the second's didn't move it"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
@@ -637,10 +626,11 @@ expect '^browser: library hidden$' "a swipe let go short of halfway didn't put t
 none_since '^browser: command view-library' ||
   fail "a swipe let go short of halfway opened the Library"
 library_to "swipe $swipe_point 12 0 10" swipe shown
-# Fingers going on past where it opens take the Library on a little with the card, its column's
-# fill still reaching the window's left edge: the edge is the column's colour 40 across, and not
-# the section's beside it. The column is the ink over the window, darker in a light window and
-# lighter in a dark one, so the step compares colours, not which is brighter.
+# Fingers going on past where it opens take the Library on a little with the card, its column
+# still reaching the window's left edge: the edge is the column's colour 40 across. The column has
+# no fill of its own, as drawn, so it is the window's glass there as in it, and anything else
+# opened at the edge reads apart. The step compares colours, not which is brighter, as the glass
+# is darker in a light window and lighter in a dark one.
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
@@ -654,17 +644,17 @@ alike() {
 }
 column=$(end_at 6)
 inside=$(end_at 40)
-beside=$(end_at 200)
-{ alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
-Library's column left the window's edge: $column at it, $inside in it, $beside beside"
+alike "$column" "$inside" || fail "past its end the Library's column left the window's edge: \
+$column at it, $inside in it"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
 library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
-# Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is clicked at its middle,
+# Its Spaces section is as wide as its column, two cards and the + after them, as library.rs's
+# spaces_content lays them out from tokens.toml's [shell.library], unless that would leave the page
+# less than its spaces-page, as Arc 1.171's. The section's button is clicked at its middle,
 # where the column's line says it drew it, so a section added to the column doesn't move the click.
 read -r bx by bw bh << EOF
 $(grep '^browser: library button spaces at ' "$log" | tail -1 | cut -d' ' -f6-)
@@ -672,8 +662,12 @@ EOF
 [ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Spaces button"
 send click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
-spaces_wide=$((216 + 264 * 2))
-[ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))
+spaces_wide=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
+  2 * $(token shell.library card-width) + $(token shell.library card-gap) +
+  $(token shell.library plus-gap) + $(token shell.library plus-size) +
+  $(token shell.library plus-after)))
+page_least=$((${content%x*} - $(token shell.library spaces-page)))
+[ $spaces_wide -gt $page_least ] && spaces_wide=$page_least
 expect "^browser: library spaces 2 wide $spaces_wide\$" \
   "the Library's Spaces section isn't $spaces_wide wide with two Spaces in a $content window"
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"

@@ -342,6 +342,8 @@ pub(super) struct Onboarding {
     /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
     /// behind (`exit::behind`).
     shaped: Option<(f32, f32, f32)>,
+    /// Whether the exit has drawn a frame of its grow, past the content's fade.
+    growing: bool,
     /// Help › Welcome plays the card again, which keeps no step to resume at.
     replay: bool,
     /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
@@ -609,6 +611,7 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
+            growing: false,
             replay,
             pressed: Vec::new(),
             signing: Vec::new(),
@@ -1378,7 +1381,7 @@ impl Shell {
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
         let length = onboarding.exit_length(still);
-        let ended = exiting.is_some_and(|at| at >= length);
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still, viewport));
         if ended {
             // A grown card stays drawn on the frame it ends on. First run's window, the size of
             // the browser's by now, is on screen until the browser window is, and a frame of it
@@ -1404,14 +1407,15 @@ impl Shell {
                 self.show_hint(cx);
             }
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| {
-                    if let Some(handle) = first_run {
-                        shell.browser.end_first_run(handle.into(), cx);
-                    }
-                    if !quit {
-                        shell.run(Command::NewTab, "onboarding", cx);
-                    }
-                })
+                // Outside the shell's update, as the host draws the browser window, and with it
+                // the shell, before putting it on screen.
+                if let Some(handle) = first_run {
+                    let browser = shell.read(cx).browser.clone();
+                    browser.end_first_run(handle.into(), cx);
+                }
+                if !quit {
+                    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
+                }
             });
             #[cfg(test)]
             exit::DRAWN.with_borrow_mut(|drawn| {
@@ -1549,14 +1553,18 @@ impl Shell {
         let (_, _, w, h, radius) = plate;
         let shape = (w, h, radius);
         let before = onboarding.shaped.replace(shape);
+        let growing =
+            exiting.is_some_and(|at| at > crate::tokens::shell::onboarding::exit::CONTENT);
+        let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
         }
         // The glass is the system's and reaches the screen a frame after the card drawn with it,
         // so the exit draws the card in the shape its glass was given the frame before, and fill
-        // and glass grow together.
+        // and glass grow together. The grow's first shape follows the glass still through the
+        // content's fade and lands at once (f0053), so that frame's card is drawn in it.
         let plate = match (&exit, before) {
-            (Some(_), Some(before)) => exit::behind(before, viewport),
+            (Some(_), Some(before)) if !grow_starts => exit::behind(before, viewport),
             _ => plate,
         };
         if step == Step::Space {

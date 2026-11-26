@@ -156,9 +156,23 @@ thread_local! {
     static HELD_FOR_FIRST_RUN: Cell<Option<*mut c_void>> = const { Cell::new(None) };
 }
 
-/// Puts the first window, which first run kept off screen, on screen as first run ends.
-pub(crate) fn show_window_held_for_first_run() {
+/// Puts the first window, which first run kept off screen, on screen as first run ends, drawn.
+pub(crate) fn show_window_held_for_first_run(cx: &mut App) {
     if let Some(ui_view) = HELD_FOR_FIRST_RUN.take() {
+        // Drawn before it's on screen, as a later window is (#2141): the Mac draws a window only
+        // once it reports it visible, some frames on, which it would spend blank where first
+        // run's grown card just was.
+        #[cfg(target_os = "macos")]
+        if let Some(handle) = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .find(|each| each.ui_view == ui_view)
+                .map(|each| each.handle)
+        }) {
+            cx.update_window(handle, |_, window, cx| window.draw_and_present(cx))
+                .ok();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = cx;
         unsafe { platform::host_show_window(ui_view) };
         // check.sh reads this line.
         log!("browser: window on screen after first run");

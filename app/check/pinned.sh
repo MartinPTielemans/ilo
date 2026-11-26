@@ -115,7 +115,8 @@ send drag $(pinned_row 0) 100 180
 expect_lists "$c $a" "$b" "after dragging the first pinned tab down"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "pressing the row dragged didn't show its tab"
 # The press now shows its row's tab, so it waits for the rows to stop under the pointer.
-expect '^browser: rows settled$' "the pinned rows didn't settle after the drag down"
+expect_after '^browser: rows settled$' "the pinned rows didn't settle after the drag down" \
+  "^browser: pinned $c $a\$"
 # Escape puts a dragged row back.
 send press $(pinned_row 0)
 expect "^browser: selected $c\( in .*\)\{0,1\}\$" "pressing a row didn't show its tab"

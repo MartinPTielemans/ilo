@@ -2784,11 +2784,13 @@ way-copied = 1.2
 # First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing
 # fades the card's content over `content`, then the card grows to the window over `grow` on
 # ARRIVE, its `corners` from the card's to the window's, its fill crossing over `material` to the
-# window's tint with the pages' card over it. The last step's knot fades with the content. Where it
-# can't, and with Reduce Motion, the card cross-fades over `cross-fade`. The Mac's host grows it;
-# no other does yet.
+# window's tint with the pages' card over it. The exit ends once the card is within `rest` points
+# of the window on every side, as ARRIVE's tail moves it less than that. The last step's knot fades
+# with the content. Where it can't, and with Reduce Motion, the card cross-fades over `cross-fade`.
+# The Mac's host grows it; no other does yet.
 content = 0.12
 grow = 0.52
+rest = 0.5
 corners = [20.0, 12.0]
 material = 0.3
 cross-fade = 0.22
@@ -3641,6 +3643,24 @@ bubble-y = 8.0
 bubble-x = 12.0
 bubble-text = 13.0
 bubble-line = 18.0
+
+[shell.conversation.sign]
+# The sign above the composer (spec-thread-stage.md, "A wait on the user"): the product's mark at
+# the brand's small form, `size` across in the mark's ink, its right edge `right` in from the
+# composer's and its foot `above` over it, in the stage and in the panel beside a page alike. While
+# the thread works, a gap `working-gap` of the cord's length travels round it, a lap in `lap` at an
+# even pace; while it waits on the user, at the top of the upper right loop a gap opens to
+# `waiting-gap` over `open`, holds `hold`, closes over `open`, and the knot rests `rest` before the
+# next. In seconds. Neither working nor waiting: no sign.
+size = 22.0
+right = 4.0
+above = 6.0
+working-gap = 0.16
+lap = 1.5
+waiting-gap = 0.14
+open = 0.35
+hold = 0.14
+rest = 1.0
 
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it
