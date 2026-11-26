@@ -6,6 +6,9 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use super::tier::Tier;
 use super::wall::Granted;
 
+#[cfg(unix)]
+pub mod resolve;
+
 /// Where a file is: one the user attached, which the assistant gets as ilo's copy, in a folder
 /// the user granted, or outside both, where only the product's own file tools reach (road B).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
