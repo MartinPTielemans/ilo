@@ -1965,6 +1965,22 @@ painted(() => document.title = "fields");
   await_log "^browser: page $agent_tab back 1 forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
     "the fields page didn't finish loading"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  # The watched page is its tile, and a press on a tile takes the page over and goes no further
+  # (#4115): the page is the window's once it's in place again, and the click after that is the
+  # field's.
+  fields_press="^browser: agent page pressed in $agent_tab\$"
+  fields_took="^browser: agent mcp-client taken over in $agent_tab\$"
+  fields_place="^browser: task page $agent_tab in place\$"
+  fields_pressed=$(grep -c "$fields_press" "$log" || true)
+  fields_taken=$(grep -c "$fields_took" "$log" || true)
+  fields_placed=$(grep -c "$fields_place" "$log" || true)
+  send click $page_point
+  await_more "$fields_press" "$fields_pressed" || fail "a click on the fields page's tile wasn't a press in the agent's page"
+  await_more "$fields_took" "$fields_taken" || fail "a click on the fields page's tile didn't take the tab over"
+  await_more "$fields_place" "$fields_placed" || fail "the fields page the user took over didn't come to rest in the window"
+  [ "$(grep -n "$fields_press" "$log" | tail -1 | cut -d: -f1)" -lt "$(grep -n "$fields_took" "$log" | tail -1 | cut -d: -f1)" ] &&
+    [ "$(grep -n "$fields_took" "$log" | tail -1 | cut -d: -f1)" -lt "$(grep -n "$fields_place" "$log" | tail -1 | cut -d: -f1)" ] ||
+    fail "the press on the fields page's tile, its take-over and the page in place came out of order"
   send click $page_point
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada

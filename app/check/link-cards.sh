@@ -402,7 +402,15 @@ send click $((wx + ww / 2)) $((wy + wh / 2))
 expect "^browser: task $session page $agent_tab\$" "a click on the agent's page's picture didn't watch it"
 expect "^browser: task page $agent_tab in place\$" "the agent's page didn't come to rest in place"
 # A click in it gives it the keyboard, taking it over where the press reaches the host; the page
-# stays the agent's Space's either way.
+# stays the agent's Space's either way. Where the watched page is its tile, the press that takes it
+# over goes no further (#4115): the page is the window's once it's in place again, and the click
+# after that is the page's.
+if grep "^browser: tile $agent_tab \(shown\|ended\)\$" "$log" | tail -1 | grep -q ' shown$'; then
+  send click 600 520
+  expect "^browser: agent page pressed in $agent_tab\$" "a click on the agent's page's tile wasn't a press in it"
+  expect "^browser: agent mcp-client taken over in $agent_tab\$" "a click on the agent's page's tile didn't take it over"
+  expect "^browser: task page $agent_tab in place\$" "the page the user took over didn't come to rest in the window"
+fi
 send click 600 520
 expect "^browser: title $agent_tab pressed [0-9]*\$" "the agent's page didn't get the click"
 plain_asked=$(asked /plain.html)
