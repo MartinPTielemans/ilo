@@ -545,6 +545,7 @@ impl Shell {
             }
         }
         let before = std::mem::replace(&mut self.task_cards, cards);
+        self.note_waiting();
         self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {

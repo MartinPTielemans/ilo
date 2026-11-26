@@ -127,6 +127,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.library.download-button-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The hidden sidebar's edge knot as the lead drew it (Paper 1b, 26 Nov), between a row's and a
+    // panel's.
+    "shell.edge-knot.radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",

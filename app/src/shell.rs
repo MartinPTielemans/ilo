@@ -73,6 +73,9 @@ mod copy_tests;
 mod display_face;
 mod drag;
 mod drm_note;
+mod edge_knot;
+#[cfg(test)]
+mod edge_knot_tests;
 mod empty;
 mod export;
 mod extensions;
@@ -1905,6 +1908,15 @@ pub struct Shell {
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
+    /// When the edge knot last came, while it shows: it takes no press for a moment after
+    /// (edge_knot.rs).
+    edge_knot_since: Option<Instant>,
+    /// The threads that need the user, of this window's Spaces, in the order they came to: the
+    /// edge knot names the first (edge_knot.rs).
+    waiting_order: Vec<SharedString>,
+    /// The top of the edge knot's window while it shows, and the content's width and the
+    /// sidebar's side it was placed for (edge_knot.rs).
+    edge_knot_at: Option<(f32, f32, bool)>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     task_list: task_cards::TaskList,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
@@ -2388,6 +2400,9 @@ impl Shell {
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
             task_cards: Vec::new(),
+            edge_knot_since: None,
+            waiting_order: Vec::new(),
+            edge_knot_at: None,
             task_list: task_cards::TaskList::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
@@ -2895,6 +2910,8 @@ impl Shell {
 
     /// Lays the page out at `page_frame`, unless it's there already or held.
     fn lay_out_page(&mut self, cx: &mut Context<Self>) {
+        // Not the page's, so a page held where it was doesn't hold it.
+        self.place_edge_knot(cx);
         let Some(frame) = self.window_page_frame(self.viewport) else {
             return;
         };

@@ -1682,6 +1682,14 @@ impl Browser for Recorder {
 
     fn hide_reveal(&self, _: &mut App) {}
 
+    fn show_edge_knot(&self, top: f32, width: f32, height: f32, _: &mut App) {
+        self.record(format!("edge knot at {top} {width} {height}"));
+    }
+
+    fn hide_edge_knot(&self, _: &mut App) {
+        self.record("edge knot hidden".into());
+    }
+
     fn option_reveals_sidebar(&self) -> bool {
         !self.option_off.get()
     }
