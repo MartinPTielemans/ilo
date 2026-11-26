@@ -328,7 +328,7 @@ pub(crate) fn write(path: PathBuf, text: &str) -> PathBuf {
 }
 
 /// Marks a file used `ago` seconds ago.
-fn used(path: &Path, ago: u64) {
+pub(crate) fn used(path: &Path, ago: u64) {
     let file = fs::File::options().write(true).open(path).unwrap();
     file.set_modified(SystemTime::now() - Duration::from_secs(ago))
         .unwrap();
@@ -2612,7 +2612,7 @@ fn firefoxs_default_profile_is_the_one_it_starts_with() {
 /// A `places.sqlite` at `path` as Firefox lays one out, with its own folders, in write-ahead mode
 /// with the log kept, as while Firefox runs: what goes in stays in the log while the connection
 /// it returns is open.
-fn places_file(path: &Path) -> rusqlite::Connection {
+pub(crate) fn places_file(path: &Path) -> rusqlite::Connection {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     _ = fs::remove_file(path);
     let db = rusqlite::Connection::open(path).unwrap();

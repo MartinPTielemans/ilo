@@ -2702,13 +2702,18 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
 fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
     use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
-    use crate::import::tests::{Browser, chrome, firefox_dir};
+    use crate::import::tests::{Browser, chrome, firefox_dir, places_file, used};
     let home = chrome(
         "onboarding-two",
         &[("Default", "Me")],
         std::time::SystemTime::now(),
     );
-    firefox_dir(home.join(".mozilla/firefox"), 60 * 60);
+    let firefox = home.join(".mozilla/firefox");
+    firefox_dir(firefox.clone(), 60 * 60);
+    // A places file as Firefox lays one out, so the read finds its kinds, last used an hour ago.
+    let places = firefox.join("p.default/places.sqlite");
+    drop(places_file(&places));
+    used(&places, 60 * 60);
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
     let (shell, cx, view) = importing_from(browser, cx);
     let bring = brought(&view, cx);
@@ -2721,7 +2726,11 @@ fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let bring = brought(&view, cx);
     assert_eq!(bring.picked, Some(1), "the click picked Firefox");
-    assert!(matches!(bring.state, Bringing::Kinds(_)), "and read it");
+    assert!(
+        matches!(bring.state, Bringing::Kinds(_)),
+        "and read it, not {:?}",
+        bring.state
+    );
     let flight = card(&shell, cx, |o| {
         o.bring.flight.map(|(from, to, _)| (from, to))
     });
