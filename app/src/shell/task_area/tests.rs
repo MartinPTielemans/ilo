@@ -1249,6 +1249,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1611,6 +1612,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2021,6 +2023,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2085,6 +2088,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2292,6 +2296,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
