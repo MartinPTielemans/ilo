@@ -246,7 +246,7 @@ impl Render for Stops {
         };
         let a11y = window.is_a11y_active();
         let look = Look::settings(true);
-        let accent = look.accent;
+        let accent = look.on;
         let field = div()
             .h(px(SEARCH_HEIGHT))
             .child(self.input.clone())

@@ -1201,8 +1201,8 @@ fn field_colors(cx: &App) -> Colors {
     let palette = palette::current(cx);
     Colors {
         placeholder: palette.on_overlay(FIELD_PLACEHOLDER),
-        caret: palette.accent.into(),
-        selection: palette.selection(),
+        caret: Some(palette.accent.into()),
+        selection: Some(palette.selection()),
     }
 }
 

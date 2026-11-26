@@ -1090,9 +1090,9 @@ light-neutral-gradient-alpha = 0.11
 # the dark dialog is a step lighter than the dark overlay (ours).
 overlay-light = 0xf3f0e8
 dialog-light = 0xfbf9f4
-# The accent of a Space without a theme starts from ilo green (#0B8045), lighter, so Ink reads on
-# it at 4.6:1 where Paper on #0B8045 is 4.4:1. On the measured window over a white backdrop it's
-# 2.7:1, so the palette takes it lighter still at its hue, to #57B97A, as it does a theme's colour.
+# ilo green, which a Board's page alone still takes, as its accent (copy-board.sh, [board]). A
+# Space without a theme no longer wears it: its accent is the text's ink with the other look's ink
+# on it, as the switch is (spec-bar-composer.md, The greens still worn).
 no-theme-accent = 0x289054
 # A Space's swatch of two colours runs from the main one to the second this far along its
 # diagonal, as the window's wash did (Arc 1.170 rec at 2×, with Ardia's account of Arc's rule:
@@ -1112,10 +1112,13 @@ ring = 1.0
 swatch-main-to = 0.25
 # The accent under the pointer, each channel at this, darker as every filled button goes (the
 # owner, 2026-10-26); pressed, each channel at this, a step darker again, whatever the label (the
-# owner, #707); and a text selection, the accent at this.
+# owner, #707); and a text selection, the accent at this. Where the accent is the text's ink, in a
+# Space without a theme and in a field whose owner gives it none, a selection is the text at
+# `no-theme-selection`.
 accent-hovered = 0.9
 accent-pressed = 0.8
 selection = 0.28
+no-theme-selection = 0.24
 # One ladder of states for every control whose states Arc wasn't recorded with, but the accent's
 # (#318): pressed, under the pointer, selected, and selected under the pointer. They're the
 # sidebar's rows', measured from Arc (`[shell]`: pressed, hovered, selected and selected-hovered),
@@ -1398,7 +1401,7 @@ short-padding = 8.0
 words-columns = 4
 word-number = 24.0
 word-gap = 6.0
-# Ours: the account's status line starts with a dot, ilo green while it syncs and the destructive
+# Ours: the account's status line starts with a dot, the text's ink while it syncs and the destructive
 # red while something stops it, 6 before the line, which says what stops it in that red, 4 before
 # the rest.
 status-dot = 7.0

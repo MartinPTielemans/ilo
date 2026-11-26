@@ -14,9 +14,7 @@ use gpui::{
 
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
-use crate::palette::{
-    CARD_PLATE, FIELD_PLATE, INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER, TEXT_SECONDARY,
-};
+use crate::palette::{CARD_PLATE, FIELD_PLATE, INK, OVERLAY_DARK, PAPER, TEXT_SECONDARY};
 use crate::text_input::Colors;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
 use crate::tokens::radius;
@@ -353,8 +351,6 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// The host's own green, where a view still takes it.
-    pub accent: Rgba,
     /// The one button that does what the view is for, and its label: Settings' is the text colour
     /// with the other look's ink on it, as the owner drew it; a look on another view's ground
     /// keeps that ground's accent with white.
@@ -368,7 +364,7 @@ impl Look {
     /// is. Its groups are the palette's card plate of the ink in both looks, with the page's inner
     /// line. Its controls are neutral: a switch that's on is the text colour with the other look's
     /// ink for its knob, and one that's off the shown plate with a knob of the text colour. Its
-    /// one main action is ilo's green, as the app's window isn't a Space's (#319).
+    /// one main action is the text colour too, as the app's window isn't a Space's (#319).
     pub fn settings(dark: bool) -> Look {
         let (card, base, other) = match dark {
             true => (rgb(OVERLAY_DARK), rgb(PAPER), rgb(INK)),
@@ -395,7 +391,6 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(rgba(if dark { PAGE_LINE } else { LIGHT_PAGE_LINE })),
-            accent: rgb(NO_THEME_ACCENT),
             primary: mix(PRIMARY),
             on_primary: other,
         }
@@ -423,7 +418,6 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
-            accent,
             primary: accent,
             on_primary: gpui::white().into(),
         }
@@ -444,7 +438,7 @@ impl Look {
     pub fn field(&self) -> Colors {
         Colors {
             placeholder: self.detail.into(),
-            caret: self.ink.into(),
+            caret: Some(self.ink.into()),
             ..Colors::default()
         }
     }
@@ -1342,18 +1336,17 @@ mod tests {
         let (dark, light) = (Look::settings(true), Look::settings(false));
         assert!(lum(dark.ink) > lum(dark.surface) && lum(light.ink) < lum(light.surface));
         assert!(!dark.light() && light.light());
-        let on = Look::on(dark.surface, dark.ink, dark.accent);
+        let on = Look::on(dark.surface, dark.ink, dark.primary);
         assert!(on.edge.is_some());
     }
 
     /// In Settings what's on is the text's colour, a switch's knob on it the card's, never green
     /// (#4092): it stands off the group as far as a name does, and its knob reads on it at WCAG's
-    /// 3:1 for a control. Off Settings' card, on is still the accent.
+    /// 3:1 for a control. Off Settings' card, on is still the ground's accent.
     #[test]
     fn whats_on_is_the_text_colour_not_the_green() {
         for dark in [true, false] {
             let look = Look::settings(dark);
-            assert_ne!(look.on, look.accent, "{dark}");
             assert!(
                 contrast(&look, look.on) >= contrast(&look, look.ink) * 0.95,
                 "{dark}: on is quieter than a name"
@@ -1362,8 +1355,9 @@ mod tests {
             assert!(knob >= 3., "{dark}: the knob reads at {knob}");
         }
         let settings = Look::settings(true);
-        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
-        assert_eq!(elsewhere.on, settings.accent);
+        let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+        let elsewhere = Look::on(settings.surface, settings.ink, signal);
+        assert_eq!(elsewhere.on, signal);
     }
 
     /// Settings' main button is the text colour, not the green (the owner's), and its label
@@ -1373,13 +1367,14 @@ mod tests {
     fn the_main_button_is_the_text_colour_and_its_label_reads() {
         for dark in [true, false] {
             let look = Look::settings(dark);
-            assert_ne!(look.primary, look.accent, "{dark}");
+            assert_eq!(look.primary, look.on, "{dark}");
             let label = crate::palette::contrast(look.on_primary, look.primary);
             assert!(label >= 4.5, "{dark}: the label reads at {label}");
         }
         let settings = Look::settings(true);
-        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
-        assert_eq!(elsewhere.primary, settings.accent);
+        let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+        let elsewhere = Look::on(settings.surface, settings.ink, signal);
+        assert_eq!(elsewhere.primary, signal);
     }
 }
 

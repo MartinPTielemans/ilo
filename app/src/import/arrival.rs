@@ -358,13 +358,13 @@ fn card_view(
         Some(at) => {
             let way = ease_in_out(since(at) / CHECK);
             let tick = match still {
-                true => drawing_check(1., gpui::white().into()).into_any_element(),
-                false => drawing_check(way, gpui::white().into()).into_any_element(),
+                true => drawing_check(1., look.on_primary.into()).into_any_element(),
+                false => drawing_check(way, look.on_primary.into()).into_any_element(),
             };
             div()
                 .size(px(BADGE))
                 .rounded_full()
-                .bg(look.accent)
+                .bg(look.primary)
                 .relative()
                 .when(still, |badge| badge.opacity(way))
                 .child(div().absolute().inset(px(BADGE * 0.2)).child(tick))
@@ -481,13 +481,13 @@ pub fn stage_row(
                 div()
                     .size(px(BADGE))
                     .rounded_full()
-                    .bg(look.accent)
+                    .bg(look.primary)
                     .relative()
                     .child(
                         div()
                             .absolute()
                             .inset(px(BADGE * 0.2))
-                            .child(drawing_check(1., gpui::white().into())),
+                            .child(drawing_check(1., look.on_primary.into())),
                     ),
             ),
     };

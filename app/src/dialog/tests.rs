@@ -891,8 +891,8 @@ fn a_prompts_field_follows_the_look(cx: &mut TestAppContext) {
             .expect("the dialog's window");
         let meant = Colors {
             placeholder: palette.on_overlay(FIELD_PLACEHOLDER),
-            caret: palette.accent.into(),
-            selection: palette.selection(),
+            caret: Some(palette.accent.into()),
+            selection: Some(palette.selection()),
         };
         assert_eq!(drawn, meant, "{look:?}");
         colours.push(drawn);

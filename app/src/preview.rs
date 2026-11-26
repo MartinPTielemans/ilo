@@ -4020,7 +4020,7 @@ fn preview_mini_bar(
     }) else {
         return;
     };
-    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent_on_dark().0.into()) else {
         return;
     };
     let selection = shown.selection;
