@@ -42,6 +42,10 @@ namespace ui {
 class SimpleMenuModel;
 }  // namespace ui
 
+namespace tabs {
+class TabDialogManager;
+}  // namespace tabs
+
 namespace views {
 class Widget;
 class WidgetDelegate;
@@ -128,6 +132,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The same for a press on |dialog|, a tab's dialog in browser window |window|, for the tab it
   // shows over.
   static void DialogPressed(views::Widget* window, views::Widget* dialog);
+  // What shows Chrome's dialogs over |contents|'s page, as its tab's, or null.
+  static tabs::TabDialogManager* DialogsOf(content::WebContents* contents);
+  // The dialog Chrome has for |contents|'s tab, over whichever window, shown or not, or null.
+  static views::Widget* TabDialog(content::WebContents* contents);
   // The hook for Chrome's tabs (hooks.h): |contents|, which asked to be shown, as Picture in
   // Picture's way back to its tab does, shows in the window holding it, in its Space.
   static void ActivateContents(content::WebContents* contents);

@@ -76,6 +76,10 @@ bool TileRule::InTile(uint64_t tab) const {
   return Holds(tab) || Parked(tab);
 }
 
+bool TileRule::HoldsDialog(uint64_t tab, bool agent_tab, bool held) const {
+  return agent_tab && !held && InTile(tab);
+}
+
 bool TileRule::InSight(uint64_t tab, bool window_shows) const {
   return window_shows || Holds(tab);
 }

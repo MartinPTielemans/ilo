@@ -143,27 +143,13 @@ std::map<bc_id, std::unique_ptr<Window>>& Windows() {
 class AgentDialogHold {
  public:
   explicit AgentDialogHold(content::WebContents* contents) {
-    tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
-    tabs::TabFeatures* features = tab ? tab->GetTabFeatures() : nullptr;
-    tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
-    if (!dialogs) {
+    views::Widget* dialog = Window::TabDialog(contents);
+    if (!dialog || !dialog->widget_delegate()) {
       return;
     }
-    // A page coming from another window has its dialog over that one until Chrome moves it.
-    for (const auto& [id, window] : Windows()) {
-      views::Widget* parent = window->widget();
-      if (!parent) {
-        continue;
-      }
-      for (views::Widget* child : views::Widget::GetAllChildWidgets(parent->GetNativeView())) {
-        if (dialogs->IsDialogManaged(child) && child->widget_delegate()) {
-          could_ = child->widget_delegate()->CanActivate();
-          child->widget_delegate()->SetCanActivate(false);
-          dialog_ = child->GetWeakPtr();
-          return;
-        }
-      }
-    }
+    could_ = dialog->widget_delegate()->CanActivate();
+    dialog->widget_delegate()->SetCanActivate(false);
+    dialog_ = dialog->GetWeakPtr();
   }
   AgentDialogHold(const AgentDialogHold&) = delete;
   AgentDialogHold& operator=(const AgentDialogHold&) = delete;
@@ -902,9 +888,7 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
       if (!IsAgentTab(contents)) {
         continue;
       }
-      tabs::TabInterface* model = tabs::TabInterface::MaybeGetFromContents(contents);
-      tabs::TabFeatures* features = model ? model->GetTabFeatures() : nullptr;
-      tabs::TabDialogManager* dialogs = features ? features->tab_dialog_manager() : nullptr;
+      tabs::TabDialogManager* dialogs = DialogsOf(contents);
       if (dialogs && dialogs->IsDialogManaged(dialog)) {
         PagePressed(contents);
         return;
@@ -912,6 +896,33 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
     }
     return;
   }
+}
+
+tabs::TabDialogManager* Window::DialogsOf(content::WebContents* contents) {
+  tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+  tabs::TabFeatures* features = tab ? tab->GetTabFeatures() : nullptr;
+  return features ? features->tab_dialog_manager() : nullptr;
+}
+
+views::Widget* Window::TabDialog(content::WebContents* contents) {
+  tabs::TabDialogManager* dialogs = DialogsOf(contents);
+  if (!dialogs) {
+    return nullptr;
+  }
+  // A page coming from another window has its dialog over that one until Chrome moves it. Views
+  // lists a window's child widgets hidden too, as one is before Chrome first shows it.
+  for (const auto& [id, window] : Windows()) {
+    views::Widget* parent = window->widget();
+    if (!parent) {
+      continue;
+    }
+    for (views::Widget* child : views::Widget::GetAllChildWidgets(parent->GetNativeView())) {
+      if (dialogs->IsDialogManaged(child)) {
+        return child;
+      }
+    }
+  }
+  return nullptr;
 }
 
 // static
@@ -3486,6 +3497,9 @@ bool Window::ShouldConstrainDialogBoundsByHost() {
 
 void Window::AddObserver(web_modal::ModalDialogHostObserver* observer) {
   dialog_observers_.AddObserver(observer);
+  // Before Chrome shows a tab's dialog, as it's made or its page becomes visible: a tile's is held
+  // off the screen.
+  tiles::DialogComing();
   // A tab's dialog places itself through this as it's made, so its keys are asked about from its
   // first, and again once it shows: the Mac lists a child window only once it's on screen.
   dialog_keys::Watch(widget_.get());

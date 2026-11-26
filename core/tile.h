@@ -32,6 +32,10 @@ void ShowInCard(bc_id tab);
 // parked, the view keeps the page's size.
 void PageViewChanged(bc_id tab);
 
+// Chrome is about to show a tab's dialog, as it's made or as its page becomes visible: each tile
+// that holds its tab's dialog (TileRule::HoldsDialog) takes one its tab has now.
+void DialogComing();
+
 // Whether |tab|'s page is in a tile, live or parked, whose own asks to be activated are refused.
 bool Holds(bc_id tab);
 
