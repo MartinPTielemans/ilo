@@ -1228,7 +1228,8 @@ impl Agents {
         // A stretch heads as at work only while the task is: one that ended at a refused or handed
         // step, a question or a page the user took heads as worked, as the card's word says, unless
         // work went on past the wait, by the steps' own order and states (set 4, find 5).
-        let at_work = working && (live == Live::Working || went_on(task, &self.held));
+        // A question's wait is a wait as a hand-off's is, so a step under way moves through it too.
+        let at_work = !ended && (live == Live::Working || went_on(task, &live, &self.held));
         let mut lines = fold(
             &task.messages,
             &task.trace,
@@ -1241,6 +1242,11 @@ impl Agents {
             // ilo's lines of its refusals, its steps handed to the user and its changes of access.
             self.ilo_lines(task, cx),
         );
+        // A step that waits on the user isn't under way, whatever else of the thread is: it holds
+        // still while a step in another of the thread's pages moves (#4320).
+        hold_waits(&mut lines, |key| {
+            (task.trace.get(key)).is_some_and(|step| waiting(step, &self.held))
+        });
         // A session's conversation is in its agent's terminal: here, only its steps, one by one.
         if task.session.is_some() {
             lines = steps(lines);
@@ -4706,24 +4712,57 @@ fn fallback(trace: &[Traced]) -> Option<String> {
     }
 }
 
-/// Whether a task waiting on the user works on past the wait: a step came after a refusal it
-/// hasn't settled, or a step of its, or a helper's, is under way that isn't itself a wait or on a
-/// page the user holds. Read from the steps alone, never from what the agent says.
-fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
-    let after_refusal = (task.stops.iter())
-        .filter(|stop| !stop.settled)
-        .any(|stop| {
-            task.trace[stop.traced.min(task.trace.len())..]
-                .iter()
-                .any(|step| !own(step))
-        });
-    let under_way = (task.trace.iter()).any(|step| {
-        step.ended.is_none()
-            && step.did.tool != "thought"
-            && !WAIT_ON_USER.contains(&step.did.tool.as_str())
-            && step.did.tab.is_none_or(|tab| !held.contains_key(&tab))
+/// Whether a task waiting on the user is at work all the same: a step of its, or a helper's, is
+/// under way that isn't itself waiting on the user, or, where the wait is a refusal's, it carried
+/// on past it, a step that isn't a wait having come after the refusal. A refusal from before
+/// never makes another wait read as work (#4320). Read from the steps alone, never from what the
+/// agent says.
+fn went_on<T>(task: &Task, live: &Live, held: &HashMap<u64, T>) -> bool {
+    let carried_on = *live == Live::Refused
+        && (task.stops.iter())
+            .filter(|stop| !stop.settled)
+            .any(|stop| {
+                task.trace[stop.traced.min(task.trace.len())..]
+                    .iter()
+                    .any(|step| !own(step) && !waits(step))
+            });
+    let under_way = (task.trace.iter())
+        .any(|step| step.ended.is_none() && step.did.tool != "thought" && !waiting(step, held));
+    carried_on || under_way
+}
+
+/// Whether a step is a wait on the user from its start to its end.
+fn waits(step: &Traced) -> bool {
+    WAIT_ON_USER.contains(&step.did.tool.as_str())
+}
+
+/// Whether a step is waiting on the user now, which isn't work under way: a wait's own step till
+/// it's answered, and any step on a page the user holds, as a load that met a sign-in is.
+fn waiting<T>(step: &Traced, held: &HashMap<u64, T>) -> bool {
+    step.ended.is_none() && (waits(step) || step.did.tab.is_some_and(|tab| held.contains_key(&tab)))
+}
+
+/// Stills each step of `lines` that is `waiting`, by its place in the task's trace: a line of
+/// several tabs' same step moves while one of them does.
+fn hold_waits(lines: &mut [Line], waiting: impl Fn(usize) -> bool) {
+    let steps = lines.iter_mut().filter_map(|line| match line {
+        Line::Trace(trace) => Some(&mut trace.items),
+        _ => None,
     });
-    after_refusal || under_way
+    for item in steps.flatten() {
+        let TraceItem::Step(step) = item else {
+            continue;
+        };
+        match &mut step.opens {
+            Opens::Steps(tabs) => {
+                for tab in tabs.iter_mut().filter(|tab| waiting(tab.key)) {
+                    tab.running = false;
+                }
+                step.running &= tabs.iter().any(|tab| tab.running);
+            }
+            _ => step.running &= !waiting(step.key),
+        }
+    }
 }
 
 /// The steps of the turn under way, newest first, its thoughts left out: what the card and the
