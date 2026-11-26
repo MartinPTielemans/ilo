@@ -616,6 +616,7 @@ pub(crate) fn finish_opening(
         ),
         prompt.map(Into::into),
         reveal::open(shell.clone(), ui_view, cx),
+        edge_knot::open(shell.clone(), ui_view, cx),
     ]
     .into_iter()
     .flatten()
