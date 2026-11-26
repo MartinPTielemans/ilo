@@ -2888,14 +2888,18 @@ impl ImportView {
             .relative()
             .child(drawn("import-passwords".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
-        let row = row(
-            "From a file",
-            div()
-                .flex()
-                .gap(px(CONTROL_GAP))
-                .child(bookmarks)
-                .child(passwords)
-                .into_any_element(),
+        let row = crate::settings_rows::detailed_row(
+            look,
+            "Import a file",
+            "Bookmarks as HTML, passwords as CSV.",
+            Some(
+                div()
+                    .flex()
+                    .gap(px(CONTROL_GAP))
+                    .child(bookmarks)
+                    .child(passwords)
+                    .into_any_element(),
+            ),
         );
         let said = match self.sources.is_empty() {
             false => "Passwords come only from a file you export. Each browser's step says where.",

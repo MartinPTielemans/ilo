@@ -1609,6 +1609,20 @@ tile-body-line = 17.0
 note-top = 10.0
 note-x = 4.0
 
+[settings.sync]
+# Sync & Import's account row, 56 tall, the account's initial on a round tile 28 across, 12
+# before the address; a device's row 44, its glyph 16 and 10 before its name, its ✕ 12 on a
+# 26 plate, and the current device's empty slot as wide.
+account = 56.0
+tile = 28.0
+tile-text = 13.0
+tile-gap = 12.0
+device = 44.0
+device-glyph = 16.0
+device-gap = 10.0
+close = 12.0
+close-box = 26.0
+
 [shell]
 # The docked sidebar's width at first, where the card starts.
 sidebar-width = 228.0
