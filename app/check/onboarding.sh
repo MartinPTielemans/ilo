@@ -10,11 +10,11 @@
 # leaves out and another brings back, and Skip; Your favorites (3b), once an import offers sites;
 # Your first Space (4), whose → picks a swatch; Tidy tabs (5) while the core has the profile's
 # time; Other apps (6) while an agent program is found, whose command switch a launch in a made-up
-# home turns on and off, writing ilo's skill there and taking it away; and step 7, always last,
-# whose Help improve the dark pass turns on and off from the keyboard, and whose Start Browsing
-# leaves the card for the first Space with the command bar up. ↩ presses a step's main button; ⌘[
-# goes back a step, which the dark pass checks at the last; Esc and ⌘W leave the step as it is.
-# Make Default makes ilo the default for a moment only on
+# home turns on and off, writing the command's skill there and taking it away; and step 7, always
+# last, whose Help improve the dark pass turns on and off from the keyboard, and whose Start
+# Browsing leaves the card for the first Space with the command bar up. ↩ presses a step's main
+# button; ⌘[ goes back a step, which the dark pass checks at the last; Esc and ⌘W leave the step as
+# it is. Make Default makes ilo the default for a moment only on
 # a Linux CI VM, so the run never changes a desk's. Help › Welcome to ilo plays it again in first
 # run's window, whether the browser's shows a page or not. A launch that brings Spaces back never
 # starts it. Every other run sets BROWSER_ONBOARDING=skip (check.sh); this one sets the appearance
@@ -377,19 +377,27 @@ quit
 
 # The command's skill (first run's step 6), on the Mac and Linux, where the command's Add writes
 # one: a new profile in a made-up home of the run's own, with only Claude Code's folder, which the
-# app gets by HOME, as it does the command it links. The left switch, command, writes ilo's skill
-# there, only the user's to read, and turned off takes it and the skills folder it made away again.
-# The right switch, mcp, isn't clicked. Nothing looks into the run's own home.
+# app gets by HOME, as it does the command it links. The left switch, command, writes the command's
+# skill there, one folder named as the skill holding a file only the user may read, and turned off
+# takes it and the skills folder it made away again. The skill's name isn't spelled here: it is the
+# command's, which the build names. The right switch, mcp, isn't clicked: it would run Claude Code's
+# own setup. Nothing looks into the run's own home.
 if ! windows; then
   skill_home="$PWD/$out/onboarding-skill-home"
   rm -rf "$skill_home"
   mkdir -p "$skill_home/.claude"
-  skill_file="$skill_home/.claude/skills/ilo/SKILL.md"
-  # Waits up to 30 s for the skill's file to be $1, there or gone.
+  skills="$skill_home/.claude/skills"
+  skill_file=
+  # Waits up to 30 s for the skill's file to be $1: there, the one file in a folder under skills,
+  # which it keeps in skill_file; or gone.
   skill_is() {
     for _ in $(seq 300); do
       case $1 in
-        there) [ -f "$skill_file" ] && return 0 ;;
+        there)
+          set -- "$skills"/*/SKILL.md
+          [ $# -eq 1 ] && [ -f "$1" ] && skill_file=$1 && return 0
+          set -- there
+          ;;
         gone) [ ! -e "$skill_file" ] && return 0 ;;
       esac
       kill -0 "$pid" 2>/dev/null || return 1
@@ -413,14 +421,20 @@ if ! windows; then
   expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' \
     "skill: the command's switch didn't finish adding the command"
   logged '^browser: agent ilo-command connected$' || fail "skill: the command's switch didn't add the command"
-  skill_is there || fail "skill: the command's switch wrote no .claude/skills/ilo/SKILL.md"
+  skill_is there ||
+    fail "skill: the command's switch wrote no SKILL.md in a folder of .claude/skills"
+  entries=$(set -- "$skills"/*; echo $#)
+  [ "$entries" -eq 1 ] || fail "skill: .claude/skills holds $entries entries, not one folder"
+  skill_name=$(basename "$(dirname "$skill_file")")
   mode=$(stat -c %a "$skill_file" 2>/dev/null || stat -f %Lp "$skill_file")
-  [ "$mode" = 600 ] || fail "skill: .claude/skills/ilo/SKILL.md is mode $mode, not 600"
-  grep -q '^name: ilo$' "$skill_file" || fail "skill: .claude/skills/ilo/SKILL.md names no ilo"
+  [ "$mode" = 600 ] || fail "skill: .claude/skills/$skill_name/SKILL.md is mode $mode, not 600"
+  grep -Fqx "name: $skill_name" "$skill_file" ||
+    fail "skill: .claude/skills/$skill_name/SKILL.md doesn't name its folder, $skill_name"
   capture_step skill-6-on
   send click $(grep '^browser: onboarding command at ' "$log" | tail -1 | cut -d' ' -f5-6)
   expect '^browser: onboarding switch slid$' "skill: a second click on the command's switch didn't turn it back"
-  skill_is gone || fail "skill: turning the command's switch off left .claude/skills/ilo/SKILL.md"
+  skill_is gone ||
+    fail "skill: turning the command's switch off left .claude/skills/$skill_name/SKILL.md"
   for _ in $(seq 300); do
     [ -e "$skill_home/.claude/skills" ] || break
     sleep 0.1
@@ -517,4 +531,4 @@ expect '^browser: appearance automatic$' \
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking a swatch and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, the command's switch writing ilo's skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
+echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking a swatch and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, the command's switch writing its skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
