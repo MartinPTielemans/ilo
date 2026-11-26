@@ -10,29 +10,32 @@
 //! its tile grown to the area instead, at its own size, and the window shows the task's tab only
 //! once the user holds it (#3788). Nothing here runs for a window that shows no task.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, MouseButton, Pixels, SharedString, Size, Task,
-    Window, canvas, div, point, prelude::*, px, rgb, size,
+    Window, canvas, div, point, prelude::*, px, rgb, rgba, size,
 };
 
 use super::{
     CARD_INSET, Command, DialogKind, Folders, PagePicture, SIDEBAR_WIDTH, Shell, Space, SpaceEntry,
     Theme,
     agent_bar::Bar,
-    card, cubic_bezier,
+    card, card_outline, cubic_bezier,
     live_tiles::{LiveTiles, TILE_RADIUS, page_in},
     picture::next_request,
     task_cards::PageWord,
 };
 use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
+use crate::palette::Tone;
 use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST, PAGE_ROOM};
+use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT};
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -43,6 +46,10 @@ pub(super) struct TaskArea {
     /// A page of the task's that came to need the user while the one watched went back, which ilo
     /// opens once that one is in its thumbnail, never over it on its way.
     opens: Option<u64>,
+    /// The card the page's own outline was drawn round in the last frame, and where the agent's
+    /// ring was: what a test reads of the lines round the page watched.
+    outlined: Cell<Option<Bounds<Pixels>>>,
+    ringed: Cell<Option<Bounds<Pixels>>>,
 }
 
 /// A task's view as it stood when the user asked the window to close or the browser to quit,
@@ -472,6 +479,8 @@ impl Shell {
                     view,
                     page: None,
                     opens: None,
+                    outlined: Cell::default(),
+                    ringed: Cell::default(),
                 })
             }
         }
@@ -1613,6 +1622,8 @@ impl Shell {
                 talk.end_tiles(cx);
             }
         }
+        area.outlined.take();
+        area.ringed.take();
         let Some(page) = &area.page else {
             // Watched again, the page's place is logged again.
             self.task_page_at.set(None);
@@ -1641,10 +1652,14 @@ impl Shell {
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
+        if in_place {
+            layer = layer.child(self.watched_outline(place));
+        }
         // While the agent drives the page, its pointer's ring goes round it, in `primary`.
         let driving = in_place && self.task_drives(page.tab);
         if driving {
             let ring = place.dilate(px(RING));
+            self.ring_drawn(ring);
             layer = layer.child(
                 div()
                     .absolute()
@@ -1668,10 +1683,31 @@ impl Shell {
         Some(layer.into_any_element())
     }
 
+    /// The page's own outline round a watched page's card at `place`, as any page has it
+    /// (`Shell::cards`): outside it on its top, right and bottom in the tone's own ink, and none
+    /// on its left, where the conversation is beside it. The agent's ring is drawn over it.
+    fn watched_outline(&self, place: Bounds<Pixels>) -> gpui::Div {
+        let ink = match self.palette.tone {
+            Tone::Dark => PAGE_OUTLINE,
+            Tone::Light => PAGE_OUTLINE_LIGHT,
+        };
+        if let Some(area) = &self.task_area {
+            area.outlined.set(Some(place));
+        }
+        card_outline(place, self.card_radius(), Some(false), rgba(ink).into())
+    }
+
+    /// Notes where the agent's ring was drawn round the watched page.
+    fn ring_drawn(&self, at: Bounds<Pixels>) {
+        if let Some(area) = &self.task_area {
+            area.ringed.set(Some(at));
+        }
+    }
+
     /// What the area draws under a page watched in its tile, which the core draws over it: the
-    /// area's ground round the page, fading in as it zooms; the agent's ring round it while the
-    /// agent drives; and where the tile is, what takes a press on it, which takes the page over.
-    /// Nothing takes a scroll or a key there.
+    /// page's own outline and the area's ground round the page, fading in as it zooms; the agent's
+    /// ring round it while the agent drives; and where the tile is, what takes a press on it,
+    /// which takes the page over. Nothing takes a scroll or a key there.
     fn watch_tile_ground(
         &self,
         tab: u64,
@@ -1683,6 +1719,7 @@ impl Shell {
         let radius = self.card_radius();
         let ring = (zoom >= 1. && self.task_drives(tab)).then(|| {
             let ring = at.dilate(px(RING));
+            self.ring_drawn(ring);
             div()
                 .absolute()
                 .left(ring.left())
@@ -1693,6 +1730,8 @@ impl Shell {
                 .border(px(RING))
                 .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0))
         });
+        // A page full screen takes the window and has no edge to keep.
+        let outline = (!self.page_fullscreen).then(|| self.watched_outline(place).opacity(zoom));
         // Going back, the tile takes no press: the conversation's pictures under it do, as they do
         // under a page going back into its picture (#3496, #4267).
         let press = (!self.task_page_going_back()).then(|| {
@@ -1715,6 +1754,7 @@ impl Shell {
         div()
             .absolute()
             .size_full()
+            .children(outline)
             .child(card(place, radius, self.palette.page).opacity(zoom))
             .children(ring)
             .children(press)
