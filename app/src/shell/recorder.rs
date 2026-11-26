@@ -2143,6 +2143,10 @@ impl Browser for Recorder {
         self.record("first run ended".into())
     }
 
+    fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
+        self.record(format!("first run shaped {width} {height} {radius}"))
+    }
+
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
     fn shows_first_run_at_open(&self) -> bool {
         true

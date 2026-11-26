@@ -69,6 +69,12 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      all in one turn, then do each step on all of them in one turn, one call per tab with its \
      tab. Calls on different tabs run at the same time, so that's faster than one tab after \
      another.\n\n\
+     The tools that act on a page (open_tab, navigate, click, type, select, press_key, scroll, \
+     request, and each step in run_steps) take an optional `note`: a short reason for that step, \
+     at most 80 characters, which ",
+    env!("APP_NAME"),
+    " shows beside the step in the task's trace and which changes nothing about what the step \
+     may do.\n\n\
      When you need the user to choose or confirm something, call ask with the question in one \
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
@@ -118,7 +124,11 @@ pub fn list(agent: &str) -> Value {
     let mut tools = shared();
     if let Some(tools) = tools.as_array_mut() {
         match super::is_task(agent) {
-            true => tools.extend(task_tools()),
+            true => {
+                // Only the product's own threads, a helper's calls among them, say why a step.
+                noted(tools);
+                tools.extend(task_tools())
+            }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
             // from outside pins. It names its session as a task names itself (#3690), and says
             // when its task is done (#3652).
@@ -280,6 +290,67 @@ fn tab_schema() -> Value {
         "type": "integer",
         "description": "The tab's id, from list_tabs or open_tab. Give it whenever you have more than one tab: without it, the call takes the tab you used last, else your first."
     })
+}
+
+/// The tools that act on a page, each of whose calls, and each step of a run, may carry a `note`:
+/// the assistant's short reason for the step, which only the trace draws (`take_note`).
+pub const NOTED: [&str; 8] = [
+    "open_tab",
+    "navigate",
+    "click",
+    "type",
+    "select",
+    "press_key",
+    "scroll",
+    "request",
+];
+
+/// How much of a note the trace draws, in characters.
+pub const NOTE_MOST: usize = 80;
+
+/// Takes a call's or a run step's `note` out of its `arguments`, so nothing after this reads it:
+/// not the guard, the core, a log or the activity file. Where it may carry one (`noted`: a tool in
+/// `NOTED`, or any step of a run) it comes back made plain (`plain_note`), else empty, whatever
+/// was sent.
+pub fn take_note(noted: bool, arguments: &mut Value) -> String {
+    let note = (arguments.as_object_mut()).and_then(|arguments| arguments.remove("note"));
+    match (noted, note) {
+        (true, Some(Value::String(note))) => plain_note(&note),
+        _ => String::new(),
+    }
+}
+
+/// A note as the trace draws it: one line, without control or direction characters, its spaces
+/// one, cut at `NOTE_MOST` characters. Markup and addresses stay text, as the trace draws it.
+pub fn plain_note(note: &str) -> String {
+    // The marks that turn text's direction, which could make a note read as something else.
+    let turns = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    let kept: String = (note.chars())
+        .filter(|c| !turns(*c))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let line = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The ellipsis a cut note ends on is one of its characters.
+    match line.chars().count() > NOTE_MOST {
+        true => page::clip(&line, NOTE_MOST - 1),
+        false => line,
+    }
+}
+
+/// Each tool that acts on a page, and each of a run's steps, offered a note: why it takes it.
+fn noted(tools: &mut [Value]) {
+    let note = json!({ "type": "string", "description": "A short reason for this step, at most 80 characters." });
+    for tool in tools {
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+        let properties = match name {
+            "run_steps" => tool.pointer_mut("/inputSchema/properties/steps/items/properties"),
+            name if NOTED.contains(&name) => tool.pointer_mut("/inputSchema/properties"),
+            _ => None,
+        };
+        if let Some(properties) = properties.and_then(Value::as_object_mut) {
+            properties.insert("note".into(), note.clone());
+        }
+    }
 }
 
 /// The tools every agent may call.
@@ -753,6 +824,9 @@ pub struct Did {
     pub tab: Option<u64>,
     /// The address it was on or opened, without its scheme, as such a line says each tab.
     pub page: String,
+    /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
+    /// trace draws it: never a log, the activity file, a card or the kept list.
+    pub says: String,
 }
 
 /// The tool of a step that's a search the assistant's program made, by its provider's own search:
@@ -1110,7 +1184,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
-        "thought" => "icons/lightbulb.svg",
+        // Three dots, as the log draws a thought (spec-thread-stage.md).
+        "thought" => "icons/ellipsis.svg",
         SEARCHED => "icons/search.svg",
         _ => "icons/globe.svg",
     }
@@ -1244,5 +1319,60 @@ pub fn describe(action: &str) -> &'static str {
         super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
         super::fence::CAME_ACTION => super::fence::CAME_DONE,
         _ => "Acted",
+    }
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+
+    #[test]
+    fn a_note_is_offered_on_each_step_that_acts_on_a_page_and_no_other() {
+        let tools = list("task-1");
+        let noted = |name: &str| {
+            let tool = (tools.as_array().unwrap().iter())
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("no tool {name}"));
+            let properties = match name {
+                "run_steps" => &tool["inputSchema"]["properties"]["steps"]["items"]["properties"],
+                _ => &tool["inputSchema"]["properties"],
+            };
+            properties.get("note").is_some()
+        };
+        for name in NOTED.iter().chain(&["run_steps"]) {
+            assert!(noted(name), "{name} takes no note");
+        }
+        assert!(!noted("upload"), "upload takes no note");
+        let outside = list("claude-code").to_string();
+        assert!(
+            !outside.contains("\"note\""),
+            "an outside app's agent is offered no note"
+        );
+        assert!(!INSTRUCTIONS.contains("`note`") && TASK_INSTRUCTIONS.contains("`note`"));
+    }
+
+    #[test]
+    fn a_note_leaves_the_arguments_and_comes_back_plain() {
+        let mut arguments = json!({ "tab": 3, "note": "Line one\nline two\u{202E}" });
+        assert_eq!(take_note(true, &mut arguments), "Line one line two");
+        assert_eq!(
+            arguments,
+            json!({ "tab": 3 }),
+            "nothing after the entry reads it"
+        );
+        let mut arguments = json!({ "tab": 3, "note": "Not here" });
+        assert_eq!(
+            take_note(false, &mut arguments),
+            "",
+            "a tool without a note shows none"
+        );
+        assert_eq!(
+            arguments,
+            json!({ "tab": 3 }),
+            "and still doesn't pass it on"
+        );
+        let mut arguments = json!({ "tab": 3, "note": 7 });
+        assert_eq!(take_note(true, &mut arguments), "");
+        assert_eq!(plain_note(&"x".repeat(500)).chars().count(), NOTE_MOST);
     }
 }

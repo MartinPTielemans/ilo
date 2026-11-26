@@ -702,7 +702,7 @@ impl Account {
 
     /// The field open, the server's address or the recovery words, whose ↩ and esc are an input
     /// method's while it composes there (dismissal's rule).
-    fn open_field(&self) -> Option<Entity<TextInput>> {
+    pub(crate) fn open_field(&self) -> Option<Entity<TextInput>> {
         (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
     }
 

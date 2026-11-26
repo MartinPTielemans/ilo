@@ -3697,7 +3697,7 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
             "✓ Work on pages",
             "Full access",
             "- ",
-            &format!("- {NEVER_GETS}"),
+            &format!("- {}", super::choices::NEVER_GETS),
         ]
     );
     bar.pick(chosen, 2);

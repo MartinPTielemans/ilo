@@ -8,8 +8,7 @@ use gpui::{
     point, prelude::*, px, rgb, rgba,
 };
 
-use crate::agents::task::{Card, Dot, TaskAction, Word};
-use crate::agents::tier::Tier;
+use crate::agents::task::{Card, Dot, Word};
 use crate::command_bar::{self, CommandBar};
 use crate::palette::{Palette, Tone};
 use crate::product;
@@ -19,11 +18,7 @@ use crate::tokens::shell::composer::*;
 use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::text;
 
-use super::super::{
-    STATUS_AGENT, Shell,
-    menus::{MenuAction, MenuEntry},
-    task_area::covering,
-};
+use super::super::{STATUS_AGENT, Shell, task_area::covering};
 
 /// Over the cards.
 const LATEST: &str = "Pick up a thread";
@@ -51,7 +46,7 @@ fn hung_under(chip: Option<Bounds<Pixels>>, clicked: gpui::Point<Pixels>) -> gpu
 }
 
 /// The level's menu's last row, which opens Settings › Agents at Access.
-const SETTINGS: &str = "Settings…";
+pub(in crate::shell) const SETTINGS: &str = "Settings…";
 
 /// Why the field is owed the keyboard, if it is.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -238,36 +233,6 @@ impl Shell {
         if self.selected == over && self.space() == home && self.talk_agent().is_none() {
             self.show_task(agent, cx);
         }
-    }
-
-    /// The level chip's menu under a task's reply field, as the composer's: names only, the
-    /// task's level checked, and Settings. Only the user's pick here changes the task's level,
-    /// through the press its refusal's button makes; there's no agent path to it.
-    pub(in crate::shell) fn task_tier_menu(
-        &mut self,
-        agent: SharedString,
-        current: Tier,
-        chip: Option<Bounds<Pixels>>,
-        clicked: gpui::Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let press = |action: TaskAction| -> MenuAction {
-            let agent = agent.clone();
-            Box::new(move |shell, cx| shell.browser.task(agent, action, cx))
-        };
-        let mut items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
-            .map(|tier| {
-                (
-                    MenuEntry::named(tier.label(), true).checked(tier == current),
-                    press(TaskAction::PickTier(tier)),
-                )
-            })
-            .collect();
-        let none: fn() -> MenuAction = || Box::new(|_, _| {});
-        items.push((MenuEntry::line(), none()));
-        let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
-        items.push((MenuEntry::new(SETTINGS, true), settings));
-        self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 
     /// The page in the card at `frame`: the bar at the height ⌘T's opens at, the product's mark

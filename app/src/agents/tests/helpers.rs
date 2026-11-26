@@ -890,6 +890,33 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     }
 }
 
+/// A helper's noted step has its note on that helper's own line, which draws it under itself,
+/// never on the task's steps; the task's own noted step keeps its own.
+#[gpui::test]
+fn a_helpers_note_is_on_its_own_line_and_not_the_tasks(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("notes", cx);
+    pages(&run, 2);
+    helper(&run, &agent, "toolu_a", PAGES[0].0, cx);
+    let noted = |tab: u64, note: &str| json!({ "tab": tab, "direction": "down", "note": note });
+    let helpers = noted(PAGES[0].0, "Finding two seats together");
+    let _a = call(&run.agents, &agent, "scroll", helpers, cx);
+    let own = noted(PAGES[1].0, "Checking the stalls");
+    let _own = call(&run.agents, &agent, "scroll", own, cx);
+    let trace = live(&run, &agent, cx);
+    let says: Vec<(bool, &str)> = (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Helper { step, .. } => Some((true, step.says.as_ref())),
+            TraceItem::Step(step) => Some((false, step.says.as_ref())),
+            TraceItem::Said(_) => None,
+        })
+        .collect();
+    let wanted = [
+        (true, "Finding two seats together"),
+        (false, "Checking the stalls"),
+    ];
+    assert_eq!(says, wanted);
+}
+
 /// A card is made again whenever any task changes, so one of a task with helpers at work costs no
 /// fold of the task's conversation, and still says what the conversation's live line says: after a
 /// question the task asked and the user answered too, where the stretch under way starts again

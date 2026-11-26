@@ -1122,6 +1122,9 @@ pub trait Browser {
     /// Takes first run's `window` off screen and closes it, and puts the browser window it kept
     /// waiting at launch on screen.
     fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Keeps the system's glass and shadow round first run's card to its size and corners now,
+    /// as its entry grows it, where the host draws them.
+    fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32) {}
     /// First run's window opens on screen at once, for a host with no call that shows it.
     fn shows_first_run_at_open(&self) -> bool {
         false
