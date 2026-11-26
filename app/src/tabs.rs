@@ -399,7 +399,8 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
     browser::title_log::page(tab, &page.url);
     update_app(|cx| {
         browser::agents::tab_at(tab, &page.url, cx);
-        browser::agents::tab_state(tab, &page.url, page.loading, cx);
+        let fine = matches!(page.trouble, Trouble::Fine);
+        browser::agents::tab_state(tab, &page.url, page.loading, fine, cx);
     });
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));

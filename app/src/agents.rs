@@ -896,6 +896,9 @@ pub struct Agents {
     opened: HashSet<u64>,
     /// The closes waiting on their page's answer, by tab: one answer for each tab.
     closing: HashMap<u64, Vec<Closing>>,
+    /// The call whose page was still loading in each tab as it stopped waiting, by its task: an
+    /// open's or a navigate's step says it opened if that load then ends well.
+    loading_late: HashMap<u64, (String, u64)>,
     /// Why each session's page that left its agent's Space went, and whose it was, for that
     /// agent's next call on it (#3660).
     gone: HashMap<u64, (String, Gone)>,
@@ -1132,6 +1135,7 @@ impl Agents {
             current: HashMap::new(),
             opened: HashSet::new(),
             closing: HashMap::new(),
+            loading_late: HashMap::new(),
             gone: HashMap::new(),
             acting: HashMap::new(),
             describing: HashMap::new(),
@@ -3339,10 +3343,25 @@ impl Agents {
         self.held.insert(tab, held);
     }
 
-    /// `tab`'s address and whether it loads, as the core said them (tabs::tab_state_changed).
-    pub fn tab_state(&mut self, tab: u64, url: &str, loading: bool) {
+    /// `tab`'s address, whether it loads and whether its page is `fine`, as the core said them
+    /// (tabs::tab_state_changed).
+    pub fn tab_state(
+        &mut self,
+        tab: u64,
+        url: &str,
+        loading: bool,
+        fine: bool,
+        cx: &mut Context<Self>,
+    ) {
         let holding = self.held.contains_key(&tab);
         self.unkept.state(tab, url, loading, holding);
+        // The load a call stopped waiting for ended: well, at the site it was to open, or not.
+        if !loading
+            && let Some((key, call)) = self.loading_late.remove(&tab)
+            && fine
+        {
+            self.opened_late(&key, call, &site(url), cx);
+        }
     }
 
     /// `tab`'s main frame finished loading (tabs::tab_loaded).
@@ -3453,6 +3472,7 @@ impl Agents {
     /// agent or the browser didn't close, the user or its own page did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.unkept.closed(tab);
+        self.loading_late.remove(&tab);
         self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
@@ -4863,6 +4883,11 @@ impl Agents {
                 Ok(()) => return self.advance(cx),
                 Err(reply) => reply,
             };
+            if failure == Failure::Loading
+                && let Some(key) = self.tracer(&agent, call)
+            {
+                self.loading_late.insert(tab, (key, call));
+            }
             // As a page still loading: the agent can look at the tab it opened later (#1461).
             let text = match opened {
                 true => format!("{note} {text}"),
@@ -6086,10 +6111,13 @@ pub fn tab_at(tab: u64, url: &str, cx: &mut App) {
     }
 }
 
-/// The core's address for `tab` and whether it loads (tabs::tab_state_changed).
-pub fn tab_state(tab: u64, url: &str, loading: bool, cx: &mut App) {
+/// The core's address for `tab`, whether it loads and whether its page is `fine`
+/// (tabs::tab_state_changed).
+pub fn tab_state(tab: u64, url: &str, loading: bool, fine: bool, cx: &mut App) {
     if let Some(agents) = global(cx) {
-        agents.update(cx, |agents, _| agents.tab_state(tab, url, loading));
+        agents.update(cx, |agents, cx| {
+            agents.tab_state(tab, url, loading, fine, cx)
+        });
     }
 }
 
