@@ -3266,14 +3266,10 @@ outline-width = 1.0
 glyph = 16.0
 glyph-gap = 9.0
 title-line = 16.0
-# Row 2: the live line, small type on `live-line` in text-2 (the drawing's 12 is off the scale); a
-# done card's on `done-line`. Text-2 is a step stronger on a light window, where dark ink at 60%
-# over a light glass falls under the reading floor sooner.
+# Row 2: the live line, small type on `live-line` in text-2 (the drawing's 12 is off the scale).
+# Text-2 is a step stronger on a light window, where dark ink at 60% over a light glass falls
+# under the reading floor sooner; a line at rest takes it for its title.
 live-line = 15.0
-done-line = 16.0
-# A done card not yet seen: its finding wraps to at most `finding-lines` on `done-line`, its first
-# sentence in text, the rest in text-2.
-finding-lines = 3
 text-2 = 0.6
 text-2-light = 0.65
 # Row 3: its pages as icons `icon` square, `icon-gap` apart; text-3 is the quietest ink.

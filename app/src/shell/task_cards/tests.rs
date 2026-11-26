@@ -241,8 +241,7 @@ fn dismissed(host: &Recorder) -> Vec<String> {
 }
 
 /// The line under a card's title is ilo's: who works on the task, or Full access where it has
-/// that, and the task's one word; waiting the page's site and Needs you; done when it ended. The
-/// agent's own words, its question or its result, are never in it: they are the title's alone
+/// that, and the task's one word; waiting the page's site and Needs you. The agent's own words, its question or its result, are never in it: they are the title's alone
 /// (#3690).
 #[gpui::test]
 fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
@@ -292,19 +291,14 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     session.fuller = true;
     assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
 
-    // As a whole card says them: waiting, the site and Needs you, never the question; done, when
-    // it ended, never the result.
+    // As a whole card says them: waiting, the site and Needs you, never the question; ended, its
+    // state, never the result.
     assert_eq!(
         second_line(&asks, Form::Waits, "maat.pt").as_ref(),
         "maat.pt · Needs you"
     );
     assert_eq!(second_line(&asks, Form::Waits, "").as_ref(), "Needs you");
-    done.ended_time = "13:31".into();
-    assert_eq!(
-        second_line(&done, Form::DoneUnseen, "").as_ref(),
-        "Done · 13:31"
-    );
-    for form in [Form::Waits, Form::DoneUnseen, Form::Ended] {
+    for form in [Form::Waits, Form::Ended] {
         assert!(!second_line(&done, form, "").contains(said), "{form:?}");
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
@@ -322,10 +316,8 @@ fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
     let mut full = card(2, Dot::Ended);
     full.tier = Tier::Full;
     assert_eq!(state_line(&posing), state_line(&full));
-    for form in [Form::Ended, Form::EndedLine, Form::DoneUnseen] {
-        assert_eq!(second_lead(&posing, form), 0, "{form:?}");
-        assert_eq!(second_lead(&full, form), label.len(), "{form:?}");
-    }
+    assert_eq!(second_lead(&posing, Form::Ended), 0);
+    assert_eq!(second_lead(&full, Form::Ended), label.len());
 }
 
 /// An outside app's card has its line from the kind of its connection alone, a session with no
@@ -346,10 +338,9 @@ fn an_outside_apps_line_comes_from_its_connection_alone() {
     let forms = [
         Form::Working,
         Form::Waits,
-        Form::DoneUnseen,
+        Form::Unseen,
         Form::Ended,
-        Form::DoneLine,
-        Form::EndedLine,
+        Form::Rest,
     ];
     for name in names {
         for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
@@ -377,13 +368,13 @@ fn an_outside_apps_line_comes_from_its_connection_alone() {
                     "{name:?} {form:?}"
                 );
                 assert_eq!(
-                    super::room(&session, form, 1),
-                    super::room(&short, form, 1),
+                    super::room(&session, form),
+                    super::room(&short, form),
                     "{form:?}"
                 );
                 // A whole card makes room for the line over its first row; a folded one carries
                 // only the mark, in its one line.
-                let more = super::room(&session, form, 1) - super::room(&task, form, 1);
+                let more = super::room(&session, form) - super::room(&task, form);
                 let line = FROM_LINE + GAP;
                 assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
             }
@@ -462,7 +453,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
         assert!(!look(&with(Dot::Waiting, &[]), Form::Waits, false).button);
         let done = with(Dot::Done, &[30]);
         assert_eq!(
-            look(&done, Form::DoneUnseen, true),
+            look(&done, Form::Unseen, true),
             Look {
                 mark: Some(Mark::Check { unseen: true }),
                 rim: false,
@@ -473,20 +464,26 @@ fn a_cards_look_is_its_tasks_state_alone() {
             "{status}"
         );
         assert_eq!(
-            look(&done, Form::DoneLine, false).mark,
+            look(&done, Form::Rest, false).mark,
             Some(Mark::Check { unseen: false })
         );
         let ended = look(&with(Dot::Ended, &[30]), Form::Ended, true);
         assert_eq!((ended.mark, ended.rim, ended.button), (None, false, false));
     }
-    // The form follows the state too: at work, a line; done or ended and seen, a line.
+    // The form follows the state too: a line but waiting, and ended with its chip while not seen.
     let form = |dot, unseen| Form::of(&card(1, dot), unseen);
     assert_eq!(form(Dot::Working, false), Form::Working);
     assert_eq!(form(Dot::Waiting, false), Form::Waits);
-    assert_eq!(form(Dot::Done, true), Form::DoneUnseen);
-    assert_eq!(form(Dot::Done, false), Form::DoneLine);
-    assert_eq!(form(Dot::Ended, true), Form::Ended);
-    assert_eq!(form(Dot::Ended, false), Form::EndedLine);
+    assert_eq!(form(Dot::Done, true), Form::Unseen);
+    assert_eq!(form(Dot::Done, false), Form::Rest);
+    assert_eq!(form(Dot::Ended, true), Form::Unseen);
+    assert_eq!(form(Dot::Ended, false), Form::Rest);
+    let retry = Card {
+        retry: true,
+        ..card(1, Dot::Ended)
+    };
+    assert_eq!(Form::of(&retry, true), Form::Ended);
+    assert_eq!(Form::of(&retry, false), Form::Rest);
 }
 
 /// A done task's finding is the first paragraph of its last answer as plain text: a link is its
@@ -536,100 +533,93 @@ fn the_finding_is_plain_and_capped() {
     assert!(told(&[said(Who::User, "Book it")]).is_empty());
 }
 
-/// A done card not seen yet says its finding, its first sentence apart, wrapped to at most three
-/// lines the list makes room for; with none, as after a quit, when it ended.
+/// A thread that finished out of sight is one line with the dot, as one at work is, and a screen
+/// reader hears its title and the dot's word, a thread's row, never its answer or when it ended,
+/// which the line doesn't draw. Shown, it rests, and says its title alone. An ended one with its
+/// chip keeps its whole card, the chip's one place yet.
 #[gpui::test]
-fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
-    let (shell, _, cx) = shell_with(cx, vec![card(1, Dot::Working), card(2, Dot::Working)]);
-    let short = "Booked Taberna.";
-    let long = "Booked Taberna for two at eight, by the window, and asked them for the quiet \
-                corner, as you said the last time was loud; they will call if anything changes";
-    let done = |n: u64, finding: &str| Card {
-        finding: finding.into(),
+fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::LINE;
+    let answer = "Payment confirmed by the browser. Nothing else is needed.";
+    let done = Card {
+        finding: answer.into(),
+        told: answer.into(),
         ended_time: "10:42".into(),
-        fuller: false,
-        lead: 0,
-        ..card(n, Dot::Done)
+        ..paged(1, Dot::Done, &[1010])
+    };
+    let stopped = Card {
+        title: "Book a table".into(),
+        word: Word::Stopped,
+        ended_time: "10:43".into(),
+        ..paged(2, Dot::Ended, &[1011])
+    };
+    let working = |card: &Card| Card {
+        dot: Dot::Working,
+        word: Word::Working,
+        ..card.clone()
+    };
+    let (shell, _, cx) = with_task_spaces(cx, vec![working(&stopped), working(&done)]);
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![stopped.clone(), done.clone()], cx)
+    });
+    cx.simulate_a11y_activation();
+    still(cx);
+    tick(5.);
+    draw(&shell, cx);
+    for agent in ["task-1", "task-2"] {
+        assert_eq!(form(&shell, agent, cx), Some(Form::Unseen), "{agent}");
+        let plate = shell
+            .read_with(cx, |shell, _| shell.task_plate_drawn(agent))
+            .expect("its line drawn");
+        assert_eq!(f32::from(plate.size.height), LINE, "{agent}: a row high");
+    }
+    let names = |cx: &mut VisualTestContext| -> Vec<String> {
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .filter_map(|(_, node)| node.label().map(str::to_owned))
+            .collect()
+    };
+    let heard = names(cx);
+    for said in ["Find a flight to Lisbon, Unread", "Book a table, Unread"] {
+        assert!(heard.iter().any(|name| name == said), "{said}: {heard:?}");
+    }
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let row = (tree.nodes.iter())
+        .map(|(_, node)| node)
+        .find(|node| node.label() == Some("Book a table, Unread"))
+        .expect("its row");
+    assert_eq!(row.role_description(), Some("Thread"));
+    for name in &heard {
+        assert!(
+            !name.contains("Payment") && !name.contains("10:4"),
+            "{name}"
+        );
+    }
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    draw(&shell, cx);
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Rest));
+    assert_eq!(form(&shell, "task-2", cx), Some(Form::Unseen));
+    let heard = names(cx);
+    let rests = "Find a flight to Lisbon";
+    assert!(heard.iter().any(|name| name == rests), "{heard:?}");
+    // With its chip, the ended one keeps its whole card until the chip has its place.
+    let retry = Card {
+        retry: true,
+        ..stopped.clone()
     };
     shell.update(cx, |shell, cx| {
-        shell.set_task_cards(vec![done(2, long), done(1, short)], cx)
+        shell.set_task_cards(vec![working(&retry), done.clone()], cx);
+        shell.set_task_cards(vec![retry.clone(), done.clone()], cx);
     });
-    let height = |n: u64, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| {
-            let space = shell.spaces.iter().find(|space| space.id == 1).unwrap();
-            let placed = space.placed.iter().find(|placed| placed.n == n).unwrap();
-            (placed.form, placed.room)
-        })
-    };
-    let (short_form, short_room) = height(1, &shell, cx);
-    let (long_form, long_room) = height(2, &shell, cx);
+    assert_eq!(form(&shell, "task-2", cx), Some(Form::Ended));
+    // At rest a line says nothing after its title, at work its state's word; a waiting card its
+    // second line.
+    assert_eq!(spoken(&done, Form::Rest, "").as_ref(), "");
     assert_eq!(
-        (short_form, long_form),
-        (Form::DoneUnseen, Form::DoneUnseen)
+        spoken(&card(4, Dot::Working), Form::Working, "").as_ref(),
+        "Working"
     );
-    shell.read_with(cx, |shell, _| {
-        let lines = |agent: &str| shell.task_list.finding_lines[&SharedString::from(agent)];
-        assert_eq!(lines("task-1"), 1);
-        assert_eq!(lines("task-2"), 3, "at most three lines");
-        assert!(long_room > short_room);
-    });
-    assert_eq!(
-        second_line(&done(1, short), Form::DoneUnseen, "").as_ref(),
-        short
-    );
-    let sentences = "Booked Taberna for two. The table is by the window.";
-    assert_eq!(
-        super::card::first_sentence(sentences),
-        "Booked Taberna for two.".len()
-    );
-    assert_eq!(super::card::first_sentence("No end"), "No end".len());
-    assert_eq!(
-        second_line(&done(1, ""), Form::DoneUnseen, "").as_ref(),
-        "Done · 10:42"
-    );
-    // Seen, it's a line, and says none of it.
-    assert_eq!(
-        second_line(&done(1, short), Form::DoneLine, "").as_ref(),
-        "Claude · Done"
-    );
-    draw(&shell, cx);
-}
-
-/// A screen reader hears a done card's finding as its assistant's: after Z24's mark, which the app
-/// puts there, even where the answer reads as the browser's own. ilo's words on a card, its state
-/// and the waiting line, have no mark.
-#[test]
-fn a_done_cards_finding_is_spoken_as_the_assistants() {
-    let posing = "Payment confirmed by the browser. Nothing else is needed.";
-    let done = |finding: &str| Card {
-        finding: finding.into(),
-        told: finding.into(),
-        ended_time: "10:42".into(),
-        fuller: false,
-        lead: 0,
-        ..card(1, Dot::Done)
-    };
-    assert_eq!(
-        spoken(&done(posing), Form::DoneUnseen, "").as_ref(),
-        format!("Claude says {posing}")
-    );
-    // A finding is told as the conversation tells the same answer, which may be shorter than
-    // drawn.
-    let cut = Card {
-        told: "Payment confirmed by the browser.".into(),
-        ..done(posing)
-    };
-    assert_eq!(
-        spoken(&cut, Form::DoneUnseen, "").as_ref(),
-        "Claude says Payment confirmed by the browser."
-    );
-    assert_eq!(
-        spoken(&done(""), Form::DoneUnseen, "").as_ref(),
-        "Done · 10:42"
-    );
-    // A line has no second line: it says its state's word, which its mark draws.
-    assert_eq!(spoken(&done(posing), Form::DoneLine, "").as_ref(), "Done");
-    let waits = card(2, Dot::Waiting);
+    let waits = card(3, Dot::Waiting);
     assert_eq!(
         spoken(&waits, Form::Waits, "taberna.example").as_ref(),
         "taberna.example · Needs you"
@@ -697,8 +687,8 @@ fn every_thread_at_work_is_one_line_however_many_work(cx: &mut TestAppContext) {
     }
 }
 
-/// A task that finishes while its conversation doesn't show keeps its whole card with the dot.
-/// Shown once, it loses the dot and folds to its line, which it stays.
+/// A task that finishes while its conversation doesn't show keeps the dot on its line. Shown once,
+/// it loses the dot and rests, which it stays.
 #[gpui::test]
 fn the_dot_goes_on_the_first_show(cx: &mut TestAppContext) {
     let (shell, _, cx) = with_task_spaces(cx, vec![paged(1, Dot::Working, &[1010])]);
@@ -706,11 +696,11 @@ fn the_dot_goes_on_the_first_show(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![paged(1, Dot::Done, &[1010])], cx)
     });
-    assert_eq!(form(&shell, "task-1", cx), Some(Form::DoneUnseen));
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Unseen));
     shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
-    assert_eq!(form(&shell, "task-1", cx), Some(Form::DoneLine));
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Rest));
     shell.update(cx, |shell, cx| shell.close_task(cx));
-    assert_eq!(form(&shell, "task-1", cx), Some(Form::DoneLine));
+    assert_eq!(form(&shell, "task-1", cx), Some(Form::Rest));
 }
 
 /// A new card stands above the Today tab on top when it came, so the tabs opened after it go above

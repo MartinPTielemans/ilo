@@ -1,7 +1,7 @@
 //! A task's card in Today's list, the one place the list puts it (spec-thread-card). Whole, it is
 //! an outlined card: its mark and title, a line in ilo's words under them, and its pages or its one
-//! button under that. As a line, at work or seen, it is a tab's line: its mark and title, with no
-//! fill or outline but the shown thread's shape (#4095). Its rim, mark and button come from its
+//! button under that. As a line, at work, finished or at rest, it is a tab's line: its mark and
+//! title, with no fill or outline but the shown thread's shape (#4095). Its rim, mark and button come from its
 //! task's state alone; the title is the only words of the assistant's on it.
 
 use gpui::{
@@ -21,10 +21,10 @@ use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, DONE_LINE, DOT, FILL, FROM_INK, FROM_LINE,
-    FROM_MARK, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_X, LIVE_LINE, ON_PRIMARY,
-    ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2,
-    TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, DOT, FILL, FROM_INK, FROM_LINE, FROM_MARK,
+    GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT,
+    OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3,
+    TEXT_3_LIGHT, TITLE_LINE, UNDER,
 };
 use crate::tokens::text;
 
@@ -37,37 +37,22 @@ fn needs_you(site: &str) -> SharedString {
     }
 }
 
-/// A done card's second line, with no finding: when it ended (Z6, after the wording pass). With
-/// it, how much of it is its lead (`second`).
-fn done_at(card: &Card) -> (SharedString, usize) {
-    match card.ended_time.is_empty() {
-        true => state(card),
-        false => (format!("Done · {}", card.ended_time).into(), 0),
-    }
-}
+/// What the dot on a finished thread's line says: its answer hasn't been looked at here (words
+/// table, N2).
+pub(super) const UNREAD: &str = "Unread";
 
-/// Where `text`'s first sentence ends: after its first `.`, `!` or `?` that ends a word, or at its
-/// end.
-pub(super) fn first_sentence(text: &str) -> usize {
-    let ends = text.char_indices().find(|&(at, c)| {
-        matches!(c, '.' | '!' | '?') && text[at + c.len_utf8()..].starts_with(' ')
-    });
-    ends.map_or(text.len(), |(at, c)| at + c.len_utf8())
-}
+/// What a thread's row is called after its name and state, as a tab's is called a tab (N3).
+pub(super) const THREAD: &str = "Thread";
 
-/// What a card says to the screen reader after its title: a line, which draws its state as its
-/// mark, the state's word; a whole card its second line as drawn, but a finding, the assistant's
-/// words, comes after Z24's mark, so it's never heard as the browser's, and as the conversation
-/// tells the same answer: cut at a whole word, as nothing marks a cut in speech.
+/// What a card says to the screen reader after its title, as drawn (N3): at work the state's
+/// word, which its mark draws; finished and not seen, the dot's word alone; at rest nothing; a
+/// whole card its second line.
 pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
-    if form.line() {
-        return card.word.after_name().into();
-    }
-    let line = second_line(card, form, site);
-    match form == Form::DoneUnseen && !card.finding.is_empty() {
-        true if !card.told.is_empty() => words::says(&card.name, &card.told).into(),
-        true => words::says(&card.name, &line).into(),
-        false => line,
+    match form {
+        Form::Working => card.word.after_name().into(),
+        Form::Unseen => UNREAD.into(),
+        Form::Rest => SharedString::default(),
+        form => second_line(card, form, site),
     }
 }
 
@@ -88,8 +73,6 @@ pub(super) fn second_lead(card: &Card, form: Form) -> usize {
 fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
     match form {
         Form::Waits => (needs_you(site), 0),
-        Form::DoneUnseen if !card.finding.is_empty() => (card.finding.clone(), 0),
-        Form::DoneUnseen => done_at(card),
         _ => state(card),
     }
 }
@@ -132,7 +115,7 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
         mark: mark(card.dot, unseen),
         rim: form == Form::Waits,
         button: form == Form::Waits && !card.pages.is_empty(),
-        dot: form == Form::DoneUnseen,
+        dot: form == Form::Unseen,
         from: outside(card),
     }
 }
@@ -270,7 +253,7 @@ impl Shell {
         let opacity = coming.map_or(1., |ease| ease.at(now));
         let line = placed.form.line();
         let body = match line {
-            true => self.card_line(card, framed == Framed::Own),
+            true => self.card_line(card, placed.form, framed == Framed::Own),
             false => self.card_whole(card, placed.form, cx),
         };
         // A whole card's outline keeps its room in its stage's colour; a line has none.
@@ -323,6 +306,11 @@ impl Shell {
         );
         let frame = self
             .strip_stop(frame, StripStop::Header(n), name, RADIUS)
+            .when(self.a11y, |frame| {
+                frame.a11y_synthetic_children(|builder| {
+                    builder.parent_node().set_role_description(THREAD)
+                })
+            })
             .child(drawn)
             .child(body)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -429,8 +417,8 @@ impl Shell {
             )
     }
 
-    /// A card's title on its line: one line, cut with an ellipsis.
-    fn card_title(&self, card: &Card, weight: FontWeight) -> impl IntoElement + use<> {
+    /// A card's title on its line in `ink`: one line, cut with an ellipsis.
+    fn card_title(&self, card: &Card, weight: FontWeight, ink: Hsla) -> impl IntoElement + use<> {
         div()
             .flex_1()
             .min_w_0()
@@ -438,7 +426,7 @@ impl Shell {
             .text_size(px(text::BODY))
             .line_height(px(TITLE_LINE))
             .font_weight(weight)
-            .text_color(self.palette.text(TITLE))
+            .text_color(ink)
             .child(card.title.clone())
     }
 
@@ -456,56 +444,37 @@ impl Shell {
 
     /// A whole card's rows: the mark and title, ilo's line, and its pages or its button.
     fn card_whole(&self, card: &Card, form: Form, cx: &mut Context<Self>) -> AnyElement {
-        let unseen = form == Form::DoneUnseen || form == Form::Ended;
+        let unseen = form == Form::Ended;
         let (text_2, text_3) = self.card_inks();
         let width = if form == Form::Waits {
             RIM_WIDTH
         } else {
             OUTLINE_WIDTH
         };
-        let dot = look(card, form, unseen).dot.then(|| {
-            div()
-                .flex_none()
-                .size(px(DOT))
-                .rounded_full()
-                .bg(Hsla::from(self.palette.ink))
-        });
         let first = div()
             .h(px(TITLE_LINE))
             .flex()
             .items_center()
             .gap(px(GLYPH_GAP))
             .child(self.card_mark(card.dot, unseen))
-            .child(self.card_title(card, FontWeight::SEMIBOLD))
-            .children(dot);
+            .child(self.card_title(card, FontWeight::SEMIBOLD, self.palette.text(TITLE)));
         let words = self.said(card, form);
-        let finding = form == Form::DoneUnseen && !card.finding.is_empty();
-        let second = match finding {
-            true => self.card_finding(card, text_2).into_any_element(),
-            false => {
-                let lead = second_lead(card, form);
-                let line = match form {
-                    Form::DoneUnseen => DONE_LINE,
-                    _ => LIVE_LINE,
-                };
-                let led = HighlightStyle {
-                    color: Some(self.palette.text(TITLE)),
-                    font_weight: Some(FontWeight::MEDIUM),
-                    ..HighlightStyle::default()
-                };
-                div()
-                    .h(px(line))
-                    .truncate()
-                    .text_size(px(text::SMALL))
-                    .line_height(px(line))
-                    .text_color(text_2)
-                    .child(match lead {
-                        0 => StyledText::new(words),
-                        lead => StyledText::new(words).with_highlights([(0..lead, led)]),
-                    })
-                    .into_any_element()
-            }
+        let lead = second_lead(card, form);
+        let led = HighlightStyle {
+            color: Some(self.palette.text(TITLE)),
+            font_weight: Some(FontWeight::MEDIUM),
+            ..HighlightStyle::default()
         };
+        let second = div()
+            .h(px(LIVE_LINE))
+            .truncate()
+            .text_size(px(text::SMALL))
+            .line_height(px(LIVE_LINE))
+            .text_color(text_2)
+            .child(match lead {
+                0 => StyledText::new(words),
+                lead => StyledText::new(words).with_highlights([(0..lead, led)]),
+            });
         let third = self.card_third(card, form, cx);
         let from = outside(card).then(|| self.from_line(card, text_3));
         div()
@@ -521,33 +490,9 @@ impl Shell {
             .into_any_element()
     }
 
-    /// A done card's finding, the agent's own words: its first sentence in the title's ink and the
-    /// rest in text-2, wrapped to the lines the list made room for and cut there. No word of it is
-    /// set heavier, as ilo's lead is, so it can't pose as ilo's.
-    fn card_finding(&self, card: &Card, text_2: Hsla) -> impl IntoElement + use<> {
-        let lines = (self.task_list.finding_lines.get(&card.agent))
-            .copied()
-            .unwrap_or(1);
-        let words = card.finding.clone();
-        let first = first_sentence(&words);
-        let ink = HighlightStyle {
-            color: Some(self.palette.text(TITLE)),
-            ..HighlightStyle::default()
-        };
-        div()
-            .h(px(DONE_LINE * lines as f32))
-            .overflow_hidden()
-            .text_size(px(text::SMALL))
-            .line_height(px(DONE_LINE))
-            .text_color(text_2)
-            .line_clamp(lines)
-            .text_ellipsis()
-            .child(StyledText::new(words).with_highlights([(0..first, ink)]))
-    }
-
     /// A whole card's third row, if it has one: waiting the page it waits on and Show Page, which
     /// isn't drawn while that page is the one shown, the row as high without it so the list stays
-    /// where it is; done or ended the pages it visited, and an ended task's chip.
+    /// where it is; ended the pages it visited and its chip.
     fn card_third(&self, card: &Card, form: Form, cx: &mut Context<Self>) -> Option<AnyElement> {
         let row = || div().flex().items_center().gap(px(ICON_GAP));
         let visited = || {
@@ -591,20 +536,10 @@ impl Shell {
                     .children(button);
                 Some(row.into_any_element())
             }
-            Form::DoneUnseen if !card.visited.is_empty() => {
-                Some(row().h(px(ICON)).children(visited()).into_any_element())
-            }
             Form::Ended => {
                 let chip = chip(card).map(|chip| self.card_chip(card, chip, cx));
-                if chip.is_none() && card.visited.is_empty() {
-                    return None;
-                }
                 let row = row()
-                    .h(px(if chip.is_some() {
-                        CHIP_HEIGHT.max(ICON)
-                    } else {
-                        ICON
-                    }))
+                    .h(px(CHIP_HEIGHT.max(ICON)))
                     .children(visited())
                     .child(div().flex_1())
                     .children(chip);
@@ -645,11 +580,25 @@ impl Shell {
 
     /// A card as one line, a tab's: its mark and its title, set heavier while its thread is the
     /// one shown, as the open tab's is.
-    fn card_line(&self, card: &Card, shown: bool) -> AnyElement {
+    fn card_line(&self, card: &Card, form: Form, shown: bool) -> AnyElement {
         let weight = match shown {
             true => FontWeight::SEMIBOLD,
             false => FontWeight::NORMAL,
         };
+        // At rest the title steps down to text-2, as a thread that needs nothing more; shown, it
+        // reads on its stage as the shown tab's does.
+        let ink = match form == Form::Rest && !shown {
+            true => self.card_inks().0,
+            false => self.palette.text(TITLE),
+        };
+        let unseen = form == Form::Unseen;
+        let dot = unseen.then(|| {
+            div()
+                .flex_none()
+                .size(px(DOT))
+                .rounded_full()
+                .bg(Hsla::from(self.palette.ink))
+        });
         // An outside app's mark at the right; its name is the line's tooltip and spoken label, not
         // drawn.
         let from = outside(card).then(|| from_mark(&self.palette));
@@ -659,8 +608,9 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(GLYPH_GAP))
-            .child(self.card_mark(card.dot, false))
-            .child(self.card_title(card, weight))
+            .child(self.card_mark(card.dot, unseen))
+            .child(self.card_title(card, weight, ink))
+            .children(dot)
             .children(from)
             .into_any_element()
     }

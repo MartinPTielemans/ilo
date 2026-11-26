@@ -46,8 +46,7 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
-    LINE, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, FROM_LINE, GAP, ICON, LINE, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -180,17 +179,19 @@ impl PageWord {
 }
 
 /// A card's form, from its task's state alone and whether its conversation has shown since it
-/// finished. A thread at work is one line however many work, as a tab is (#4095).
+/// finished. A thread is one line, as a tab is, however many work (#4095).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Form {
     /// At work: one line.
     Working,
     Waits,
-    DoneUnseen,
-    /// Stopped, interrupted or at its limit, and not yet seen.
+    /// Finished and not seen since: one line with the dot, an answer's title in the text's ink.
+    Unseen,
+    /// Stopped, interrupted or at its limit, not yet seen, with its chip: the whole card, until
+    /// the chip has its place in the conversation.
     Ended,
-    DoneLine,
-    EndedLine,
+    /// Done and seen, or stopped, interrupted or at its limit and seen: one line at rest.
+    Rest,
 }
 
 impl Form {
@@ -198,36 +199,27 @@ impl Form {
         match (card.dot, unseen) {
             (Dot::Working, _) => Form::Working,
             (Dot::Waiting, _) => Form::Waits,
-            (Dot::Done, true) => Form::DoneUnseen,
-            (Dot::Done, false) => Form::DoneLine,
-            (Dot::Ended, true) => Form::Ended,
-            (Dot::Ended, false) => Form::EndedLine,
+            (Dot::Ended, true) if chip(card).is_some() => Form::Ended,
+            (Dot::Done | Dot::Ended, true) => Form::Unseen,
+            (Dot::Done | Dot::Ended, false) => Form::Rest,
         }
     }
 
     pub(super) fn line(self) -> bool {
-        matches!(self, Form::Working | Form::DoneLine | Form::EndedLine)
+        !matches!(self, Form::Waits | Form::Ended)
     }
 }
 
 /// The room a card in `form` takes in the list: a line's, a tab row's, against the rows beside it
 /// as a tab's is; a whole card's, the room under it with it: its padding, its title's line, its
-/// second line, or a finding's `lines`, and, where it has one, its third, a gap between each.
-fn room(card: &Card, form: Form, lines: usize) -> f32 {
+/// second line, and, where it has one, its third, a gap between each.
+fn room(card: &Card, form: Form) -> f32 {
     if form.line() {
         return LINE;
     }
-    let second = match form {
-        Form::DoneUnseen => DONE_LINE * lines as f32,
-        _ => LIVE_LINE,
-    };
-    let pages = !card.pages.is_empty();
-    let visited = !card.visited.is_empty();
     let third = match form {
-        Form::Waits if pages => BUTTON_HEIGHT,
-        Form::DoneUnseen if visited => ICON,
-        Form::Ended if chip(card).is_some() => CHIP_HEIGHT.max(ICON),
-        Form::Ended if visited => ICON,
+        Form::Waits if !card.pages.is_empty() => BUTTON_HEIGHT,
+        Form::Ended => CHIP_HEIGHT.max(ICON),
         _ => 0.,
     };
     let third = if third > 0. { GAP + third } else { 0. };
@@ -235,24 +227,7 @@ fn room(card: &Card, form: Form, lines: usize) -> f32 {
         true => FROM_LINE + GAP,
         false => 0.,
     };
-    2. * PADDING + from + TITLE_LINE + GAP + second + third + UNDER
-}
-
-/// How many lines a card's `finding` takes in a list `width` wide, at most FINDING_LINES: what
-/// the card's second row has to its right, at small type.
-fn finding_lines(finding: &str, width: f32, cx: &gpui::App) -> usize {
-    if finding.is_empty() {
-        return 1;
-    }
-    let room = width - 2. * PLATE_INSET - 2. * PADDING - CARD_GLYPH - GLYPH_GAP;
-    let font = gpui::font(crate::face::UI);
-    let mut wrapper = cx
-        .text_system()
-        .line_wrapper(font, px(crate::tokens::text::SMALL));
-    let fragments = [gpui::LineFragment::text(finding)];
-    let indent = gpui::IndentAdjustment::NoIndent;
-    let breaks = wrapper.wrap_line(&fragments, px(room), indent).count();
-    (breaks + 1).min(FINDING_LINES as usize)
+    2. * PADDING + from + TITLE_LINE + GAP + LIVE_LINE + third + UNDER
 }
 
 /// The room ⌘T's slot takes: a line at work's, so nothing moves as the task's line takes it.
@@ -369,7 +344,7 @@ pub(super) struct TaskList {
     fill: Ease,
     content: Ease,
     /// Tasks that finished while their conversation didn't show and that it hasn't shown since,
-    /// whose cards stay whole, with the dot.
+    /// whose lines carry the dot.
     unseen: HashSet<SharedString>,
     /// When each finished task was last seen, on the shell's clock, which the Today tabs' ageing
     /// counts from.
@@ -395,8 +370,6 @@ pub(super) struct TaskList {
     pub(super) strip_open: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When the ring's turns began.
     epoch: Instant,
-    /// How many lines each card's finding takes at the sidebar's width at rest, by its task.
-    pub(super) finding_lines: HashMap<SharedString, usize>,
 }
 
 impl Default for TaskList {
@@ -418,7 +391,6 @@ impl Default for TaskList {
             rested: Rc::default(),
             strip_open: Rc::default(),
             epoch: clock(),
-            finding_lines: HashMap::new(),
         }
     }
 }
@@ -486,8 +458,8 @@ impl Shell {
                 // check.sh reads this line: a title is one line, written out (#3690).
                 log!("browser: task card {} titled {}", card.agent, card.title);
             }
-            // A task that finishes out of sight keeps its whole card until its conversation shows;
-            // one that comes finished, brought back after a quit, has been seen.
+            // A task that finishes out of sight keeps the dot until its conversation shows; one
+            // that comes finished, brought back after a quit, has been seen.
             let ended = |dot: Dot| matches!(dot, Dot::Done | Dot::Ended);
             match (was.map(|was| ended(was.dot)), ended(card.dot)) {
                 (Some(false), true) if shown.as_ref() != Some(&card.agent) => {
@@ -594,8 +566,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// The page area shows another task's view, or none: a finished card shown loses its dot and
-    /// folds to its line.
+    /// The page area shows another task's view, or none: a finished thread shown loses its dot.
     pub(super) fn reshape_cards(&mut self, cx: &mut Context<Self>) {
         self.place_cards(cx);
     }
@@ -618,14 +589,8 @@ impl Shell {
         let before = self.layout();
         let homes: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let regular = !self.one_space();
-        let width = self.sidebar_width;
-        self.task_list.finding_lines = (self.task_cards.iter())
-            .filter(|card| !card.finding.is_empty())
-            .map(|card| (card.agent.clone(), finding_lines(&card.finding, width, cx)))
-            .collect();
         let shown = self.space;
         let list = &self.task_list;
-        let lines = |agent: &SharedString| list.finding_lines.get(agent).copied().unwrap_or(1);
         for space in &mut self.spaces {
             let listed: Vec<&Card> = (self.task_cards.iter())
                 .filter(|card| regular && lists_in(card, space.id, &homes))
@@ -643,7 +608,7 @@ impl Shell {
                         above: stood.map_or(top, |was| was.above),
                         lead: away.then_some(0),
                         form,
-                        room: room(card, form, lines(&card.agent)),
+                        room: room(card, form),
                     }
                 })
                 .collect();
