@@ -3389,6 +3389,16 @@ pause-top = 5.6
 pause-bottom = 10.4
 pause-left = 6.3
 pause-right = 9.7
+# An outside app's card (spec-thread-card, "An outside app's card, told from a thread's"): a line
+# over row 1, `from-line` tall and a `gap` above it, of the product's mark, `from-mark` square in
+# the glyph's column, stroked `from-stroke` in the ink at `from-ink`, then the app's name in small
+# type, text-3, one line, its rows' inset from the inner left edge. Folded, the mark sits
+# `from-mark-gap` before the page's icon, at the line's right.
+from-line = 14.0
+from-mark = 12.0
+from-stroke = 1.2
+from-ink = 0.6
+from-mark-gap = 6.0
 
 [shell.task-card.motion]
 # Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. The ring

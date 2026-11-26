@@ -280,6 +280,48 @@ pub(super) fn paint_mark(mark: Mark, bounds: Bounds<Pixels>, inks: MarkInks, win
     }
 }
 
+/// The outside app's mark, in a box of `from-mark` (the drawing's 12): a rounded square, and a
+/// prompt's chevron and a short line inside it.
+const FROM_SQUARE: (f32, f32, f32, f32, f32) = (1.1, 1.6, 9.8, 8.8, 2.4);
+const FROM_CHEVRON: [(f32, f32); 3] = [(3.7, 4.6), (5.3, 6.), (3.7, 7.4)];
+const FROM_LINE: [(f32, f32); 2] = [(6.6, 7.5), (8.4, 7.5)];
+
+/// Paints the product's mark for an outside app's session in `bounds`, its box, in `colour`. It's
+/// drawn from the kind of connection alone, so nothing the app says draws it.
+pub(super) fn paint_from_mark(bounds: Bounds<Pixels>, colour: Hsla, window: &mut Window) {
+    use crate::tokens::shell::task_card::FROM_STROKE as STROKE;
+    let at = |(x, y): (f32, f32)| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+    // A quad's border lies inside its bounds, so the square's are grown by half the stroke for it
+    // to lie on the drawing's outline.
+    let (x, y, width, height, radius) = FROM_SQUARE;
+    let square = Bounds::new(
+        at((x - STROKE / 2., y - STROKE / 2.)),
+        gpui::size(px(width + STROKE), px(height + STROKE)),
+    );
+    window.paint_quad(quad(
+        square,
+        px(radius + STROKE / 2.),
+        transparent_black(),
+        px(STROKE),
+        colour,
+        BorderStyle::Solid,
+    ));
+    for points in [&FROM_CHEVRON[..], &FROM_LINE[..]] {
+        let mut path = PathBuilder::stroke(px(STROKE));
+        path.move_to(at(points[0]));
+        for &each in &points[1..] {
+            path.line_to(at(each));
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, colour);
+        }
+        // Round caps and joins, as the stroke has none of its own.
+        for &end in points {
+            dot(at(end), STROKE / 2., colour, window);
+        }
+    }
+}
+
 fn dot(middle: Point<Pixels>, radius: f32, colour: Hsla, window: &mut Window) {
     let square = Bounds::new(
         point(middle.x - px(radius), middle.y - px(radius)),
