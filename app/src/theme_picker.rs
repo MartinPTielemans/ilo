@@ -1494,7 +1494,7 @@ impl Render for ThemePicker {
                 [] => rgb(NO_COLOR).into(),
                 [one] => rgb(*one).into(),
                 [first, second, ..] => linear_gradient(
-                    135.,
+                    DISC_ANGLE,
                     linear_color_stop(rgb(*first), 0.),
                     linear_color_stop(rgb(*second), 1.),
                 ),
@@ -1561,7 +1561,7 @@ impl Render for ThemePicker {
             .size_full()
             .rounded(px(PAD_RADIUS))
             .bg(linear_gradient(
-                180.,
+                SHADE_ANGLE,
                 // The shade fades in from none of it.
                 linear_color_stop(Hsla::from(rgba(SHADE)).opacity(0.), SHADE_FROM),
                 linear_color_stop(rgba(SHADE), 1.),
@@ -1811,7 +1811,7 @@ impl Render for ThemePicker {
                                 fill(
                                     part(0., INTENSITY_FULL),
                                     linear_gradient(
-                                        90.,
+                                        TRACK_ANGLE,
                                         linear_color_stop(at_alpha(first, INTENSITY_FROM), 0.),
                                         linear_color_stop(at_alpha(first, 1.), 1.),
                                     ),
@@ -1822,7 +1822,7 @@ impl Render for ThemePicker {
                                 fill(
                                     part(INTENSITY_FULL, 1.),
                                     linear_gradient(
-                                        90.,
+                                        TRACK_ANGLE,
                                         linear_color_stop(rgb(first), 0.),
                                         linear_color_stop(rgb(second), 1.),
                                     ),
@@ -1839,22 +1839,22 @@ impl Render for ThemePicker {
                                 fill(
                                     part(GLASS_SOLID, 1.),
                                     linear_gradient(
-                                        90.,
+                                        TRACK_ANGLE,
                                         linear_color_stop(rgb(GLASS_FROM), 0.),
                                         linear_color_stop(rgb(GLASS_TO), 1.),
                                     ),
                                 )
                                 .corner_radii(right_round),
                             );
-                            // Panes of glass, fading in to the clear end, as drawn: dashes 4
-                            // long, 4 apart, in three rows, the middle one a dash along.
-                            for (row, shift) in [(0., 0.), (1., 4.), (2., 0.)] {
+                            // Panes of glass in three rows, the middle one a dash along.
+                            for (row, shift) in [(0., 0.), (1., GLASS_DASH), (2., 0.)] {
                                 let mut x = shift;
                                 while x < track_length {
-                                    let along = ((x - 20.) / (track_length - 20.)).clamp(0., 1.);
+                                    let along = ((x - GLASS_FADE) / (track_length - GLASS_FADE))
+                                        .clamp(0., 1.);
                                     let dash = Bounds::new(
-                                        o + point(px(x), px(row * 4.)),
-                                        size(px(4f32.min(track_length - x)), px(4.)),
+                                        o + point(px(x), px(row * GLASS_DASH)),
+                                        size(px(GLASS_DASH.min(track_length - x)), px(GLASS_DASH)),
                                     );
                                     window.paint_quad(fill(
                                         dash,
@@ -1863,7 +1863,7 @@ impl Render for ThemePicker {
                                             GLASS_LINES * along,
                                         ),
                                     ));
-                                    x += 8.;
+                                    x += 2. * GLASS_DASH;
                                 }
                             }
                         }

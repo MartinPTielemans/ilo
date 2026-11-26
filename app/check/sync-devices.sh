@@ -375,9 +375,15 @@ busy_commits=$(commits)
 busy_kept=$(kept)
 busy_sent=$(sent_lines)
 busy_started=$(now_ms)
+# Archiving A's only tab above left its window with no page, so the first ⌘T gives its resting bar
+# the keyboard, and each after it, with a page there, opens the command bar.
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  if [ "$i" = 1 ]; then
+    resting_key t "device A window"
+  else
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  fi
   send insert "${site}login.html?busy-$i"
   send key return
 done

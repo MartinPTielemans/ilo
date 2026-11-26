@@ -66,7 +66,7 @@ impl Agents {
         let Some(task) = self.task(agent) else {
             return;
         };
-        let kept = self.tasks.kept.of(agent).is_some() && !self.tasks.kept.off;
+        let kept = self.tasks.kept.of(agent).is_some();
         if !kept || last_tab(task, &self.pages(task, cx)) != Some(tab) {
             return;
         }
@@ -77,14 +77,14 @@ impl Agents {
     /// `agent`'s kept task is Done: its card's line and its last page's picture go to its card's
     /// folder, written off the UI's thread, the picture only if the last one its conversation took
     /// of that page could have been given to an agent, and the page still could be now. Nothing
-    /// with the switch off, nor for a task with no row, as one deleted from the Archive: its card
-    /// stays as it was while ⌘Z can bring it back, and goes when it goes for good. A failed write
-    /// leaves the card as it was and says nothing.
+    /// for a task with no row, as one deleted from the Archive: its card stays as it was while ⌘Z
+    /// can bring it back, and goes when it goes for good. A failed write leaves the card as it was
+    /// and says nothing.
     fn keep_card(&mut self, agent: &str, cx: &mut Context<Self>) {
         let (Some(root), Some(task)) = (self.cards_root(), self.task(agent)) else {
             return;
         };
-        if self.tasks.kept.off || !self.tasks.kept.listed().any(|listed| listed == agent) {
+        if !self.tasks.kept.listed().any(|listed| listed == agent) {
             return;
         }
         let Some(card) = (self.tasks.kept.of(agent)).map(|record| record.card.clone()) else {
@@ -123,22 +123,6 @@ impl Agents {
         self.tasks.card_jobs.ask(job, cx.background_executor());
     }
 
-    /// Settings › Agents' Keep finished tasks so you can reply.
-    pub fn keeps_tasks(&self) -> bool {
-        !self.tasks.kept.off
-    }
-
-    /// The switch. Off, a new task's run keeps nothing; what's kept stays until it's removed,
-    /// which Settings offers as it's turned off.
-    pub fn set_keeps_tasks(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on != self.tasks.kept.off {
-            return;
-        }
-        self.tasks.kept.off = !on;
-        self.save();
-        cx.notify();
-    }
-
     /// How many finished tasks ilo holds a conversation's id for, and how many of them the last
     /// try couldn't remove.
     pub fn kept_tasks(&self) -> (usize, usize) {
@@ -157,7 +141,7 @@ impl Agents {
         let keep = match self.tasks.kept.of(agent) {
             Some(record) if record.gone || walled => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, self.keeps_tasks(), walled),
+            None => kept::decide(cli, walled),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -258,6 +242,8 @@ impl Agents {
             record.resumed.push((said, back));
         }
         self.tasks.picked_up.insert(agent.to_string(), was);
+        // Its card's line and picture are of the turn before; the reply's own replace them.
+        self.tasks.came_back.remove(agent);
         self.kept_under_way(agent);
         if let Some(task) = self.task_mut(agent) {
             task.tier = back;
@@ -320,8 +306,8 @@ impl Agents {
     /// that its assistant still has them, and over a reply that took a task up at another access
     /// or after a quit (`pick_up`), the access it came back at. Then, last, the line that stands in
     /// the reply field's place once a task is done, stopped, or failed as its conversation went,
-    /// and can't take a reply: its assistant keeps none, didn't keep this one as the switch was
-    /// off, or no longer has it. One that ended in this run with its conversation kept has no
+    /// and can't take a reply: its assistant keeps none, didn't keep this one as it has files, or
+    /// no longer has it. One that ended in this run with its conversation kept has no
     /// line: its messages are there, over its reply field. An outside agent's session has none.
     pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
@@ -385,9 +371,9 @@ impl Agents {
                 match kept::keeps(cli) {
                     Keeps::Never => IloKind::KeepsNothing,
                     // Remove All took it from under the task.
-                    Keeps::WhenWanted if self.tasks.kept.had(&task.agent) => IloKind::Gone,
-                    // The task started while Settings' switch was off.
-                    Keeps::WhenWanted => IloKind::NotKept,
+                    Keeps::Always if self.tasks.kept.had(&task.agent) => IloKind::Gone,
+                    // The task has files, so its assistant kept none (wall.rs).
+                    Keeps::Always => IloKind::NotKept,
                 },
             )),
         }
@@ -554,11 +540,11 @@ impl Agents {
 
     /// The tasks a run before left that haven't been brought back, the last to end first, as the
     /// composer's Latest tasks lists them until one is opened: each as its card, which has its
-    /// title and how it ended and no more, and for its home the user's Space of the profile it was
+    /// title, how it ended, and the line and picture its kept card read back, and for its home the user's Space of the profile it was
     /// asked in, by which a window lists those of the profile in front alone. One whose
     /// conversation takes no reply, or whose profile has no Space of the user's, is in the
     /// Archive alone, as is one older than the newest a profile's composer has room for. Made
-    /// from what a launch already holds: nothing is read for it, and no tool of an agent's
+    /// from what a launch already holds: nothing is read for it here, and no tool of an agent's
     /// reaches it.
     pub fn kept_cards(&self, cx: &App) -> Vec<Card> {
         let mut left: Vec<&Task> = (self.tasks.kept.listed())
@@ -588,11 +574,10 @@ impl Agents {
                     return None;
                 }
                 *listed += 1;
-                // Its head says when it ended; no line follows, as no run keeps its answer or
-                // its steps.
+                // Its head says when it ended; its line is the one its kept card read back, if
+                // any, as no run keeps its answer or its steps.
                 Some(Card {
                     home: *home,
-                    line: None,
                     ended_at: task
                         .ended
                         .map(|at| crate::agents::time_or_day(seconds(at)).into()),
@@ -611,6 +596,8 @@ impl Agents {
         };
         // Its run ends first, so nothing writes the conversation back.
         task.process = None;
+        // Its card's line and picture go with its card.
+        self.tasks.came_back.remove(agent);
         self.remove_copies(agent, cx);
         let task = agent.to_string();
         self.remove_kept(
@@ -623,6 +610,7 @@ impl Agents {
     pub(in crate::agents) fn forget_kept(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.tasks.picked_up.remove(agent);
         self.tasks.card_tiles.remove(agent);
+        self.tasks.came_back.remove(agent);
         let task = agent.to_string();
         self.remove_kept(
             move |record| record.task.as_deref() == Some(task.as_str()),
@@ -665,7 +653,8 @@ impl Agents {
             cx,
         );
         // Every card goes, a task's at work too: it has none to show until it's done, and is
-        // written again then.
+        // written again then. What was read back of them goes from the cards shown.
+        self.tasks.came_back.clear();
         if let Some(root) = self.cards_root() {
             (self.tasks.card_jobs).ask(cards::Job::RemoveAll(root), cx.background_executor());
         }
@@ -681,8 +670,14 @@ impl Agents {
     /// From `load`, which the app calls once the first window's UI has shown, so none of this is
     /// in the time to the first frame. With no file of ids, as on every launch after a run that
     /// kept nothing, the one look for the file is all a launch pays: nothing is read, started or
-    /// spawned.
+    /// spawned. Then what the launch's cleanup already found of their runs' places is theirs.
     pub(crate) fn take_old_kept(&mut self, cx: &mut Context<Self>) {
+        self.take_kept_file(cx);
+        self.tasks.kept_taken = true;
+        self.came_clean(Vec::new(), cx);
+    }
+
+    fn take_kept_file(&mut self, cx: &mut Context<Self>) {
         let (Some(root), Some(cards_root)) = (self.kept_root(), self.cards_root()) else {
             return;
         };
@@ -696,11 +691,15 @@ impl Agents {
         }
         let mut left = self.tasks.kept.left();
         left.truncate(KEPT.saturating_sub(self.tasks.dismissed.len()));
+        let mut reading = Vec::new();
         // The Archive lists the last to leave the foot first, so the oldest joins it first.
         for (id, cli, past) in left.iter().rev() {
             self.tasks.next += 1;
             let agent = format!("task-{}", self.tasks.next);
             self.tasks.kept.give(id, &agent);
+            if let Some(card) = self.tasks.kept.card_of(id) {
+                reading.push((agent.clone(), card));
+            }
             self.tasks.dismissed.push_back(agent.clone());
             let helpers = self.helpers_on() && *cli == Cli::Claude;
             (self.tasks.tasks).push(Task::past(agent, *cli, past, helpers));
@@ -711,8 +710,47 @@ impl Agents {
             cx.notify();
         }
         self.remove_kept(|record| record.task.is_none(), cx);
-        let sweep = cards::Job::Sweep(cards_root, self.tasks.kept.cards());
+        let sweep = cards::Job::Sweep(cards_root.clone(), self.tasks.kept.cards());
         self.tasks.card_jobs.ask(sweep, cx.background_executor());
+        // Each card brought back is read after the sweep, off the UI's thread: until it's read,
+        // the card draws its title alone.
+        if reading.is_empty() {
+            return;
+        }
+        let (answer, read) = futures::channel::oneshot::channel();
+        let ids = reading.iter().map(|(_, card)| card.clone()).collect();
+        let job = cards::Job::Read(cards_root, ids, answer);
+        self.tasks.card_jobs.ask(job, cx.background_executor());
+        cx.spawn(async move |agents, cx| {
+            let Ok(read) = read.await else { return };
+            _ = agents.update(cx, |agents, cx| agents.cards_read(reading, read, cx));
+        })
+        .detach();
+    }
+
+    /// The cards a launch read back: each to its task, if it's still one a run before left that
+    /// no reply has taken up, and holds that card.
+    fn cards_read(
+        &mut self,
+        reading: Vec<(String, cards::CardId)>,
+        read: Vec<(cards::CardId, cards::Back)>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut came = false;
+        for ((agent, card), (id, back)) in reading.into_iter().zip(read) {
+            let holds = (self.tasks.kept.of(&agent)).is_some_and(|record| record.card == card);
+            let left = (self.task(&agent)).is_some_and(|task| task.from_before() && ended(task));
+            if card != id || !holds || !left || self.tasks.picked_up.contains_key(&agent) {
+                continue;
+            }
+            if back.line.is_some() || back.plate.is_some() {
+                self.tasks.came_back.insert(agent, back);
+                came = true;
+            }
+        }
+        if came {
+            cx.notify();
+        }
     }
 
     /// Removes the conversations `which` picks, off the UI's thread, as each waits on its
@@ -888,6 +926,8 @@ impl Task {
             files: crate::agents::files::Given::default(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
+            restart: None,
             copying: false,
             names: crate::agents::files::Names::default(),
         }

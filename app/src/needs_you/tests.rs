@@ -38,6 +38,7 @@ fn opened(cx: &mut TestAppContext) -> Rc<Recorder> {
 
 fn card(agent: &str, name: &str, dot: Dot) -> Card {
     Card {
+        kept_picture: None,
         agent: agent.to_string().into(),
         home: 1,
         space: 3,
@@ -61,6 +62,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }

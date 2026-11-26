@@ -119,10 +119,10 @@ pub enum Nowhere {
 /// Whether an assistant's runs can be kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeps {
-    /// Never: each run keeps nothing, whatever is wanted.
+    /// Never: each run keeps nothing.
     Never,
-    /// When a run is wanted kept.
-    WhenWanted,
+    /// Each run that can be: one with no files (`decide`).
+    Always,
 }
 
 /// The table: one row for each assistant.
@@ -130,20 +130,19 @@ pub const fn keeps(cli: Cli) -> Keeps {
     match cli {
         // Its print-mode conversations stay out of its own history in a terminal, in a folder of
         // ilo's that no terminal is in.
-        Cli::Claude => Keeps::WhenWanted,
+        Cli::Claude => Keeps::Always,
         // Until a run shows its app-server's threads stay out of its own history in a terminal.
         Cli::Codex => Keeps::Never,
     }
 }
 
-/// What a new run of `cli` keeps. `wanted` is why it would be kept at all: today Settings ›
-/// Agents' switch alone. A `walled` run, a task's with files, keeps nothing whatever is wanted:
-/// its assistant can't write where it keeps conversations. The runner is told only what comes
-/// of it, never the reason.
-pub fn decide(cli: Cli, wanted: bool, walled: bool) -> Keep {
-    match (keeps(cli), wanted && !walled) {
-        (Keeps::WhenWanted, true) => Keep::New(Id::new()),
-        (Keeps::WhenWanted, false) | (Keeps::Never, _) => Keep::Nothing,
+/// What a new run of `cli` keeps: nothing the user sets decides it. A `walled` run, a task's
+/// with files, keeps nothing: its assistant can't write where it keeps conversations. The runner
+/// is told only what comes of it, never the reason.
+pub fn decide(cli: Cli, walled: bool) -> Keep {
+    match (keeps(cli), walled) {
+        (Keeps::Always, false) => Keep::New(Id::new()),
+        (Keeps::Always, true) | (Keeps::Never, _) => Keep::Nothing,
     }
 }
 
@@ -263,6 +262,9 @@ pub struct Record {
     /// The user's replies that took the task up again, each by how many messages of theirs came
     /// before it and the access it came back at: ilo's line goes over each.
     pub resumed: Vec<(usize, Tier)>,
+    /// The names of the places its runs left something running in, each until a later launch's
+    /// sweep of it comes clean: a place's name alone, never its mark, a process or a path.
+    pub left: Vec<String>,
     /// Its removal is under way.
     removing: bool,
     /// Its removal failed: it's still there, for the user to try again.
@@ -273,10 +275,8 @@ pub struct Record {
 #[derive(Debug, Default)]
 pub struct Kept {
     records: Vec<Record>,
-    /// Settings › Agents' Keep finished tasks, off.
-    pub off: bool,
     /// The tasks whose conversation was removed from under them, as Remove All does: each had
-    /// one, where a task that started with the switch off never did, and the two say so apart.
+    /// one, where a task with files never did, and the two say so apart.
     removed_from: Vec<String>,
 }
 
@@ -333,6 +333,7 @@ impl Kept {
             nowhere: None,
             gone: false,
             resumed: Vec::new(),
+            left: Vec::new(),
             removing: false,
             stuck: false,
         });
@@ -403,6 +404,15 @@ impl Kept {
             .collect()
     }
 
+    /// The sweep of `place` came clean: the row that carried its name no longer does. None if no
+    /// row did; else that row's task, if it has one.
+    pub fn came_clean(&mut self, place: &str) -> Option<Option<String>> {
+        let record = (self.records.iter_mut())
+            .find(|record| record.left.iter().any(|each| each == place))?;
+        record.left.retain(|each| each != place);
+        Some(record.task.clone())
+    }
+
     /// A removal ended: the id goes if the conversation did, else it stays, marked.
     pub fn removed(&mut self, id: &Id, removed: bool) {
         match removed {
@@ -451,6 +461,15 @@ impl Kept {
                     .take(TITLE)
                     .collect();
                 record.past = Some(Past { title, end, at });
+                // Names a place is made with, and nothing else.
+                let left = (each
+                    .get("left")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten())
+                .filter_map(Value::as_str)
+                .filter(|name| super::wall::leftovers::is_name(name));
+                record.left = left.map(String::from).collect();
             }
         }
         true
@@ -476,6 +495,9 @@ impl Kept {
                     row["ended"] = json!(past.at);
                     row["profile"] = json!(record.profile);
                     row["card"] = json!(record.card.as_str());
+                    if !record.left.is_empty() {
+                        row["left"] = json!(record.left);
+                    }
                 }
                 row
             })

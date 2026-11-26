@@ -1191,7 +1191,6 @@ impl Agents {
         }))
         .collect();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -2225,17 +2224,12 @@ impl Agents {
             "done" if !is_task(&agent) => {
                 let said = self.said_done(&agent, id, cx);
                 match &said {
-                    Ok(text) if text.starts_with("Your task") => {
-                        self.note(&agent, connection, "done", "", "")
-                    }
-                    Err(why) => self.note(&agent, connection, "done", "", why),
-                    Ok(_) => {}
+                    task::SaidDone::Ended => self.note(&agent, connection, "done", "", ""),
+                    task::SaidDone::UnderWay(why) => self.note(&agent, connection, "done", "", why),
+                    task::SaidDone::NoTask => {}
                 }
                 cx.notify();
-                _ = reply.send(match said {
-                    Ok(text) => ToolResult::text(text),
-                    Err(why) => ToolResult::error(why),
-                });
+                _ = reply.send(said.answer());
             }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
@@ -2490,13 +2484,16 @@ impl Agents {
     }
 
     /// Whether the agent may call tools: a client the user connected, while other apps' agents are
-    /// on, or a thread not dropped, while threads are.
+    /// on, or a thread not dropped, while threads are. A thread whose start waits on the sweep of
+    /// its run before has no run, so nothing calls for it.
     fn may_call(&self, agent: &str) -> bool {
         match (server::side(agent), Client::from_id(agent)) {
             (Some(server::Side::Outside), Some(client)) => {
                 self.is_connected(client) && self.other_apps()
             }
-            (Some(server::Side::Inside), _) => self.threads() && self.task(agent).is_some(),
+            (Some(server::Side::Inside), _) => {
+                self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
+            }
             _ => false,
         }
     }
@@ -5458,7 +5455,6 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
-            "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({

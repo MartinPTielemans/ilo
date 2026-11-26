@@ -72,6 +72,7 @@ use browser::tokens::text;
 
 mod assistants;
 mod new_thread;
+mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -298,6 +299,9 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The loose ends Overview's ✕ put away, read from the profile's folder at Overview's first
+    /// draw, never at launch, when the search's index makes Settings.
+    put_away: Option<browser::settings_overview::PutAway>,
     /// The assistants the user clicked on Models while the inside switch is off, looked up and
     /// shown as usual until the page is left.
     looked_up: HashSet<Cli>,
@@ -1195,6 +1199,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            put_away: None,
             looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),
@@ -3883,8 +3888,8 @@ impl Settings {
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Under the inside switch, while it's on: whether a finished one is kept (#4105).
-        let keeps = on.then(|| self.kept_tasks(agents, accent, cx));
+        // Under the inside switch, while it's on: what is kept of them (#4105).
+        let keeps = on.then(|| self.kept_tasks(agents, cx));
         // And under that, each one kept, which is the list of what is.
         let kept = match on {
             true => self.kept_rows(agents, cx),
@@ -4481,47 +4486,27 @@ impl Settings {
         cx.notify();
     }
 
-    /// Keep finished tasks: its switch, how many ilo holds a conversation's id for, which isn't a
-    /// promise each still takes a reply, and Remove All…, which asks first, as nothing brings a
-    /// conversation back. Turning it off offers the same. The line under it says what is kept and
-    /// where, then names who keeps none, from kept.rs's table.
-    fn kept_tasks(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+    /// What is kept of the threads, which no setting turns off: the row is named by how many ilo
+    /// holds a conversation's id for, which isn't a promise each still takes a reply, and has
+    /// Remove All…, which asks first, as nothing brings a conversation back. With none the row
+    /// stays, so what a Remove All did can be seen.
+    fn kept_tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
-        let model = agents.read(cx);
-        let (kept, stuck) = model.kept_tasks();
-        let switch = {
-            let agents = agents.clone();
-            let set = move |on, cx: &mut App| {
-                agents.update(cx, |agents, cx| agents.set_keeps_tasks(on, cx));
-                if !on && kept > 0 {
-                    ask_remove_kept(agents.clone(), kept, None, cx);
-                }
-            };
-            self.toggle(
-                "keep tasks",
-                KEEP_TASKS,
-                model.keeps_tasks(),
-                set,
-                accent,
-                cx,
-            )
-        };
-        let count = (kept > 0).then(|| {
-            let said = match stuck {
-                0 => format!("{kept} kept"),
-                // Every id held is counted, so those are among them.
-                stuck => format!("{kept} kept · {stuck} of them couldn't be removed"),
-            };
+        let (kept, stuck) = agents.read(cx).kept_tasks();
+        let (name, removes) = browser::settings_rows::kept_row(kept);
+        // Every id held is counted, so those are among them.
+        let stuck = (stuck > 0).then(|| {
+            let said = format!("{stuck} of them couldn't be removed");
             div().text_color(look.detail).child(said).into_any_element()
         });
-        let remove = (kept > 0).then(|| {
+        let remove = removes.then(|| {
             let agents = agents.clone();
             self.button("remove-kept-tasks", REMOVE_ALL)
                 .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
                 .into_any_element()
         });
-        let controls = count.into_iter().chain(remove).chain([switch]).collect();
-        nested(setting(look, KEEP_TASKS, Some(KEPT_WHERE.into()), controls))
+        let controls = stuck.into_iter().chain(remove).collect();
+        nested(setting(look, name, Some(KEPT_AS.into()), controls))
     }
 
     /// The finished tasks kept, the last to end first, each by its title and the Archive's own
@@ -4556,12 +4541,12 @@ impl Settings {
     ) {
         let (message, detail, action) = match kept {
             1 => (
-                "Remove 1 finished thread?".to_string(),
+                "Remove 1 thread?".to_string(),
                 "The conversation is removed from this computer.".to_string(),
                 REMOVE,
             ),
             kept => (
-                format!("Remove {kept} finished threads?"),
+                format!("Remove {kept} threads?"),
                 "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),
@@ -5845,11 +5830,10 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
-/// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
-/// has no task in the list, which says it.
-const KEEP_TASKS: &str = "Keep finished threads so you can reply";
-const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
+/// The line under Settings › Agents' row for the threads kept (table KT2), and the buttons: a
+/// kept task's own, and the one for them all. An assistant that keeps none has no task in the
+/// list, which says it.
+const KEPT_AS: &str = "Threads are kept as you saw them. Your assistant keeps the conversation.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
@@ -6323,6 +6307,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
+            Section::Overview => self.overview(cx),
             Section::General => {
                 let profiles = profiles();
                 let general = self.general(&profiles, accent, cx);

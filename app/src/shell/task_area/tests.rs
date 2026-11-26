@@ -1225,6 +1225,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
     watching(&shell, &host, cx);
     let card = |dot: Dot| Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -1248,6 +1249,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1586,6 +1588,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     use crate::agents::task::{Card, Dot, Word};
     let (shell, _, cx) = shell_with_task(cx);
     let card = |dot: Dot, status: &str| Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -1609,6 +1612,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1653,7 +1657,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![done.clone()], cx));
     assert_eq!(
         says(&shell, cx),
-        ("Claude finished".into(), "gulbenkian.pt".into(), false)
+        ("Claude, done".into(), "gulbenkian.pt".into(), false)
     );
     // Of the pages it left, the strip opens the page shown alone, and has nothing once it moved.
     let open = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
@@ -1993,6 +1997,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
     let (shell, _host, cx) = shell_with_task(cx);
     still(cx);
     let card = |steps: &[(u64, &str)]| Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -2018,6 +2023,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2056,6 +2062,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         (31, "Handing you boxoffice.example"),
     ];
     let card = Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -2081,6 +2088,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         ended_at: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2264,6 +2272,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     use crate::agents::task::{Card, Dot, Word};
     still(cx);
     let card = Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -2287,6 +2296,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };

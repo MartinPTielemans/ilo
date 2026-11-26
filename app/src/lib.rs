@@ -271,6 +271,7 @@ pub mod safe_start;
 pub mod saved_reads;
 pub mod settings_card;
 pub mod settings_column;
+pub mod settings_overview;
 pub mod settings_pictures;
 pub mod settings_rows;
 pub mod settings_search;

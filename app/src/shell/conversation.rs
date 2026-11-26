@@ -34,6 +34,7 @@ use super::{
 };
 use crate::agents::Status;
 use crate::agents::files::words as files_words;
+use crate::agents::kept::cards::Plate;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
@@ -368,20 +369,18 @@ impl Shell {
         }
     }
 
-    /// The composer's Latest tasks, at most `most`: the tasks the user talks to here, the newest
-    /// first, then those a run before left in the profile in front, which no other profile's
-    /// Space lists, as one comes back only in its own.
+    /// The composer's Latest tasks, at most `most`: the tasks the user talks to whose home is the
+    /// Space in front, the newest first, then those a run before left there, never another
+    /// Space's. A card's home is the browser's own record of where it was asked, and a run
+    /// before's is its profile's Space of the user's (`Agents::kept_cards`).
     pub(super) fn latest_tasks(&self, most: usize) -> Vec<Card> {
-        let profile = |space: u64| {
-            let space = self.spaces.iter().find(|each| each.id == space);
-            space.map(|space| space.profile)
+        let Some(here) = self.shown_space().map(|space| space.id) else {
+            return Vec::new();
         };
-        let here = self.shown_space().map(|space| space.profile);
-        let kept =
-            (self.kept_cards.iter()).filter(|card| here.is_some() && profile(card.home) == here);
         (self.task_cards.iter())
             .filter(|card| card.replies)
-            .chain(kept)
+            .chain(&self.kept_cards)
+            .filter(|card| card.home == here)
             .take(most)
             .cloned()
             .collect()
@@ -583,8 +582,18 @@ impl Shell {
             .extend(gone.into_iter().map(|(.., picture)| picture.image()));
     }
 
-    /// The plates' pictures of cards that no longer picture that page, or are gone, go.
-    pub(super) fn keep_plates(&mut self) {
+    /// The plates' pictures of cards that no longer picture that page, or are gone, go; and so does
+    /// a kept card's picture, read back after a quit, that no card of `was`'s successors holds now
+    /// (Remove, Remove All, a reply), from this window's atlas if it drew it.
+    pub(super) fn keep_plates(&mut self, was: &[Card]) {
+        let held = |plate: &&Plate| {
+            (self.task_cards.iter()).any(|card| card.kept_picture.as_ref() == Some(*plate))
+        };
+        let gone: Vec<_> = (was.iter().filter_map(|card| card.kept_picture.as_ref()))
+            .filter(|plate| !held(plate))
+            .map(|plate| plate.image.clone())
+            .collect();
+        self.stale_pictures.extend(gone);
         let cards = &self.task_cards;
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
             .into_iter()
@@ -596,11 +605,13 @@ impl Shell {
             .extend(gone.into_iter().map(|(.., picture)| picture.image()));
     }
 
-    /// The picture a card of Latest tasks shows on its plate, if its conversation left one.
+    /// The picture a card of Latest tasks shows on its plate, if its conversation left one, or
+    /// after a quit, its kept card's.
     pub(super) fn plate_of(&self, card: &Card) -> Option<PagePicture> {
         (self.card_plates.iter())
             .find(|(agent, tab, _)| *agent == card.agent && card.last_tab == Some(*tab))
             .map(|(.., picture)| picture.clone())
+            .or_else(|| card.kept_picture.as_ref().map(PagePicture::kept))
     }
 
     /// A picture the conversation asked for came, or the core had none: whether it was one of its
