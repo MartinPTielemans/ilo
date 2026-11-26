@@ -1003,6 +1003,8 @@ pub struct CommandBar {
     /// The bar drew since it was asked to open while its window was off screen, as the host has it
     /// draw before putting it on: that frame is its first on screen once the window comes on.
     opened_drawn: bool,
+    /// The open's first frame was drawn, on screen or off, and its time logged.
+    opened_drew: bool,
     /// The agents ⇥ asks, as last learned, read as the bar opens and as they change.
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
@@ -1262,6 +1264,7 @@ fn new_bar(
             settings_index: None,
             opened_at: None,
             opened_drawn: false,
+            opened_drew: false,
             task_agents: None,
             ask: None,
             plus: crate::plus::Plus::default(),
@@ -1480,6 +1483,7 @@ fn reset(
             bar.settings_index = None;
             bar.opened_at = Some(Instant::now());
             bar.opened_drawn = false;
+            bar.opened_drew = false;
             bar.end_ask(cx);
             // What the browser last learned, read in memory: nothing about tasks runs as it opens.
             bar.task_agents = bar.learned_agents(cx);
@@ -4517,6 +4521,18 @@ impl CommandBar {
 }
 
 impl CommandBar {
+    /// Logs the time from ⌘T to the bar's first frame drawn, on screen or off, once an open: the
+    /// point before its window shows it, which the first frame's line follows.
+    fn log_drawn(&mut self) {
+        if let Some(opened) = self.opened_at.filter(|_| !self.opened_drew) {
+            self.opened_drew = true;
+            log!(
+                "browser: command bar frame drawn in {:.1} ms",
+                opened.elapsed().as_secs_f64() * 1000.
+            );
+        }
+    }
+
     /// Logs the time from ⌘T to the bar's first frame on screen, once an open.
     fn log_first_frame(&mut self) {
         if let Some(opened) = self.opened_at.take() {
@@ -4539,6 +4555,7 @@ impl Render for CommandBar {
                 self.input.read(cx).text()
             );
         }
+        self.log_drawn();
         if window.is_visible() {
             self.log_first_frame();
         } else {
