@@ -59,11 +59,12 @@ class TileRule {
   // card that has the page shows it again.
   bool HoldsDialog(uint64_t tab, bool agent_tab, bool held) const;
 
-  // Whether the user sees |tab|'s page, which a window shows if |window_shows|: in a window's pane
-  // or in a live tile. One that dies there is called crashed and gets the app's card, and nothing
-  // loads it again by itself (#3433). Any other that dies is unloaded: a parked one, which draws
-  // nothing, and one a card has, as before tiles.
-  bool InSight(uint64_t tab, bool window_shows) const;
+  // Whether |tab|'s page, which a window shows if |window_shows|, stays crashed if it dies: in a
+  // window's pane, or in a tile, live or parked. One that dies there gets the app's card, and
+  // nothing loads it again by itself (#3433): a parked tile's keeps its sign in the app, as its
+  // tile does, while another tile is watched. Any other that dies is unloaded, as one a card has,
+  // as before tiles.
+  bool KeepsCrashed(uint64_t tab, bool window_shows) const;
 
   // The word the core's log line uses for |shown|.
   static const char* Name(Shown shown);

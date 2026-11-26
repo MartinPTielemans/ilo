@@ -110,10 +110,10 @@ void LogEnded(bc_id tab) {
 }
 
 // The page of |tab|, which was a tile in |view| or |parked|, leaves both: out of its window as well
-// where it |leaves_window|.
-void Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
+// where it |leaves_window|. Returns whether it was either.
+bool Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
   if (!view && !parked) {
-    return;
+    return false;
   }
   if (view) {
     LogEnded(tab);
@@ -121,6 +121,7 @@ void Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
   if (content::WebContents* contents = Tab::FromId(tab)) {
     platform::EndTile(contents, leaves_window);
   }
+  return true;
 }
 
 }  // namespace
@@ -167,7 +168,11 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
 
 void End(bc_id tab) {
   const bool parked = Rule().Parked(tab);
-  Out(tab, Rule().Left(tab), parked, /*leaves_window=*/true);
+  const bool was_tile = Out(tab, Rule().Left(tab), parked, /*leaves_window=*/true);
+  // A page that died in its tile or the park stayed crashed there, and no tile has it now.
+  if (Tab* left = was_tile ? Tab::Get(tab) : nullptr) {
+    left->LeftSight();
+  }
   LetDialog(tab, /*show=*/false);
 }
 
@@ -218,8 +223,8 @@ bool Holds(bc_id tab) {
   return Rule().InTile(tab);
 }
 
-bool InSight(bc_id tab) {
-  return Rule().InSight(tab, Window::Showing(tab) != nullptr);
+bool KeepsCrashed(bc_id tab) {
+  return Rule().KeepsCrashed(tab, Window::Showing(tab) != nullptr);
 }
 
 void Died(bc_id tab, bool died) {

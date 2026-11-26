@@ -80,8 +80,8 @@ bool TileRule::HoldsDialog(uint64_t tab, bool agent_tab, bool held) const {
   return agent_tab && !held && InTile(tab);
 }
 
-bool TileRule::InSight(uint64_t tab, bool window_shows) const {
-  return window_shows || Holds(tab);
+bool TileRule::KeepsCrashed(uint64_t tab, bool window_shows) const {
+  return window_shows || InTile(tab);
 }
 
 // static

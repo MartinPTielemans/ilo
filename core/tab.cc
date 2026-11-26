@@ -1958,7 +1958,7 @@ void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
         FROM_HERE, base::BindOnce(&Tab::Reload, weak_factory_.GetWeakPtr(),
                                   *std::exchange(reload_after_kill_, std::nullopt)));
   } else if (Died(status) && !browser_shutdown::HasShutdownStarted()) {
-    if (tiles::InSight(id_)) {
+    if (tiles::KeepsCrashed(id_)) {
       crashed_ = true;
       tiles::Died(id_, true);
       LayOutSoon();
@@ -2055,7 +2055,7 @@ void Tab::LeftSight() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Tab> tab) {
-                       if (tab && !tiles::InSight(tab->id_)) {
+                       if (tab && !tiles::KeepsCrashed(tab->id_)) {
                          tab->UnloadDead();
                        }
                      },

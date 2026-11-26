@@ -276,9 +276,10 @@ class Tab : public content::WebContentsObserver,
   static void GameRunning(content::WebContents* contents, bool running);
   // Gives a hung page Chrome's hang timeout again, as Chrome's Wait does.
   void Wait();
-  // For a window that stopped showing the tab, or a tile of it that ended: a page whose renderer
-  // died, out of sight now, is unloaded rather than kept with nothing to show, so it loads again
-  // once it's shown. One a window or a live tile has by then stays crashed, with its card.
+  // For a window that stopped showing the tab, or a tile or the park that let it go: a page whose
+  // renderer died, which neither has now, is unloaded rather than kept with nothing to show, so it
+  // loads again once it's shown. One a window or a tile, live or parked, has by then stays crashed,
+  // with its card (TileRule::KeepsCrashed).
   void LeftSight();
   // Whether the page's renderer died while a window showed it, so its pane shows the app's card in
   // place of the page until it's loaded again.
