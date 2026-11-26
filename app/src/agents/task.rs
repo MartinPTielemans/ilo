@@ -726,6 +726,31 @@ impl Word {
     }
 }
 
+/// What an agent's `done` came to: the fact its caller logs by, never its answer's words.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum SaidDone {
+    /// Its session under way ended.
+    Ended,
+    /// It had none under way, which is no error and nothing to log.
+    NoTask,
+    /// Another call of its own is still under way, which the refusal names.
+    UnderWay(String),
+}
+
+impl SaidDone {
+    /// What the agent is answered.
+    pub(super) fn answer(self) -> super::ToolResult {
+        match self {
+            Self::Ended => super::ToolResult::text(
+                "Your task is done: its card says so. Pages of yours still open stay in your \
+                Space for the user to open from it. Your next call starts a new task.",
+            ),
+            Self::NoTask => super::ToolResult::text("No task of yours is under way."),
+            Self::UnderWay(why) => super::ToolResult::error(why),
+        }
+    }
+}
+
 /// What the user does to a task from its card or its conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskAction {
@@ -3575,19 +3600,14 @@ impl Agents {
     /// `agent`'s call `call` said its task is done (#3652): its session under way is, unless
     /// another call of its own is still under way, such as one waiting on the user, which it
     /// names. A done never leaves a question behind.
-    pub(super) fn said_done(
-        &mut self,
-        agent: &str,
-        call: u64,
-        cx: &mut Context<Self>,
-    ) -> Result<String, String> {
+    pub(super) fn said_done(&mut self, agent: &str, call: u64, cx: &mut Context<Self>) -> SaidDone {
         let live = (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
                 && (task.session.as_ref())
                     .is_some_and(|session| session.agent == agent && session.calls.contains(&call))
         });
         let Some(task) = live else {
-            return Ok("No task of yours is under way.".into());
+            return SaidDone::NoTask;
         };
         let session = task.session.as_ref().expect("a session, as found");
         let under_way = (session.calls.iter()).filter(|each| **each != call).min();
@@ -3598,17 +3618,13 @@ impl Agents {
                 Some(tab) => format!(" on tab {tab}"),
                 None => String::new(),
             };
-            return Err(format!(
+            return SaidDone::UnderWay(format!(
                 "Your {tool}{on} is still under way: call done once it's answered."
             ));
         }
         let key = task.agent.clone();
         self.session_done(&key, cx);
-        Ok(
-            "Your task is done: its card says so. Pages of yours still open stay in your Space \
-            for the user to open from it. Your next call starts a new task."
-                .into(),
-        )
+        SaidDone::Ended
     }
 
     /// From now, the session ends once QUIET passes without a call, if none of its pages is
