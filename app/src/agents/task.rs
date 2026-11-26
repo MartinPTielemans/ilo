@@ -4169,10 +4169,7 @@ impl Agents {
             .unwrap_or_default();
         let element = (arguments.get("ref").and_then(Value::as_str).zip(tab))
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
-        let named = |element: &page::Element| match element.name.trim().is_empty() {
-            true => format!("the {}", element.role),
-            false => page::curly(element.name.trim(), 40),
-        };
+        let named = |element: &page::Element| tools::named(&element.name, &element.role);
         let (on, page) = (site(&url), address(&url));
         let mut did = tools::Did {
             tool: tool.to_string(),
@@ -5544,6 +5541,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             format!("Thought for {}", duration(took.as_secs().max(1))),
             String::new(),
         ),
+        // A failed step says its reason in its account (TS2).
+        (_, _, Some(_)) => (
+            tools::failed_account(&step.did, &description),
+            String::new(),
+        ),
         _ => (tools::step_title(&step.did, tense(step)), description),
     };
     TraceStep {
@@ -5595,10 +5597,14 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
     let tabs: Vec<TraceStep> = (steps.iter())
         .map(|&(key, step)| {
             let line = trace_step(&[(key, step)]);
+            // A tab's line is its address, and why it failed at its right, as its own line's
+            // account would say it.
+            let why = (step.error.as_ref()).map(|_| tools::reason(step.kind).into());
             match step.did.page.is_empty() {
                 true => line,
                 false => TraceStep {
                     title: step.did.page.clone().into(),
+                    description: why.unwrap_or(line.description.clone()),
                     ..line
                 },
             }
@@ -5652,9 +5658,12 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         (1.., _) => format!("{} of {count}", count - running),
         // Failed on each, it says why if it's the same why.
         (0, failed) if failed == count => {
-            let why = &tabs[0].description;
-            match tabs.iter().all(|tab| tab.description == *why) {
-                true => why.to_string(),
+            let why = tools::reason(first.kind);
+            match steps
+                .iter()
+                .all(|(_, step)| tools::reason(step.kind) == why)
+            {
+                true => why,
                 false => String::new(),
             }
         }

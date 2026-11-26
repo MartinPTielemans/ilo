@@ -9316,7 +9316,7 @@ mod tasks {
             [
                 ("Read shop.example", "", false),
                 ("Typed “SPRING10” in “Coupon”", "", false),
-                ("Couldn't type in “Password”", "password field", true),
+                ("Couldn't type: password field", "", true),
                 ("Looked at shop.example", "", false),
             ]
         );
@@ -9523,7 +9523,7 @@ mod tasks {
         };
         assert_eq!(
             (step.title.as_ref(), step.description.as_ref(), step.failed),
-            ("Couldn't open maat.pt", "not a web page", true)
+            ("Couldn't open: not a web page", "", true)
         );
         let opens = format!("{url}\nAgents may open only http and https pages.");
         assert!(
@@ -9575,7 +9575,9 @@ mod tasks {
                 panic!("{:?}", trace.items)
             };
             assert!(step.failed);
-            step.description.to_string()
+            // A failed step's account says why after its verb (TS2).
+            let why = step.title.split_once(": ").map(|(_, why)| why);
+            why.unwrap_or_default().to_string()
         };
         // What each error said that its word was read from, and its kind. A stopped step has no
         // line to say it in (a_step_under_way_at_stop_leaves_no_line).
@@ -9717,6 +9719,65 @@ mod tasks {
         for (did, tense, title) in titles {
             assert_eq!(step_title(&did, tense), title, "{did:?} {tense:?}");
         }
+    }
+
+    /// A failed step's account in a trace is its verb and why (TS2), leaving out what it acted on,
+    /// and a step that didn't see what it looked for says so whole.
+    #[test]
+    fn a_failed_step_says_its_verb_and_why() {
+        use crate::agents::tools::{Did, failed_account};
+        let did = |tool: &str, target: &str, text: &str| Did {
+            tool: tool.into(),
+            site: "shop.example".into(),
+            target: target.into(),
+            text: text.into(),
+            ..Default::default()
+        };
+        let accounts = [
+            (
+                did("select", "“Size”", "M"),
+                "sold out",
+                "Couldn't choose: sold out",
+            ),
+            (
+                did("click", "“Tickets”", ""),
+                "not found",
+                "Couldn't click: not found",
+            ),
+            (did("click", "“Tickets”", ""), "", "Couldn't click"),
+            (
+                did("back", "", ""),
+                "still loading",
+                "Couldn't go back: still loading",
+            ),
+            (did("screenshot", "", ""), "", "Couldn't look"),
+            (
+                did("wait", "“Tickets”", ""),
+                "didn't show",
+                "Didn't see “Tickets”",
+            ),
+            (
+                did("check", "“Sold out”", ""),
+                "not found",
+                "Didn't see “Sold out”",
+            ),
+        ];
+        for (did, reason, account) in accounts {
+            assert_eq!(failed_account(&did, reason), account, "{did:?}");
+        }
+    }
+
+    /// What a step acted on is the page's words, quoted and clipped (TS2), or with no name, what
+    /// kind of thing it is.
+    #[test]
+    fn a_step_names_what_it_acted_on_in_the_pages_words() {
+        use crate::agents::tools::named;
+        assert_eq!(named("Kestrel 14", "button"), "“Kestrel 14”");
+        assert_eq!(named(" ", "button"), "a button");
+        assert_eq!(named("", "link"), "a link");
+        assert_eq!(named("", "image"), "an image");
+        let long = named("The quick brown fox jumps over the lazy dog", "link");
+        assert_eq!(long, "“The quick brown fox jumps over t…”");
     }
 
     /// The stretch under way is an open trace with what the agent said along the way in it; its

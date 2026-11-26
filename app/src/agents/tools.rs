@@ -881,6 +881,19 @@ pub const SEARCHED: &str = "web_search";
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
 
+/// How many characters of what a step acted on its account names, in the page's words (TS2).
+pub const NAMED_SHOWN: usize = 32;
+
+/// What a step acted on, as its account names it (TS2): its name in the page's words, quoted and
+/// clipped, or with none, what kind of thing it is: "a button", "a link".
+pub fn named(name: &str, role: &str) -> String {
+    match (name.trim(), role.starts_with(['a', 'e', 'i', 'o', 'u'])) {
+        ("", false) => format!("a {role}"),
+        ("", true) => format!("an {role}"),
+        (name, _) => page::curly(name, NAMED_SHOWN),
+    }
+}
+
 /// Whether a step is under way, done, or failed, which its title says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tense {
@@ -990,6 +1003,24 @@ pub fn refusal_shown<'a>(action: &str, refused: &'a str) -> &'a str {
 /// A step's title, in one sentence: "Opening gulbenkian.pt", "Read maat.pt",
 /// "Couldn't open maat.pt/en/visit".
 pub fn step_title(did: &Did, tense: Tense) -> String {
+    words(did, tense, true)
+}
+
+/// A failed step's account in a trace (TS2): its verb and why, "Couldn't choose: sold out", or
+/// with no why, "Couldn't choose". A step that didn't see what it looked for says so whole, since
+/// a reason would say it twice, and a permission the browser refused has its one sentence.
+pub fn failed_account(did: &Did, reason: &str) -> String {
+    let verb = words(did, Tense::Failed, false);
+    let stopped = permission_stopped(&did.tool, &did.site).is_some();
+    match verb.starts_with("Couldn't ") && !reason.is_empty() && !stopped {
+        true => format!("{verb}: {reason}"),
+        false => verb,
+    }
+}
+
+/// A step's words in a tense, and with `object`, what it acted on: a failed step's account leaves
+/// that out (TS2), so each verb's words before its object stay in its `on`.
+fn words(did: &Did, tense: Tense, object: bool) -> String {
     // A permission the browser refused the page: its one sentence, whatever the tense.
     if let Some(stopped) = permission_stopped(&did.tool, &did.site) {
         return stopped;
@@ -1006,23 +1037,23 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     let (now, done, failed, on) = match did.tool.as_str() {
         "open_tab" | "navigate" => ("Opening", "Opened", "Couldn't open", site("a page")),
         "back" => (
-            "Going back on",
-            "Went back on",
-            "Couldn't go back on",
-            site("the page"),
+            "Going back",
+            "Went back",
+            "Couldn't go back",
+            format!("on {}", site("the page")),
         ),
         "forward" => (
-            "Going forward on",
-            "Went forward on",
-            "Couldn't go forward on",
-            site("the page"),
+            "Going forward",
+            "Went forward",
+            "Couldn't go forward",
+            format!("on {}", site("the page")),
         ),
         "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
         "screenshot" => (
-            "Looking at",
-            "Looked at",
-            "Couldn't look at",
-            site("the page"),
+            "Looking",
+            "Looked",
+            "Couldn't look",
+            format!("at {}", site("the page")),
         ),
         "click" => (
             "Clicking",
@@ -1041,6 +1072,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 (Tense::Done, false) => {
                     format!("Typed {} in {into}", page::curly(&did.text, TYPED_SHOWN))
                 }
+                (Tense::Failed, _) if !object => "Couldn't type".into(),
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
@@ -1055,6 +1087,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 (Tense::Done, false) => {
                     format!("Chose {} in {into}", page::curly(&did.text, TYPED_SHOWN))
                 }
+                (Tense::Failed, _) if !object => "Couldn't choose".into(),
                 (Tense::Failed, true) => format!("Couldn't choose in {into}"),
                 (Tense::Failed, false) => format!(
                     "Couldn't choose {} in {into}",
@@ -1078,8 +1111,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         "wait" => match did.target.strip_suffix(" to go") {
             // Text that should go: “Loading” to go.
             Some(text) if tense == Tense::Failed => return format!("Didn't see {text} go"),
-            _ if did.target == SETTLE => {
-                ("Waiting for", "Waited for", "Couldn't wait for", target(""))
+            _ if did.target == SETTLE => (
+                "Waiting",
+                "Waited",
+                "Couldn't wait",
+                format!("for {}", target("")),
+            ),
+            _ if did.target.starts_with('“') && tense == Tense::Failed => {
+                return format!("Didn't see {}", target("the page"));
             }
             _ if did.target.starts_with('“') => (
                 "Waiting for",
@@ -1089,20 +1128,22 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             ),
             _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
+        "check" if tense == Tense::Failed => return format!("Didn't see {}", target("text")),
         "check" => ("Looking for", "Saw", "Didn't see", target("text")),
+        // The fence's sentences name the site in every tense.
         super::fence::ASKED_ACTION => {
             let (now, done, failed) = super::fence::ASKED;
-            (now, done, failed, site("a site"))
+            return format!("{} {}", in_tense(tense, now, done, failed), site("a site"));
         }
         super::fence::CAME_ACTION => {
             let (now, done, failed) = super::fence::CAME;
-            (now, done, failed, site("a site"))
+            return format!("{} {}", in_tense(tense, now, done, failed), site("a site"));
         }
         "list_tabs" => (
-            "Looking over",
-            "Looked over",
-            "Couldn't look over",
-            "its tabs".to_string(),
+            "Looking",
+            "Looked",
+            "Couldn't look",
+            "over its tabs".to_string(),
         ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
         "pin_tab" => ("Pinning", "Pinned", "Couldn't pin", site("a tab")),
@@ -1179,14 +1220,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         action => return describe(action).to_string(),
     };
-    let verb = match tense {
+    let verb = in_tense(tense, now, done, failed);
+    match on.is_empty() || (tense == Tense::Failed && !object) {
+        true => verb.to_string(),
+        false => format!("{verb} {on}"),
+    }
+}
+
+fn in_tense<'a>(tense: Tense, now: &'a str, done: &'a str, failed: &'a str) -> &'a str {
+    match tense {
         Tense::Now => now,
         Tense::Done => done,
         Tense::Failed => failed,
-    };
-    match on.is_empty() {
-        true => verb.to_string(),
-        false => format!("{verb} {on}"),
     }
 }
 

@@ -343,7 +343,7 @@ fn an_over_stretch_reads_its_summary_and_a_failed_step_on_its_own(cx: &mut TestA
             ),
             at(1, StepKind::Opened, "Opened skyscanner.net", false),
             at(2, StepKind::Read, "Read skyscanner.net", false),
-            at(3, StepKind::Clicked, "Couldn't click on the page", true),
+            at(3, StepKind::Clicked, "Couldn't click: not found", true),
         ],
     })];
     talk(&shell, over, cx);
@@ -355,7 +355,7 @@ fn an_over_stretch_reads_its_summary_and_a_failed_step_on_its_own(cx: &mut TestA
         "the stretch isn't read as its summary: {read:?}"
     );
     assert!(
-        has(&read, "Couldn't click on the page"),
+        has(&read, "Couldn't click: not found"),
         "the failed step isn't read on its own line: {read:?}"
     );
     assert!(
