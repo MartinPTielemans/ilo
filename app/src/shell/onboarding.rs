@@ -1999,12 +1999,17 @@ impl Shell {
     ) -> gpui::Div {
         let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
         let (name, line) = Step::Account.message(os);
-        let problem = (self.account_view())
-            .and_then(|view| view.read(cx).state().problem)
-            .filter(|_| shows == Welcome::Form);
+        let view = self.account_view();
+        let view = view.as_ref().map(|view| view.read(cx));
+        let problem =
+            (view.and_then(|view| view.state().problem)).filter(|_| shows == Welcome::Form);
+        let unfinished = view.is_some_and(Account::google_unfinished) && shows == Welcome::Form;
+        // Drawn only while the server's discovery offers Google (v9 §3).
+        let google = view.is_some_and(|view| view.state().google);
         let line: SharedString = match (shows, problem) {
             (Welcome::Syncing, _) => "Your Spaces are syncing.".into(),
             (_, Some(problem)) => account::problem_text(problem).into(),
+            _ if unfinished => account::GOOGLE_UNFINISHED.into(),
             _ => line,
         };
         let [knot, knot_top] = t::WELCOME_KNOT;
@@ -2016,10 +2021,37 @@ impl Shell {
         let column_items: Vec<AnyElement> = match shows {
             // One sign-in window both signs in and makes an account (account.rs sign_in, the
             // core's one call), so there's no Sign Up of its own.
-            Welcome::Form => vec![
-                card::welcome_button(self.main(Step::Account, "Continue".into(), inks, cx))
-                    .into_any_element(),
-            ],
+            Welcome::Form => {
+                let continue_button =
+                    card::welcome_button(self.main(Step::Account, "Continue".into(), inks, cx));
+                // The quiet button under Continue, the same size, its label never changing; the
+                // keyboard comes to it after Continue and before Not Now.
+                let google = google.then(|| {
+                    card::welcome_button(card::quiet(
+                        "onboarding-google",
+                        account::GOOGLE.into(),
+                        inks,
+                    ))
+                    .mt(px(t::WELCOME_GOOGLE_GAP))
+                    .when(self.a11y, |control| named_button(control, account::GOOGLE))
+                    .when_some(
+                        self.step_stop(Step::Account, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(view) = shell.account_view() {
+                            view.update(cx, |view, cx| view.sign_in_google(cx));
+                        }
+                        cx.notify();
+                    }))
+                    .relative()
+                    .children(self.place(Step::Account, "google"))
+                    .into_any_element()
+                });
+                std::iter::once(continue_button.into_any_element())
+                    .chain(google)
+                    .collect()
+            }
             Welcome::SigningIn => {
                 let cancel = card::bare("onboarding-cancel", "Cancel".into(), inks)
                     .when(self.a11y, |control| named_button(control, "Cancel Sign In"))

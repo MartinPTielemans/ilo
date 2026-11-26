@@ -3392,7 +3392,11 @@ bool bc_sync_set_server(const char* server) {
 }
 
 void bc_sync_sign_in(void) {
-  browser_core::sync::SignIn();
+  browser_core::sync::SignIn(false);
+}
+
+void bc_sync_sign_in_google(void) {
+  browser_core::sync::SignIn(true);
 }
 
 void bc_sync_cancel(void) {
@@ -3433,6 +3437,14 @@ void bc_sync_remove_device(const char* id) {
   if (id) {
     browser_core::sync::RemoveDevice(id);
   }
+}
+
+void bc_sync_read_google(void) {
+  browser_core::sync::ReadGoogle();
+}
+
+void bc_sync_remove_google(void) {
+  browser_core::sync::RemoveGoogle();
 }
 
 void bc_sync_read_activity(bc_sync_activity* activity) {

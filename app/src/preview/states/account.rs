@@ -35,6 +35,10 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
     let no_server = state == "no-server";
     // PREVIEW_SERVER=<address> signs in to a server of the user's, which the line names by its host.
     let own = states::var("PREVIEW_SERVER").ok();
+    // PREVIEW_GOOGLE=1 has the server offer Google, linked to the account once signed in, and
+    // PREVIEW_GOOGLE=failed has the link's last Remove fail too.
+    let google_said = states::var("PREVIEW_GOOGLE").unwrap_or_default();
+    let google = google_said == "1" || google_said == "failed";
     let state = State {
         status,
         problem: None,
@@ -52,6 +56,12 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
         },
         settings: true,
         extensions: false,
+        google,
+        google_email: match google && status == Status::On {
+            true => "sam@example.com".into(),
+            false => "".into(),
+        },
+        google_remove_failed: google_said == "failed" && status == Status::On,
     };
     let device = |id: &str, name: &str, os: &str, current| Device {
         id: id.to_string().into(),
@@ -196,6 +206,9 @@ impl account::Host for PreviewAccount {
         true
     }
     fn sign_in(&self) {}
+    fn sign_in_google(&self) {}
+    fn read_google(&self) {}
+    fn remove_google(&self) {}
     fn cancel(&self) {}
     fn sign_out(&self) {}
     fn recovery_words(&self) -> String {

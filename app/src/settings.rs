@@ -373,6 +373,18 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_sign_in() };
     }
 
+    fn sign_in_google(&self) {
+        unsafe { bc::bc_sync_sign_in_google() };
+    }
+
+    fn read_google(&self) {
+        unsafe { bc::bc_sync_read_google() };
+    }
+
+    fn remove_google(&self) {
+        unsafe { bc::bc_sync_remove_google() };
+    }
+
     fn cancel(&self) {
         unsafe { bc::bc_sync_cancel() };
     }

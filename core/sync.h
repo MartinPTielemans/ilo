@@ -17,6 +17,10 @@
 
 struct bc_sync_activity;
 
+namespace content {
+class WebContents;
+}
+
 namespace browser_core::sync {
 
 // Sets the sync hooks, before any profile is made.
@@ -31,7 +35,8 @@ void WindowActivated();
 
 // The C API's calls, as public/browser_core.h says.
 bool SetServer(const std::string& server);
-void SignIn();
+// bc_sync_sign_in, or bc_sync_sign_in_google with |google|.
+void SignIn(bool google);
 void Cancel();
 void SignOut();
 std::string RecoveryWords();
@@ -41,9 +46,15 @@ void RequestPairing();
 void AnswerPairing(const std::string& id, bool add);
 void ReadDevices();
 void RemoveDevice(const std::string& id);
+void ReadGoogle();
+void RemoveGoogle();
 void ReadActivity(bc_sync_activity* activity);
 void Choose(int what, bool on);
 void DeleteAccount();
+
+// Whether |contents| is the sign-in window's page, which gets none of the user's saved passwords
+// and offers to save none: the account's password, or Google's, stays the page's alone.
+bool InSignInWindow(content::WebContents* contents);
 
 // For share links (share.cc). Nothing of these is logged, as nothing of a share is.
 // The account's server, or an empty URL while signed out.

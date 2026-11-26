@@ -806,6 +806,16 @@ typedef struct bc_sync_state {
   // extensions from the Chrome Web Store with their settings. Else false.
   bool settings;
   bool extensions;
+  // The server signs in with Google too, so bc_sync_sign_in_google has its button, as its discovery
+  // last said: read when bc_sync_set_server names it, and for the build's own as bc_sync_sign_in
+  // starts. Nothing is asked of a server before the user names it or signs in.
+  bool google;
+  // While signed in, the address Google signs in to the account with, once bc_sync_read_google has
+  // read it, else "". The server keeps only Google's id for it, and names the account's address.
+  const char* google_email;
+  // While signed in, the last bc_sync_remove_google failed: it didn't reach the server, or the
+  // server refused it. Until the next bc_sync_read_google or bc_sync_remove_google.
+  bool google_remove_failed;
 } bc_sync_state;
 
 // What bc_sync_choose turns on or off.
@@ -4390,18 +4400,26 @@ BC_EXPORT void bc_window_toggle_full_screen(bc_id window);
 // account holds the user's passwords and its secret reads them, and the sign-in window is no tab an
 // agent can act in.
 
-// Signs in to |server| from now on, such as "https://sync.example.org", or to the build's own if it's
-// empty, signing out first if signed in, and returns whether it will: only to https, or to http on
-// a loopback address, for a server on the machine. Then sync_changed.
+// Signs in to |server| from now on, such as "https://sync.example.org", or to the build's own if
+// it's empty, signing out first if signed in, and returns whether it will: only to https, or to
+// http on a loopback address, for a server on the machine. Then sync_changed, and again once the
+// server's discovery says whether it signs in with Google (bc_sync_state.google).
 BC_EXPORT bool bc_sync_set_server(const char* server);
 
 // Opens the server's sign-in page in a small window of the core's over the front window: the page
-// alone, the server's host in its title, in a session of its own that keeps nothing in the user's
-// profiles. Once the user has signed in, the core catches where the page sends it, closes the
-// window and gets the account's tokens; the user closing the window cancels. Only while signed out.
+// alone, the host of the page it shows in its title, in a session of its own that keeps nothing in
+// the user's profiles and offers to save no password. Once the user has signed in, the core catches
+// where the page sends it, closes the window and gets the account's tokens; the user closing the
+// window cancels. Only while signed out.
 // Then sync_changed, BC_SYNC_SIGNING_IN, then BC_SYNC_FIRST_DEVICE or BC_SYNC_NEEDS_SECRET, or
 // BC_SYNC_SIGNED_OUT again, with BC_SYNC_PROBLEM_SERVER if it failed.
 BC_EXPORT void bc_sync_sign_in(void);
+
+// As bc_sync_sign_in, with the server's page going straight on to Google's, while
+// bc_sync_state.google: Google's own page, in the same window and session, takes the Google
+// password, and the browser gets only the account's tokens, as with any sign-in. The title names
+// Google's host while its page is shown. Without Google it's bc_sync_sign_in.
+BC_EXPORT void bc_sync_sign_in_google(void);
 
 // Stops what the account waits for: the sign-in window closes, back to BC_SYNC_SIGNED_OUT, or the
 // pairing request is taken back from the other devices, back to BC_SYNC_NEEDS_SECRET. Then
@@ -4451,6 +4469,16 @@ BC_EXPORT void bc_sync_read_devices(void);
 // It keeps what synced, and syncs again only once it signs in and gets the secret. Then
 // sync_devices_changed.
 BC_EXPORT void bc_sync_remove_device(const char* id);
+
+// Asks the server whether Google signs in to the account, while signed in: once as Settings shows
+// the account, never on a timer. Then sync_changed, with bc_sync_state.google_email.
+BC_EXPORT void bc_sync_read_google(void);
+
+// Stops Google signing in to the account, while signed in. The mailed code still does, and so does
+// Google again once the user has entered one. Then sync_changed, google_email "", or
+// google_remove_failed if it didn't reach the server or the server refused it. Removed already
+// (by another device) counts as removed.
+BC_EXPORT void bc_sync_remove_google(void);
 
 // Reads how sync is keeping up with the server into |activity|, with BC_SYNC_ON, else zero. Read
 // as Settings shows it, and again at sync_changed while it does.

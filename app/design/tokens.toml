@@ -2629,6 +2629,8 @@ main-end = 7.0
 cap = [18.0, 5.0, 11.0, 0.125]
 # The Welcome's larger buttons and its field: height, corners and words' size.
 welcome-button = [36.0, 10.0, 13.5]
+# The gap over the Welcome's Continue with Google, under Continue (v9 §3).
+welcome-google-gap = 8.0
 # The progress knot in the foot's middle, its ghost at this alpha of the text, and the seconds it
 # redraws in, ease-in-out.
 progress = 26.0
