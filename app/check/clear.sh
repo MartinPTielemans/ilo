@@ -590,8 +590,8 @@ expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 send layout
 view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
-[ "$view" = "417,8 ${docked#* }" ] ||
-  fail "the Library didn't push the page to 417 at its width: it's at $view, docked at $docked"
+[ "$view" = "644,8 ${docked#* }" ] ||
+  fail "the Library didn't push the page to 644 at its width: it's at $view, docked at $docked"
 ../tools/window-screenshot.sh "$pid" "$out/library.png" || fail "no window to capture"
 # History lists the pages this run visited among its closed tabs (#2337). The pointer on a row
 # shows its trash, and its title truncates before it; a click on a visited page's row opens the
