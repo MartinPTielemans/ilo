@@ -509,7 +509,11 @@ async function walk() {
   if (await js(`!!document.querySelector(".clips .zoom")`)) {
     await js(`document.querySelector(".clips .zoom").scrollIntoView({ block: "center" })`);
     await js(`document.querySelector(".clips .zoom").click()`);
-    await sleep(900);
+    // The view is read once it has stood up and its clip has started, as the clip says by its own time moving, not
+    // after a fixed wait: a clip decoded in software can take longer than one to start (#4029). It gives up after 5 s.
+    log.waited = await js(
+      `(() => { const start = performance.now(); return new Promise((done) => { const look = () => { const d = document.querySelector(".view"), v = d && d.querySelector("video"); if (d && d.open && v && !v.paused && v.currentTime > 0 && !d.getAnimations({ subtree: true }).some((a) => a.playState === "running")) done(Math.round(performance.now() - start)); else if (performance.now() - start > 5000) done(null); else requestAnimationFrame(look); }; look(); }); })()`,
+    );
     log.view = await js(
       `(() => { const d = document.querySelector(".view"), v = d.querySelector("video"); return { open: d.open, size: v && (${box})(v).slice(2), playing: v && !v.paused, screen: [innerWidth, innerHeight] }; })()`,
     );
