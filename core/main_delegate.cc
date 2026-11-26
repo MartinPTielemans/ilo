@@ -24,6 +24,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
+#include "base/values.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_devices.h"
@@ -99,6 +101,8 @@
 #include "components/performance_manager/public/features.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/client_certificate_delegate.h"
+#include "content/public/browser/digital_identity_interstitial_type.h"
+#include "content/public/browser/digital_identity_provider.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -113,6 +117,7 @@
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "base/files/file_util.h"
@@ -434,6 +439,68 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   base::ScopedMultiSourceObservation<Profile, ProfileObserver> profile_observations_{this};
 };
 
+// Chrome's provider of a digital ID, but a page in an agent's Space the user doesn't hold hears
+// that the user declined before Chrome's provider starts, so nothing is shown and no phone is
+// looked for (agent_permission_rule.h). Posted, as Chrome's provider answers later too: the request
+// that owns this lets go of it as it hears the answer.
+class AgentDigitalIdentityProvider : public content::DigitalIdentityProvider {
+ public:
+  explicit AgentDigitalIdentityProvider(std::unique_ptr<content::DigitalIdentityProvider> chrome)
+      : chrome_(std::move(chrome)) {}
+
+  bool IsLastCommittedOriginLowRisk(content::RenderFrameHost& frame) const override {
+    return chrome_->IsLastCommittedOriginLowRisk(frame);
+  }
+
+  DigitalIdentityInterstitialAbortCallback ShowDigitalIdentityInterstitial(
+      content::WebContents& contents,
+      const url::Origin& origin,
+      content::DigitalIdentityInterstitialType type,
+      DigitalIdentityInterstitialCallback callback) override {
+    if (NoDigitalIdentity(&contents)) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback), RequestStatusForMetrics::kErrorUserDeclined));
+      return base::OnceClosure();
+    }
+    return chrome_->ShowDigitalIdentityInterstitial(contents, origin, type, std::move(callback));
+  }
+
+  void Get(content::WebContents* contents,
+           const url::Origin& origin,
+           base::ValueView request,
+           DigitalIdentityCallback callback) override {
+    if (!Declined(contents, callback)) {
+      chrome_->Get(contents, origin, request, std::move(callback));
+    }
+  }
+
+  void Create(content::WebContents* contents,
+              const url::Origin& origin,
+              base::ValueView request,
+              DigitalIdentityCallback callback) override {
+    if (!Declined(contents, callback)) {
+      chrome_->Create(contents, origin, request, std::move(callback));
+    }
+  }
+
+ private:
+  // Whether the request of the page in |contents| is declined, which |callback| then hears.
+  static bool Declined(content::WebContents* contents, DigitalIdentityCallback& callback) {
+    if (!NoDigitalIdentity(contents)) {
+      return false;
+    }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       base::expected<DigitalCredential, RequestStatusForMetrics>(
+                           base::unexpected(RequestStatusForMetrics::kErrorUserDeclined))));
+    return true;
+  }
+
+  const std::unique_ptr<content::DigitalIdentityProvider> chrome_;
+};
+
 class ContentBrowserClient : public ChromeContentBrowserClient {
  public:
   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
@@ -512,6 +579,14 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
       return std::make_unique<content::IdentityRequestDialogController>();
     }
     return ChromeContentBrowserClient::CreateIdentityRequestDialogController(contents);
+  }
+
+  // Chrome's, wrapped so a page in an agent's Space the user doesn't hold is shown nothing for a
+  // digital ID. One is made for each request, and the hold is read at each of its asks.
+  std::unique_ptr<content::DigitalIdentityProvider> CreateDigitalIdentityProvider() override {
+    std::unique_ptr<content::DigitalIdentityProvider> chrome =
+        ChromeContentBrowserClient::CreateDigitalIdentityProvider();
+    return chrome ? std::make_unique<AgentDigitalIdentityProvider>(std::move(chrome)) : nullptr;
   }
 
   // Chrome's, but a page in an agent's Space opens no Picture in Picture window for a document,

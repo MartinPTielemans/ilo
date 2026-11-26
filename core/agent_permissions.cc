@@ -352,6 +352,14 @@ bool NoAppInstall(content::WebContents* contents) {
   return true;
 }
 
+bool NoDigitalIdentity(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kDigitalIdentity, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kDigitalIdentity, contents->GetOutermostWebContents());
+  return true;
+}
+
 bool NoFederatedSignIn(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kFederatedSignIn, RuleTabOf(contents))) {
     return false;

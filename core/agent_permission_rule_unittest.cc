@@ -32,13 +32,14 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
 
 // The user holding the tab changes these answers: their own copy writes the clipboard, and a
 // print, the choice of a certificate, of a device to cast to, of an account to sign in with and of
-// where a share goes, and the answer to an extension's install are theirs to make.
+// where a share goes, and the answer to an extension's install and to a digital ID's ask are
+// theirs to make.
 TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
     if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
         kind == Kind::kCast || kind == Kind::kExtensionInstall || kind == Kind::kFederatedSignIn ||
-        kind == Kind::kShare || kind == Kind::kAppInstall) {
+        kind == Kind::kShare || kind == Kind::kAppInstall || kind == Kind::kDigitalIdentity) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -441,6 +442,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoDialogToInstallAnApp) {
 // While the user holds the tab the install is theirs to answer, as in a tab of their own.
 TEST(AgentPermissionRule, AHeldTabIsAskedWhetherToInstallAnApp) {
   EXPECT_FALSE(Refuses(Kind::kAppInstall, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabIsAskedForADigitalId) {
+  EXPECT_FALSE(Refuses(Kind::kDigitalIdentity, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoDialogForADigitalId) {
+  EXPECT_TRUE(Refuses(Kind::kDigitalIdentity, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kDigitalIdentity), "digital_identity");
+}
+
+// While the user holds the tab the ID is theirs to give, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabIsAskedForADigitalId) {
+  EXPECT_FALSE(Refuses(Kind::kDigitalIdentity, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {

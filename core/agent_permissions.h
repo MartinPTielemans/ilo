@@ -98,6 +98,11 @@ bool NoShare(content::RenderFrameHost* frame);
 // the user doesn't hold. Notes the refusal.
 bool NoAppInstall(content::WebContents* contents);
 
+// Whether the page in |contents| is refused the dialog that has the user verify a digital ID with
+// their phone, asked as each request for one starts, before anything of it is shown: a page in an
+// agent's Space the user doesn't hold. Notes the refusal.
+bool NoDigitalIdentity(content::WebContents* contents);
+
 // Whether the page in |contents| is refused the sheet that offers the user's accounts with another
 // site to sign in with, asked as each of its requests to sign in so starts: a page in an agent's
 // Space the user doesn't hold. Notes the refusal.
