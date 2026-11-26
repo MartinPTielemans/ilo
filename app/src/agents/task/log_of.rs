@@ -14,7 +14,7 @@ use crate::agents::Agents;
 use crate::agents::kept::log::Record;
 use crate::agents::lines::STOPS;
 use crate::agents::tools;
-use crate::shell::conversation::pages::{Paged, paged};
+use crate::shell::conversation::pages::{Page, Paged, paged};
 use crate::shell::conversation::words;
 
 impl Agents {
@@ -58,9 +58,7 @@ impl Agents {
                         match each {
                             Paged::Page(page) => {
                                 let kept_from = self.kept_from(task, page.tab, &page.site, cx);
-                                records.push(Record::Page(
-                                    self.page_title(page.tab, &page.site, kept_from, cx),
-                                ));
+                                records.push(Record::Page(page_title(&page, kept_from)));
                                 (records).extend(
                                     page.shown().map(|step| self.step_of(task, step, kept_from)),
                                 );
@@ -113,15 +111,6 @@ impl Agents {
             })
     }
 
-    /// A page's line as drawn: its tab's title while it has one, else its site; one the agent was
-    /// kept from, its site alone.
-    fn page_title(&self, tab: Option<u64>, site: &str, kept_from: bool, cx: &App) -> String {
-        let title = (tab.filter(|_| !kept_from))
-            .map(|tab| self.browser.tab(tab, cx).title.to_string())
-            .filter(|title| !title.is_empty());
-        title.unwrap_or_else(|| site.to_string())
-    }
-
     /// A step's line as drawn, which shows what it typed only where `shows_typed` let it, and on a
     /// page the agent was kept from, the product's own words for its kind and nothing of the page.
     fn step_of(&self, task: &Task, step: &TraceStep, kept_from: bool) -> Record {
@@ -141,6 +130,16 @@ impl Agents {
             },
             failed: step.failed,
         }
+    }
+}
+
+/// A page's line as drawn: the title its steps kept while it had one, else its site; one the
+/// agent was kept from, its site alone. Never its tab's title at Done, which is whatever page the
+/// tab went on to.
+fn page_title(page: &Page, kept_from: bool) -> String {
+    match kept_from || page.title.is_empty() {
+        true => page.site.to_string(),
+        false => page.title.to_string(),
     }
 }
 

@@ -423,6 +423,42 @@ fn a_done_kept_task_keeps_its_log_and_remove_all_takes_it(cx: &mut TestAppContex
     assert!(!file.exists());
 }
 
+/// A kept log keeps each page by the title its steps saw, not the title its tab has at Done: a
+/// tab that went on to another page doesn't name the pages before by the last one.
+#[gpui::test]
+fn a_kept_log_keeps_each_page_by_the_title_its_steps_saw(cx: &mut TestAppContext) {
+    use crate::agents::kept::log::Record;
+    let run = Run::new("card-log-titles", cx);
+    let (agent, tab) = at_work(&run, 1, cx);
+    let goes = |title: &'static str, url: &'static str| {
+        for each in (run.browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == tab) {
+            (each.2, each.3) = (title, url);
+        }
+    };
+    let step = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        _ = call(&run.agents, &agent, tool, arguments, cx);
+        cx.run_until_parked();
+    };
+    goes("Shop", "https://www.example.com/shop");
+    step("snapshot", json!({ "tab": tab }), cx);
+    step(
+        "navigate",
+        json!({ "tab": tab, "url": "https://slow.example/" }),
+        cx,
+    );
+    goes("Slow page", "https://slow.example/");
+    step("snapshot", json!({ "tab": tab }), cx);
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx).expect("a log");
+    let pages: Vec<&str> = (log.iter())
+        .filter_map(|record| match record {
+            Record::Page(page) => Some(page.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pages, ["Shop", "Slow page"], "{log:?}");
+}
+
 /// A page the agent was kept from, a site the user put off limits, keeps its site alone in the
 /// log, never its title, and a step on it the product's own words for its kind.
 #[gpui::test]
