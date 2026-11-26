@@ -817,7 +817,7 @@ expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon p
 # Export… in Settings › Sync & Import, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
+settings_general "⌘, didn't show Settings"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
 send clickkey $(drawn "toolbar Sync & Import")

@@ -43,7 +43,7 @@ done
 # item moves the ring and gives back the system's, and a click on Automatic's leaves the page's
 # scheme as it is. The row is captured in each look.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_general "Settings… didn't show Settings"
 settings_drew
 send clickkey $(drawn "toolbar Window")
 expect '^browser: settings tab Window$' "a click on Window didn't show its section"

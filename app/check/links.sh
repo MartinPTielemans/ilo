@@ -402,8 +402,8 @@ if [ "$driven" = 1 ]; then
   send click $page_point
   # Settings says the browser isn't the default and offers to make it so.
   send key , cmd
-  expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
-  settings_drew General
+  expect '^browser: settings shown Overview$' "⌘, didn't show Settings"
+  settings_drew Overview
   expect '^browser: default browser no$' "Settings didn't read whether the browser is the default"
   ../tools/window-screenshot.sh "$pid" "$out/links-settings.png" || fail "no window to capture"
   # Settings › Links, its second tab, starts with the Meet rule, as Arc seeds its Google Meet route

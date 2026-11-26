@@ -448,7 +448,7 @@ none_since "^browser: title $a pressed" || fail "the click on the dim reached th
 open_preview "for Settings"
 # The preview's page takes no window's keys but its own, so Settings comes from the menu.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show Settings over the preview"
+expect '^browser: settings shown Overview$' "Settings… didn't show Settings over the preview"
 in_order "after Settings took the keyboard" '^browser: link preview released$' \
   '^browser: link preview closing (dismissed)$' "^browser: tab $p closed\$"
 send key w cmd
@@ -563,7 +563,7 @@ link_to site
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
+settings_general "⌘, didn't show Settings"
 # Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
 expect '^browser: settings drew General$' "Settings didn't draw General"
 # Peek is under General's own rows: in_sight scrolls it up, from this show's frame.
@@ -616,7 +616,7 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+settings_general "⌘, didn't show Settings"
 expect '^browser: settings drew General$' "Settings didn't draw General"
 in_sight "switch link previews" '^browser: settings drew General$' ||
   fail "Settings didn't draw the link previews' switch"

@@ -88,7 +88,7 @@ send key 2 cmd
 expect "^browser: selected $wiki in " "⌘2 didn't show the pinned Wikipedia tab"
 shot 3-pinned
 send key , cmd
-expect '^browser: settings shown General$' "⌘, didn't show Settings"
+settings_general "⌘, didn't show Settings"
 shot 4-settings
 send key escape
 exec 3>&-

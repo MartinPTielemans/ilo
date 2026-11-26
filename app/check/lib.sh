@@ -797,6 +797,16 @@ settings_drew() {
   fi
   fail "Settings didn't draw ${1:-its tab}; no report of its window's visibility came since the command"
 }
+# Settings, just shown with no page named, then on General: it opens on Overview (S1), so a click
+# on the toolbar's General shows it, as everyday_section clicks its section. $1 is the row's
+# failure message for the show.
+settings_general() {
+  expect '^browser: settings shown Overview$' "$1"
+  settings_drew Overview
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  settings_drew General
+}
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
 # waited for, which drawn_after leaves out.
