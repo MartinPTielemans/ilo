@@ -1983,9 +1983,9 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
         )
     );
     shell.update(cx, |shell, cx| {
-        shell.set_agent_status(held("MCP client"), cx)
+        shell.set_agent_status(held("Another app"), cx)
     });
-    assert_eq!(says(&shell, cx).0, "MCP client needs you");
+    assert_eq!(says(&shell, cx).0, "Another app needs you");
 }
 
 /// While a task works on several pages, the strip under each says that page's own step, never

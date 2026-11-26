@@ -8,7 +8,7 @@
 //! and sessions live as long as the browser runs: their Spaces go when a task is dropped, at quit, and at the next launch for
 //! any a crash left.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -939,6 +939,9 @@ pub struct Tasks {
     /// The name each outside agent gave on each of its connections (`session_connection`), by its
     /// id and the connection, for that connection's session's card.
     pub(super) names: HashMap<(String, u64), SharedString>,
+    /// Of those, the connections of an outside app that gave no name, or one treated as none, so
+    /// theirs is its kind's (`hello`).
+    pub(super) nameless: HashSet<(String, u64)>,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
     /// Whether ⌘T's ask has shown in this run, which learns again once.
@@ -3231,18 +3234,23 @@ impl Agents {
             task.state == State::Working
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
         });
-        let name = match Client::from_id(agent) {
+        let (name, nameless) = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
                 if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
             {
-                given
+                (given, false)
             }
-            Some(known) => known.name().to_string(),
+            Some(known) => (known.name().to_string(), known == Client::Other),
             None => return,
         };
         let name = page::clip(&name, 60).into();
-        self.tasks.names.insert((agent.into(), connection), name);
+        let key = (agent.to_string(), connection);
+        match nameless {
+            true => self.tasks.nameless.insert(key.clone()),
+            false => self.tasks.nameless.remove(&key),
+        };
+        self.tasks.names.insert(key, name);
     }
 
     /// The client's `connection` closed: its name goes, but for the client's last, which shows
@@ -3250,7 +3258,9 @@ impl Agents {
     pub(super) fn goodbye(&mut self, agent: &str, connection: u64) {
         let others = (self.tasks.names.keys()).any(|(each, on)| each == agent && *on != connection);
         if others {
-            self.tasks.names.remove(&(agent.into(), connection));
+            let key = (agent.to_string(), connection);
+            self.tasks.names.remove(&key);
+            self.tasks.nameless.remove(&key);
         }
     }
 
@@ -3260,6 +3270,17 @@ impl Agents {
             .filter(|((each, _), _)| each == agent)
             .max_by_key(|((_, connection), _)| *connection)
             .map(|(_, name)| name.clone())
+    }
+
+    /// Whether the name `agent` shows on `connection`, or where that connection gave none, is its
+    /// kind's because it gave no name of its own: an outside app's that gave none, or one treated
+    /// as none.
+    pub(super) fn nameless_on(&self, agent: &str, connection: Option<u64>) -> bool {
+        let key = connection.map(|on| (agent.to_string(), on));
+        match key.filter(|key| self.tasks.names.contains_key(key)) {
+            Some(key) => self.tasks.nameless.contains(&key),
+            None => Client::from_id(agent) == Some(Client::Other),
+        }
     }
 
     /// The connection whose session's card has `tab` among its pages, of `agent`'s, for what its

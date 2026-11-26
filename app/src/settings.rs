@@ -3986,9 +3986,13 @@ impl Settings {
                 continue;
             }
             listed_any = true;
-            blocks.push(Block::Heading(
-                format!("What {} may do", agents.read(cx).agent_name(client.id())).into(),
-            ));
+            // An app with no name of its own is "this app" here, as Another app would read as a
+            // name (table OA1).
+            let heading = match model.nameless(client.id()) {
+                true => "What this app may do".into(),
+                false => format!("What {} may do", model.agent_name(client.id())).into(),
+            };
+            blocks.push(Block::Heading(heading));
             blocks.extend(grants.map(Block::Group));
             if !entries.is_empty() {
                 blocks.push(Block::Group(group(look, entries)));
