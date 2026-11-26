@@ -300,9 +300,9 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 /// blur reaches, and on X11 and Windows nothing asks for one (#3676).
 const BLURRED: bool = cfg!(target_os = "macos");
 
-/// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
-/// (`bc_window_start_resize`).
-const RESIZE_EDGE: f32 = 3.;
+/// The strip inside the browser window's sides that the UI keeps over the page: the hidden
+/// sidebar's edge, and on Linux the band that resizes the window (`bc_window_start_resize`).
+use crate::tokens::shell::EDGE_STRIP;
 
 // Rows make room and close it, a closed tab's row fades and new rows fade in on one spring, Arc's
 // (docs/ux-spec.md › Motion: Row motion). A row's hover fill comes and goes in one frame, and only
@@ -4486,15 +4486,44 @@ impl Shell {
             |_, _, _| {},
             move |_, _, window, _| {
                 let shell = shell.clone();
-                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        shell.update(cx, |shell, _| shell.page_keyboard = None).ok();
+                        let x = f32::from(event.position.x);
+                        shell.update(cx, |shell, cx| shell.ui_pressed(x, cx)).ok();
                     }
                 });
             },
         )
         .absolute()
         .size_full()
+    }
+
+    /// A press `x` across the window's own view. One in a strip at its side over the page leaves
+    /// the page the keyboard it had: the strip brings the sidebar out on hover and, on Linux,
+    /// resizes the window, neither of which is a press in the UI, so the host's move of the
+    /// keyboard to the UI with it is undone.
+    pub(super) fn ui_pressed(&mut self, x: f32, cx: &mut Context<Self>) {
+        if self.page_keyboard.is_some() && self.in_edge_strip(x) {
+            self.browser.focus_page(cx);
+            return;
+        }
+        self.page_keyboard = None;
+    }
+
+    /// Whether `x` across the window is in a strip at its side the UI keeps over the page: the
+    /// hidden sidebar's edge (`reveal_edge`) or, on Linux, a band that resizes the window
+    /// (`resize_bands`).
+    fn in_edge_strip(&self, x: f32) -> bool {
+        let width = f32::from(self.viewport.width);
+        let reveal = self.sidebar_hidden
+            && !self.page_fullscreen
+            && self.little.is_none()
+            && self.from_side(x) < EDGE_STRIP;
+        let band = cfg!(target_os = "linux")
+            && !self.maximized
+            && !self.full_screen
+            && (x < EDGE_STRIP || x >= width - EDGE_STRIP);
+        reveal || band
     }
 
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
@@ -4541,7 +4570,7 @@ impl Shell {
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .w(px(RESIZE_EDGE))
+                    .w(px(EDGE_STRIP))
                     .cursor(match right {
                         true => CursorStyle::ResizeRight,
                         false => CursorStyle::ResizeLeft,

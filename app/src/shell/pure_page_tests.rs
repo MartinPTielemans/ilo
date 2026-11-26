@@ -6,7 +6,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AppContext, Bounds, Entity, Pixels, Size, TestAppContext, VisualTestContext, point, px, size,
+    AppContext, Bounds, Entity, Modifiers, MouseButton, Pixels, Size, TestAppContext,
+    VisualTestContext, point, px, size,
 };
 
 use super::drag::detents::shell_with;
@@ -309,4 +310,50 @@ fn developer_mode_outlines_nothing_with_the_sidebar_hidden(cx: &mut TestAppConte
     let (hidden, cx) = developer_window(true, cx);
     let drawn = hidden.read_with(cx, |shell, _| shell.developer_outline_drawn.get());
     assert_eq!(drawn, None, "an outline drew with the sidebar hidden");
+}
+
+/// A press in the strip at the hidden sidebar's edge leaves the page the keyboard it had: the strip
+/// brings the sidebar out on hover, and the host's move of the keyboard to the UI with the press is
+/// undone. A press in the UI past it takes the keyboard, as any does.
+#[gpui::test]
+fn a_press_in_the_edge_strip_leaves_the_page_the_keyboard(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host.clone(), cx));
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        shell.sidebar_hidden = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let press = |x: f32, cx: &mut VisualTestContext| {
+        let at = point(px(x), px(300.));
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    };
+    let has_keyboard = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.page_keyboard.is_some())
+    };
+    shell.update_in(cx, |shell, window, cx| shell.page_took_keyboard(window, cx));
+    host.take();
+    press(1., cx);
+    assert!(
+        has_keyboard(&shell, cx),
+        "a press in the strip took the page's keyboard"
+    );
+    assert!(
+        host.take()
+            .iter()
+            .any(|call| call.starts_with("focus page")),
+        "the page wasn't given the keyboard back after the press in the strip"
+    );
+    press(400., cx);
+    assert!(
+        !has_keyboard(&shell, cx),
+        "a press in the UI left the page the keyboard"
+    );
 }

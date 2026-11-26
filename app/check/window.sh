@@ -21,7 +21,8 @@
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
-# the page goes to its place in one step when the motion is over by its first frame. The
+# the page goes to its place in one step when the motion is over by its first frame. On the Mac a
+# press in the strip at the hidden sidebar's edge leaves the page the keyboard. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -985,6 +986,15 @@ expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focuse
 moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
+# A press in the strip at the hidden sidebar's edge isn't a press in the UI: the strip brings the
+# sidebar out on hover alone, so the page keeps the keyboard. The Mac's driver names the page's
+# view; on Linux the strip is also the band that resizes the window.
+if [ "$(uname)" = Darwin ]; then
+  send click 1 400
+  send warp
+  send state
+  in_browser RenderWidgetHostViewCocoa "a press in the strip at the hidden sidebar's edge"
+fi
 send key s cmd
 moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"

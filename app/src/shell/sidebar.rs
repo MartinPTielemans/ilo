@@ -16,7 +16,7 @@ use crate::glow;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
-    PLATE_INSET, PRIVATE_SHADE, RESIZE_EDGE, REVEAL_BACK, REVEAL_HOLD, REVEAL_IN_DAMPING,
+    EDGE_STRIP, PLATE_INSET, PRIVATE_SHADE, REVEAL_BACK, REVEAL_HOLD, REVEAL_IN_DAMPING,
     REVEAL_IN_RESPONSE, REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE,
     REVEAL_OVERSHOOT, REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
     SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
@@ -724,7 +724,7 @@ impl Shell {
             .absolute()
             .top_0()
             .bottom_0()
-            .w(px(RESIZE_EDGE))
+            .w(px(EDGE_STRIP))
             .block_mouse_except_scroll()
             .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, _, cx| {
                 shell.pointer_over(event.position, cx);
@@ -757,7 +757,7 @@ impl Shell {
             let now = cx.background_executor().now();
             back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
         }
-        let in_strip = (0. ..RESIZE_EDGE).contains(&side) && y >= 0.;
+        let in_strip = (0. ..EDGE_STRIP).contains(&side) && y >= 0.;
         self.reveal_strip = in_strip.then(|| match self.reveal_strip {
             Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
             None => (y, back),
@@ -829,7 +829,7 @@ impl Shell {
         // The edge is the strip a page reaching the window's side leaves to the UI, the resize
         // edge's width (core/page_edge_strips.h). Past it, out of the window, the pointer has gone
         // to another window or display.
-        if !(0. ..RESIZE_EDGE).contains(&x) {
+        if !(0. ..EDGE_STRIP).contains(&x) {
             self.reveal_wait = None;
             self.reveal_strip = None;
             // A question or a chooser keeps it out until it's answered, the Cast card and its
