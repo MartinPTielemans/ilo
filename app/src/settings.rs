@@ -46,8 +46,8 @@ use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
     command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
-    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
-    stop_chip, stop_popup, stop_restore, stop_switch, text,
+    group_lined, installed_row, mark_row, named_button, named_popup, ring, row, segmented,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,

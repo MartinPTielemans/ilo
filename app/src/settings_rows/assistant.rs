@@ -88,6 +88,11 @@ pub fn assistant_row(
         Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
         Offer::SignIn => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
         Offer::TryAgain => vec![press("assistant-try-again", sign_in(), Act::SignIn)],
+        // Its program missing, its maker's installer and then its sign-in (AS1), from one press.
+        Offer::Install | Offer::TryInstall => {
+            let title = shown.offer.label(cli).unwrap_or_default().into();
+            vec![press("assistant-install", title, Act::SignIn)]
+        }
         // Under way, the ring the product turns while it works, and the way out.
         Offer::Cancel => vec![
             working(look, index).into_any_element(),
@@ -134,6 +139,34 @@ pub fn assistant_row(
     wrapping(look, cli.glyph(), text, controls)
 }
 
+/// The line under an assistant's row once ilo installed its program (AS6), there while the program
+/// is, signed in or out (AS7), with How to Uninstall, which `uninstall` opens: its maker's page,
+/// since ilo never removes it. A program the user installed has none.
+pub fn installed_row(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    a11y: bool,
+    uninstall: Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Div {
+    use crate::agents::sign_in::HOW_TO_UNINSTALL;
+    let button = stop_button(
+        look,
+        ("assistant-uninstall", cli as usize),
+        HOW_TO_UNINSTALL,
+        a11y,
+    )
+    .on_click(move |_, window, cx| uninstall(window, cx));
+    frame()
+        .child(
+            lined(look)
+                .mt_0()
+                .flex_1()
+                .min_w_0()
+                .child(cli.installed_line()),
+        )
+        .child(end([button.into_any_element()]))
+}
+
 /// An assistant's ⋯, which opens its menu at `menu_at` with a press.
 fn more(
     look: &Look,
@@ -177,6 +210,10 @@ pub fn first_run_row(
         Offer::Nothing => vec![working(look, index).into_any_element()],
         Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
         Offer::SignIn | Offer::TryAgain => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
+        Offer::Install | Offer::TryInstall => {
+            let title = shown.offer.label(cli).unwrap_or_default().into();
+            vec![press("assistant-install", title, Act::SignIn)]
+        }
         Offer::Cancel => vec![
             working(look, index).into_any_element(),
             press(

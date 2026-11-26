@@ -81,10 +81,32 @@ impl Settings {
             (row, ROW_X)
         });
         let assistants: Vec<_> = assistants.collect();
-        let assistants = (assistants.into_iter().zip(models))
-            .flat_map(|(row, model)| std::iter::once(row).chain(model));
+        // AS6: under the row of a program ilo installed, while it's there, the way to remove it.
+        let installed: Vec<Option<(gpui::Div, f32)>> = (Cli::ALL.iter())
+            .map(|&cli| {
+                let shown = !alone || self.looked_up.contains(&cli);
+                (shown && agents.read(cx).installed_here(cli)).then(|| self.installed(cli))
+            })
+            .collect();
+        let assistants = (assistants.into_iter().zip(installed).zip(models)).flat_map(
+            |((row, installed), model)| std::iter::once(row).chain(installed).chain(model),
+        );
         // Another app is Apps that connect's, two groups down, so it's not here as well.
         group_lined(look, assistants)
+    }
+
+    /// The AS6 line under `cli`'s row, set in as its Model is: How to Uninstall opens its maker's
+    /// page in a new tab.
+    fn installed(&self, cli: Cli) -> (gpui::Div, f32) {
+        let uninstall = move |_: &mut Window, cx: &mut App| {
+            if let Some(page) = cli.uninstall_page() {
+                log!("browser: assistant uninstall page {}", cli.id());
+                open_notice(page, cx)
+            }
+        };
+        let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let row = installed_row(&self.look, cli, self.a11y, Rc::new(uninstall));
+        (row.pl(px(x)), x)
     }
 
     /// `cli`'s Model, under its row and set in from it as a feature's own settings are, with the

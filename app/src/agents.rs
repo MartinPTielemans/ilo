@@ -23,6 +23,7 @@ pub mod fence;
 pub mod files;
 mod held;
 mod helpers;
+pub mod install;
 pub mod kept;
 mod lines;
 pub mod notes;
@@ -1235,6 +1236,12 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        let installed = (tasks.get("installed").and_then(Value::as_array))
+            .into_iter()
+            .flatten();
+        self.tasks.sign_ins.installed = (installed.filter_map(Value::as_str))
+            .filter_map(runner::Cli::from_id)
+            .collect();
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
@@ -5786,6 +5793,9 @@ impl Agents {
             "found": found,
             "last": last,
             "notify": self.notify.id(),
+            "installed": (self.tasks.sign_ins.installed.iter())
+                .map(|cli| cli.id())
+                .collect::<Vec<_>>(),
         });
         let saved = json!({
             "threads": self.threads(),
