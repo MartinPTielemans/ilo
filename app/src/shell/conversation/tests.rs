@@ -4730,3 +4730,241 @@ fn a_kept_card_is_told_only_of_a_picture_an_agent_could_have_had(cx: &mut TestAp
     shell.update(cx, |shell, _| shell.private = true);
     assert_eq!(taken(&|_, _| {}, cx), None);
 }
+
+/// Task-1's conversation of `lines` lines of its own and then `last`, which scroll.
+fn foot_talk(lines: usize, last: Vec<Line>) -> Conversation {
+    let mut talk = conversation(1);
+    (talk.lines).extend((0..lines).map(|n| {
+        Line::Said(
+            format!("Line {n} of what the assistant said, long enough to wrap in the panel").into(),
+        )
+    }));
+    talk.lines.extend(last);
+    talk
+}
+
+/// ilo's line handing tab 30 to the user, with Hand Back and Not Now.
+fn handed(key: usize) -> Line {
+    Line::Ilo(IloLine {
+        key,
+        kind: IloKind::Yours {
+            tab: 30,
+            site: None,
+        },
+        settled: false,
+    })
+}
+
+/// ilo's line that it stopped the task at an order on tab 30, with Take Over.
+fn stopped(key: usize) -> Line {
+    Line::Ilo(IloLine {
+        key,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Place order".into(),
+            doing: "clicking “Place order”".into(),
+            why: Why::Order,
+            tier: Tier::Work,
+            count: 1,
+        },
+        settled: false,
+    })
+}
+
+/// The product puts the handed page 30 beside the conversation by itself, as at a hand-off
+/// (`open_needing_page`), and the core then shows its Space and page.
+fn hand_off(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| shell.open_needing_page(30, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_space(3, cx);
+        shell.set_selected(30, cx);
+    });
+    redraw(shell, view, cx);
+    redraw(shell, view, cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the handed page isn't beside the conversation"
+    );
+}
+
+/// Whether line `key`'s button was drawn whole inside the lines' scrolled area, by the scroll's
+/// own bounds and the place the button recorded as it was painted.
+fn in_view(
+    view: &Entity<super::TalkView>,
+    key: (usize, IloButton),
+    cx: &mut VisualTestContext,
+) -> Result<(), String> {
+    let (button, _) = ilo_button(view, key, cx).ok_or(format!("{key:?} wasn't drawn"))?;
+    let area = view.read_with(cx, |view, _| view.scroll.bounds());
+    match button.top() >= area.top() && button.bottom() <= area.bottom() {
+        true => Ok(()),
+        false => Err(format!(
+            "{key:?} drawn at {:?} to {:?}, the lines' area {:?} to {:?}",
+            button.top(),
+            button.bottom(),
+            area.top(),
+            area.bottom()
+        )),
+    }
+}
+
+/// The scroll's offset and its most, as last laid out.
+fn foot_scrolled(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (gpui::Pixels, gpui::Pixels) {
+    view.read_with(cx, |view, _| {
+        (view.scroll.offset().y, view.scroll.max_offset().y)
+    })
+}
+
+/// At a hand-off the product puts the handed page beside the conversation, whose column narrows
+/// and wraps taller: read at its foot before, it's at its foot after, so the handed line's Hand
+/// Back and Not Now stand in view, and a line that needs the user after it is followed.
+#[gpui::test]
+fn a_hand_off_keeps_a_conversation_at_its_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert!(max > px(0.), "the lines fit, so nothing scrolls");
+    assert_eq!(offset, -max, "it opened away from its foot");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    for button in [IloButton::HandBack, IloButton::NotNow] {
+        in_view(&view, (900, button), cx).unwrap_or_else(|miss| {
+            panic!("beside the handed page, the handed line's button is out of view: {miss}")
+        });
+    }
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    in_view(&view, (901, IloButton::TakeOver), cx).unwrap_or_else(|miss| {
+        panic!("a line that needs the user, beside the handed page, wasn't followed: {miss}")
+    });
+}
+
+/// The same with the lines still easing after the line before when the page goes beside: the
+/// follow ends at the foot of the narrower column, not short of it.
+#[gpui::test]
+fn a_follow_under_way_at_a_hand_off_ends_at_the_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    // The question comes wide, at the foot: the lines start to follow it on their curve.
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![stopped(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.motion.follow.is_some()),
+        "the question wasn't followed on a curve"
+    );
+    // The curve takes a step wide, then the product hands the user the page in the same moment
+    // as its line comes, and the curve goes on a step a frame to its end.
+    let step = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            if let Some(follow) = view.motion.follow.as_mut() {
+                follow.since -= std::time::Duration::from_millis(40);
+            }
+        });
+    };
+    step(&view, cx);
+    redraw(&shell, &view, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![stopped(900), handed(901)])), cx)
+    });
+    hand_off(&shell, &view, cx);
+    for _ in 0..100 {
+        if view.read_with(cx, |view, _| view.motion.follow.is_none()) {
+            break;
+        }
+        step(&view, cx);
+        redraw(&shell, &view, cx);
+    }
+    redraw(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "the follow under way ended short of the foot");
+    for button in [IloButton::HandBack, IloButton::NotNow] {
+        in_view(&view, (901, button), cx).unwrap_or_else(|miss| {
+            panic!("the handed line's button is out of view after the follow: {miss}")
+        });
+    }
+}
+
+/// Scrolled up before the hand-off, the lines stay where the user left them, and nothing that
+/// comes after moves them: the card's Needs you tells them.
+#[gpui::test]
+fn a_hand_off_leaves_lines_the_user_scrolled_up_where_they_are(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, Vec::new())), cx)
+    });
+    redraw(&shell, &view, cx);
+    view.update(cx, |view, _| {
+        view.scroll.set_offset(point(px(0.), px(-100.)))
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    assert_eq!(
+        foot_scrolled(&view, cx).0,
+        px(-100.),
+        "the hand-off pulled the user away from what they read"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    assert_eq!(
+        foot_scrolled(&view, cx).0,
+        px(-100.),
+        "a line after the hand-off pulled the user away from what they read"
+    );
+}
+
+/// Back from the page, the column wide again, a conversation that was at its foot still is.
+#[gpui::test]
+fn back_from_a_handed_page_a_conversation_stays_at_its_foot(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    hand_off(&shell, &view, cx);
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "beside the page, it's off its foot");
+    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    redraw(&shell, &view, cx);
+    redraw(&shell, &view, cx);
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the page didn't go back"
+    );
+    let (offset, max) = foot_scrolled(&view, cx);
+    assert_eq!(offset, -max, "back wide, it's off its foot");
+    // And a line that comes then is followed.
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(foot_talk(60, vec![handed(900), stopped(901)])), cx)
+    });
+    redraw(&shell, &view, cx);
+    in_view(&view, (901, IloButton::TakeOver), cx)
+        .unwrap_or_else(|miss| panic!("back wide, a new line wasn't followed: {miss}"));
+}
