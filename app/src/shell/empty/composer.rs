@@ -65,10 +65,16 @@ enum Owed {
 }
 
 impl Shell {
+    /// Whether the card rests on the bar: the Space shows no page, the welcome hasn't the card,
+    /// and the window isn't a Little ilo window's, which keeps its own bar inside it.
+    pub(in crate::shell) fn rests_on_bar(&self) -> bool {
+        self.selected == 0 && !self.welcome && self.little.is_none()
+    }
+
     /// Makes the bar the page rests on as the Space comes to show no page, and drops it as a page
     /// shows, or the welcome takes the card.
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             if let Some(resting) = self.resting.take() {
                 // GPUI's focus would go with the field, and the shortcuts with it, as the shell's
                 // context holds them, until a click lands on the shell, which a header button's
@@ -89,6 +95,8 @@ impl Shell {
             if resting.space != space {
                 resting.space = space;
                 resting.wants_keys = Owed::Shown;
+                let bar = resting.bar.clone();
+                bar.update(cx, |bar, cx| bar.space_changed(window, cx));
             }
             return self.give_resting_keys(window, cx);
         }
@@ -113,7 +121,7 @@ impl Shell {
     /// over it (#4140). Whether it did.
     pub(in crate::shell) fn keys_to_resting(&mut self, cx: &mut Context<Self>) -> bool {
         // The field stays until the next frame drops it, so a page shown since isn't one.
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             return false;
         }
         let Some(resting) = &mut self.resting else {
