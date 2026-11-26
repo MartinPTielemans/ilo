@@ -858,11 +858,9 @@ fn no_text_on_the_card_reads_under_text_3(_: &mut TestAppContext) {
     for light in [false, true] {
         let inks = super::card::Inks::of(light);
         let look = super::switch_look(inks);
-        let account = super::account_look(inks);
         for (what, ink) in [
             ("a row's name", look.ink),
             ("a row's second line", look.detail),
-            ("the account's second line", account.detail),
             ("the card's second ink", inks.text_2()),
             ("the card's third ink", inks.text(t::TEXT_3)),
         ] {
@@ -911,6 +909,21 @@ fn the_main_button_goes_toward_its_label_under_the_pointer(_: &mut TestAppContex
                 );
             }
         }
+    }
+}
+
+/// The account's view on the card takes the switches' look whole: its signed-in dot, the look's
+/// primary, is the text's ink as every mark on the card is, in both looks.
+#[gpui::test]
+fn the_accounts_dot_is_the_cards_ink(_: &mut TestAppContext) {
+    for light in [false, true] {
+        let inks = super::card::Inks::of(light);
+        let look = super::switch_look(inks);
+        assert_eq!(
+            look.primary, look.ink,
+            "light {light}: the dot is the look's ink"
+        );
+        assert_eq!(look.ink, inks.text(1.), "light {light}: the text's own");
     }
 }
 
