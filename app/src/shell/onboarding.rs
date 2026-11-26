@@ -339,10 +339,9 @@ pub(super) struct Onboarding {
     /// When the entry began, while it plays (v9 §2).
     entry: Option<Instant>,
     /// The card's size and corners the host last shaped the window to, so it's told only of a
-    /// change: on the entry's frames, and once as it ends.
+    /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
+    /// behind (`exit::behind`).
     shaped: Option<(f32, f32, f32)>,
-    /// The card's size and corners as the last frame drew them (`glass_shape`).
-    drawn: Option<(f32, f32, f32)>,
     /// Help › Welcome plays the card again, which keeps no step to resume at.
     replay: bool,
     /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
@@ -609,7 +608,6 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
-            drawn: None,
             replay,
             pressed: Vec::new(),
             signing: Vec::new(),
@@ -1387,12 +1385,10 @@ impl Shell {
             let last = (onboarding.grown(still)).then(|| {
                 let plate = exit::frame(length, true, viewport).plate;
                 let (_, _, w, h, radius) = plate;
-                let glass = onboarding.glass_shape((w, h, radius));
-                if onboarding.shaped != Some(glass) {
-                    let (w, h, radius) = glass;
+                if onboarding.shaped != Some((w, h, radius)) {
                     self.browser.shape_first_run(w, h, radius);
                 }
-                (plate, glass)
+                (plate, (w, h, radius))
             });
             self.onboarding = None;
             // check.sh waits for this line.
@@ -1550,11 +1546,18 @@ impl Shell {
         let exit = exiting.map(|at| exit::frame(at, onboarding.grown(still), viewport));
         let plate = exit.as_ref().map_or(plate, |exit| exit.plate);
         let (_, _, w, h, radius) = plate;
-        let shape = onboarding.glass_shape((w, h, radius));
-        if onboarding.shaped.replace(shape) != Some(shape) {
-            let (w, h, radius) = shape;
+        let shape = (w, h, radius);
+        let before = onboarding.shaped.replace(shape);
+        if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
         }
+        // The glass is the system's and reaches the screen a frame after the card drawn with it,
+        // so the exit draws the card in the shape its glass was given the frame before, and fill
+        // and glass grow together.
+        let plate = match (&exit, before) {
+            (Some(_), Some(before)) => exit::behind(before, viewport),
+            _ => plate,
+        };
         if step == Step::Space {
             self.space_editor(light, window, cx);
         }
