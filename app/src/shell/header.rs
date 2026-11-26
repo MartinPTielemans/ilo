@@ -344,8 +344,11 @@ impl Shell {
             log!("browser: nav glyphs dimmed {dimmed}");
         }
         let page = self.page(self.field_tab());
-        let [sidebar, back, forward, reload_x] =
-            nav_places(self.width(), self.full_screen, self.right);
+        let [sidebar, back, forward, reload_x] = nav_places(
+            self.width(),
+            self.full_screen || self.buttons_at_bar_end(),
+            self.right,
+        );
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -1036,14 +1039,15 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 
 /// Where the header's buttons' plates start in a sidebar `width` wide: the sidebar button, then
 /// back, forward and reload, each None where it doesn't fit. The sidebar button follows the traffic
-/// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
+/// lights, or starts near the sidebar's edge where the window's buttons have left the corner
+/// (`corner_free`): in full screen (Arc 1.171), and on Windows with the top bar on (#3160). The
 /// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
 /// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
 /// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
 /// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
 /// from the page (#2375).
-pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
-    let sidebar = if full_screen {
+pub(super) fn nav_places(width: f32, corner_free: bool, right: bool) -> [Option<f32>; 4] {
+    let sidebar = if corner_free {
         FULL_SCREEN_SIDEBAR_BUTTON_X
     } else {
         SIDEBAR_BUTTON_X

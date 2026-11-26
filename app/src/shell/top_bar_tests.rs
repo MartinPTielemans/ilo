@@ -15,7 +15,10 @@ use super::{
     CARD_INSET, Command, Folders, Page, Shell, SidebarRight, TopBar, WINDOW_BUTTONS,
     recorder::Recorder,
 };
-use crate::tokens::shell::{TOP_BAR, URL_FIELD_HEIGHT, WINDOWS_BUTTON_PLATE};
+use crate::tokens::shell::{
+    FULL_SCREEN_SIDEBAR_BUTTON_X, NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X, TOP_BAR, URL_FIELD_HEIGHT,
+    WINDOWS_BUTTON_PLATE,
+};
 
 const WINDOWS: bool = cfg!(target_os = "windows");
 
@@ -201,6 +204,41 @@ fn on_windows_the_window_buttons_go_to_the_bars_end(cx: &mut TestAppContext) {
 
 /// A click on the bar's field opens the command bar over the field, as a click on the sidebar's
 /// does, the sidebar hidden too.
+/// On Windows, with the window's buttons gone to the bar's end, the sidebar button takes the corner
+/// they left, where full screen has it, and back, forward and reload stay where they are. With the
+/// bar off it follows the window's buttons again. The Mac's and Linux's stays after their buttons.
+#[gpui::test]
+fn on_windows_the_sidebar_button_takes_the_corner_the_buttons_left(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    let hides = |x: f32, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.simulate_click(
+            point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.)),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        let hidden = shell.update(cx, |shell, _| {
+            let hidden = shell.sidebar_hidden;
+            shell.sidebar_hidden = false;
+            shell.sidebar_motion = None;
+            hidden
+        });
+        draw(shell, cx);
+        hidden
+    };
+
+    bar(true, &shell, cx);
+    let corner = match WINDOWS {
+        true => FULL_SCREEN_SIDEBAR_BUTTON_X,
+        false => SIDEBAR_BUTTON_X,
+    };
+    assert!(hides(corner, &shell, cx), "no sidebar button at {corner}");
+    bar(false, &shell, cx);
+    assert!(
+        hides(SIDEBAR_BUTTON_X, &shell, cx),
+        "the sidebar button didn't go back"
+    );
+}
+
 #[gpui::test]
 fn a_click_on_the_bars_field_opens_the_command_bar_over_it(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
