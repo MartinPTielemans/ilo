@@ -1,6 +1,7 @@
 //! What a kept thread brings back across a quit (#4090), in a folder of its own,
-//! `<profile>/Kept threads/<card id>/`, which only its owner can open: its card's line and its
-//! page's last picture, and later its log and its trace's pictures, each under a name this file
+//! `<profile>/Kept threads/<card id>/`, which only its owner can open: its card's line, its
+//! page's last picture and its log as drawn closed (log.rs), and later its trace's pictures, each
+//! under a name this file
 //! gives it. This is the one place that writes, reads and removes them, and its `Queue` the one
 //! way they're written and removed, in the order asked. The names in it are this file's own and
 //! the card's id, never anything of a thread's, and nothing here logs.
@@ -69,6 +70,7 @@ impl std::fmt::Debug for CardId {
 enum File {
     Line,
     Picture,
+    Log,
 }
 
 impl File {
@@ -76,6 +78,7 @@ impl File {
         match self {
             File::Line => "line",
             File::Picture => "card.png",
+            File::Log => "log",
         }
     }
 }
@@ -234,11 +237,18 @@ fn png(pixels: &Pixels) -> Option<Vec<u8>> {
     Some(encoded)
 }
 
-/// Writes `id`'s card in `root`: its `line` in place of what was there, and its picture as
-/// `picture` says. With neither, nothing is left of it. It encodes the picture, so it's never run
-/// on the UI's thread. False if any of it couldn't be written, when what was there may be gone.
-pub fn write(root: &Path, id: &CardId, line: Option<&str>, picture: &Picture) -> bool {
-    if line.is_none() && matches!(picture, Picture::Remove) {
+/// Writes `id`'s card in `root`: its `line` and its `log` in place of what was there, and its
+/// picture as `picture` says. With none of them, nothing is left of it. It encodes the picture, so
+/// it's never run on the UI's thread. False if any of it couldn't be written, when what was there
+/// may be gone.
+pub fn write(
+    root: &Path,
+    id: &CardId,
+    line: Option<&str>,
+    picture: &Picture,
+    log: Option<&str>,
+) -> bool {
+    if line.is_none() && log.is_none() && matches!(picture, Picture::Remove) {
         remove(root, id);
         return true;
     }
@@ -260,8 +270,13 @@ pub fn write(root: &Path, id: &CardId, line: Option<&str>, picture: &Picture) ->
         Picture::Taken(image) => Some(pixels(image).as_ref().and_then(png)),
     };
     let line = Some(line.map(|line| line.as_bytes().to_vec()));
+    let log = Some(log.map(|log| log.as_bytes().to_vec()));
     let mut written = true;
-    for (file, bytes) in [(File::Line, line), (File::Picture, picture)] {
+    for (file, bytes) in [
+        (File::Line, line),
+        (File::Picture, picture),
+        (File::Log, log),
+    ] {
         let Some(bytes) = bytes else {
             continue;
         };
@@ -278,7 +293,8 @@ pub fn write(root: &Path, id: &CardId, line: Option<&str>, picture: &Picture) ->
 }
 
 /// What `id`'s card in `root` holds: each file that's there, reads whole and has its shape. It
-/// decodes the picture, so it's never run on the UI's thread.
+/// decodes the picture, so it's never run on the UI's thread. Its log is read alone, by
+/// `read_log`, as a launch reads cards and never logs.
 pub fn read(root: &Path, id: &CardId) -> Card {
     let Some(folder) = own_folder(root, id) else {
         return Card::default();
@@ -287,6 +303,24 @@ pub fn read(root: &Path, id: &CardId) -> Card {
         line: read_line(&folder.join(File::Line.name())),
         picture: read_picture(&folder.join(File::Picture.name())),
     }
+}
+
+/// `id`'s log in `root`, if its file is no larger than a log may be and is one the app wrote.
+pub fn read_log(root: &Path, id: &CardId) -> Option<Vec<super::log::Record>> {
+    log_file(&own_folder(root, id)?.join(File::Log.name()))
+}
+
+fn log_file(path: &Path) -> Option<Vec<super::log::Record>> {
+    use std::io::Read;
+    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let most = super::log::MOST as u64;
+    let mut bytes = Vec::new();
+    (std::fs::File::open(path).ok()?.take(most + 1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    super::log::read(&String::from_utf8(bytes).ok()?)
 }
 
 fn read_line(path: &Path) -> Option<String> {
@@ -371,6 +405,8 @@ pub enum Job {
         id: CardId,
         line: Option<String>,
         picture: Picture,
+        /// Its log as the file holds it (log.rs), or None for none.
+        log: Option<String>,
     },
     /// Threads gone for good: `remove`, each.
     Remove(PathBuf, Vec<CardId>),
@@ -385,6 +421,12 @@ pub enum Job {
         Vec<CardId>,
         futures::channel::oneshot::Sender<Vec<(CardId, Back)>>,
     ),
+    /// A thread a run before left, first shown: its card's `read_log`.
+    ReadLog(
+        PathBuf,
+        CardId,
+        futures::channel::oneshot::Sender<Option<Vec<super::log::Record>>>,
+    ),
 }
 
 impl Job {
@@ -395,7 +437,8 @@ impl Job {
                 id,
                 line,
                 picture,
-            } => _ = write(&root, &id, line.as_deref(), &picture),
+                log,
+            } => _ = write(&root, &id, line.as_deref(), &picture, log.as_deref()),
             Job::Remove(root, ids) => {
                 for id in &ids {
                     remove(&root, id);
@@ -420,6 +463,7 @@ impl Job {
                 // A launch that went on without it, as a window closed meanwhile, wants none.
                 _ = answer.send(back);
             }
+            Job::ReadLog(root, id, answer) => _ = answer.send(read_log(&root, &id)),
         }
     }
 }

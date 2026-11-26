@@ -810,6 +810,12 @@ pub struct Shown {
     pub offer: Offer,
 }
 
+/// Claude's line while its sign-in waits, in the computer's browser (FR19). One line in first run's
+/// column, so the row keeps its height.
+pub(crate) const CLAUDE_WAITING: &str = "Finish in your browser.";
+/// ChatGPT's line while its sign-in waits, in a window the browser opens (FR19).
+pub(crate) const CHATGPT_WAITING: &str = "Finish in the new window.";
+
 /// What Claude Code's line says to run where its sign-in needs a terminal.
 pub const CLAUDE_SIGN_IN: &str = "claude auth login";
 
@@ -847,7 +853,10 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         offer,
     };
     match (row, ready) {
-        (Row::SigningIn, _) => shown("Finish in the page that opened", Offer::Cancel),
+        (Row::SigningIn, _) => match cli {
+            Cli::Claude => shown(CLAUDE_WAITING, Offer::Cancel),
+            Cli::Codex => shown(CHATGPT_WAITING, Offer::Cancel),
+        },
         (Row::SigningOut, _) => shown("Signing out…", Offer::Nothing),
         // Its Sign Out failed: still signed in, and the ⋯ menu has Sign Out again.
         (Row::Failed(said), Ready::SignedIn) => Shown {

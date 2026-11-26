@@ -138,6 +138,9 @@ pub enum IloKind {
     /// nowhere to work and its pages nowhere to go: a task a run of the browser before left. In
     /// the reply field's place.
     NoSpace,
+    /// A line of a thread a run before left, as its kept log stored it (kept/log.rs): its words
+    /// alone, which the app wrote, drawn as words: no button, link, ring or count.
+    Kept { words: SharedString },
 }
 
 /// What a task went on without, or couldn't be started again without, by the name the app shows
@@ -253,7 +256,7 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
         | IloKind::NotCopied { .. } => Vec::new(),
-        IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
+        IloKind::Resumed { .. } | IloKind::KeptHere | IloKind::Kept { .. } => Vec::new(),
         IloKind::Gone
         | IloKind::NotKept
         | IloKind::KeepsNothing
@@ -297,7 +300,7 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
         | IloKind::NotCopied { .. } => None,
-        IloKind::Resumed { .. } | IloKind::KeptHere => None,
+        IloKind::Resumed { .. } | IloKind::KeptHere | IloKind::Kept { .. } => None,
         IloKind::Gone
         | IloKind::NotKept
         | IloKind::KeepsNothing

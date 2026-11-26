@@ -5,20 +5,20 @@
 
 use gpui::{
     Bounds, Context, Corners, Entity, FontWeight, Hsla, Pixels, SharedString, Window, canvas, div,
-    point, prelude::*, px, rgb, rgba,
+    point, prelude::*, px, rgba,
 };
 
 use crate::agents::task::{Card, Dot, Word};
-use crate::command_bar::{self, CommandBar};
+use crate::command_bar::CommandBar;
 use crate::palette::{Palette, Tone};
 use crate::product;
 use crate::shell::ShowStarted;
-use crate::tokens::command_bar::{HEIGHT as BAR_HEIGHT, WIDTH as BAR_WIDTH};
+use crate::tokens::command_bar::{REST_HEIGHT as BAR_HEIGHT, REST_WIDTH as BAR_WIDTH};
 use crate::tokens::shell::composer::*;
 use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::text;
 
-use super::super::{STATUS_AGENT, Shell, task_area::covering};
+use super::super::{Shell, broom::working_ring, cast::TURN, task_area::covering};
 
 /// Over the cards.
 const LATEST: &str = "Pick up a thread";
@@ -251,10 +251,8 @@ impl Shell {
             true => self.latest_tasks(CARDS as usize),
             false => Vec::new(),
         };
-        let row = command_bar::centered_row_middle(f32::from(self.viewport.height))
-            - f32::from(frame.top());
         let plates = cards.iter().any(|card| self.plate_of(card).is_some());
-        let top = group_top(row, f32::from(frame.size.height), !cards.is_empty(), plates);
+        let top = group_top(f32::from(frame.size.height), !cards.is_empty(), plates);
         // A narrow window keeps the bar inside the card's gutters.
         let bar_width = BAR_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
         let bar = div()
@@ -332,12 +330,10 @@ impl Shell {
             Some(at) => format!("{} · {at}", card.word.alone(&card.name)).into(),
             None => card.word.alone(&card.name),
         };
-        let dot = (card.dot == Dot::Working).then(|| {
-            div()
-                .flex_none()
-                .size(px(DOT))
-                .rounded_full()
-                .bg(rgb(STATUS_AGENT))
+        // A thread at work wears the state's glyph, the ring, in the text's ink: no green.
+        let ring = (card.dot == Dot::Working).then(|| {
+            let turned = self.breath.turned(TURN, self.clock.now());
+            working_ring(&palette, STATE_GLYPH, turned)
         });
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.word {
@@ -417,7 +413,7 @@ impl Shell {
                                 Dot::Waiting => palette.text(1.),
                                 _ => palette.text(STATE_INK),
                             })
-                            .children(dot)
+                            .children(ring)
                             .child(state),
                     )
                     .child(
@@ -449,10 +445,10 @@ pub(in crate::shell) fn mark_top(top: f32, little: bool) -> Option<f32> {
     (!little && at >= TOP).then_some(at)
 }
 
-/// How far under a card `height` tall the page's group starts, with its bar's input row's middle
-/// `row` under the card's top as ⌘T's bar's is: there, or as far up as the group needs to fit,
-/// through its cards when it has any (`plates` if one has its site's plate), never above `TOP`.
-pub(in crate::shell) fn group_top(row: f32, height: f32, cards: bool, plates: bool) -> f32 {
+/// How far under a card `height` tall the page's bar starts: in its column 150 down, under the
+/// mark's room, or as far up as the group needs to fit through its cards when it has any
+/// (`plates` if one has its site's plate), never above `TOP`.
+pub(in crate::shell) fn group_top(height: f32, cards: bool, plates: bool) -> f32 {
     let card = match plates {
         // A card is its words and its plate inside its rim, 1 on each side.
         true => 2. + CARD_WORDS + PAGE_HEIGHT + PAGE_INSET,
@@ -462,7 +458,7 @@ pub(in crate::shell) fn group_top(row: f32, height: f32, cards: bool, plates: bo
         true => LABEL_TOP + LABEL_LINE + LABEL_BOTTOM + card,
         false => 0.,
     };
-    let level = row - BAR_HEIGHT / 2.;
+    let level = COLUMN_TOP + MARK_SIZE + MARK_GAP;
     level.min(height - TOP - BAR_HEIGHT - below).max(TOP)
 }
 

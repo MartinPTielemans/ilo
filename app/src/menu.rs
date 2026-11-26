@@ -249,6 +249,14 @@ pub trait Host {
     fn glass(&self, _panels: &[(Bounds<Pixels>, f32)], _light: bool) {}
     /// Takes it away, and gives the keyboard back to what had it.
     fn hide(&self);
+    /// A right press closed the menu at `at` in the browser window's content, in the room round
+    /// the panels. Where the window has the pointer over its whole frame, as the Mac's, the press
+    /// would go on to the menu's own window, which nothing hears, so the host gives it to the
+    /// window under it once this update is over, and returns that it does. A window that takes the
+    /// pointer on its panels alone has nothing to do: the press is the other window's already.
+    fn press_under(&self, _at: Point<Pixels>, _cx: &mut App) -> bool {
+        false
+    }
     /// Whether the window blends with what's under it. One that can't, on X11 with no compositor,
     /// shows its clear pixels black (#1479), so there the panels are opaque and square with no
     /// shadow, and the window holds them alone.
@@ -467,6 +475,8 @@ fn panel_width(
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
+    let icons = items.iter().any(|&at| entries[at].icon.is_some());
+    let lead = lead + if icons { ICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
     let out = items.iter().any(|&at| entries[at].out);
     let chevron = chevron + if out { GAP + OUT_ARROW } else { 0. };
@@ -1464,7 +1474,7 @@ pub fn show(request: Request, cx: &mut App) {
         let search = (request.items.iter().any(|item| item.field)).then(|| {
             let palette = request.look.palette();
             let colors = text_input::Colors {
-                caret: rgba(palette.label).into(),
+                caret: Some(rgba(palette.label).into()),
                 ..text_input::Colors::placeholder(rgba(palette.secondary))
             };
             let placeholder = (request.items.iter().find(|item| item.field))
@@ -1749,9 +1759,12 @@ impl ContextMenu {
                 }
                 // While a menu is open, a press outside it only closes it: the click goes no
                 // further. The one exception is a right press, which goes on to open the menu of
-                // what it's on, in this one's place.
+                // what it's on, in this one's place. One in the window's room is taken where the
+                // host carries it there itself, after the hide this close asks for.
+                let room = Bounds::new(shown.origin, tracking.layout.frame.size);
                 self.close(Closing::PressedOutside, cx);
                 event == Pointer::Pressed
+                    || (room.contains(&at) && self.host.clone().press_under(at, cx))
             }
             Pointer::Released => {
                 let outcome = tracking.released(at);
@@ -2050,6 +2063,13 @@ impl ContextMenu {
                 .text_color(secondary)
                 .into_any_element(),
         });
+        let icon = entry.icon.map(|icon| {
+            svg()
+                .path(icon)
+                .size(px(ICON))
+                .flex_none()
+                .text_color(secondary)
+        });
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(
                 svg()
@@ -2121,6 +2141,7 @@ impl ContextMenu {
             .children(check)
             .children(swatch)
             .children(favicon)
+            .children(icon)
             .child(
                 div()
                     .flex_1()

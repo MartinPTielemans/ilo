@@ -15,6 +15,7 @@ use super::runner::Cli;
 use super::sign_in::Offer;
 use super::tier::{Stop, Tier, Why};
 use super::*;
+use crate::product::PRODUCT;
 
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
@@ -455,6 +456,8 @@ struct Configs {
     disconnected: Mutex<Vec<(Client, String)>>,
     /// Why the next Connect fails, as when Claude Code isn't installed.
     failing: Mutex<Option<String>>,
+    /// How many Connects after that fail too.
+    failing_more: Mutex<usize>,
     /// The clients on the computer, besides any other MCP client.
     found: Mutex<Vec<Client>>,
     /// What each task CLI answers when looked for; one not here isn't found.
@@ -463,6 +466,14 @@ struct Configs {
     looks: AtomicUsize,
     /// Whether the user's shell leaves out the `ilo` command's folder.
     unsearched: Mutex<bool>,
+    /// The programs each Add wrote the skill for, and the kept skills each Remove took away. No
+    /// file is written: a skill's own tests write into a made-up home (agents::skill).
+    skills_added: Mutex<Vec<Vec<Client>>>,
+    skills_removed: Mutex<Vec<Vec<crate::agents::skill::Kept>>>,
+    /// Where the stand-in's look finds each program's skill file, Ours where unsaid, which its
+    /// remover follows; and how many looks there were.
+    skill_places: Mutex<Vec<(Client, crate::agents::skill::Place)>>,
+    skill_looks: AtomicUsize,
     /// Each sign-in started, as a stand-in the test says what it hears through; the CLIs whose
     /// sign-in was cancelled; those signed out; and what the next sign-out answers, else Ok.
     sign_ins: Mutex<Vec<(crate::agents::runner::Cli, SignInHeard)>>,
@@ -471,6 +482,15 @@ struct Configs {
     sign_out_answers: Mutex<Option<Result<(), Option<String>>>>,
     /// Whether the next sign-in can't start.
     sign_in_fails: Mutex<bool>,
+}
+
+impl Configs {
+    fn skill_place(&self, program: Client) -> crate::agents::skill::Place {
+        let places = self.skill_places.lock().unwrap();
+        (places.iter().rev())
+            .find(|(each, _)| *each == program)
+            .map_or(crate::agents::skill::Place::Ours, |(_, place)| *place)
+    }
 }
 
 type SignInHeard = futures::channel::mpsc::UnboundedSender<crate::agents::sign_in::Heard>;
@@ -495,6 +515,12 @@ impl Clients for Configs {
         if let Some(why) = self.failing.lock().unwrap().take() {
             return Err(why);
         }
+        let mut left = self.failing_more.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err("not installed".into());
+        }
+        drop(left);
         self.connected.lock().unwrap().push((client, entry.clone()));
         Ok(())
     }
@@ -513,6 +539,62 @@ impl Clients for Configs {
 
     fn searches(&self, _: &std::path::Path) -> bool {
         !*self.unsearched.lock().unwrap()
+    }
+
+    fn add_skills(
+        &self,
+        programs: &[Client],
+        _: &[crate::agents::skill::Kept],
+    ) -> Vec<crate::agents::skill::Kept> {
+        use crate::agents::skill::Place;
+        self.skills_added.lock().unwrap().push(programs.to_vec());
+        // A file the user changed is theirs: not written over, and no longer kept.
+        let programs: Vec<Client> = (programs.iter().copied())
+            .filter(|&program| self.skill_place(program) != Place::Changed)
+            .collect();
+        for &program in &programs {
+            (self.skill_places.lock().unwrap()).push((program, Place::Ours));
+        }
+        (programs.into_iter())
+            .map(|program| crate::agents::skill::Kept {
+                program,
+                name: crate::agents::skill::name().into(),
+                sha256: String::new(),
+                made_skills: false,
+                written: None,
+            })
+            .collect()
+    }
+
+    fn remove_skills(
+        &self,
+        kept: &[crate::agents::skill::Kept],
+    ) -> Vec<(Client, crate::agents::skill::Removed)> {
+        use crate::agents::skill::{Place, Removed};
+        self.skills_removed.lock().unwrap().push(kept.to_vec());
+        (kept.iter())
+            .map(|kept| match self.skill_place(kept.program) {
+                Place::Ours => {
+                    (self.skill_places.lock().unwrap()).push((kept.program, Place::Missing));
+                    (kept.program, Removed::Gone)
+                }
+                Place::Changed => (kept.program, Removed::Changed),
+                Place::Missing => (kept.program, Removed::Missing),
+            })
+            .collect()
+    }
+
+    fn look_skills(&self, kept: &[crate::agents::skill::Kept]) -> Vec<crate::agents::skill::Place> {
+        self.skill_looks.fetch_add(1, Ordering::SeqCst);
+        kept.iter()
+            .map(|kept| self.skill_place(kept.program))
+            .collect()
+    }
+
+    /// Under a made-up home that's never this computer's.
+    fn skill_at(&self, kept: &crate::agents::skill::Kept) -> Option<PathBuf> {
+        let home = std::path::Path::new("/made-up-home");
+        crate::agents::skill::at(home, kept.program, &kept.name)
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -610,7 +692,44 @@ pub(crate) fn stand_in_with(
     found: Vec<Client>,
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    stand_in_configs(looked, found, None, cx)
+}
+
+/// Agents as `stand_in_with` makes them, the next Connect failing with `failing`, the count the
+/// third gives after it failing too, and each
+/// client's connect and disconnect as the configs heard them.
+pub(crate) fn stand_in_failing(
+    found: Vec<Client>,
+    failing: Option<&str>,
+    cx: &mut App,
+) -> (
+    Entity<Agents>,
+    impl Fn() -> (Vec<Client>, Vec<Client>) + use<>,
+    impl Fn(usize) + use<>,
+) {
     let configs = Arc::new(Configs::default());
+    *configs.failing.lock().unwrap() = failing.map(Into::into);
+    let (agents, _) = stand_in_configs(Vec::new(), found, Some(configs.clone()), cx);
+    let fails = configs.clone();
+    let fail_next = move |count: usize| *fails.failing_more.lock().unwrap() = count;
+    let heard = move || {
+        let connected = configs.connected.lock().unwrap();
+        let disconnected = configs.disconnected.lock().unwrap();
+        (
+            connected.iter().map(|(client, _)| *client).collect(),
+            disconnected.iter().map(|(client, _)| *client).collect(),
+        )
+    };
+    (agents, heard, fail_next)
+}
+
+fn stand_in_configs(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    found: Vec<Client>,
+    configs: Option<Arc<Configs>>,
+    cx: &mut App,
+) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    let configs = configs.unwrap_or_default();
     *configs.looked.lock().unwrap() = looked;
     *configs.found.lock().unwrap() = found;
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -2112,8 +2231,58 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// A connection saved before the server took the product's name is void: its token reaches
+/// nothing and its row asks to connect again. Connect Again takes the old name out of the
+/// client's config before it writes the new, and the command's Add Again takes its own away.
+#[gpui::test]
+fn a_connection_from_before_the_products_name_connects_again(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let clients = [Client::Codex, Client::ClaudeCode, Client::Command];
+    let saved = json!({ "agents": [
+        { "client": Client::Codex.id(), "token": "codex-before" },
+        { "client": Client::ClaudeCode.id(), "token": "claude-before", "name": "another" },
+        { "client": Client::Command.id(), "token": "command-before" },
+    ] });
+    agents.update(cx, |agents, cx| agents.load(&saved.to_string(), cx));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(!agents.is_connected(client), "{client:?} is connected");
+            assert!(agents.is_stale(client), "{client:?} isn't asked again");
+        }
+        assert!(
+            agents.tokens.lock().unwrap().is_empty(),
+            "an old token works"
+        );
+        assert_eq!(agents.command_state(), crate::agents::cli::State::Stale);
+        assert_eq!(agents.setup(Client::Codex), None);
+    });
+
+    for client in clients {
+        agents.update(cx, |agents, cx| agents.connect(client, cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        *configs.disconnected.lock().unwrap(),
+        [
+            (Client::Codex, old_server_name()),
+            (Client::ClaudeCode, old_server_name())
+        ]
+    );
+    let connected: Vec<_> = (configs.connected.lock().unwrap().iter())
+        .map(|(client, entry)| (*client, entry.name.clone()))
+        .collect();
+    assert_eq!(connected, clients.map(|client| (client, server_name())));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(agents.is_connected(client) && !agents.is_stale(client));
+        }
+        assert_eq!(agents.tokens.lock().unwrap().len(), clients.len());
+    });
+}
+
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
-/// that orders.
+/// that orders. Its fields say what a core with the field kinds says of each.
 fn shop_tree() -> String {
     shop_tree_named("Place order")
 }
@@ -2125,9 +2294,9 @@ fn shop_tree_named(button: &str) -> String {
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
         { "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Coupon" },
-          "backendDOMNodeId": 31 },
+          "backendDOMNodeId": 31, "secret": false, "autofilled": false },
         { "nodeId": "4", "role": { "value": "textbox" }, "name": { "value": "Password" },
-          "backendDOMNodeId": 41, "password": true },
+          "backendDOMNodeId": 41, "password": true, "secret": true, "autofilled": false },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": button },
           "backendDOMNodeId": 51 },
     ]})
@@ -3336,9 +3505,12 @@ fn an_order_is_refused_until_the_user_gives_full_access(cx: &mut TestAppContext)
     );
     assert_eq!(
         told.text,
-        "ilo stopped this: click “Place order” on example.com. It isn't part of this task's access \
-         (Work on pages). Only the user can change a task's access, in ilo. Don't try another way \
-         to the same end; if they change it, the same call will go through."
+        format!(
+            "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of this \
+             task's access (Work on pages). Only the user can change a task's access, in \
+             {PRODUCT}. Don't try another way to the same end; if they change it, the same call \
+             will go through."
+        )
     );
     assert_eq!(browser.pages.borrow().len(), pages, "it clicked");
     assert!(log(&agents, "claude-code", cx).contains(&(
@@ -5694,10 +5866,10 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
     let stopped = run.recv().unwrap();
     assert!(stopped.error);
     assert!(
-        stopped.text.starts_with(
-            "Step 2 failed: ilo stopped this: click “Place order” on example.com. It isn't part \
-             of this task's access"
-        ),
+        stopped.text.starts_with(&format!(
+            "Step 2 failed: {PRODUCT} stopped this: click “Place order” on example.com. It isn't \
+             part of this task's access"
+        )),
         "{}",
         stopped.text
     );
@@ -8470,7 +8642,6 @@ mod tasks {
     /// you" lead it, which the card sets heavier.
     #[gpui::test]
     fn a_cards_status_says_how_far_its_task_has_got(cx: &mut TestAppContext) {
-        use crate::agents::task::status_lead;
         let (agents, browser) = ready(None, cx);
         let agent = start(&agents, "Use the coupon", cx);
         agents.update(cx, |agents, _| {
@@ -8478,7 +8649,7 @@ mod tasks {
         });
         let status = |cx: &mut TestAppContext| card_of(&agents, cx).status.to_string();
         assert_eq!(status(cx), "Thinking · no steps yet");
-        assert_eq!(status_lead(&status(cx)), 0);
+        assert_eq!(card_of(&agents, cx).lead, 0);
         browser
             .tabs
             .borrow_mut()
@@ -8505,7 +8676,7 @@ mod tasks {
             cx,
         );
         assert_eq!(status(cx), "Step 2 · Typed “SPRING10” in “Coupon”");
-        assert_eq!(status_lead(&status(cx)), "Step 2".len());
+        assert_eq!(card_of(&agents, cx).lead, "Step 2".len());
         browser
             .tabs
             .borrow_mut()
@@ -8522,18 +8693,14 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Needs you · Sign in, please", Dot::Waiting)
         );
-        assert_eq!(status_lead(&card.status), "Needs you".len());
+        assert_eq!(card.lead, "Needs you".len());
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
             ("Stopped after 3 steps", Dot::Ended)
         );
-        assert_eq!(
-            status_lead(&card.status),
-            0,
-            "a stopped card asks for nothing"
-        );
+        assert_eq!(card.lead, 0, "a stopped card asks for nothing");
     }
 
     /// A step that chose an option with a line break in it says it on one line, as the card's
@@ -11262,7 +11429,7 @@ mod tasks {
 
     /// The composer opens in a profile with what it last started a thread with there: its level,
     /// except Full access, which opens at the level every thread starts at, and its model. Each
-    /// profile keeps its own, and they're saved.
+    /// profile keeps its own, with the effort Settings set there, and they're saved.
     #[gpui::test]
     fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
         use crate::agents::task::Last;
@@ -11275,6 +11442,7 @@ mod tasks {
         let haiku = Some((Cli::Claude, "haiku".to_string()));
         agents.update(cx, |agents, _| {
             assert_eq!(agents.composer_last(1), Last::default(), "a first composer");
+            agents.set_new_thread_effort(1, Some("high"));
             agents.remember_composer(1, Tier::Look, haiku.clone());
             agents.remember_composer(2, Tier::Full, None);
         });
@@ -11283,9 +11451,11 @@ mod tasks {
                 (agents.composer_last(1), agents.composer_last(2))
             })
         };
+        // Settings' effort outlasts a composer's start, which never sets it.
         let looked = Last {
             tier: Tier::Look,
             model: haiku.clone(),
+            effort: Some("high"),
         };
         assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
         let again = super::agents(&browser, &configs, Some(path.clone()), cx);
@@ -12021,9 +12191,12 @@ mod sessions {
         assert!(refused.error, "it ordered: {}", refused.text);
         assert_eq!(
             refused.text,
-            "ilo stopped this: click “Place order” on example.com. It isn't part of this task's \
-             access (Work on pages). Only the user can change a task's access, in ilo. Don't try \
-             another way to the same end; if they change it, the same call will go through."
+            format!(
+                "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of \
+                 this task's access (Work on pages). Only the user can change a task's access, \
+                 in {PRODUCT}. Don't try another way to the same end; if they change it, the \
+                 same call will go through."
+            )
         );
         assert!(!refused.text.contains("Refund"), "{}", refused.text);
         assert_eq!(
@@ -13065,6 +13238,7 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
+            format!("the-{PRODUCT}-Command"),
             // So is one that only reads as one (#3585): a word mixing scripts, letters of one
             // script that look like another's, compatibility forms, marks that don't show or
             // join, and any case.
@@ -13090,6 +13264,33 @@ mod sessions {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
             assert!(nameless(&agents, cx), "{posing} passed as a name");
+        }
+        // Nor is a name one of the browser's own words for a level or a state, in any case and
+        // however its words are joined: it has its kind's, as one posing as the browser has.
+        use crate::agents::task::{DRIVING, PAUSED, Word};
+        let levels = Tier::ALL.into_iter().map(Tier::label);
+        let states = Word::ALL.into_iter().map(Word::after_name);
+        let words: Vec<&str> = levels.chain(states).chain([DRIVING, PAUSED]).collect();
+        assert_eq!(words.len(), 11);
+        for word in words {
+            let joined = word.replace(' ', "-");
+            for posing in [word, &word.to_uppercase(), &word.to_lowercase(), &joined] {
+                hello(&agents, "mcp-client", "Zed", cx);
+                hello(&agents, "mcp-client", posing, cx);
+                assert_eq!(
+                    named(&agents, cx).0,
+                    Client::Other.name(),
+                    "{posing} passed"
+                );
+                // With no name of its own, as any app that gave none: Settings calls it this app.
+                assert!(nameless(&agents, cx), "{posing} passed as a name");
+            }
+        }
+        // A longer name with such a word in it is an agent's own.
+        for taken in ["Done Deals", "Working Title", "Paused Player 2"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+            assert!(!nameless(&agents, cx), "{taken} is a name of its own");
         }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
@@ -13439,6 +13640,22 @@ mod sessions {
         assert!(card.question.is_some());
     }
 
+    /// A session's status begins with its client's name, which is no count of steps and asks for
+    /// nothing whatever it reads as: how much of a status leads it is its maker's fact.
+    #[gpui::test]
+    fn a_clients_name_is_never_its_statuss_lead(cx: &mut TestAppContext) {
+        let (agents, _browser) = at_work(cx);
+        let key = cards(&agents, cx).remove(0).agent.to_string();
+        for name in ["Step 5", crate::agents::task::NEEDS_YOU] {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&key).unwrap().name = name.into()
+            });
+            let card = card(&agents, &key, cx);
+            assert!(card.status.starts_with(name), "{}", card.status);
+            assert_eq!((card.dot, card.lead), (Dot::Working, 0), "{name}");
+        }
+    }
+
     /// What a `done` came to is a fact, which its caller logs by whatever its answer says: one
     /// refused for a call still under way is in the activity log with why, the one that ends the
     /// task is there too, and one with nothing under way is no error and isn't logged.
@@ -13674,7 +13891,7 @@ mod sessions {
         ] {
             hello(&agents, agent, posing, cx);
             let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
-            assert_eq!(name, "ilo CLI", "{posing} passed");
+            assert_eq!(name, Client::Command.name(), "{posing} passed");
         }
         hello(&agents, agent, "Researcher", cx);
         command(1, "read_page", json!({ "tab": 20 }), cx);
@@ -13748,6 +13965,218 @@ mod sessions {
         cx.run_until_parked();
         assert_eq!(state(cx), State::Off);
         assert_eq!(configs.disconnected.lock().unwrap()[0].0, Client::Command);
+    }
+
+    /// The command's Add writes its skill for each program the stat found and no other; a
+    /// connect of Claude Code or Codex writes none; Remove takes away what Add kept (first run's
+    /// floor 3). The stand-in writes no file: skill.rs's own tests do, into a made-up home.
+    #[gpui::test]
+    fn the_commands_add_writes_a_skill_for_each_program_found(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        *configs.found.lock().unwrap() = vec![Client::ClaudeCode];
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        let skills = |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.skills());
+        agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+        cx.run_until_parked();
+        assert!(
+            configs.skills_added.lock().unwrap().is_empty(),
+            "MCP writes no skill"
+        );
+        assert!(skills(cx).is_empty());
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            *configs.skills_added.lock().unwrap(),
+            [vec![Client::ClaudeCode]]
+        );
+        assert_eq!(skills(cx), [Client::ClaudeCode]);
+        agents.update(cx, |agents, cx| agents.disconnect(Client::ClaudeCode, cx));
+        cx.run_until_parked();
+        assert!(
+            configs.skills_removed.lock().unwrap().is_empty(),
+            "MCP's Disconnect leaves it"
+        );
+        agents.update(cx, |agents, cx| agents.disconnect(Client::Command, cx));
+        cx.run_until_parked();
+        let removed = configs.skills_removed.lock().unwrap().clone();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0][0].program, Client::ClaudeCode);
+        assert!(skills(cx).is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.skills_changed().is_empty()));
+    }
+
+    /// A skill the user changed isn't removed, and the command's row says so with the reveal,
+    /// until the file is gone or the command is added again; while the command is added, the row
+    /// names only the programs whose file is still the one written (SK1, SK2).
+    #[gpui::test]
+    fn a_skill_the_user_changed_is_said_until_its_gone_or_added_again(cx: &mut TestAppContext) {
+        use crate::agents::skill::Place;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        *configs.found.lock().unwrap() = vec![Client::ClaudeCode, Client::Codex];
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        let read = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (
+                    agents.skills(),
+                    agents.skills_changed(),
+                    agents.skill_to_reveal(),
+                )
+            })
+        };
+        let change =
+            |place: Place| (configs.skill_places.lock().unwrap()).push((Client::Codex, place));
+        let add = |added: bool, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| match added {
+                true => agents.connect(Client::Command, cx),
+                false => agents.disconnect(Client::Command, cx),
+            });
+            cx.run_until_parked();
+        };
+        let look = |cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| agents.look_skills(cx));
+            cx.run_until_parked();
+        };
+        add(true, cx);
+        assert_eq!(read(cx).0, [Client::ClaudeCode, Client::Codex]);
+
+        // Changed while added: no longer said to be added for it, and nothing said changed yet.
+        change(Place::Changed);
+        look(cx);
+        assert_eq!(read(cx), (vec![Client::ClaudeCode], vec![], None));
+
+        add(false, cx);
+        let file = format!(
+            "/made-up-home/.agents/skills/{}/SKILL.md",
+            super::skill::name()
+        );
+        assert_eq!(read(cx), (vec![], vec![Client::Codex], Some(file.into())));
+
+        // Gone: said no more.
+        change(Place::Missing);
+        look(cx);
+        assert_eq!(read(cx), (vec![], vec![], None));
+
+        // Changed again, then added again: the file stays the user's and goes from the list.
+        add(true, cx);
+        change(Place::Changed);
+        add(false, cx);
+        assert_eq!(read(cx).1, [Client::Codex]);
+        add(true, cx);
+        assert_eq!(read(cx), (vec![Client::ClaudeCode], vec![], None));
+        add(false, cx);
+        assert_eq!(read(cx), (vec![], vec![], None), "not kept, so not said");
+    }
+
+    /// Whether the skill files are in place is read when Settings › Other apps opens and after
+    /// the command's Add or Remove: never at launch.
+    #[gpui::test]
+    fn the_skills_are_looked_at_only_as_other_apps_opens_and_after_add_or_remove(
+        cx: &mut TestAppContext,
+    ) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        *configs.found.lock().unwrap() = vec![Client::ClaudeCode];
+        let folder = std::env::temp_dir().join(format!("skills-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let agents = agents(&browser, &configs, Some(folder.join("agents.json")), cx);
+        agents.update(cx, |agents, cx| {
+            agents.load("{}", cx);
+            agents.look_for_clients(cx);
+        });
+        cx.run_until_parked();
+        let looks = || configs.skill_looks.load(Ordering::SeqCst);
+        assert_eq!(looks(), 0, "launch looks at no skill");
+        assert!(
+            !folder.join(super::skill::FILE_KEPT).exists(),
+            "nor writes the list"
+        );
+        agents.update(cx, |agents, cx| agents.look_skills(cx));
+        cx.run_until_parked();
+        assert_eq!(looks(), 1);
+        agents.update(cx, |agents, cx| agents.connect(Client::Command, cx));
+        cx.run_until_parked();
+        assert_eq!(looks(), 2);
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// First run's click on a way turns the outside switch on as its write lands, in the same
+    /// save: a quit before it lands, or a write that fails, leaves the switch as it was, so a
+    /// relaunch never finds it on with nothing added.
+    #[gpui::test]
+    fn the_outside_switch_goes_on_only_as_a_first_run_way_lands(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let folder = std::env::temp_dir().join(format!("outside-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        agents.update(cx, |agents, cx| agents.set_other_apps(false, cx));
+        let relaunched = |cx: &mut TestAppContext| {
+            let saved = std::fs::read_to_string(&path).unwrap_or_default();
+            let (browser, clients) = (browser.clone(), configs.clone());
+            let socket = address(&folder);
+            let bridge = vec!["/app/mcp-bridge".into()];
+            let again = cx.new(|_| Agents::new(browser, clients, None, socket, bridge));
+            again.update(cx, |again, cx| {
+                again.load(&saved, cx);
+                (again.other_apps(), again.is_connected(Client::Command))
+            })
+        };
+        for fails in [true, false] {
+            if fails {
+                *configs.failing.lock().unwrap() = Some("not installed".into());
+            }
+            agents.update(cx, |agents, cx| {
+                agents.connect_for_outside(&[Client::Command], cx)
+            });
+            assert!(
+                !agents.read_with(cx, |agents, _| agents.other_apps()),
+                "not before it lands"
+            );
+            assert_eq!(
+                relaunched(cx),
+                (false, false),
+                "quit before it lands: as it was"
+            );
+            cx.run_until_parked();
+            let now = agents.read_with(cx, |agents, _| {
+                (agents.other_apps(), agents.is_connected(Client::Command))
+            });
+            assert_eq!(now, (!fails, !fails), "failed {fails}");
+            assert_eq!(relaunched(cx), (!fails, !fails), "failed {fails}: as saved");
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// An off while a Connect is writing takes that client away once its write lands, and one
+    /// still waiting its turn is never written; neither turns the outside switch on.
+    #[gpui::test]
+    fn an_off_during_a_connect_takes_it_away_once_it_lands(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_other_apps(false, cx);
+            agents.connect_for_outside(&[Client::ClaudeCode, Client::Codex], cx);
+            assert!(agents.is_pending(Client::ClaudeCode) && agents.is_pending(Client::Codex));
+            agents.disconnect(Client::ClaudeCode, cx);
+            agents.disconnect(Client::Codex, cx);
+        });
+        cx.run_until_parked();
+        let connected: Vec<Client> = (configs.connected.lock().unwrap().iter())
+            .map(|(client, _)| *client)
+            .collect();
+        let disconnected: Vec<Client> = (configs.disconnected.lock().unwrap().iter())
+            .map(|(client, _)| *client)
+            .collect();
+        assert_eq!(connected, [Client::ClaudeCode], "the one writing landed");
+        assert_eq!(disconnected, [Client::ClaudeCode], "and was taken away");
+        agents.read_with(cx, |agents, _| {
+            assert!(
+                !agents.is_connected(Client::ClaudeCode) && !agents.is_connected(Client::Codex)
+            );
+            assert!(!agents.is_pending(Client::ClaudeCode) && !agents.is_pending(Client::Codex));
+            assert!(!agents.other_apps());
+        });
     }
 
     fn titled(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {

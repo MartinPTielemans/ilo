@@ -62,7 +62,9 @@ use crate::tokens::command_bar::LIST_X;
 use crate::tokens::command_bar::ROW_HEIGHT;
 pub use crate::tokens::command_bar::WIDTH;
 const ROWS_SHOWN: usize = 5;
+use crate::agents::files::{self as task_files, Never, Picked, words as files_words};
 use crate::agents::tier::Tier;
+use crate::agents::wall::Granted;
 use crate::product;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 use crate::tokens::command_bar::FIELD_ABOVE;
@@ -84,6 +86,9 @@ use crate::tokens::command_bar::ROW_END;
 use crate::tokens::command_bar::TITLE_X;
 use crate::tokens::command_bar::{
     FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X, MARK,
+};
+use crate::tokens::command_bar::{
+    REST_GAP, REST_HEIGHT, REST_LEFT, REST_LINE, REST_RIGHT, REST_TEXT,
 };
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
@@ -107,13 +112,14 @@ use crate::tokens::command_bar::HOVERED;
 use crate::tokens::command_bar::LINE_COLOR;
 use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
-use crate::tokens::command_bar::SELECTED_DIM;
+use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
     CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
-    FOOT_TEXT,
+    FOOT_TEXT, PLUS,
 };
+use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
@@ -283,6 +289,126 @@ pub fn model_words(agent: &TaskAgent, id: &str) -> String {
     }
 }
 
+/// The assistant a thread starts on: the one `picked` names, while it isn't at its limit, else the
+/// first ready.
+pub fn starts_on<'a>(
+    agents: &'a TaskAgents,
+    picked: Option<&(SharedString, String)>,
+) -> Option<&'a TaskAgent> {
+    let picked = picked.map(|(id, _)| id);
+    let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
+    let first = ready.clone().next();
+    ready.find(|agent| Some(&agent.id) == picked).or(first)
+}
+
+/// The level menu, as each level it offers and its items: the levels, `current` checked, and the
+/// line every level holds to. Settings' `A new thread starts with` opens it too, without Full
+/// access (`full`), which is set for one thread and never where one starts.
+pub fn level_choices(current: Tier, full: bool) -> (Vec<Tier>, Vec<MenuEntry>) {
+    let tiers: Vec<Tier> = (Tier::ALL.into_iter())
+        .filter(|&tier| full || tier != Tier::Full)
+        .collect();
+    let mut items: Vec<MenuEntry> = (tiers.iter())
+        .map(|&tier| MenuEntry {
+            checked: tier == current,
+            ..MenuEntry::named(tier.label(), true)
+        })
+        .collect();
+    items.push(MenuEntry::line());
+    items.push(MenuEntry::named(choices::NEVER_GETS, false));
+    (tiers, items)
+}
+
+/// The model menu, as its items and what each picks: each assistant by its own name, then the
+/// models it offers, its default first and the one a thread starts on (`picked`, else Settings')
+/// checked; one at its limit says when it resets, and one not signed in has Sign In, which starts
+/// its own sign-in as Settings' does; then Settings › Agents while `to_settings`. Each assistant's
+/// heading is its name as Settings' page has it. Over them all a field narrows them as the user
+/// types: an assistant with no model matching goes, heading and all, as Sign In does, and Settings
+/// stays whatever is typed; a pick is still one of these rows. The composer and Settings'
+/// `A new thread starts with` both open it.
+pub fn model_choices(
+    agents: &TaskAgents,
+    picked: Option<&(SharedString, String)>,
+    to_settings: bool,
+) -> (Vec<MenuEntry>, Vec<ModelPick>) {
+    let (on, chosen) = match starts_on(agents, picked) {
+        Some(agent) => (Some(agent.id.clone()), Some(next_model(picked, agent))),
+        None => (None, None),
+    };
+    let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
+    let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
+    // Settings' name for the assistant, so the two never say it differently.
+    let label = |id: &SharedString, name: &SharedString| -> SharedString {
+        match crate::agents::runner::Cli::from_id(id) {
+            Some(cli) => crate::settings_rows::assistant_name(cli).into(),
+            None => name.clone(),
+        }
+    };
+    for agent in &agents.agents {
+        items.push(heading(label(&agent.id, &agent.name)));
+        picks.push(ModelPick::Nothing);
+        let at_limit = agent
+            .resets
+            .clone()
+            .map(|resets| format!("Limit resets {resets}"));
+        let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
+        let default = agent.default_model.as_deref();
+        let (ids, entries) = crate::agents::task::model_menu(
+            checked.unwrap_or("\0"),
+            DEFAULT_ROW,
+            default,
+            agent.models.clone(),
+        );
+        for ((id, _), entry) in ids.into_iter().zip(entries) {
+            let entry = MenuEntry {
+                enabled: at_limit.is_none(),
+                detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
+                over: false,
+                ..entry
+            };
+            items.push(entry);
+            picks.push(ModelPick::Model(agent.id.clone(), id));
+        }
+    }
+    for (id, name) in &agents.signed_out {
+        items.push(heading(label(id, name)));
+        picks.push(ModelPick::Nothing);
+        items.push(MenuEntry::named(SIGN_IN, true).offer().out());
+        picks.push(ModelPick::SignIn(id.clone()));
+    }
+    if to_settings {
+        items.push(MenuEntry::line());
+        picks.push(ModelPick::Nothing);
+        items.push(MenuEntry::named(SETTINGS, true).kept().out());
+        picks.push(ModelPick::Settings);
+    }
+    (items, picks)
+}
+
+/// The effort menu, as what each row picks and its items: Default, which leaves the level to the
+/// program, then `levels`, each by `effort_name`, `picked` checked, Default with none. Nothing for
+/// a program that takes no effort. The composer and Settings' `A new thread starts with` both
+/// open it.
+pub fn effort_choices(
+    levels: &'static [&'static str],
+    picked: Option<&'static str>,
+) -> (Vec<Option<&'static str>>, Vec<MenuEntry>) {
+    if levels.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let picks: Vec<Option<&'static str>> = std::iter::once(None)
+        .chain(levels.iter().map(|level| Some(*level)))
+        .collect();
+    let items = (picks.iter())
+        .map(|&level| MenuEntry {
+            checked: picked.filter(|each| levels.contains(each)) == level,
+            ..MenuEntry::named(level.map_or(EFFORT_DEFAULT.into(), effort_name), true)
+        })
+        .collect();
+    (picks, items)
+}
+
 /// Whether the composer's model pick is for the assistant `id`.
 fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
     ask.and_then(|ask| ask.model.as_ref())
@@ -297,9 +423,19 @@ fn heading(title: SharedString) -> MenuEntry {
     }
 }
 
+/// The folder the system's panel gave, its links resolved, granted for a thread, unless ilo never
+/// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
+/// and the start checks it again.
+fn granted(picked: &std::path::Path) -> Option<Granted> {
+    let never = Never::here(None);
+    let root = task_files::resolved(picked);
+    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
+    Granted::picked(root).ok()
+}
+
 /// A pick on the composer's model menu.
-#[derive(Clone, Debug)]
-enum ModelPick {
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModelPick {
     /// A header or a line, which is never chosen.
     Nothing,
     /// A model of an assistant, by the assistant's id and the model's, empty for its default.
@@ -317,14 +453,27 @@ const SEARCH_MODELS: &str = "Search models";
 /// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
 /// `{assistant}'s default`.
 const DEFAULT_ROW: &str = "Default";
+/// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
+fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
+    let (plate, kind) = match palette.tone {
+        palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
+        palette::Tone::Light => (LIGHT_CHOSEN, LIGHT_CHOSEN_KIND),
+    };
+    (palette.plate(plate), palette.on_overlay(kind))
+}
+
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
 const EFFORT: &str = "composer-effort";
+/// The plus's, and the files' and the folder's it added.
+const PLUS_ID: &str = "composer-plus";
+const FILES: &str = "composer-files";
+const FOLDER: &str = "composer-folder";
 /// What the effort trigger reads before a pick, and the menu's row that leaves the level to the
 /// program (words table, D6).
-const EFFORT_NAME: &str = "Effort";
-const EFFORT_DEFAULT: &str = "Default";
+pub const EFFORT_NAME: &str = "Effort";
+pub const EFFORT_DEFAULT: &str = "Default";
 
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
@@ -355,21 +504,34 @@ struct Ask {
     /// The assistant and model picked on the model menu, by the assistant's id and the model's,
     /// empty for its own default; None for the first ready assistant on Settings' model.
     model: Option<(SharedString, String)>,
-    /// The effort level picked on the effort menu, one of its assistant's `Cli::efforts`; None
-    /// for the program's own, which ilo then passes nothing for. It holds for this thread only.
+    /// The effort level picked on the effort menu, one of its assistant's `Cli::efforts`, or
+    /// Settings' until then; None for the program's own, which ilo then passes nothing for. A
+    /// pick holds for this thread only.
     effort: Option<&'static str>,
+    /// The files and the folder the user added on the plus, from the system's panel alone, for
+    /// this thread's start alone: they go as the level does.
+    picked: Picked,
+}
+
+/// What the composer opens with: the level and model it last started a thread with, by the
+/// assistant's id and the model's, and Settings' effort.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Opens {
+    pub tier: Tier,
+    pub model: Option<(SharedString, String)>,
+    pub effort: Option<&'static str>,
 }
 
 /// The effort levels the program of the assistant `id` takes, from the one list
 /// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
-fn efforts_of(id: &str) -> &'static [&'static str] {
+pub fn efforts_of(id: &str) -> &'static [&'static str] {
     crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
 }
 
 /// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
 /// else the program's own with its first letter capital. It is only ever a label: the program is
 /// passed the level itself.
-fn effort_name(level: &str) -> String {
+pub fn effort_name(level: &str) -> String {
     match level {
         "low" => "Low".into(),
         "medium" => "Medium".into(),
@@ -660,9 +822,10 @@ pub trait Host {
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page`, from the Space the bar shows
-    /// over, and hides the bar by folding it into the ask's slot, which its card takes, or where
-    /// the window shows no slot, as `hide` does.
+    /// Starts `asked` as a task on the agent `agent`, with `page` and the files and folder the
+    /// user added on the plus, from the Space the bar shows over, and hides the bar by folding it
+    /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
+    /// does.
     fn run_task(
         &self,
         agent: &str,
@@ -671,6 +834,7 @@ pub trait Host {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     );
     /// As `run_task`, from a resting bar's composer, in the Space it rests in, which shows no
@@ -682,13 +846,20 @@ pub trait Host {
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: Picked,
         cx: &mut App,
     );
+    /// Whether this system can wall a thread in with the user's files, which the composer's plus
+    /// offers File or Folder by: with nothing to add, the plus is disabled (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// The level and model the composer last started a thread with in the profile of the Space
-    /// the bar shows over, Full access never: what its choices open at. Only the composer's own
-    /// starts set it; no agent reads or sets it.
-    fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
-        (Tier::default(), None)
+    /// the bar shows over, Full access never, and Settings' effort: what its choices open at.
+    /// Only the composer's own starts and Settings' `A new thread starts with` set it; no agent
+    /// reads or sets it.
+    fn composer_last(&self, _: &App) -> Opens {
+        Opens::default()
     }
     /// Starts signing in to the assistant `agent`, as Settings' Sign In does.
     fn sign_in(&self, _agent: &str, _: &mut App) {}
@@ -836,7 +1007,11 @@ pub struct CommandBar {
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
     ask: Option<Ask>,
-    /// Where the composer's level and model triggers were last drawn, which their menus hang from.
+    /// The composer's plus, the add menu's (`crate::plus`).
+    plus: crate::plus::Plus,
+    /// Where the composer's triggers were last drawn, which their menus hang from.
+    files_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    folder_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     level_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where the effort trigger was last drawn, for an assistant whose program takes an effort.
@@ -1089,6 +1264,9 @@ fn new_bar(
             opened_drawn: false,
             task_agents: None,
             ask: None,
+            plus: crate::plus::Plus::default(),
+            files_at: Rc::default(),
+            folder_at: Rc::default(),
             level_at: Rc::default(),
             model_at: Rc::default(),
             effort_at: Rc::default(),
@@ -1501,12 +1679,6 @@ fn mode_chip(
 /// Where the centred panel's top is, down a browser window `height` tall.
 pub fn centered_top(height: f32) -> f32 {
     height / 2. - ABOVE_MIDDLE
-}
-
-/// Where the middle of the centred bar's input row is, down a browser window `height` tall: the
-/// height the composer page's field rests at, so ⌘T's bar opens on it.
-pub fn centered_row_middle(height: f32) -> f32 {
-    centered_top(height) + HEIGHT / 2.
 }
 
 /// How tall the bar's window is with `rows` suggestions listed: the input, and under it, with its
@@ -2327,12 +2499,14 @@ impl CommandBar {
             self.favicons.insert(url.to_string(), None);
             self.host.page_favicon(url);
         }
-        let (tier, model) = self.host.composer_last(cx);
+        let last = self.host.composer_last(cx);
+        let picked = Picked::default();
         self.ask = Some(Ask {
             page,
-            tier,
-            model,
-            effort: None,
+            tier: last.tier,
+            model: last.model,
+            effort: last.effort,
+            picked,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2361,11 +2535,8 @@ impl CommandBar {
     /// The assistant the composer starts its thread on: the one picked on its model menu while
     /// it's signed in and not at its limit, else the first that is.
     fn composer_assistant(&self) -> Option<&TaskAgent> {
-        let agents = self.task_agents.as_ref()?;
-        let picked = (self.ask.as_ref()).and_then(|ask| ask.model.as_ref().map(|(id, _)| id));
-        let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
-        let first = ready.clone().next();
-        ready.find(|agent| Some(&agent.id) == picked).or(first)
+        let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
+        starts_on(self.task_agents.as_ref()?, picked)
     }
 
     /// The model the composer's thread starts on, by id, empty for its assistant's own default:
@@ -2413,7 +2584,8 @@ impl CommandBar {
     /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier, effort) = (ask.page.clone(), ask.tier, ask.effort);
+        let (page, tier, effort, files) =
+            (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
         let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
             return;
@@ -2436,7 +2608,7 @@ impl CommandBar {
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, cx);
+                .run_task(&id, &asked, page, tier, model, effort, files, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -2444,7 +2616,7 @@ impl CommandBar {
             .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
-            .run_task_at_rest(&id, &asked, tier, model, effort, cx);
+            .run_task_at_rest(&id, &asked, tier, model, effort, files, cx);
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -2455,28 +2627,14 @@ impl CommandBar {
         let Some(agent) = self.composer_assistant() else {
             return;
         };
-        let levels = efforts_of(&agent.id);
+        let (levels, items) = effort_choices(efforts_of(&agent.id), ask.effort);
         if levels.is_empty() {
             return;
         }
-        let default = MenuEntry {
-            checked: ask.effort.is_none(),
-            ..MenuEntry::named(EFFORT_DEFAULT, true)
-        };
-        let items = std::iter::once(default)
-            .chain(levels.iter().map(|level| MenuEntry {
-                checked: ask.effort == Some(*level),
-                ..MenuEntry::named(effort_name(level), true)
-            }))
-            .collect();
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-                // Row 0 is Default; each other row is its level on the program's own list.
-                let picked = closed.chosen().map(|item| match item {
-                    0 => None,
-                    item => levels.get(item - 1).copied(),
-                });
+                let picked = closed.chosen().and_then(|item| levels.get(item).copied());
                 let closed = |bar: &mut Self, cx: &mut Context<Self>| {
                     bar.menu_closed(cx);
                     picked.map(|level| bar.pick_effort(level, cx));
@@ -2509,19 +2667,121 @@ impl CommandBar {
         })
     }
 
-    /// The level trigger's menu, under it: the three levels, the one the thread starts at
-    /// checked, each with its line, and the line every level holds to. A pick holds for this
-    /// thread and is offered next time; Full access is never offered again by itself.
+    /// The plus's rows in the composer, each a `crate::plus::Row`: File or Folder where this
+    /// system can wall a thread in with the user's files, whose panel's picks come to `added`.
+    /// With none the plus is disabled.
+    fn add_rows(&self, cx: &mut Context<Self>) -> Vec<crate::plus::Row> {
+        let mut rows = Vec::new();
+        if self.host.files_available(cx) {
+            let bar = cx.entity().downgrade();
+            rows.push(crate::plus::file_or_folder(move |paths, cx| {
+                bar.update(cx, |bar, cx| bar.added(paths, cx)).ok();
+            }));
+        }
+        rows
+    }
+
+    /// Opens the plus's menu, as a click on the plus does: only while the composer is open,
+    /// where the plus is drawn.
+    #[cfg(test)]
+    pub fn open_add_menu_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ask.is_none() {
+            return;
+        }
+        let rows = self.add_rows(cx);
+        let view = cx.entity_id();
+        self.plus.open(rows, view, CHOICES_MENU_DROP, window, cx);
+    }
+
+    /// What the user picked in the system's panel: each file added once, and a folder granted
+    /// for this thread, the latest in place of one before, unless ilo never gives it. The bar
+    /// takes the keyboard back from the panel either way.
+    fn added(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        if self.surface == Surface::Window && self.ask.is_some() {
+            self.host.take_keyboard();
+        }
+        let Some(ask) = &mut self.ask else { return };
+        for path in paths {
+            if path.is_dir() {
+                match granted(&path) {
+                    Some(folder) => {
+                        ask.picked.folder = Some(folder);
+                        log!("browser: composer folder granted");
+                    }
+                    // Nothing granted: the start sees no folder. No name reaches a log (#3656).
+                    None => log!("browser: composer folder refused"),
+                }
+            } else if path.is_file() && !ask.picked.files.contains(&path) {
+                ask.picked.files.push(path);
+            }
+        }
+        // A count, never a name.
+        log!("browser: composer files {}", ask.picked.files.len());
+        cx.notify();
+    }
+
+    /// The added files' trigger's menu: each file by its name, checked, as a pick takes it out.
+    fn files_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ask) = &self.ask else { return };
+        let files = ask.picked.files.clone();
+        let items = (files.iter())
+            .map(|file| MenuEntry {
+                checked: true,
+                ..MenuEntry::named(task_files::shown_name(file), true)
+            })
+            .collect();
+        let bar = cx.entity().downgrade();
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let file = closed.chosen().and_then(|at| files.get(at).cloned());
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    let (Some(file), Some(ask)) = (file, &mut bar.ask) else {
+                        return;
+                    };
+                    ask.picked.files.retain(|each| *each != file);
+                    log!("browser: composer files {}", ask.picked.files.len());
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(FILES, items, chosen, window, cx);
+    }
+
+    /// The granted folder's trigger's menu: its one act, Revoke (X3), after which the thread
+    /// starts with no folder.
+    fn folder_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !(self.ask.as_ref()).is_some_and(|ask| ask.picked.folder.is_some()) {
+            return;
+        }
+        let items = vec![MenuEntry::new(files_words::REVOKE, true)];
+        let bar = cx.entity().downgrade();
+        let chosen = Box::new(
+            move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
+                let revoked = closed.chosen() == Some(0);
+                let closed = |bar: &mut Self, cx: &mut Context<Self>| {
+                    bar.menu_closed(cx);
+                    if let (true, Some(ask)) = (revoked, &mut bar.ask) {
+                        ask.picked.folder = None;
+                        log!("browser: composer folder revoked");
+                    }
+                };
+                bar.update(cx, closed).ok();
+            },
+        );
+        self.show_choices(FOLDER, items, chosen, window, cx);
+    }
+
+    /// The level trigger's menu, under it: `level_choices`, Full access among them. A pick holds
+    /// for this thread and is offered next time; Full access is never offered again by itself.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
-        let items = choices::level_entries(ask.tier);
+        let (tiers, items) = level_choices(ask.tier, true);
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-                let tier = closed
-                    .chosen()
-                    .and_then(|item| Tier::ALL.get(item).copied());
+                let tier = closed.chosen().and_then(|item| tiers.get(item).copied());
                 let closed = |bar: &mut Self, cx: &mut Context<Self>| {
                     bar.menu_closed(cx);
                     tier.map(|tier| bar.pick_tier(tier, cx));
@@ -2540,64 +2800,11 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// The model trigger's menu, under it: each assistant by its own name, then the models it
-    /// offers, its default first and the one the thread starts on checked; one at its limit says
-    /// when it resets, and one not signed in has Sign In, which starts its own sign-in as
-    /// Settings' does; then Settings › Agents. Each assistant's heading is its name as Settings'
-    /// page has it. Over them all a field narrows them as the user types: an assistant with no
-    /// model matching goes, heading and all, as Sign In does, and Settings stays whatever is
-    /// typed; a pick is still one of these rows.
+    /// The model trigger's menu, under it: `model_choices`, Settings › Agents last.
     fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agents = self.task_agents.clone().unwrap_or_default();
-        let (on, chosen) = match self.composer_assistant() {
-            Some(agent) => (Some(agent.id.clone()), self.composer_model()),
-            None => (None, None),
-        };
-        let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
-        let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
-        // Settings' name for the assistant, so the two never say it differently.
-        let label = |id: &SharedString, name: &SharedString| -> SharedString {
-            match crate::agents::runner::Cli::from_id(id) {
-                Some(cli) => crate::settings_rows::assistant_name(cli).into(),
-                None => name.clone(),
-            }
-        };
-        for agent in &agents.agents {
-            items.push(heading(label(&agent.id, &agent.name)));
-            picks.push(ModelPick::Nothing);
-            let at_limit = agent
-                .resets
-                .clone()
-                .map(|resets| format!("Limit resets {resets}"));
-            let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
-            let default = agent.default_model.as_deref();
-            let (ids, entries) = crate::agents::task::model_menu(
-                checked.unwrap_or("\0"),
-                DEFAULT_ROW,
-                default,
-                agent.models.clone(),
-            );
-            for ((id, _), entry) in ids.into_iter().zip(entries) {
-                let entry = MenuEntry {
-                    enabled: at_limit.is_none(),
-                    detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
-                    over: false,
-                    ..entry
-                };
-                items.push(entry);
-                picks.push(ModelPick::Model(agent.id.clone(), id));
-            }
-        }
-        for (id, name) in &agents.signed_out {
-            items.push(heading(label(id, name)));
-            picks.push(ModelPick::Nothing);
-            items.push(MenuEntry::named(SIGN_IN, true).offer().out());
-            picks.push(ModelPick::SignIn(id.clone()));
-        }
-        items.push(MenuEntry::line());
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept().out());
-        picks.push(ModelPick::Settings);
+        let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
+        let (items, picks) = model_choices(&agents, picked, true);
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
@@ -2642,6 +2849,8 @@ impl CommandBar {
         cx: &mut Context<Self>,
     ) {
         let trigger = match id {
+            FILES => self.files_at.get(),
+            FOLDER => self.folder_at.get(),
             LEVEL => self.level_at.get(),
             EFFORT => self.effort_at.get(),
             _ => self.model_at.get(),
@@ -2978,14 +3187,16 @@ impl CommandBar {
         taken
     }
 
-    /// The selected row's fill and its label, and the chip's in a site search: the site's own
-    /// colour, made to read on the bar, where it has one, else the Space's accent.
-    fn accent(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
-        let (fill, label) = match self.site.as_ref().and_then(|site| site.color) {
-            Some(color) => palette.site_accent(gpui::rgb(color)),
-            None => (palette.accent, palette.accent_label),
-        };
-        (fill.into(), label.into())
+    /// The mode chip's fill and its label: in a site search with a colour of its own, that colour,
+    /// made to read on the bar, else a chip's plate and the ink.
+    fn site_chip(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
+        match self.site.as_ref().and_then(|site| site.color) {
+            Some(color) => {
+                let (fill, label) = palette.site_accent(gpui::rgb(color));
+                (fill.into(), label.into())
+            }
+            None => (palette.plate(CHIP), palette.ink.into()),
+        }
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -3051,9 +3262,11 @@ impl CommandBar {
             true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
             false => 0.,
         };
-        foot + match self.over_field {
-            true => field_height(rows),
-            false => height(rows),
+        foot + match (self.surface, self.over_field) {
+            // At rest the input is the resting bar's, its rows as ⌘T's.
+            (Surface::InPlace, _) => height(rows) - HEIGHT + REST_HEIGHT,
+            (_, true) => field_height(rows),
+            (_, false) => height(rows),
         }
     }
 
@@ -3318,13 +3531,9 @@ impl CommandBar {
     /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
     /// out: ✕ closes and trash removes (ux-principles, the owner, #1394). It's the arrow's tile, so
     /// the two read as one kind.
-    fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn remove_button(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (tile, color) = match selected {
-            true => (label, accent),
-            false => (palette.plate(ARROW_TILE), palette.on_overlay(ARROW)),
-        };
+        let (tile, color) = (palette.plate(ARROW_TILE), palette.on_overlay(ARROW));
         div()
             .id(("remove", index))
             .when(self.a11y, |button| {
@@ -3795,12 +4004,51 @@ impl CommandBar {
         )
     }
 
-    /// The composer's row of choices (choices.rs): the level, the model and, for an assistant whose
-    /// program takes one, the effort, each opening its menu under it, then Start, which starts the
-    /// thread as ↩ does and does nothing with no words.
+    /// The composer's row of choices (choices.rs): the plus, disabled where it adds nothing, what
+    /// it added, the level, the model and, for an assistant whose program takes one, the effort,
+    /// each opening its menu under it, then Start, which starts the thread as ↩ does and does
+    /// nothing with no words.
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let palette = palette::current(cx);
         let tier = self.ask.as_ref().map(|ask| ask.tier).unwrap_or_default();
+        // The plus, square as a trigger is tall, opens the add menu: no chevron, and disabled in
+        // its place with nothing to add.
+        let (dim, plate) = (palette.on_overlay(DIM), palette.plate(CHIP));
+        let look = choices::plus_look(dim, plate, PLUS, CHOICES_MENU_DROP, self.a11y);
+        let rows = self.add_rows(cx);
+        let plus = self.plus.draw(PLUS_ID, rows, &look, cx.entity_id());
+        let picked = self.ask.as_ref().map(|ask| ask.picked.clone());
+        let picked = picked.unwrap_or_default();
+        let mut added = Vec::new();
+        if !picked.files.is_empty() {
+            added.push(choices::Added {
+                said: files_words::files(picked.files.len()).into(),
+                trigger: choices::Trigger {
+                    id: FILES,
+                    at: self.files_at.clone(),
+                    click: Some(Box::new(
+                        cx.listener(|bar, _, window, cx| bar.files_menu(window, cx)),
+                    )),
+                },
+                gives_way: false,
+            });
+        }
+        if let Some(folder) = &picked.folder {
+            added.push(choices::Added {
+                // Its name shows here alone, never in a log, a notification or an assistant's
+                // answer.
+                said: task_files::shown_name(folder.root()).into(),
+                trigger: choices::Trigger {
+                    id: FOLDER,
+                    at: self.folder_at.clone(),
+                    click: Some(Box::new(
+                        cx.listener(|bar, _, window, cx| bar.folder_menu(window, cx)),
+                    )),
+                },
+                // A long name gives way first, the row's other choices kept whole.
+                gives_way: true,
+            });
+        }
         let (mark, said) = match self.composer_assistant() {
             Some(agent) => {
                 let model = self.composer_model().unwrap_or_default();
@@ -3840,10 +4088,13 @@ impl CommandBar {
                 text: palette.on_overlay(TITLE),
                 dim: palette.on_overlay(DIM),
                 plate: palette.plate(CHIP),
-                primary: palette.accent.into(),
-                on_primary: palette.accent_label.into(),
+                // `primary`, the ink, with `on-primary` on it.
+                primary: palette.ink.into(),
+                on_primary: palette.on_fill(palette.ink).ink.into(),
             },
             a11y: self.a11y,
+            plus: Some(plus),
+            added,
             level: (tier, level),
             model: Some((mark, said.into(), model)),
             effort,
@@ -3929,32 +4180,21 @@ impl CommandBar {
         let selected = index == self.selected;
         let thread = row.starts_thread();
         let end = self.end(row);
-        // The selected row keeps its accent under the pointer.
+        // The selected row keeps its plate under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (title, dim) = match selected {
-            true => (label, label.opacity(SELECTED_DIM)),
-            false => (palette.on_overlay(TITLE), palette.on_overlay(DIM)),
+        // The selected row differs only by its plate, `shown`, and its kind in text-2: no accent,
+        // so its title, glyphs and chips are any row's in both tones.
+        let title = palette.on_overlay(TITLE);
+        let dim = match selected {
+            true => chosen(&palette).1,
+            false => palette.on_overlay(DIM),
         };
-        // The icon sits on a tile of the accent's label in the selected row, and a command's on a
-        // faint one in the rest.
-        let glyph = match selected {
-            true => accent,
-            false => palette.on_overlay(ROW_GLYPH),
-        };
-        let tile = match (selected, row.kind()) {
-            (true, _) => Some(label),
-            (false, Kind::Command) => Some(palette.plate(CHIP)),
-            _ => None,
-        };
-        // What a Space's mark is ringed against: the selected row's tile, else the panel, which a
-        // command's faint tile hardly changes.
-        let tile_behind = if selected {
-            label
-        } else {
-            Hsla::from(palette.overlay)
-        };
+        let glyph = palette.on_overlay(ROW_GLYPH);
+        // A command's icon sits on a faint tile.
+        let tile = matches!(row.kind(), Kind::Command).then(|| palette.plate(CHIP));
+        // What a Space's mark is ringed against: the panel, which a faint plate hardly changes.
+        let tile_behind = Hsla::from(palette.overlay);
         let icon = div()
             .size(px(ICON_BOX))
             .mr(px(TITLE_X - ICON_BOX_X - ICON_BOX))
@@ -3969,12 +4209,9 @@ impl CommandBar {
                 Icon::Mark => Some(product::mark(MARK, &palette).into_any_element()),
                 _ => self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)),
             });
-        // A key's chip: the accent's label with the accent on it on the selected row.
+        // A key's chip, on every row alike.
         let chip = |text: SharedString| {
-            let (fill, text_color) = match selected {
-                true => (label, accent),
-                false => (palette.plate(CHIP), dim),
-            };
+            let (fill, text_color) = (palette.plate(CHIP), dim);
             div()
                 .h(px(ICON_BOX))
                 .flex_none()
@@ -4006,7 +4243,7 @@ impl CommandBar {
             .pr(px(ROW_END))
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
-            .when(selected, |line| line.bg(accent))
+            .when(selected, |line| line.bg(chosen(&palette).0))
             .when(hovered, |line| line.bg(palette.plate(HOVERED)))
             // Arc keeps the plate under the pointer as the keys move the selection.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
@@ -4041,25 +4278,16 @@ impl CommandBar {
                         .items_center()
                         .justify_center()
                         .rounded(px(CHIP_RADIUS))
-                        .bg(if selected {
-                            label
-                        } else {
-                            palette.plate(ARROW_TILE)
-                        })
+                        .bg(palette.plate(ARROW_TILE))
                         .child(
                             svg()
                                 .path(glyph)
                                 .size(px(END_GLYPH))
-                                .text_color(if selected {
-                                    accent
-                                } else {
-                                    palette.on_overlay(ARROW)
-                                }),
+                                .text_color(palette.on_overlay(ARROW)),
                         )
                 });
-                let tint = if selected { label } else { dim };
                 let end = if tile.is_some() { 7. } else { bare_end() };
-                let label = div().flex_none().mr(px(end)).text_color(tint);
+                let label = div().flex_none().mr(px(end)).text_color(dim);
                 line.child(div().flex_1())
                     .child(label.child(said))
                     .children(tile)
@@ -4070,24 +4298,22 @@ impl CommandBar {
             // Another computer's tab ends with that computer's name, as an agent's row with its
             // model.
             .when(!row.computer.is_empty(), |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1()).child(
                     div()
                         .flex_none()
                         .ml(px(HINT_GAP))
-                        .text_color(tint)
+                        .text_color(dim)
                         .child(row.computer.clone()),
                 )
             })
             // New Thread ends with its kind and ⇥, which grows the bar as a click does.
             .when(thread, |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
                             .mr(px(HINT_KEY_GAP))
-                            .text_color(tint)
+                            .text_color(dim)
                             .child(THREAD_KIND),
                     )
                     .child(chip(hint_key("tab", shell::OFF_THE_MAC).into()))
@@ -4095,7 +4321,7 @@ impl CommandBar {
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
                 line.when(end.is_none(), |line| line.child(div().flex_1()))
-                    .child(self.remove_button(index, selected, cx))
+                    .child(self.remove_button(index, cx))
             })
     }
 }
@@ -4198,11 +4424,7 @@ impl CommandBar {
         let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
         let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
         // A site search with a colour of its own is in it.
-        let colored = self.site.as_ref().is_some_and(|site| site.color.is_some());
-        let (fill, label) = match colored {
-            true => self.accent(&palette),
-            false => (palette.plate(CHIP), palette.ink.into()),
-        };
+        let (fill, label) = self.site_chip(palette);
         Some(mode_chip(fill, label, favicon, name))
     }
 
@@ -4339,18 +4561,37 @@ impl Render for CommandBar {
             .enumerate()
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
-        let (radius, input_height, list_top, level) = match self.over_field {
-            true => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
-            false => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
+        let (radius, input_height, list_top, level) = match (in_place, self.over_field) {
+            (true, _) => (
+                crate::tokens::radius::PANEL,
+                REST_HEIGHT,
+                LIST_TOP,
+                Level::Modal,
+            ),
+            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
+            (false, false) => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
         };
         // Over the field the input's icon and text are in the rows' columns.
-        let (icon_x, icon, text_x, text_size) = match self.over_field {
-            true => {
+        let (icon_x, icon, text_x, text_size) = match (in_place, self.over_field) {
+            (true, _) => (
+                REST_LEFT,
+                INPUT_ICON,
+                REST_LEFT + INPUT_ICON + REST_GAP,
+                REST_TEXT,
+            ),
+            (false, true) => {
                 let icon_x = LIST_X + ICON_BOX_X + (ICON_BOX - ICON_SIZE) / 2.;
                 (icon_x, ICON_SIZE, LIST_X + TITLE_X, FIELD_INPUT_TEXT)
             }
-            false => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
+            (false, false) => (INPUT_ICON_X, INPUT_ICON, INPUT_TEXT_X, INPUT_TEXT),
         };
+        let (input_end, input_line) = match in_place {
+            true => (REST_RIGHT, REST_LINE),
+            false => (HINT_END, INPUT_LINE),
+        };
+        // At rest with nothing under it the bar is a field in its page: the field's plate and the
+        // resting rim, no shadow. Its rows and the composer float over the cards, as ⌘T's do.
+        let bare = in_place && rows.is_empty() && self.ask.is_none();
         // One device pixel, which a 0.5 pt line isn't on a 1× display, where it doesn't draw.
         let hairline = 1. / window.scale_factor();
         let edge = |inset: f32, width: f32, color: Hsla| {
@@ -4365,67 +4606,78 @@ impl Render for CommandBar {
                 .border_color(color)
         };
         let palette = palette::current(cx);
-        // The placeholder and the accent follow the Space's, which may have changed since it opened.
+        // The placeholder follows the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
             input.set_colors(
                 palette.on_overlay(PLACEHOLDER),
-                palette.accent.into(),
-                palette.selection(),
+                palette.ink.into(),
+                palette.plate(FIELD_SELECTION),
             );
             input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
-        let panel = self
-            .with_keys(div(), cx)
-            .relative()
-            .size_full()
-            .overflow_hidden()
-            .rounded(px(radius))
-            .bg(palette.overlay)
-            .text_color(palette.ink)
-            // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-            .font_weight(FontWeight::MEDIUM)
-            .text_size(px(text::BODY))
-            .child(
-                div()
-                    .h(px(input_height))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .pl(px(icon_x))
-                    .pr(px(HINT_END))
-                    .gap(px(text_x - icon_x - icon))
-                    .text_size(px(text_size))
-                    .line_height(px(INPUT_LINE))
-                    .child(self.input_icon(cx))
-                    .children(self.mode_chip(&palette))
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .children(self.site_hint(cx)),
-            )
-            .when(!rows.is_empty() && !self.over_field, |bar| {
-                bar.child(
+        let panel =
+            self.with_keys(div(), cx)
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .rounded(px(radius))
+                .bg(match bare {
+                    true => palette
+                        .ground_plate(crate::palette::Ground::Field, crate::palette::FIELD_PLATE),
+                    false => palette.overlay.into(),
+                })
+                .text_color(palette.ink)
+                // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(text::BODY))
+                .child(
                     div()
-                        .h(px(hairline))
-                        .mx(px(LINE_INSET))
+                        .h(px(input_height))
                         .flex_none()
-                        .bg(palette.faint(LINE_COLOR)),
+                        .flex()
+                        .items_center()
+                        .pl(px(icon_x))
+                        .pr(px(input_end))
+                        .gap(px(text_x - icon_x - icon))
+                        .text_size(px(text_size))
+                        .line_height(px(input_line))
+                        .child(self.input_icon(cx))
+                        .children(self.mode_chip(&palette))
+                        .child(div().flex_1().min_w_0().child(self.input.clone()))
+                        .children(self.site_hint(cx)),
                 )
-            })
-            .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
-            .when(self.ask.is_some(), |bar| {
-                bar.child(self.choices(cx))
-                    .child(
+                .when(!rows.is_empty() && !self.over_field, |bar| {
+                    bar.child(
                         div()
                             .h(px(hairline))
                             .mx(px(LINE_INSET))
                             .flex_none()
                             .bg(palette.faint(LINE_COLOR)),
                     )
-                    .child(self.foot(cx))
-            })
-            .children(self.a11y.then(|| self.announcer()))
-            // The modal level's rim in the palette's ink; its outline and shadow are the host's,
-            // round the window, or on Windows round it in the window.
-            .child(edge(0., 1., Level::Modal.rim_in(&palette)));
+                })
+                .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
+                .when(self.ask.is_some(), |bar| {
+                    bar.child(self.choices(cx))
+                        .child(
+                            div()
+                                .h(px(hairline))
+                                .mx(px(LINE_INSET))
+                                .flex_none()
+                                .bg(palette.faint(LINE_COLOR)),
+                        )
+                        .child(self.foot(cx))
+                })
+                .children(self.a11y.then(|| self.announcer()))
+                // The modal level's rim in the palette's ink; its outline and shadow are the host's,
+                // round the window, or on Windows round it in the window.
+                .child(edge(
+                    0.,
+                    1.,
+                    match bare {
+                        true => Level::Resting.rim_in(&palette),
+                        false => Level::Modal.rim_in(&palette),
+                    },
+                ));
         // At rest no window is round it: it casts the level's shadow on its page itself, and is
         // as tall as what it shows, over what the page has under it.
         if in_place {
@@ -4433,7 +4685,7 @@ impl Render for CommandBar {
                 .w_full()
                 .h(px(self.drawn_height()))
                 .font_family(crate::face::UI)
-                .child(panel.shadow(Level::Modal.shadow()))
+                .child(panel.when(!bare, |panel| panel.shadow(Level::Modal.shadow())))
                 .into_any_element();
         }
         // The browser's shortcuts work here too, below the bar's own keys.

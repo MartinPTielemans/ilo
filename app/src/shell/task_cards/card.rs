@@ -9,11 +9,10 @@ use gpui::{
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{
-    Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
-};
+use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
+use crate::palette::Palette;
 use crate::shell::conversation::{stage_fill, words};
 use crate::shell::join::join;
 use crate::shell::page_ends::StripStop;
@@ -39,11 +38,12 @@ fn needs_you(site: &str) -> SharedString {
     }
 }
 
-/// A done card's second line, with no finding: when it ended (Z6, after the wording pass).
-fn done_at(card: &Card) -> SharedString {
+/// A done card's second line, with no finding: when it ended (Z6, after the wording pass). With
+/// it, how much of it is its lead (`second`).
+fn done_at(card: &Card) -> (SharedString, usize) {
     match card.ended_time.is_empty() {
-        true => state_line(card),
-        false => format!("Done · {}", card.ended_time).into(),
+        true => state(card),
+        false => (format!("Done · {}", card.ended_time).into(), 0),
     }
 }
 
@@ -79,12 +79,25 @@ pub(super) fn count(card: &Card) -> Option<SharedString> {
 
 /// The second line of a whole card in `form`: ilo's words alone.
 pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
+    second(card, form, site).0
+}
+
+/// How much of a whole card's second line in `form` is its lead, in the title's ink: the level's
+/// label where the line is its state's and the card is at Full access, by the card's level and
+/// never by what the line begins with.
+pub(super) fn second_lead(card: &Card, form: Form) -> usize {
+    second(card, form, "").1
+}
+
+/// A whole card's second line in `form` and how much of it is its lead: only its state's line
+/// has one.
+fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
     match form {
-        Form::Working if !card.status.is_empty() => card.status.clone(),
-        Form::Waits => needs_you(site),
-        Form::DoneUnseen if !card.finding.is_empty() => card.finding.clone(),
+        Form::Working if !card.status.is_empty() => (card.status.clone(), 0),
+        Form::Waits => (needs_you(site), 0),
+        Form::DoneUnseen if !card.finding.is_empty() => (card.finding.clone(), 0),
         Form::DoneUnseen => done_at(card),
-        _ => state_line(card),
+        _ => state(card),
     }
 }
 
@@ -98,6 +111,18 @@ pub(super) struct Look {
     pub(super) dot: bool,
     /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
     pub(super) from: bool,
+}
+
+/// The product's mark for an outside app's session, in `palette`'s ink at `from-ink`: its card's
+/// and its panel's.
+pub(in crate::shell) fn from_mark(palette: &Palette) -> impl IntoElement + use<> {
+    let colour = Hsla::from(palette.ink).opacity(FROM_INK);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
+    )
+    .flex_none()
+    .size(px(FROM_MARK))
 }
 
 /// Whether `card` is an outside app's session rather than a thread: from the kind of its connection
@@ -380,17 +405,6 @@ impl Shell {
             .child(drawn)
     }
 
-    /// The product's mark for an outside app's session, in the ink at `from-ink`.
-    fn from_mark(&self) -> impl IntoElement + use<> {
-        let colour = Hsla::from(self.palette.ink).opacity(FROM_INK);
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
-        )
-        .flex_none()
-        .size(px(FROM_MARK))
-    }
-
     /// An outside app's line over a whole card's first row: the product's mark in the glyph's
     /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
     /// an ellipsis.
@@ -405,7 +419,7 @@ impl Shell {
                     .w(px(GLYPH))
                     .flex()
                     .justify_center()
-                    .child(self.from_mark()),
+                    .child(from_mark(&self.palette)),
             )
             .child(
                 div()
@@ -474,7 +488,7 @@ impl Shell {
         let second = match finding {
             true => self.card_finding(card, text_2).into_any_element(),
             false => {
-                let lead = state_lead(&words);
+                let lead = second_lead(card, form);
                 let line = match form {
                     Form::DoneUnseen => DONE_LINE,
                     _ => LIVE_LINE,
@@ -675,7 +689,7 @@ impl Shell {
             .map(|tab| self.card_icon(tab, 1.));
         // An outside app's mark at the right, before the page's icon; its name is the line's
         // tooltip and spoken label, not drawn.
-        let from = outside(card).then(|| self.from_mark());
+        let from = outside(card).then(|| from_mark(&self.palette));
         let end = (from.is_some() || on.is_some()).then(|| {
             div()
                 .flex_none()

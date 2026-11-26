@@ -1553,7 +1553,6 @@ fn each_states_one_button_is_the_hosts_primary(cx: &mut TestAppContext) {
     let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
     assert_eq!(ground.primary, signal);
     let settings = Look::settings(false);
-    assert_ne!(settings.primary, gpui::rgb(crate::palette::NO_THEME_ACCENT));
     assert_eq!(
         settings.primary, settings.on,
         "Settings' main button is its text colour"

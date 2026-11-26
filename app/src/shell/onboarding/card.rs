@@ -72,7 +72,7 @@ impl Inks {
         self.text(if self.light { t::LIGHT_GROUP } else { t::GROUP })
     }
 
-    /// A field's ground.
+    /// A field's fill, and the recovery words' plate.
     pub(super) fn field(&self) -> Rgba {
         self.text(if self.light { t::LIGHT_FIELD } else { t::FIELD })
     }
@@ -133,12 +133,24 @@ pub(super) fn heading_text(
 }
 
 pub(super) fn heading(
-    (title, line): (SharedString, SharedString),
+    said: (SharedString, SharedString),
     centred: bool,
     inks: Inks,
     cx: &mut App,
 ) -> gpui::Div {
-    let [x, y, size, height] = t::HEADING;
+    let [_, y, _, _] = t::HEADING;
+    heading_at(said, centred, y, inks, cx)
+}
+
+/// As `heading`, its top at `y`, as the Welcome's states place theirs lower under the knot.
+pub(super) fn heading_at(
+    (title, line): (SharedString, SharedString),
+    centred: bool,
+    y: f32,
+    inks: Inks,
+    cx: &mut App,
+) -> gpui::Div {
+    let [x, _, size, height] = t::HEADING;
     let [gap, line_size, line_height] = t::LINE;
     let place = |row: gpui::Div| match centred {
         true => row.w(px(t::WIDTH)).flex().justify_center().text_center(),
@@ -209,6 +221,16 @@ pub(super) fn quiet(id: &'static str, label: SharedString, inks: Inks) -> Statef
         .focus_visible(card_ring(inks))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(label)
+}
+
+/// A small quiet button, as the recovery words' Copy is.
+pub(super) fn small(id: &'static str, label: SharedString, inks: Inks) -> Stateful<gpui::Div> {
+    let [height, radius, inset, size] = t::SMALL_BUTTON;
+    quiet(id, label, inks)
+        .h(px(height))
+        .px(px(inset))
+        .rounded(px(radius))
+        .text_size(px(size))
 }
 
 /// The step's main button, `button` with its words in it: the text's ink as its fill and the key

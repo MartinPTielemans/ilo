@@ -44,7 +44,7 @@ rm -f "$saved" "$launch_frame"
 serve
 agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # Showing the file on Linux, with no file manager on the bus, falls to xdg-open, which tries
 # $BROWSER before the runner's own browsers: true ends it there, so none stays on the display.

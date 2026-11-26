@@ -30,7 +30,7 @@ rm -f "$cards_off"
 # The agent's token, which Settings › Other apps keeps, on from the launch as mcp.sh's.
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 
 # The private server, which only logs: a card must never reach it.

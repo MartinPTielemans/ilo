@@ -127,14 +127,27 @@ pub struct Element {
     pub password: bool,
     /// The DOM node of the form it's in, if it's in one.
     pub form: Option<i64>,
+    /// Whether the page marks the field as one for a secret by its autofill kind: a card's number,
+    /// its security code or expiry, a one-time code, a new or current password. None while the core
+    /// doesn't say. Read by `shows_typed` alone: never put into an outline, an answer or a log.
+    pub secret: Option<bool>,
+    /// Whether the browser itself filled the field. None while the core doesn't say; read by
+    /// `shows_typed` alone.
+    pub autofilled: Option<bool>,
 }
 
 impl Element {
-    /// Whether what an agent types into it may be shown: never a password field's value, nor one
-    /// whose name says it's a secret. A trace's step and a kept card both go by this.
+    /// Whether what an agent types into it may be shown: only where the core said the page marks
+    /// it no secret and the browser didn't fill it, and never a password field's value, nor one
+    /// whose name says it's a secret. A core that doesn't say means no. A trace's step, a kept
+    /// card and a kept log all go by this.
     pub fn shows_typed(&self) -> bool {
         let name = self.name.to_lowercase();
-        !self.password && !name.contains("password") && !name.contains("passcode")
+        self.secret == Some(false)
+            && self.autofilled == Some(false)
+            && !self.password
+            && !name.contains("password")
+            && !name.contains("passcode")
     }
 }
 
@@ -712,6 +725,8 @@ impl<'a> Walk<'a> {
                 name: name.into(),
                 password,
                 form: self.form,
+                secret: node.get("secret").and_then(Value::as_bool),
+                autofilled: node.get("autofilled").and_then(Value::as_bool),
             };
             if state(node, "focused") {
                 self.focus = Focus::On(element.clone());
@@ -1576,6 +1591,48 @@ mod tests {
             "{outline}"
         );
         assert!(outline.contains("x…\")\n"), "{outline}");
+    }
+
+    /// What's typed into a field shows only where the core says both that the page marks it no
+    /// secret and that the browser didn't fill it: a core that doesn't say means no, and either
+    /// fact true means no. A password field, or one whose name says it's a secret, never shows it.
+    /// Neither fact reaches the outline.
+    #[test]
+    fn typed_text_shows_only_where_the_core_says_the_field_is_no_secret() {
+        let shows = |secret: Option<bool>, autofilled: Option<bool>, name: &str| {
+            let mut nodes = vec![
+                node("1", "RootWebArea", "Form", &["2"]),
+                node("2", "textbox", name, &[]),
+            ];
+            nodes[1]["backendDOMNodeId"] = json!(2);
+            if let Some(secret) = secret {
+                nodes[1]["secret"] = json!(secret);
+            }
+            if let Some(autofilled) = autofilled {
+                nodes[1]["autofilled"] = json!(autofilled);
+            }
+            let mut refs = Refs::default();
+            let outline = outline(&tab(), &nodes, &mut refs, None);
+            let text = outline.text();
+            assert!(
+                !text.contains("secret") && !text.contains("autofill"),
+                "{text}"
+            );
+            outline.elements[0].shows_typed()
+        };
+        assert!(!shows(None, None, "City"), "a core that doesn't say");
+        assert!(!shows(Some(false), None, "City"));
+        assert!(!shows(None, Some(false), "City"));
+        assert!(
+            !shows(Some(true), Some(false), "City"),
+            "a field the page marks secret"
+        );
+        assert!(
+            !shows(Some(false), Some(true), "City"),
+            "a field the browser filled"
+        );
+        assert!(shows(Some(false), Some(false), "City"));
+        assert!(!shows(Some(false), Some(false), "Passcode"));
     }
 
     /// The page's text inside a line's quotes, a name, a select's choices or what a field holds,

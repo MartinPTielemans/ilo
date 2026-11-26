@@ -67,7 +67,7 @@ mod clean_link;
 mod close_tab;
 mod command_names;
 mod commands;
-mod conversation;
+pub(crate) mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;
@@ -1793,6 +1793,8 @@ pub struct Shell {
     /// The download whose row the left button last pressed, where, and whether the press became
     /// the system's drag of its file.
     download_press: Option<(u64, Point<Pixels>, bool)>,
+    /// The download whose row in the Library is under the pointer, which shows its buttons.
+    download_pointed: Option<u64>,
     /// The drag of a download's file from the Library closed it, to come back if nothing takes it.
     library_dragged: bool,
     /// The captures saved to the Library, newest first.
@@ -2326,6 +2328,7 @@ impl Shell {
             downloads: Vec::new(),
             download_icons: HashMap::new(),
             download_press: None,
+            download_pointed: None,
             library_dragged: false,
             captures: Vec::new(),
             download_previews: HashMap::new(),

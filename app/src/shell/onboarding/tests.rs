@@ -8,7 +8,7 @@ use std::{
 
 use gpui::{
     Entity, Focusable, Modifiers, TestAppContext, VisualTestContext,
-    accesskit::{Action, Role, Toggled},
+    accesskit::{Role, Toggled},
     point, px,
 };
 
@@ -196,6 +196,32 @@ fn synced(cx: &mut VisualTestContext, status: Status) {
         ..State::default()
     };
     cx.update(|_, cx| cx.set_global(account::Synced(state)));
+    cx.run_until_parked();
+}
+
+/// The account as the core says it is, with `problem`.
+fn synced_with(cx: &mut VisualTestContext, status: Status, problem: Option<account::Problem>) {
+    let state = State {
+        status,
+        problem,
+        server: SERVER.into(),
+        default_server: true,
+        ..State::default()
+    };
+    cx.update(|_, cx| cx.set_global(account::Synced(state)));
+    cx.run_until_parked();
+}
+
+/// What the Welcome shows of the account.
+fn welcome(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> super::Welcome {
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, cx| shell.welcome_shows(cx))
+}
+
+/// The moment "Your Spaces are syncing." holds, gone by.
+fn syncing_held(cx: &mut VisualTestContext) {
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(t::SYNCING_HOLD));
     cx.run_until_parked();
 }
 
@@ -679,6 +705,9 @@ fn a_returning_account_leaves_out_the_new_profiles_steps(cx: &mut TestAppContext
     synced(cx, Status::Pairing);
     assert_eq!(step(&shell, cx), Some(Step::Account));
     synced(cx, Status::On);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Syncing);
+    assert_eq!(step(&shell, cx), Some(Step::Account), "it says so first");
+    syncing_held(cx);
     assert_eq!(
         step(&shell, cx),
         Some(Step::Done),
@@ -719,7 +748,6 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.reads_shell(shell.downgrade());
     host.threads.set(Some(true));
-    host.other_apps.set(Some(true));
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
     assert!(placed("main", cx).is_none(), "no main button");
@@ -729,12 +757,7 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
     assert!(host.take().is_empty());
     click("just-the-browser", cx);
     cx.run_until_parked();
-    assert_eq!(host.take(), ["threads false"]);
-    assert_eq!(
-        host.other_apps.get(),
-        Some(true),
-        "Other apps' switch is as it was"
-    );
+    assert_eq!(host.take(), ["threads false"], "and nothing else");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 
     shell.update(cx, |shell, _| shell.onboarding = None);
@@ -1182,11 +1205,9 @@ fn return_ending_a_composition_passes_no_step(cx: &mut TestAppContext) {
     let tree = cx.a11y_tree().expect("GPUI built a tree");
     let words = (tree.nodes.iter())
         .map(|(_, node)| node)
-        .find(|node| {
-            node.role() == Role::Button && node.label() == Some("Use Recovery Words Instead")
-        })
+        .find(|node| node.role() == Role::Button && node.label() == Some("Use Recovery Words"))
         .and_then(|node| node.bounds())
-        .expect("Use Recovery Words Instead");
+        .expect("Use Recovery Words");
     let at = gpui::point(
         px(((words.x0 + words.x1) / 2.) as f32 / scale),
         px(((words.y0 + words.y1) / 2.) as f32 / scale),
@@ -1680,6 +1701,7 @@ fn a_finished_sign_in_goes_on(cx: &mut TestAppContext) {
     synced(cx, Status::Pairing);
     assert_eq!(step(&shell, cx), Some(Step::Account));
     synced(cx, Status::On);
+    syncing_held(cx);
     assert_eq!(
         step(&shell, cx),
         Some(Step::Done),
@@ -1687,10 +1709,11 @@ fn a_finished_sign_in_goes_on(cx: &mut TestAppContext) {
     );
 }
 
-/// The account's first device shows its recovery words, which show once, so neither Esc nor ↩ goes
-/// on from them and there's no Not Now; their Done does.
+/// The account's first device shows its recovery words, which show once: Esc keeps them and
+/// there's no Not Now; Copy copies them through the build's own way, and their main button, I've
+/// Saved Them, goes on, as ↩ does (v9 §3.3).
 #[gpui::test]
-fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
+fn the_first_devices_words_go_on_with_ive_saved_them(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
     synced(cx, Status::SignedOut);
@@ -1702,25 +1725,196 @@ fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
     // The core has made them, and syncs.
     synced(cx, Status::On);
     settle(&shell, cx);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Words);
     cx.simulate_keystrokes("escape");
     assert_eq!(step(&shell, cx), Some(Step::Account), "Esc keeps the words");
-    cx.simulate_keystrokes("enter");
-    assert_eq!(step(&shell, cx), Some(Step::Account), "so does ↩");
-    assert!(shell.read_with(cx, |shell, cx| shell.keeping_words(cx)));
+    assert!(account_calls(&host).is_empty(), "and asks nothing");
     assert!(
         placed("not-now", cx).is_none(),
         "no Not Now while they show"
     );
-    // The words are taller than the card has room for, so the assistive app's press reaches Done.
-    let done = cx.a11y_tree().expect("GPUI built a tree").nodes;
-    let done = done
-        .into_iter()
-        .find_map(|(id, node)| {
-            (node.role() == Role::Button && node.label() == Some("Done")).then_some(id)
+    // All 24, counted, never read out.
+    let shown = shell.read_with(cx, |shell, cx| {
+        (shell.account_view()).and_then(|view| view.read(cx).shown_words().map(<[String]>::len))
+    });
+    assert_eq!(shown, Some(24));
+    click("copy", cx);
+    assert_eq!(account_calls(&host), ["copy secret"]);
+    let (copied, noted) = shell.read_with(cx, |shell, cx| {
+        let now = cx.background_executor().now();
+        (shell.account_view()).map_or((false, false), |view| view.read(cx).copied(now))
+    });
+    assert!(
+        copied && noted,
+        "Copied, with the note on where the copy went"
+    );
+    // The assistive app's press reaches the main button.
+    let saved = cx.a11y_tree().expect("GPUI built a tree").nodes;
+    assert!(
+        (saved.iter()).any(|(_, node)| {
+            node.role() == Role::Button && node.label() == Some("I've Saved Them")
+        }),
+        "I've Saved Them is in the tree"
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "↩ goes on, as the button does"
+    );
+}
+
+/// Esc stops a wait under way, the sign-in window or the request to the other devices, and never
+/// passes the step; Not Now while the sign-in window is open closes it as it goes on.
+#[gpui::test]
+fn esc_stops_a_wait_and_never_passes_the_welcome(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    started(&shell, cx);
+    cx.simulate_keystrokes("escape");
+    assert!(
+        account_calls(&host).is_empty(),
+        "nothing to stop in the form"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+
+    cx.simulate_keystrokes("enter");
+    synced(cx, Status::SigningIn);
+    account_calls(&host);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        account_calls(&host),
+        ["cancel"],
+        "the sign-in window closes"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+
+    synced(cx, Status::NeedsSecret);
+    settle(&shell, cx);
+    assert_eq!(account_calls(&host), ["request pairing"]);
+    synced(cx, Status::Pairing);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Approve);
+    assert!(placed("not-now", cx).is_none(), "no Not Now while it waits");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(account_calls(&host), ["cancel"], "the request stops");
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+    synced(cx, Status::NeedsSecret);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Again);
+    cx.simulate_keystrokes("escape");
+    assert!(account_calls(&host).is_empty(), "nothing more to stop");
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+    shell.update(cx, |shell, _| shell.onboarding = None);
+
+    synced(cx, Status::SignedOut);
+    started(&shell, cx);
+    cx.simulate_keystrokes("enter");
+    synced(cx, Status::SigningIn);
+    account_calls(&host);
+    click("not-now", cx);
+    assert_eq!(
+        account_calls(&host),
+        ["cancel"],
+        "Not Now closes the window"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+}
+
+/// No device added this one: the build's line says why, Ask Again asks again, and Use Recovery
+/// Words opens their field, whose ↩ is Restore's and never passes the step; restored, the
+/// Welcome says the Spaces are syncing, then goes on.
+#[gpui::test]
+fn a_new_device_asks_again_or_restores_with_its_words(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    started(&shell, cx);
+    cx.simulate_keystrokes("enter");
+    synced(cx, Status::NeedsSecret);
+    settle(&shell, cx);
+    synced_with(cx, Status::NeedsSecret, Some(account::Problem::Declined));
+    assert_eq!(welcome(&shell, cx), super::Welcome::Again);
+    assert!(placed("not-now", cx).is_some(), "Not Now goes on from here");
+    account_calls(&host);
+    cx.simulate_keystrokes("enter");
+    assert!(account_calls(&host).is_empty(), "↩ has no button here");
+    click("ask-again", cx);
+    assert_eq!(account_calls(&host), ["request pairing"]);
+
+    click("use-words", cx);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Restore);
+    settle(&shell, cx);
+    let field = shell.read_with(cx, |shell, cx| {
+        (shell.account_view()).and_then(|view| view.read(cx).open_field())
+    });
+    let field = field.expect("the words' field");
+    assert!(
+        cx.update(|window, cx| field.focus_handle(cx).is_focused(window)),
+        "it takes the keyboard"
+    );
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "made up words", window, cx)
         })
-        .expect("Done is in the tree");
-    cx.simulate_a11y_action(done, Action::Click);
-    assert_eq!(step(&shell, cx), Some(Step::Import), "Done goes on");
+    });
+    account_calls(&host);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(account_calls(&host), ["words"], "↩ in the field is Restore");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Account),
+        "and doesn't pass the step"
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        welcome(&shell, cx),
+        super::Welcome::Again,
+        "Esc leaves the field"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+    click("use-words", cx);
+    click("main", cx);
+    assert_eq!(account_calls(&host), ["words"], "Restore, clicked");
+    synced(cx, Status::On);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Syncing);
+    syncing_held(cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Done),
+        "a returning account's steps"
+    );
+}
+
+/// ⌘Q while the account waits for its words or another device's approval resumes at the Welcome,
+/// which shows that wait again; the kept number is the step's alone.
+#[gpui::test]
+fn a_quit_while_the_account_waits_resumes_at_the_welcome(cx: &mut TestAppContext) {
+    let dir = kept_dir(cx);
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    started(&shell, cx);
+    assert_eq!(kept(&dir).as_deref(), Some("1"));
+    assert!(
+        placed("sign-up", cx).is_none(),
+        "one sign-in window, no Sign Up"
+    );
+    cx.simulate_keystrokes("enter");
+    synced(cx, Status::NeedsSecret);
+    settle(&shell, cx);
+    assert_eq!(kept(&dir).as_deref(), Some("1"));
+    synced(cx, Status::Pairing);
+    relaunch(&shell, cx, &dir);
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+    assert_eq!(welcome(&shell, cx), super::Welcome::Approve);
+    synced(cx, Status::On);
+    syncing_held(cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Done),
+        "a returning account, past what its Spaces bring"
+    );
 }
 
 /// The look the Space step shows is on the window at once, as the theme panel's is: the mock's
@@ -2076,8 +2270,7 @@ fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
         (vec![Client::Codex], true),
         (vec![], false),
     ] {
-        let (shell, cx, host) = first_window(cx);
-        host.other_apps.set(Some(false));
+        let (shell, cx, _host) = first_window(cx);
         let (_agents, looks) =
             cx.update(|_, cx| crate::agents::tests::stand_in_with(Vec::new(), found.clone(), cx));
         started(&shell, cx);
@@ -2090,54 +2283,94 @@ fn a_found_agent_program_brings_other_apps(cx: &mut TestAppContext) {
     }
 }
 
-/// Other apps' switch is on its own step, Settings' own and set at once, a click on it or its row
-/// turning it either way; no other step has it, and nothing else it moves.
+/// Other apps' two switches are on their own step, off as it shows, each Settings' own and set at
+/// once, a click on it or its card turning it either way. Either on turns the outside switch on as
+/// it lands; it goes off only as the second is turned off. No other step has them, and nothing
+/// else moves.
 #[gpui::test]
-fn other_apps_agents_have_their_row_on_their_step(cx: &mut TestAppContext) {
+fn other_apps_two_ways_are_off_as_they_show_and_either_turns_the_outside_switch_on(
+    cx: &mut TestAppContext,
+) {
+    use crate::agents::Client;
     let (shell, cx, host) = first_window(cx);
-    host.other_apps.set(Some(false));
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let (agents, heard, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in_failing(found.clone(), None, cx));
+    let outside =
+        |cx: &mut VisualTestContext| agents.read_with(cx, |agents, _| agents.other_apps());
     started(&shell, cx);
-    // A test's shell has no Agents to find a program of, so it puts the step in as the import's
-    // begun puts the favorites in.
-    shell.update(cx, |shell, _| {
-        let steps = &mut shell.onboarding.as_mut().unwrap().steps;
-        let done = steps.iter().position(|&step| step == Step::Done).unwrap();
-        steps.insert(done, Step::OtherApps);
-    });
+    assert!(steps(&shell, cx).contains(&Step::OtherApps));
     let others = shell.update(cx, |shell, cx| {
         (STEPS.iter())
             .filter(|&&step| step != Step::OtherApps)
             .any(|&step| {
-                (shell.switches(step, cx).iter()).any(|(each, _)| *each == Switch::OtherApps)
+                (shell.switches(step, cx).iter())
+                    .any(|(each, _)| matches!(each, Switch::Command | Switch::Mcp))
             })
     });
-    assert!(!others, "no other step has a row about other apps");
+    assert!(!others, "no other step has a way in");
     on_to(&shell, cx, Step::OtherApps);
     let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| shell.switches(Step::OtherApps, cx))
     };
-    assert_eq!(offered(&shell, cx), [(Switch::OtherApps, false)], "off");
-    let frame = |part, shell: &Entity<Shell>, cx: &VisualTestContext| {
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, false), (Switch::Mcp, false)],
+        "both off as it shows"
+    );
+    let frame = |switch, part, shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| {
             let onboarding = shell.onboarding.as_ref().expect("the card shows");
-            (onboarding.frames.borrow())
-                .get(&(Switch::OtherApps, part))
-                .copied()
+            (onboarding.frames.borrow()).get(&(switch, part)).copied()
         })
     };
-    let switch = frame("switch", &shell, cx).expect("its switch is drawn");
-    let row = frame("row", &shell, cx).expect("its row is drawn");
+    let command = frame(Switch::Command, "switch", &shell, cx).expect("its switch is drawn");
+    let mcp = frame(Switch::Mcp, "row", &shell, cx).expect("its card is drawn");
+    let at_left = |card: gpui::Bounds<gpui::Pixels>| point(card.left() + px(4.), card.center().y);
     host.take();
-    cx.simulate_click(switch.center(), Modifiers::none());
+
+    assert!(!outside(cx));
+    cx.simulate_click(command.center(), Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(host.take(), ["other apps true"], "set at once");
-    assert_eq!(offered(&shell, cx), [(Switch::OtherApps, true)]);
-    cx.simulate_click(
-        point(row.left() + px(4.), row.center().y),
-        Modifiers::none(),
+    assert!(outside(cx), "on as the command landed");
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, true), (Switch::Mcp, false)]
     );
+    assert!(agents.read_with(cx, |agents, _| agents.is_connected(Client::Command)));
+    assert_eq!(
+        heard().0,
+        [Client::Command],
+        "no app connected by the command"
+    );
+
+    cx.simulate_click(at_left(mcp), Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(host.take(), ["other apps false"], "and back by its row");
+    assert!(outside(cx), "still on");
+    assert_eq!(
+        heard().0,
+        [Client::Command, Client::ClaudeCode, Client::Codex]
+    );
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, true), (Switch::Mcp, true)]
+    );
+
+    cx.simulate_click(command.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(outside(cx), "on while MCP is");
+    cx.simulate_click(at_left(mcp), Modifiers::none());
+    cx.run_until_parked();
+    assert!(!outside(cx), "off with both");
+    assert_eq!(
+        heard().1,
+        [Client::Command, Client::ClaudeCode, Client::Codex]
+    );
+    assert_eq!(
+        offered(&shell, cx),
+        [(Switch::Command, false), (Switch::Mcp, false)],
+        "off takes away what on added"
+    );
     assert_eq!(
         host.threads.get(),
         None,
@@ -2146,6 +2379,74 @@ fn other_apps_agents_have_their_row_on_their_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Done));
     assert!(host.take().is_empty(), "Next sets nothing more");
+    assert!(!outside(cx));
+}
+
+/// A way whose Add fails turns back off and says so in its small line: the command's, or MCP's
+/// for each app that fell, on while one is connected. The outside switch is as it was before the
+/// click while the other way is off, and stays on while it's on.
+#[gpui::test]
+fn a_way_that_fails_turns_back_off_and_says_so(cx: &mut TestAppContext) {
+    use super::other_apps;
+    use crate::agents::Client;
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let failed = |switch| match switch {
+        Switch::Command => "Couldn't add the command.",
+        _ => "Couldn't connect Claude Code and Codex.",
+    };
+    for (switch, other) in [
+        (Switch::Command, Switch::Mcp),
+        (Switch::Mcp, Switch::Command),
+    ] {
+        for other_on in [false, true] {
+            let (shell, cx, _host) = first_window(cx);
+            let (agents, _, fail_next) =
+                cx.update(|_, cx| crate::agents::tests::stand_in_failing(found.clone(), None, cx));
+            let outside =
+                |cx: &mut VisualTestContext| agents.read_with(cx, |agents, _| agents.other_apps());
+            started(&shell, cx);
+            on_to(&shell, cx, Step::OtherApps);
+            if other_on {
+                shell.update(cx, |shell, cx| shell.onboarding_switch(other, cx));
+                cx.run_until_parked();
+                assert!(outside(cx));
+            }
+            // Each of the way's writes fails: MCP's both apps, so nothing of it lands.
+            fail_next(2);
+            shell.update(cx, |shell, cx| shell.onboarding_switch(switch, cx));
+            cx.run_until_parked();
+            let way = agents.read_with(cx, |agents, _| match switch {
+                Switch::Command => other_apps::command(agents),
+                _ => other_apps::mcp(agents),
+            });
+            assert!(!way.on, "{switch:?} {other_on}");
+            assert_eq!(way.small.as_ref(), failed(switch), "{switch:?} {other_on}");
+            assert_eq!(outside(cx), other_on, "{switch:?}: as before the click");
+        }
+    }
+}
+
+/// MCP's way with one app that fails and one that lands is on, says which fell, and turns the
+/// outside switch on with the one that landed.
+#[gpui::test]
+fn a_way_that_lands_for_one_app_turns_the_outside_switch_on(cx: &mut TestAppContext) {
+    use super::other_apps;
+    use crate::agents::Client;
+    let found = vec![Client::ClaudeCode, Client::Codex];
+    let (shell, cx, _host) = first_window(cx);
+    let (agents, _, _) = cx.update(|_, cx| {
+        crate::agents::tests::stand_in_failing(found.clone(), Some("not installed"), cx)
+    });
+    started(&shell, cx);
+    on_to(&shell, cx, Step::OtherApps);
+    shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Mcp, cx));
+    cx.run_until_parked();
+    let (way, outside) = agents.read_with(cx, |agents, _| {
+        (other_apps::mcp(agents), agents.other_apps())
+    });
+    assert!(way.on);
+    assert_eq!(way.small.as_ref(), "Connected Codex. Claude Code failed.");
+    assert!(outside);
 }
 
 /// Safari's files kept from the app need Full Disk Access as Safari is read: the step stays,
@@ -2700,14 +3001,114 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
     }
     assert_eq!(
         card(Cli::Claude, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the browser that opened.", Offer::Cancel),
+        said("Finish in your browser.", Offer::Cancel),
         "Claude's sign-in is in the computer's browser"
     );
     assert_eq!(
         card(Cli::Codex, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the window that opened.", Offer::Cancel),
+        said("Finish in the new window.", Offer::Cancel),
         "ChatGPT's is in a window here"
     );
+}
+
+/// A row on the card is as tall in each of its states (FR19), as each state's line is one line in
+/// the card's column: its maker's plan with Sign In, the wait with the ring and Cancel, signed in
+/// with the disc and ⋯, and a sign-in that didn't finish.
+#[gpui::test]
+fn an_assistants_row_is_as_tall_in_each_state(cx: &mut TestAppContext) {
+    use crate::agents::ready::Ready;
+    use crate::agents::sign_in::{Row, shown};
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let states = [
+        ("at the start", Ready::SignedOut, None, Row::Idle),
+        ("waiting", Ready::SignedOut, None, Row::SigningIn),
+        ("signed in", Ready::SignedIn, Some("Plus"), Row::Idle),
+        ("failed", Ready::SignedOut, None, Row::Failed(None)),
+    ];
+    for cli in Cli::ALL {
+        let mut heights = Vec::new();
+        for (state, ready, plan, row) in &states {
+            let rows = vec![(cli, shown(cli, *ready, *plan, row))];
+            shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+            settle(&shell, cx);
+            let drawn = placed(cli.id(), cx)
+                .unwrap_or_else(|| panic!("{cli:?}'s row wasn't drawn {state}"));
+            heights.push((*state, f32::from(drawn.size.height)));
+        }
+        let first = heights[0].1;
+        assert!(
+            heights
+                .iter()
+                .all(|&(_, height)| (height - first).abs() < 0.5),
+            "{cli:?}'s row changes height between its states: {heights:?}"
+        );
+    }
+}
+
+/// A line too long for the card's column is cut where it's drawn, the row keeping its height, and
+/// read whole by an assistive app; each maker's own waiting line is read whole too.
+#[gpui::test]
+fn a_cut_line_keeps_the_rows_height_and_is_read_whole(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let show = |shell: &Entity<Shell>, cx: &mut VisualTestContext, line: &str, offer| {
+        let rows = vec![(
+            Cli::Claude,
+            Shown {
+                line: line.into(),
+                offer,
+            },
+        )];
+        shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+        settle(shell, cx);
+        placed("claude", cx)
+            .expect("Claude's row is drawn")
+            .size
+            .height
+    };
+    let rest = show(&shell, cx, "", Offer::SignIn);
+    let long = "Finish signing in to your Claude plan in the browser window that opened just now.";
+    assert_eq!(
+        show(&shell, cx, long, Offer::Cancel),
+        rest,
+        "the cut row's height"
+    );
+    let read = |cx: &mut VisualTestContext| {
+        let said = read(cx).into_iter();
+        let labels = said.filter(|(role, ..)| *role == Role::Label);
+        labels.map(|(_, name, _)| name).collect::<Vec<_>>()
+    };
+    let said = read(cx);
+    assert!(
+        said.iter().any(|name| name == long),
+        "the whole line in {said:?}"
+    );
+
+    let rows = Cli::ALL.map(|cli| {
+        let waiting = crate::agents::sign_in::Row::SigningIn;
+        let ready = crate::agents::ready::Ready::SignedOut;
+        (
+            cli,
+            crate::agents::sign_in::shown(cli, ready, None, &waiting),
+        )
+    });
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_show_assistants(rows.to_vec(), cx)
+    });
+    settle(&shell, cx);
+    let said = read(cx);
+    for line in [
+        crate::agents::sign_in::CLAUDE_WAITING,
+        crate::agents::sign_in::CHATGPT_WAITING,
+    ] {
+        assert!(said.iter().any(|name| name == line), "{line} in {said:?}");
+    }
 }
 
 /// A signed-in row on the card has the check disc and its ⋯, not Settings' mark, and the foot's

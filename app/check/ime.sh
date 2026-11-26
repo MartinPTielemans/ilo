@@ -173,7 +173,7 @@ if [ "${1:-}" = --steps ]; then
   await "agent mcp-client stopped Request at Work on pages: localhost$" "$at"
   stopped=$(agent_line) || fail "the browser didn't answer the agent's change"
   case "$stopped" in
-    *"ilo stopped this: make a change on localhost."*) ;;
+    *"$product stopped this: make a change on localhost."*) ;;
     *) fail "the agent's change at Work on pages answered: $stopped" ;;
   esac
   shot agent-stopped
@@ -428,7 +428,7 @@ for mode in $modes; do
   x11=; [ "$mode" = x11 ] && x11=--x11
   # Each leg its own profile, as the last one's browser may not be gone yet, with the run's agent.
   mkdir -p "$home/profile-$mode"
-  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$AGENT_TOKEN" \
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$AGENT_TOKEN" "$product" \
     > "$home/profile-$mode/Agents"
   chmod 600 "$home/profile-$mode/Agents"
   dbus-run-session --config-file="$home/bus.conf" -- \

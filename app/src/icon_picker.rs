@@ -221,8 +221,8 @@ pub fn open_at(
             // The card is dark in every look, so the field's colours are the card's own.
             TextInput::new("Search", cx).follows(|_| Colors {
                 placeholder: rgba(HINT).into(),
-                caret: rgb(CARET).into(),
-                selection: rgba(HOVERED).into(),
+                caret: Some(rgb(CARET).into()),
+                selection: Some(rgba(HOVERED).into()),
             })
         });
         cx.new(|cx| IconPicker {
@@ -679,8 +679,8 @@ impl IconPicker {
                 .justify_center()
                 .rounded(px(SEGMENTS_RADIUS))
                 .when(chosen, |segment| {
-                    let palette = crate::palette::current(cx);
-                    segment.bg(palette.accent).text_color(palette.accent_label)
+                    let (fill, label) = crate::palette::current(cx).accent_on_dark();
+                    segment.bg(fill).text_color(label)
                 })
                 // The other takes the ladder under the pointer (ours: Arc's isn't recorded), in Ink, away
                 // from its white label, which reads on the track with no more room, as the
