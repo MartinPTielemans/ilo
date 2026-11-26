@@ -174,6 +174,9 @@ pub enum Failure {
     SignedOut,
     /// The assistant's program isn't on this computer, so no run started.
     NotInstalled,
+    /// Its program is older than the browser runs, or didn't take the browser's limits, so no
+    /// thread started (AP27).
+    NeedsUpdate,
     /// The CLI said why, in its words.
     Other(String),
 }

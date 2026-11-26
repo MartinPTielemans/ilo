@@ -7167,6 +7167,43 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// An assistant older than the browser runs is said on its row before any thread starts, and a
+    /// thread asked of it never starts: its card says it needs an update, with its row's How to
+    /// Update (AP27).
+    #[gpui::test]
+    fn an_assistant_that_needs_an_update_starts_no_thread(cx: &mut TestAppContext) {
+        // A program that's there, so only its look's answer keeps the thread from starting.
+        let (agents, _) = ready(Some(PathBuf::from("/nonexistent/claude")), cx);
+        set_found(&agents, Ready::NeedsUpdate, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// A run its program ends for want of an update, as a Codex that didn't take the browser's
+    /// limits does, says so on its card and its row, whatever its version said, until it's looked
+    /// for again.
+    #[gpui::test]
+    fn a_run_that_needs_an_update_says_so_on_its_card_and_row(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, cx| {
+            agents.fail(&agent, Failure::NeedsUpdate, cx)
+        });
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        let row = agents.read_with(cx, |agents, _| agents.assistant_row(Cli::Claude));
+        assert_eq!(
+            (row.line.as_str(), row.offer),
+            ("Needs an update", Offer::Update)
+        );
+    }
+
     /// The card offers the install for the fact that the program isn't there, never for a
     /// failure's words: what a CLI says of something of its own that "isn't installed" is its
     /// own failure, said as it said it, with no fix of the assistant's.

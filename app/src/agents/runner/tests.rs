@@ -470,8 +470,8 @@ fn a_thread_with_files_reads_its_own_alone() {
 }
 
 /// A thread starts only on a Codex new enough to take the profile, and only once its answer says
-/// the profile is the one it runs under. Otherwise it ends as one whose program stopped, and no
-/// turn is asked for.
+/// the profile is the one it runs under. Otherwise it ends as one whose Codex needs an update
+/// (AP27), and no turn is asked for.
 #[test]
 fn no_thread_starts_without_its_profile() {
     for (agent, fits) in [
@@ -489,12 +489,25 @@ fn no_thread_starts_without_its_profile() {
     ] {
         assert_eq!(codex::fits(agent), fits, "{agent:?}");
     }
+    // What `codex --version` prints, which Settings › Models' row reads before any thread starts.
+    for (printed, fits) in [
+        ("codex-cli 0.172.0\n", true),
+        ("codex-cli 0.180.2", true),
+        ("codex-cli 1.0.0-alpha.3\n", true),
+        ("codex-cli 0.171.9\n", false),
+        ("codex-cli 0.172\n", false),
+        ("codex-cli\n", false),
+        ("", false),
+        ("codex-cli 0.160.0\ncodex-cli 0.172.0\n", false),
+    ] {
+        assert_eq!(codex::fits_version(printed), fits, "{printed:?}");
+    }
     let stdin = std::sync::Mutex::new(None);
     let launch = launch(Cli::Codex);
     let old = json!({ "id": 1, "result": { "userAgent": "ilo/0.160.0 (Mac OS 26.1.0; arm64)" } });
     assert!(matches!(
         codex::read(&old, &codex::State::default(), &stdin, &launch)[..],
-        [Out::Gone(_)]
+        [Out::Ended(Some(Failure::NeedsUpdate))]
     ));
     // A thread answered before it was asked for names no profile it was asked to start under.
     let unasked = json!({ "id": 2, "result": { "thread": { "id": "t1" },

@@ -2413,6 +2413,11 @@ impl Agents {
             self.fail(agent, Failure::NotInstalled, cx);
             return false;
         };
+        // Its row already says so (AP27): a thread never starts only to fail.
+        if found.ready == Ready::NeedsUpdate {
+            self.fail(agent, Failure::NeedsUpdate, cx);
+            return false;
+        }
         let dir = self.tasks_dir();
         let walled = wall.is_some();
         let mut args = self.bridge.clone();
@@ -2688,6 +2693,7 @@ impl Agents {
         };
         // check.sh reads this line.
         log!("browser: task {agent} failed: {failure:?}");
+        let needs_update = failure == Failure::NeedsUpdate;
         let state = match failure {
             Failure::Limit(resets) => State::Limit {
                 resets: resets.map(clock),
@@ -2703,6 +2709,14 @@ impl Agents {
                 why: format!("{} isn't installed.", cli.name()).into(),
                 assistant: true,
             },
+            Failure::NeedsUpdate => {
+                let product = crate::product::PRODUCT;
+                let why = format!("{} needs an update to work in {product}.", cli.name()).into();
+                State::Failed {
+                    why,
+                    assistant: true,
+                }
+            }
             Failure::Other(why) => State::Failed {
                 why: page::clip(&why, 200).into(),
                 assistant: false,
@@ -2719,8 +2733,17 @@ impl Agents {
         }
         self.keep_ended(agent, cx);
         self.forget_waiting(agent, None, cx);
-        // What's ready may have changed.
-        self.look_for_task_agents(cx);
+        match needs_update {
+            // Its program refused the browser's limits, so its row and card say so until it's
+            // looked for again, whatever its version said.
+            true => {
+                if let Some(found) = self.tasks.found.get_mut(&cli) {
+                    found.ready = Ready::NeedsUpdate;
+                }
+            }
+            // What's ready may have changed.
+            false => self.look_for_task_agents(cx),
+        }
         cx.notify();
     }
 

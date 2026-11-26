@@ -179,11 +179,13 @@ pub fn read(
             }];
         }
         match id {
-            // Too old to say which profile it took, or not saying the one asked for: no thread
-            // starts, and the task ends as one whose program stopped.
+            // Older than its floor: no thread starts, and the task ends as one whose Codex needs an
+            // update (AP27). Not saying the profile asked for: no thread starts either, and the
+            // task ends as one whose program stopped.
             INITIALIZE if !fits(message.pointer("/result/userAgent").and_then(Value::as_str)) => {
+                log!("browser: codex is older than its floor");
                 inner.starting = false;
-                return vec![Out::Gone("Codex is older than its floor".into())];
+                return vec![Out::Ended(Some(Failure::NeedsUpdate))];
             }
             THREAD if !holds(message, inner.profile.as_deref()) => {
                 inner.starting = false;
@@ -447,11 +449,20 @@ pub fn fits(agent: Option<&str>) -> bool {
     let version = (agent.and_then(|agent| agent.split_whitespace().next()))
         .and_then(|first| first.rsplit_once('/'))
         .map(|(_, version)| version);
-    let parts: Option<Vec<u32>> = version.and_then(|version| {
-        (version.split(['.', '-', '+']).take(3))
-            .map(|part| part.parse().ok())
-            .collect()
-    });
+    version.is_some_and(at_least_oldest)
+}
+
+/// Whether what `codex --version` printed, `codex-cli <version>`, names OLDEST or newer.
+pub fn fits_version(printed: &str) -> bool {
+    let first = printed.lines().next().unwrap_or_default();
+    first.split_whitespace().last().is_some_and(at_least_oldest)
+}
+
+/// Whether `version`, `<major>.<minor>.<patch>` and anything after, is OLDEST or newer.
+fn at_least_oldest(version: &str) -> bool {
+    let parts: Option<Vec<u32>> = (version.split(['.', '-', '+']).take(3))
+        .map(|part| part.parse().ok())
+        .collect();
     parts.is_some_and(|parts| parts.len() == 3 && parts[..] >= OLDEST[..])
 }
 

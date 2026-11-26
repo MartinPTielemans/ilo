@@ -381,6 +381,7 @@ fn failure_words(name: &str, cli: Option<runner::Cli>, failure: Failure) -> Stri
         Failure::Limit(_) => format!("{name} is at its usage limit."),
         Failure::SignedOut => format!("{name} isn't signed in."),
         Failure::NotInstalled => format!("{name} isn't installed."),
+        Failure::NeedsUpdate => format!("{name} needs an update to work in {PRODUCT}."),
         Failure::Other(why) => why,
     }
 }
