@@ -1569,6 +1569,36 @@ light-page-line = 0x0000000d
 shown = 0xf3f0e833
 light-shown = 0.16
 
+[settings.overview]
+# Overview (spec-settings.md › S1, values-settings.md › S1): the default browser's notice, a row of
+# its own 60 tall; Loose ends' rows 52 tall, 14 in at the left and 10 at the right, their empty
+# ring 16 and 12 before the text, their ✕ 12 in a 26 box.
+notice = 60.0
+loose = 52.0
+loose-left = 14.0
+loose-right = 10.0
+loose-ring = 16.0
+loose-gap = 12.0
+close = 12.0
+close-box = 26.0
+# How it's set up: two rows of three tiles, 10 apart, each 112 tall at radius 12, 12 in above and
+# under and 14 at the sides, its head's glyph 16 and 8 before the page's name at 13 on 16, the
+# drawing's 590 read as semibold, its two lines at 12 on 17, 10 under the head.
+tile = 112.0
+tile-radius = 12.0
+tile-y = 12.0
+tile-x = 14.0
+tile-gap = 10.0
+tile-glyph = 16.0
+tile-head-gap = 8.0
+tile-title = 13.0
+tile-title-line = 16.0
+tile-body = 12.0
+tile-body-line = 17.0
+# The line under the tiles, 10 under them and 4 in, at 12 on 17.
+note-top = 10.0
+note-x = 4.0
+
 [shell]
 # The docked sidebar's width at first, where the card starts.
 sidebar-width = 228.0

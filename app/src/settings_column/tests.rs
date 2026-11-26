@@ -75,6 +75,12 @@ fn plate_y(section: Section, height: f32) -> f32 {
         return height - SIDEBAR_BOTTOM - CHROMIUM_ROW - FOOT_ROW / 2.;
     }
     let mut y = TITLE_ROW + SEARCH_HEIGHT + SEARCH_AFTER;
+    for each in Section::TOP {
+        if each == section {
+            return y + ROW / 2.;
+        }
+        y += ROW;
+    }
     for group in Section::GROUPS {
         y += HEADING;
         for &each in group {
@@ -96,6 +102,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     assert_eq!(
         names,
         [
+            "Overview",
             "General",
             "Window",
             "Privacy",
@@ -187,7 +194,7 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     );
 }
 
-/// VoiceOver reads the column as a tab list of the thirteen sections, the one shown selected, and
+/// VoiceOver reads the column as a tab list of the fourteen sections, the one shown selected, and
 /// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
 #[gpui::test]
 fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
@@ -312,7 +319,7 @@ impl Render for Stops {
 }
 
 /// Every place ⇥ stops in Settings is one VoiceOver can name: each has a role and a name, and ⇥
-/// goes round all twenty, the thirteen sections, the field, the card's five and the foot.
+/// goes round all twenty-one, the fourteen sections, the field, the card's five and the foot.
 #[gpui::test]
 fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     use gpui::accesskit::{NodeId, Role};
@@ -363,13 +370,14 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
         "Restore Defaults for New Tab",
         "New Tab, ⌘T",
         "Chromium settings",
+        "Overview",
         "General",
         "About",
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    // The search field, five controls and Chromium settings, then the thirteen pages.
-    assert_eq!(stops.len(), 20, "{names:?}");
+    // The search field, five controls and Chromium settings, then the fourteen pages.
+    assert_eq!(stops.len(), 21, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
@@ -733,9 +741,9 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("up");
     }
     settle(cx);
-    assert_eq!(scroll(cx).0, 0., "↑ to General left it above the list");
+    assert_eq!(scroll(cx).0, 0., "↑ to Overview left it above the list");
     press("enter", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::Overview);
 }
 
 /// The owner's groups, each under its heading, and no page of appearance settings: what it held
