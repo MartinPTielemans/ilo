@@ -467,6 +467,12 @@ pub struct Task {
     /// the task's messages and steps, so its line stands where it happened: what its lines about
     /// them are written from, by the conversation's words table.
     pub(in crate::agents) rewalled: Vec<rewall::Came>,
+    /// What each walled run of its was given, by its process, until the sweep after its end
+    /// answers: what anything it left running could still reach, and its place's name, which a
+    /// kept task's row carries while that sweep isn't clean.
+    pub(super) ran_walled: Vec<(u32, Given, Option<String>)>,
+    /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
+    pub(super) restart: Option<rewall::Restart>,
     /// While ilo copies its attached files, before its assistant first starts: nothing starts or
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
@@ -880,6 +886,11 @@ pub struct Tasks {
     pub tasks: Vec<Task>,
     /// The finished tasks' conversations ilo holds an id for (kept.rs).
     pub kept: super::kept::Kept,
+    /// Whether the launch has read the kept tasks an earlier run left (`take_old_kept`).
+    pub(super) kept_taken: bool,
+    /// The places the launch's cleanup swept clean, by name with how many each sweep ended, while
+    /// they wait on the kept tasks being read (rewall.rs `came_clean`).
+    pub(super) came_clean: Vec<(String, usize)>,
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
     pub(super) profiles: Vec<String>,
@@ -1809,6 +1820,8 @@ impl Agents {
             names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
+            restart: None,
             copying: false,
         };
         self.tasks.tasks.push(task);
@@ -2086,6 +2099,10 @@ impl Agents {
         match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
+                    if process.walled() {
+                        let walled = (process.run(), task.files.clone(), process.place());
+                        task.ran_walled.push(walled);
+                    }
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
@@ -2145,11 +2162,19 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, run, out } = event;
+        // The sweep after a run's end answers for that run, whichever run is under way now.
+        if let Out::Swept(answer) = out {
+            return self.swept(&agent, run, answer, cx);
+        }
         // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
+        // Nor is one of a task whose start waits on the sweep of its run before: it has no run.
+        if self.task(&agent).is_some_and(|task| task.restart.is_some()) {
             return;
         }
         // Its assistant is inside its wall, which is no answer of the assistant's.
@@ -2232,6 +2257,7 @@ impl Agents {
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
             Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
+            Out::Swept(_) => {}
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -2389,6 +2415,10 @@ impl Agents {
             task.hold(text.to_string());
             return cx.notify();
         }
+        // A start waiting on a sweep (rewall.rs) is given the conversation with this in it.
+        if task.restart.is_some() {
+            return cx.notify();
+        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2438,6 +2468,8 @@ impl Agents {
         task.asking = None;
         task.writing = None;
         task.waiting = None;
+        // A start waiting on a sweep never happens.
+        task.restart = None;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -2726,9 +2758,26 @@ impl Agents {
             );
             self.browser.delete_space(space, cx);
         }
-        if let Some(dir) = &self.tasks.dir {
-            end_old_task_files(&dir.join("Tasks"));
-        }
+        let Some(dir) = &self.tasks.dir else {
+            return;
+        };
+        let Some((root, left)) = end_old_task_files(&dir.join("Tasks")) else {
+            return;
+        };
+        // A sweep walks every process, so the cleanup is off the UI thread.
+        let cleaned =
+            cx.background_spawn(async move { super::wall::leftovers::clean_up(&root, &left) });
+        cx.spawn(async move |agents, cx| {
+            let cleaned = cleaned.await;
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+            _ = agents.update(cx, |agents, cx| agents.came_clean(cleaned.clean, cx));
+        })
+        .detach();
     }
 
     fn remove_task_files(&self, agent: &str) {
@@ -3294,6 +3343,8 @@ impl Agents {
             names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
+            restart: None,
             copying: false,
         });
         cx.notify();
@@ -5281,15 +5332,17 @@ fn names_the_browser(name: &str) -> bool {
 }
 
 /// The files of the tasks a run before left, but for the places walled tasks left, which are swept
-/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
-/// thread, as a sweep walks every process.
-fn end_old_task_files(tasks: &std::path::Path) {
+/// first (leftovers.rs): those are listed here, before any task can make one, and given back with
+/// where they are, for the cleanup.
+fn end_old_task_files(
+    tasks: &std::path::Path,
+) -> Option<(PathBuf, Vec<super::wall::leftovers::Left>)> {
     use super::wall::leftovers;
     let root = tasks.join(leftovers::ROOT);
     let left = leftovers::left_in(&root);
     if left.is_empty() {
         _ = std::fs::remove_dir_all(tasks);
-        return;
+        return None;
     }
     for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
         if entry.file_name() == leftovers::ROOT {
@@ -5301,15 +5354,5 @@ fn end_old_task_files(tasks: &std::path::Path) {
             Err(_) => {}
         }
     }
-    _ = std::thread::Builder::new()
-        .name("task-leftovers".into())
-        .spawn(move || {
-            let cleaned = leftovers::clean_up(&root, &left);
-            log!(
-                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
-                cleaned.ended,
-                cleaned.removed,
-                cleaned.kept
-            );
-        });
+    Some((root, left))
 }

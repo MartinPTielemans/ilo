@@ -2488,13 +2488,16 @@ impl Agents {
     }
 
     /// Whether the agent may call tools: a client the user connected, while other apps' agents are
-    /// on, or a thread not dropped, while threads are.
+    /// on, or a thread not dropped, while threads are. A thread whose start waits on the sweep of
+    /// its run before has no run, so nothing calls for it.
     fn may_call(&self, agent: &str) -> bool {
         match (server::side(agent), Client::from_id(agent)) {
             (Some(server::Side::Outside), Some(client)) => {
                 self.is_connected(client) && self.other_apps()
             }
-            (Some(server::Side::Inside), _) => self.threads() && self.task(agent).is_some(),
+            (Some(server::Side::Inside), _) => {
+                self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
+            }
             _ => false,
         }
     }

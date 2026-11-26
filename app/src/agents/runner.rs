@@ -160,6 +160,9 @@ pub enum Out {
     NotAllowed(super::task::ilo::HelpersLimit),
     /// A run's first line lists its kinds of helper: whether each is ilo's.
     Kinds { ours: bool },
+    /// What the sweep after a walled run's end found: everything its assistant started was
+    /// ended, or not. The run has ended, so this is the last of it and never its task's next.
+    Swept(Result<leftovers::Swept, leftovers::SweepFailed>),
 }
 
 /// What a task's output tells of one of its helpers, for its line in the conversation. A label:
@@ -216,6 +219,8 @@ pub struct Process {
     rising: Arc<AtomicBool>,
     /// The wall of a walled start, whose group and leftovers its end ends.
     walled: Option<Arc<Wall>>,
+    /// Where a walled start's sweep answers: its task, on the channel its lines go on.
+    answer: Option<(String, UnboundedSender<Event>)>,
 }
 
 impl Process {
@@ -288,6 +293,7 @@ impl Process {
             codex: codex.clone(),
             rising: still_rising.clone(),
             walled: wall.clone(),
+            answer: walled.then(|| (agent.to_string(), events.clone())),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -383,6 +389,16 @@ impl Process {
         self.id
     }
 
+    /// Whether it started inside a wall, whose sweep answers after its end.
+    pub fn walled(&self) -> bool {
+        self.answer.is_some()
+    }
+
+    /// The name of its wall's place, for a walled start with one.
+    pub fn place(&self) -> Option<String> {
+        self.walled.as_deref().and_then(Wall::place_name)
+    }
+
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
         // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
@@ -422,15 +438,26 @@ impl Drop for Process {
                 leftovers::System::end_group(&leftovers::Os, self.id);
             }
             _ = child.kill();
+            let (run, answer) = (self.id, self.answer.take());
             _ = std::thread::Builder::new()
                 .name("task-reap".into())
                 .spawn(move || {
                     _ = child.wait();
-                    if let Some(wall) = walled {
-                        wall.sweep_after();
-                    }
+                    reaped(walled.as_deref(), run, answer);
                 });
         }
+    }
+}
+
+/// After a run's end and its reap: the sweep of what its wall still holds, answered to its task.
+/// A run with no wall has nothing to sweep and says nothing.
+fn reaped(walled: Option<&Wall>, run: u32, answer: Option<(String, UnboundedSender<Event>)>) {
+    let Some(swept) = walled.and_then(Wall::sweep_after) else {
+        return;
+    };
+    if let Some((agent, events)) = answer {
+        let out = Out::Swept(swept);
+        _ = events.unbounded_send(Event { agent, run, out });
     }
 }
 
