@@ -57,14 +57,36 @@ repo=$(git config -f prebuilt.ini prebuilt.repository)
 # hasn't, only if a later commit reverted the core, where the nearest serves anyway, so only
 # engines off the nearest's history are compared: on a core branch, which no engine has yet, they
 # are the few a landing brought in, not every engine since the first.
+# A failed listing says so, rather than that no engine was built from this history (#4027).
+tags=$(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*") ||
+  fail "couldn't list the prebuilt engines in $repo: git ls-remote failed, as above."
+# Each engine's commit, in one git call rather than three a tag: a Windows runner took 12 to 20 s a
+# call for 39 tags (#4014). The count from each to HEAD is HEAD's commits less the engine's, as
+# all of the engine's are HEAD's, counted over one listing of HEAD's history, the same count as
+# git rev-list --count <engine>..HEAD.
+tagged=$(printf '%s\n' "$tags" |
+  sed -n "s|^[0-9a-f]*[[:space:]]*refs/tags/engine-$platform-\([^^]*\)\$|\1^{commit}|p" |
+  git cat-file --batch-check='%(objectname)' | grep -E '^[0-9a-f]{40,64}$' || true)
 built=
-while read -r _ ref; do
-  case $ref in *"^{}") continue ;; esac
-  tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$platform"-}^{commit}" 2>/dev/null) ||
-    continue
-  git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
-  built+="$(git rev-list --count "$tagged..HEAD") $tagged"$'\n'
-done < <(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*")
+if [ -n "$tagged" ]; then
+  built=$(git rev-list --parents HEAD | awk '
+    NR == FNR { parents[$1] = substr($0, length($1) + 2); total++; next }
+    ($1 in parents) {
+      split("", seen)
+      seen[$1] = 1
+      stack[1] = $1
+      top = 1
+      count = 0
+      while (top > 0) {
+        commit = stack[top--]
+        count++
+        n = split(parents[commit], up, " ")
+        for (i = 1; i <= n; i++)
+          if (!(up[i] in seen)) { seen[up[i]] = 1; stack[++top] = up[i] }
+      }
+      print total - count, $1
+    }' - <(printf '%s\n' "$tagged"))
+fi
 [ -n "$built" ] ||
   none "no prebuilt $platform engine in $repo was built from this checkout's history. Fetch the history with git fetch --unshallow, or publish one with $publisher."
 nearest=
@@ -79,7 +101,7 @@ while read -r _ tagged; do
     commit=$tagged
     break
   fi
-done < <(printf '%s' "$built" | sort -n)
+done < <(printf '%s\n' "$built" | sort -n)
 if [ -n "$only_commit" ]; then
   echo "$commit"
   exit 0
