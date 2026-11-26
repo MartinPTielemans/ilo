@@ -663,9 +663,16 @@ source_set("agent_close_rule") {
   ]
 }
 
+# PDFium's own headers include each other from its root, which its public config doesn't add, so
+# Chromium's //pdf adds it as this does.
+config("pdfium_includes") {
+  include_dirs = [ "//third_party/pdfium" ]
+}
+
 # A PDF's pages, read by PDFium in the core's reader, a sandboxed utility process (bc_pdf_read,
 # #4367), apart so browser_core_unittests tests the reading alone.
 source_set("pdf_read") {
+  configs += [ ":pdfium_includes" ]
   sources = [
     "pdf_read.cc",
     "pdf_read.h",
