@@ -24,5 +24,26 @@ TEST(ArchiveRule, NeverArchivesNothingPastThirtyDays) {
   EXPECT_LT(*due, now);
 }
 
+TEST(ArchiveRule, AnAgentsSpaceTakesNoTab) {
+  const base::Time now = base::Time::Now();
+  EXPECT_EQ(InSpace(false, base::Hours(1)), base::Hours(1));
+  // A tab handed to an agent, unseen however long in its Space, is never due there.
+  const std::optional<base::TimeDelta> agents = InSpace(true, base::Hours(1));
+  EXPECT_EQ(agents, std::nullopt);
+  EXPECT_EQ(DueAt(now - base::Days(365), agents), std::nullopt);
+}
+
+TEST(ArchiveRule, ATabBackWaitsItsWholeTimeAgain) {
+  // Last seen 20 hours ago, then handed and back now, which counts as seen
+  // (handed::UsersAgain): it's due 12 hours from now, not 8 hours ago.
+  const base::Time back = base::Time::Now();
+  const std::optional<base::TimeDelta> after = InSpace(false, base::Hours(12));
+  const std::optional<base::Time> due = DueAt(back, after);
+  ASSERT_TRUE(due);
+  EXPECT_EQ(*due, back + base::Hours(12));
+  EXPECT_GT(*due, back);
+  EXPECT_LT(*DueAt(back - base::Hours(20), after), back);
+}
+
 }  // namespace
 }  // namespace browser_core::archive_rule
