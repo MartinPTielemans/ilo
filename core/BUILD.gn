@@ -598,8 +598,11 @@ source_set("page_edge_strips") {
     "page_edge_strips.h",
   ]
 
-  # Its header's geometry is its callers' too.
-  public_deps = [ "//ui/gfx/geometry" ]
+  # Its header's geometry is its callers' too, and the geometry's headers need base's.
+  public_deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
 }
 
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
