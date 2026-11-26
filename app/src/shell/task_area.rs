@@ -834,7 +834,7 @@ impl Shell {
 
     /// A press on the watched page's tile takes the page over, as Take Over does, and goes no
     /// further: neither it nor one in the ARM after it reaches the page.
-    fn press_watch_tile(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn press_watch_tile(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
@@ -1598,6 +1598,9 @@ impl Shell {
             return Some(
                 layer
                     .child(self.watch_tile_ground(page.tab, place, at, zoom, cx))
+                    // A page that died leaves its tile to its card, as the window's page does its
+                    // place: the core has the tile draw nothing till the page loads again.
+                    .children(self.crash_cards(at, cx))
                     .child(self.task_strip(part, page.tab, zoom, cx))
                     .into_any_element(),
             );

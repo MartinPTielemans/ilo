@@ -169,8 +169,14 @@ impl Shell {
                             cx.listener(move |shell, _, _, cx| {
                                 // Not the window's background, whose drag moves the window.
                                 cx.stop_propagation();
-                                // The core hears no press here, as the page has no renderer.
-                                shell.page_pressed(tab, cx);
+                                // The core hears no press here, as the page has no renderer. On
+                                // the watched tile's card it's a press on the tile, which keeps
+                                // the card in place while it takes the page over.
+                                if shell.watch_tile_shown() == Some(tab) {
+                                    shell.press_watch_tile(cx);
+                                } else {
+                                    shell.page_pressed(tab, cx);
+                                }
                                 // A task's page stays watched: selecting it would leave the area.
                                 if shell.task_area.is_none() && shell.selected != tab {
                                     shell.select(tab, cx);
