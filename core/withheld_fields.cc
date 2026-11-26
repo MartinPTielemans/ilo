@@ -46,6 +46,10 @@ bool CouldShow(const FieldFacts& field) {
          (field.typed || field.fixed || field.select);
 }
 
+bool Described(const FieldFacts& field) {
+  return CouldShow(field) || (field.select && !field.secret && !field.autofilled);
+}
+
 bool Withheld(const FieldFacts& field) {
   const Seen seen = SeenOf(field);
   return seen == Seen::kFilled || seen == Seen::kChanged;

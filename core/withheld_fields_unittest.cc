@@ -162,6 +162,28 @@ TEST(WithheldFieldsTest, OnlyAFieldThatMayShowIsDescribed) {
   }
 }
 
+// Every list not yet known to be secret or filled is read, even one holding nothing, as its
+// autocomplete alone says whether a choice in it is a secret's; a text field only where it could
+// show what it holds, as its kind was read already (CheckPasswords).
+TEST(WithheldFieldsTest, EveryListIsReadForItsKind) {
+  FieldFacts list = Holding(u"12");
+  list.select = true;
+  FieldFacts empty = list;
+  empty.value.clear();
+  FieldFacts typed = Holding(u"Ada");
+  typed.typed = u"Ada";
+  for (const FieldFacts& field : {list, empty, typed}) {
+    EXPECT_TRUE(Described(field));
+  }
+  FieldFacts secret = list;
+  secret.secret = true;
+  FieldFacts autofilled = empty;
+  autofilled.autofilled = true;
+  for (const FieldFacts& field : {secret, autofilled, Holding(u"ada@example.com")}) {
+    EXPECT_FALSE(Described(field));
+  }
+}
+
 // Point's picture hatches every value, as its text and the note's panel send none: the page's
 // default, a read-only field's and the agent's own typing too, which a screenshot shows.
 TEST(WithheldFieldsTest, PointsPictureHatchesEveryValue) {
