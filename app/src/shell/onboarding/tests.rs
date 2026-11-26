@@ -858,9 +858,11 @@ fn no_text_on_the_card_reads_under_text_3(_: &mut TestAppContext) {
     for light in [false, true] {
         let inks = super::card::Inks::of(light);
         let look = super::switch_look(inks);
+        let account = super::account_look(inks);
         for (what, ink) in [
             ("a row's name", look.ink),
             ("a row's second line", look.detail),
+            ("the account's second line", account.detail),
             ("the card's second ink", inks.text_2()),
             ("the card's third ink", inks.text(t::TEXT_3)),
         ] {
@@ -875,6 +877,40 @@ fn no_text_on_the_card_reads_under_text_3(_: &mut TestAppContext) {
             inks.text_2(),
             "light {light}: text-2, one of the three"
         );
+    }
+}
+
+/// The main button filled with the text's ink goes a step toward its label's under the pointer
+/// and a step further pressed, as every ink-filled button does, in both looks: never lighter or
+/// darker by an opacity that lets the card through.
+#[gpui::test]
+fn the_main_button_goes_toward_its_label_under_the_pointer(_: &mut TestAppContext) {
+    use crate::tokens::palette::{INK_HOVER_MIX, INK_PRESSED_MIX};
+    for light in [false, true] {
+        let inks = super::card::Inks::of(light);
+        let [rest, hovered, pressed] = super::card::main_fills(inks);
+        let label = inks.on_main();
+        assert_eq!(
+            rest,
+            inks.text(1.),
+            "light {light}: at rest, the text's ink"
+        );
+        for (what, fill, mix) in [
+            ("hovered", hovered, INK_HOVER_MIX),
+            ("pressed", pressed, INK_PRESSED_MIX),
+        ] {
+            assert_eq!(fill.a, 1., "light {light}: {what} is opaque");
+            for (fill, rest, label) in [
+                (fill.r, rest.r, label.r),
+                (fill.g, rest.g, label.g),
+                (fill.b, rest.b, label.b),
+            ] {
+                assert!(
+                    (fill - (rest + (label - rest) * mix)).abs() < 1e-4,
+                    "light {light}: {what} is {mix} of the way to its label"
+                );
+            }
+        }
     }
 }
 

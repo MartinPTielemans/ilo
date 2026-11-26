@@ -242,6 +242,7 @@ pub(super) fn main_button(
 ) -> Stateful<gpui::Div> {
     let [height, radius, inset, gap] = t::BUTTON_SIZE;
     let [cap, cap_radius, cap_text, cap_alpha] = t::CAP;
+    let [rest, hovered, pressed] = main_fills(inks);
     let end = if key.is_some() { t::MAIN_END } else { inset };
     let chip = key.map(|key| {
         div()
@@ -270,14 +271,23 @@ pub(super) fn main_button(
         .justify_center()
         .gap(px(gap))
         .rounded(px(radius))
-        .bg(inks.text(1.))
+        .bg(rest)
         .text_color(inks.on_main())
         .text_size(px(t::BUTTON_TEXT))
         .font_weight(FontWeight::SEMIBOLD)
-        .hover(|style| style.opacity(t::BUTTON_HOVER))
+        .hover(move |style| style.bg(hovered))
+        .active(move |style| style.bg(pressed))
         .focus_visible(card_ring(inks))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .children(chip)
+}
+
+/// The main button's fill at rest, under the pointer and pressed: the text's ink, then a step and
+/// a further step toward its label's, as every button filled with ink goes in both looks.
+pub(super) fn main_fills(inks: Inks) -> [Rgba; 3] {
+    let rest = inks.text(1.);
+    let (hovered, pressed) = crate::palette::ink_states(rest, inks.on_main());
+    [rest, hovered, pressed]
 }
 
 /// The Welcome's taller button, a column wide.

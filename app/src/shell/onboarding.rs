@@ -160,6 +160,15 @@ fn switch_look(inks: Inks) -> Look {
     }
 }
 
+/// The account's view on the card: the switches' look, its second lines in text-2; its signed-in
+/// dot keeps the signal.
+fn account_look(inks: Inks) -> Look {
+    Look {
+        primary: rgb(SIGNAL),
+        ..switch_look(inks)
+    }
+}
+
 /// What the computer is called in a line.
 /// A row across the card at `y`, its content centred.
 fn welcome_centred(y: f32) -> gpui::Div {
@@ -1854,7 +1863,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         if let Some(view) = self.account_view() {
-            let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
+            let look = account_look(inks);
             view.update(cx, |view, cx| {
                 view.set_look(look, cx);
                 // Signed in, it asks nothing more (the devices' list is Settings').
