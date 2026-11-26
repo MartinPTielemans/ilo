@@ -1,11 +1,10 @@
-//! The lines round a page a thread shows: the page's own outline, as any page has it, and the
-//! agent's ring over it while the thread drives the page.
+//! The line round a page a thread shows: the page's own outline, as any page has it, at rest and
+//! while the thread drives the page.
 
 use gpui::{Hsla, rgba};
 
 use super::*;
 use crate::palette::Tone;
-use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT, PAGE_OUTLINE_WIDTH};
 
 /// Draws the window as it is in `tone`.
@@ -24,14 +23,10 @@ fn page_card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Bounds<Pixels
     })
 }
 
-/// The card the outline was drawn round in the last frame, and where the ring was.
-fn lines(
-    shell: &Entity<Shell>,
-    cx: &mut VisualTestContext,
-) -> (Option<Bounds<Pixels>>, Option<Bounds<Pixels>>) {
+/// The card the outline was drawn round in the last frame.
+fn line(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
     shell.read_with(cx, |shell, _| {
-        let area = shell.task_area.as_ref().unwrap();
-        (area.outlined.get(), area.ringed.get())
+        shell.task_area.as_ref().unwrap().outlined.get()
     })
 }
 
@@ -39,11 +34,7 @@ fn lines(
 /// right and bottom, none on its left, in `tone`'s own ink.
 fn outlined(shell: &Entity<Shell>, card: Bounds<Pixels>, tone: Tone, cx: &mut VisualTestContext) {
     let width = px(PAGE_OUTLINE_WIDTH);
-    assert_eq!(
-        lines(shell, cx).0,
-        Some(card),
-        "{tone:?}: no outline round it"
-    );
+    assert_eq!(line(shell, cx), Some(card), "{tone:?}: no outline round it");
     let mut line = shell.read_with(cx, |shell, _| shell.watched_outline(card));
     let style = line.style();
     // Outside the card by its own width where it has a line, and at the card's edge on the left.
@@ -71,7 +62,7 @@ fn outlined(shell: &Entity<Shell>, card: Bounds<Pixels>, tone: Tone, cx: &mut Vi
 }
 
 /// A page a thread shows has the page's own outline at rest, in Dark and in Light: on its top,
-/// right and bottom and none on its left, with no ring while the thread isn't at work in it.
+/// right and bottom and none on its left.
 #[gpui::test]
 fn a_watched_page_has_the_pages_own_outline_in_both_tones(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -80,7 +71,6 @@ fn a_watched_page_has_the_pages_own_outline_in_both_tones(cx: &mut TestAppContex
         toned(&shell, tone, cx);
         let card = page_card(&shell, cx);
         outlined(&shell, card, tone, cx);
-        assert_eq!(lines(&shell, cx).1, None, "{tone:?}: a ring at rest");
     }
 }
 
@@ -94,29 +84,25 @@ fn a_page_watched_in_its_tile_has_the_pages_own_outline_in_both_tones(cx: &mut T
         toned(&shell, tone, cx);
         let card = page_card(&shell, cx);
         outlined(&shell, card, tone, cx);
-        assert_eq!(lines(&shell, cx).1, None, "{tone:?}: a ring at rest");
     }
 }
 
-/// While the thread drives the page, the ring is drawn round it as before, over the outline: its
-/// band covers the line on each side that has one, in both tones.
+/// While the thread drives the page, nothing is drawn on it: the card and the panel beside the
+/// page say it is at work, and the page keeps its own outline alone, in both tones.
 #[gpui::test]
-fn the_ring_is_drawn_over_the_outline_while_the_thread_drives(cx: &mut TestAppContext) {
+fn a_driven_page_has_its_own_outline_alone(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell_with_task(cx);
     watching_working(&shell, cx);
     for tone in [Tone::Dark, Tone::Light] {
         toned(&shell, tone, cx);
         let card = page_card(&shell, cx);
         outlined(&shell, card, tone, cx);
-        let ring = lines(&shell, cx).1;
-        assert_eq!(ring, Some(card.dilate(px(RING))), "{tone:?}");
     }
 }
 
-/// A page driven in its tile keeps its ring round the tile, with the outline round its card
-/// under it, in both tones.
+/// A page driven in its tile has the outline round its card alone, in both tones.
 #[gpui::test]
-fn the_ring_round_a_driven_tile_is_drawn_with_the_outline(cx: &mut TestAppContext) {
+fn a_page_driven_in_its_tile_has_its_own_outline_alone(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
     host.shows_tiles.set(Some(true));
     watching_working(&shell, cx);
@@ -128,8 +114,5 @@ fn the_ring_round_a_driven_tile_is_drawn_with_the_outline(cx: &mut TestAppContex
         toned(&shell, tone, cx);
         let card = page_card(&shell, cx);
         outlined(&shell, card, tone, cx);
-        let tile = tile_place(&shell, cx);
-        let ring = lines(&shell, cx).1;
-        assert_eq!(ring, Some(tile.dilate(px(RING))), "{tone:?}");
     }
 }
