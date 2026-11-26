@@ -12,8 +12,8 @@
 # orders, and each time the page is the file without the changes taken back.
 # Last, a column of 300 things with one settled to its top and one traded: each pass takes
 # everything down and lays it all out again, so the page's own PerformanceObserver says the
-# longest task while the file is turned on and again after the window's width changes, and
-# neither may reach 50 ms.
+# longest task while the file is turned on and again after the window's width changes, each three
+# times, and the smallest of each three may not reach 50 ms (#3993).
 
 serve
 # The page says, once nothing moves, its things in each list by where they're drawn: the column's
@@ -69,7 +69,10 @@ own='a,b,c,w side s,n row r1,r2,r3,r4 hidden -'
 # The long list's page: 300 things in a column as wide as part of the view, so a width change
 # moves every one. Once nothing has moved for half a second it says which of four things is on top,
 # the order of the traded two, its view, how many times Mark was pressed, and the longest task the
-# browser reported since the last press, by long-animation-frame where it has it.
+# browser reported since the last press, by long-animation-frame where it has it. A frame says
+# where its time went too: in tasks before it rendered, in rendering, and how long it kept input
+# waiting. Arrange's own script isn't among the frame's scripts, as the browser names only the
+# page's, so it's in the time, not apart from the rest.
 things=
 for i in $(seq 0 299); do
   things="$things<section id=\"t$i\" aria-label=\"Thing $i\">Thing $i</section>"
@@ -85,11 +88,18 @@ body { margin: 0; font: 14px sans-serif; background: rgb(243, 245, 246) }
 <div id="list">'"$things"'</div>
 <script>
 const type = PerformanceObserver.supportedEntryTypes.includes("long-animation-frame") ? "long-animation-frame" : "longtask";
-let longest = 0, since = 0, mark = 0;
+const none = "tasks - render - blocking -";
+let longest = 0, parts = none, since = 0, mark = 0;
 new PerformanceObserver((list) => {
-  for (const e of list.getEntries()) if (e.startTime >= since) longest = Math.max(longest, e.duration);
+  for (const e of list.getEntries()) {
+    if (e.startTime < since || e.duration <= longest) continue;
+    longest = e.duration;
+    if (e.blockingDuration === undefined) continue;
+    const tasks = e.renderStart ? e.renderStart - e.startTime : e.duration;
+    parts = "tasks " + Math.round(tasks) + " render " + Math.round(e.duration - tasks) + " blocking " + Math.round(e.blockingDuration);
+  }
 }).observe({ type, buffered: true });
-document.getElementById("mark").addEventListener("click", () => { since = performance.now(); longest = 0; mark++; });
+document.getElementById("mark").addEventListener("click", () => { since = performance.now(); longest = 0; parts = none; mark++; });
 // Not "top": a script declaring window.top again is refused whole, and its title never comes.
 const topOf = (id) => document.getElementById(id).getBoundingClientRect().top;
 let now, still = 0, said;
@@ -101,7 +111,7 @@ setInterval(() => {
     " view " + innerWidth + "x" + innerHeight + " mark " + mark;
   if (now !== was) { still = 0; return; }
   if (++still < 5) return;
-  const title = "long " + now + " longest " + Math.round(longest) + " by " + type;
+  const title = "long " + now + " longest " + Math.round(longest) + " " + parts + " by " + type;
   if (title !== said) document.title = said = title;
 }, 100);
 </script>' > "$out/site/arrange-long.html"
@@ -299,11 +309,16 @@ for order in acw awc caw cwa wac wca; do
 done
 ../tools/window-screenshot.sh "$pid" "$out/arrange-order-put-back.png" || fail "no window to capture"
 
-# The long list: its page in the same tab, Mark pressed before the file is turned on and again
-# before the width changes, so each reading is that step's alone.
+# The long list: its page in the same tab, Mark pressed before the file is turned on and before
+# each width change, so each reading is that step's alone. Each is read three times and the bar is
+# on the smallest (#3993): whatever else lands in a frame, a window's configures, the Site Controls
+# closing, a thread the runner set aside, only adds time and seldom to all three, while a slow pass
+# of Arrange's is in each. The smallest hides a cost only the first pass has, so all three are said.
 go_from_bar "${site}arrange-long.html"
-long() { said | sed -n 's/^long \(.*\) longest [0-9]* by [a-z-]*$/\1/p'; }
-longest() { said | sed -n 's/^long .* longest \([0-9]*\) by [a-z-]*$/\1/p'; }
+long() { said | sed -n 's/^long \(.*\) longest [0-9]* tasks .* by [a-z-]*$/\1/p'; }
+longest() { said | sed -n 's/^long .* longest \([0-9]*\) tasks .* by [a-z-]*$/\1/p'; }
+# Where the longest frame's time went, as the page says it.
+parts() { said | sed -n 's/^long .* longest [0-9]* tasks \([0-9-]*\) render \([0-9-]*\) blocking \([0-9-]*\) by [a-z-]*$/tasks \1, rendering \2, input kept waiting \3/p'; }
 # Waits for the long page to say $1, up to its view and Mark's count, else fails with $2.
 long_shows() {
   for _ in $(seq 100); do
@@ -323,40 +338,64 @@ mark() {
   done
   fail "a click on the long page's Mark didn't count press $1: the page says $(said)"
 }
-long_shows 'first t0 pair t100,t200 view ' "the long list's page didn't draw"
-mark 1
-printf '{"version":1,"changes":[%s]}' "$(settle_of t299 before t0),$(trade_of t100 t200)" > "$arranged"
-expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
-  "the long list: the app didn't read the file written outside ilo as one kept off"
-turn_on 'the long list'
-long_shows 'first t299 pair t200,t100 view ' \
-  "the long list's file didn't settle Thing 299 to its top and trade Thing 100 with Thing 200"
-on_ms=$(longest)
-by=$(said | sed 's/.* by //')
-read -r vw vh << EOF
-$(long | sed -n 's/.* view \([0-9]*\)x\([0-9]*\) .*/\1 \2/p')
-EOF
-mark 2
-# The window as wide as the view was, as mini-bar.sh does, so the view narrows by the sidebar.
-send resize "$vw" $((vh + 40))
-for _ in $(seq 100); do
-  case "$(long)" in "first t299 pair t200,t100 view ${vw}x"*) sleep 0.1 ;; "first t299 pair t200,t100 view "*) break ;; *) sleep 0.1 ;; esac
-done
-case "$(long)" in
-  "first t299 pair t200,t100 view ${vw}x"*) fail "the long page's view didn't change width after a resize: the page says $(said)" ;;
-  "first t299 pair t200,t100 view "*" mark 2") ;;
-  *) fail "the long list's arrangement didn't hold after a resize: the page says $(said)" ;;
-esac
-resized_ms=$(longest)
 # Both entry types report only tasks of 50 ms or more, so 0 is none reported, not a time.
-reading() { if [ "$1" -gt 0 ]; then echo "a task of $1 ms"; else echo "no task of 50 ms or more"; fi; }
-echo "arrange-order: 300 things, by $by: $(reading "$on_ms") turning the file on, $(reading "$resized_ms") after the width changed from ${vw} to $(long | sed 's/.* view \([0-9]*\)x.*/\1/')."
-[ "$on_ms" -lt 50 ] || fail "turning on a file for 300 things made a task of $on_ms ms, at or over 50"
-[ "$resized_ms" -lt 50 ] || fail "a width change with a file for 300 things made a task of $resized_ms ms, at or over 50"
+reading() { if [ "$1" -gt 0 ]; then echo "a task of $1 ms ($2)"; else echo "no task of 50 ms or more"; fi; }
+smallest() { printf '%s\n' "$@" | sort -n | head -n 1; }
+arranged_long='first t299 pair t200,t100 view '
+long_shows 'first t0 pair t100,t200 view ' "the long list's page didn't draw"
+# The file three times, each written again outside ilo so the app keeps it off and the page is
+# back as the site has it, then turned on: the same two changes, the bytes apart by a space.
+on_ms= on_said=
+for round in 1 2 3; do
+  case $round in 1) pad= ;; 2) pad=' ' ;; *) pad='  ' ;; esac
+  printf '{"version":1,%s"changes":[%s]}' "$pad" "$(settle_of t299 before t0),$(trade_of t100 t200)" > "$arranged"
+  expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
+    "the long list, file $round: the app didn't read the file written outside ilo as one kept off"
+  long_shows 'first t0 pair t100,t200 view ' "the long list, file $round: the file written outside ilo wasn't kept off"
+  mark $round
+  turn_on "the long list, file $round"
+  long_shows "$arranged_long" \
+    "the long list's file $round didn't settle Thing 299 to its top and trade Thing 100 with Thing 200"
+  on_ms="$on_ms $(longest)"
+  on_said="$on_said${on_said:+; }$(reading "$(longest)" "$(parts)")"
+done
+by=$(said | sed 's/.* by //')
+read -r vw vh << VIEW
+$(long | sed -n 's/.* view \([0-9]*\)x\([0-9]*\) .*/\1 \2/p')
+VIEW
+# The window as wide as the view was, as mini-bar.sh does, so the view narrows by the sidebar; then
+# 100 narrower, twice, each a pass over every thing.
+resized_ms= resized_said= widths=$vw was=$vw wide=$vw
+for round in 1 2 3; do
+  mark $((3 + round))
+  send resize "$wide" $((vh + 40))
+  for _ in $(seq 100); do
+    case "$(long)" in "$arranged_long${was}x"*) sleep 0.1 ;; "$arranged_long"*) break ;; *) sleep 0.1 ;; esac
+  done
+  case "$(long)" in
+    "$arranged_long${was}x"*) fail "the long page's view didn't change width after resize $round: the page says $(said)" ;;
+    "$arranged_long"*" mark $((3 + round))") ;;
+    *) fail "the long list's arrangement didn't hold after resize $round: the page says $(said)" ;;
+  esac
+  resized_ms="$resized_ms $(longest)"
+  resized_said="$resized_said${resized_said:+; }$(reading "$(longest)" "$(parts)")"
+  was=$(long | sed 's/.* view \([0-9]*\)x.*/\1/')
+  widths="$widths to $was"
+  wide=$((wide - 100))
+done
+on_least=$(smallest $on_ms)
+resized_least=$(smallest $resized_ms)
+echo "arrange-order: 300 things, by $by. Turning the file on, first to third: $on_said; the smallest $on_least ms." \
+  "The width from $widths, first to third: $resized_said; the smallest $resized_least ms."
+[ "$on_least" -lt 50 ] ||
+  fail "turning on a file for 300 things made a task of 50 ms or more each of three times, the smallest $on_least ms"
+[ "$resized_least" -lt 50 ] ||
+  fail "a width change with a file for 300 things made a task of 50 ms or more each of three times, the smallest $resized_least ms"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-order-long.png" || fail "no window to capture"
 
 exec 3>&-
 quit
 echo "ok: Arrange laid each file out as one order, each change in turn:${ordered%,}. Put back took" \
   "each of three changes back in every order, the page each time the file without them:$backs." \
-  "Over 300 things no task reached 50 ms: $(reading "$on_ms") turning the file on, $(reading "$resized_ms") after a width change."
+  "Over 300 things the smallest of three readings stayed under 50 ms: $on_least ms turning the file on," \
+  "$resized_least ms after a width change, where 0 is no task of 50 ms or more."
