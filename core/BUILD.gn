@@ -474,6 +474,18 @@ source_set("select_choices") {
   ]
 }
 
+# The strips at a window's sides a page leaves to the UI, apart so browser_core_unittests tests the
+# rule alone.
+source_set("page_edge_strips") {
+  sources = [
+    "page_edge_strips.cc",
+    "page_edge_strips.h",
+  ]
+
+  # Its header's geometry is its callers' too.
+  public_deps = [ "//ui/gfx/geometry" ]
+}
+
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
 source_set("mini_player_place") {
   sources = [
@@ -938,6 +950,7 @@ source_set("browser_core") {
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
+    ":page_edge_strips",
     ":other_tabs",
     ":agent_close_rule",
     ":agent_file_field_rule",
@@ -1293,6 +1306,7 @@ test("browser_core_unittests") {
     "leveldb_cache_unittest.cc",
     "link_card_rule_unittest.cc",
     "mini_player_place_unittest.cc",
+    "page_edge_strips_unittest.cc",
     "share_snapshot_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
@@ -1360,6 +1374,7 @@ test("browser_core_unittests") {
     ":history_removal",
     ":idle_check",
     ":mini_player_place",
+    ":page_edge_strips",
     ":other_tabs",
     ":popup_hold",
     ":protected_move_rule",
