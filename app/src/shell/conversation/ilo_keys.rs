@@ -446,10 +446,12 @@ impl super::super::Shell {
     /// draws, or with the keyboard on it already, back where it was. A held key's repeats do
     /// nothing, where the host can tell them, as the key would otherwise go back and forth.
     ///
-    /// Beside a page watched it keys the panel's line. With a page over the conversation, full
-    /// screen or on its way back, no button is in sight to ring: while the window has the keyboard
-    /// the key goes back to the conversation, to its reply field, and rings nothing; a page the
-    /// user has, held from its agent or with the keyboard, keeps the view and every key.
+    /// Beside a page watched it keys the panel's line, and with no line asked there, the panel's
+    /// field. Where the panel has neither, an outside app's thread with nothing asked, and with a
+    /// page over the conversation, full screen or on its way back, nothing is in sight to take
+    /// the keyboard: while the window has it the key goes back to the conversation and rings
+    /// nothing, so the key is always a way back from the page; a page the user has, held from its
+    /// agent or with the keyboard, keeps the view.
     pub(in crate::shell) fn focus_agent_question(&mut self, from: &str, cx: &mut Context<Self>) {
         if from == "ui" && self.browser.key_repeated() {
             return;
@@ -462,16 +464,36 @@ impl super::super::Shell {
         let page = from == "page"
             || (self.browser.page_has_keyboard(cx)).unwrap_or(self.page_keyboard.is_some());
         if !self.talk_drawn() {
-            let held = matches!(self.agent_bar(), Some(Bar::Held { .. }));
-            if let Some((_, tab)) = self.watched_task_page().filter(|_| !page && !held) {
-                log!("browser: focus key leaves task page {tab}");
-                self.task_page_back(cx);
-            }
+            self.focus_key_leaves_page(page, cx);
             return;
         }
         let beside = self.watched_task_page().map(|(_, tab)| tab);
         if view.update(cx, |view, cx| view.focus_ilo(page, beside, cx)) {
             self.take_keyboard(cx);
+            return;
+        }
+        // Nothing is asked. With the conversation alone the key has nothing to do; beside a page
+        // it takes the panel's field, and the page is left where the panel shows none.
+        if beside.is_none() {
+            return;
+        }
+        if view.read(cx).takes_reply() {
+            self.take_keyboard(cx);
+            self.focus_talk = true;
+            cx.notify();
+        } else {
+            self.focus_key_leaves_page(page, cx);
+        }
+    }
+
+    /// The key with nothing of the conversation's in sight to take the keyboard: the page watched
+    /// goes back into its picture, unless the user has it, held from its agent or with the
+    /// keyboard in it (`page`).
+    fn focus_key_leaves_page(&mut self, page: bool, cx: &mut Context<Self>) {
+        let held = matches!(self.agent_bar(), Some(Bar::Held { .. }));
+        if let Some((_, tab)) = self.watched_task_page().filter(|_| !page && !held) {
+            log!("browser: focus key leaves task page {tab}");
+            self.task_page_back(cx);
         }
     }
 

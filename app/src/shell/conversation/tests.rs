@@ -3528,6 +3528,122 @@ fn a_watch_from_any_door_is_a_tile_and_a_handoff_leaves_the_reply_field(cx: &mut
     );
 }
 
+/// The thread of `card` shown with its page 30 watched, so the user stands on it beside the
+/// panel, and `lines` for its conversation's.
+fn standing_on_page_30(
+    card: Card,
+    lines: Vec<Line>,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    Rc<Recorder>,
+    Entity<super::TalkView>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown_with(card, cx);
+    host.shows_tiles.set(Some(true));
+    let talk = Conversation {
+        lines,
+        ..conversation(1)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, Default::default(), None, false, cx)
+    }));
+    view.update(cx, |_, cx| cx.notify());
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the watch doesn't stand on the page"
+    );
+    (shell, host, view, cx)
+}
+
+/// What Focus Agent Question's key from the UI wrote of leaving the page watched.
+fn focus_key_heard(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
+    crate::heard::listen();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    (crate::heard::take().into_iter())
+        .filter(|line| line.starts_with("browser: focus key leaves task page "))
+        .collect()
+}
+
+/// Standing on a thread's page with a question asked in the panel, Focus Agent Question's key
+/// takes the question: its first button rings, and the page stays watched.
+#[gpui::test]
+fn standing_on_a_page_the_focus_key_takes_the_question_asked(cx: &mut TestAppContext) {
+    let asked = Line::Ilo(IloLine {
+        key: 7,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Place order".into(),
+            doing: "clicking “Place order”".into(),
+            why: Why::Order,
+            tier: Tier::Work,
+            count: 1,
+        },
+        settled: false,
+    });
+    let (shell, _host, view, cx) = standing_on_page_30(card(), vec![asked], cx);
+    let left = focus_key_heard(&shell, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    assert_eq!(left, Vec::<String>::new(), "the key left the page");
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(
+        !cx.update(|window, _| reply.is_focused(window)),
+        "the field took the keyboard from the question"
+    );
+}
+
+/// With nothing asked, the key takes the panel's field, and the page stays watched.
+#[gpui::test]
+fn standing_on_a_page_the_focus_key_takes_the_field_with_nothing_asked(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = standing_on_page_30(card(), Vec::new(), cx);
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    let window_own = shell.read_with(cx, |shell, _| shell.focus_handle.clone());
+    cx.update(|window, cx| window.focus(&window_own, cx));
+    assert!(!cx.update(|window, _| reply.is_focused(window)));
+    host.take();
+    let left = focus_key_heard(&shell, cx);
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the key didn't give the panel's field the keyboard"
+    );
+    assert!(
+        host.take().contains(&"focus ui".to_string()),
+        "the keyboard wasn't taken from the page"
+    );
+    assert_eq!(left, Vec::<String>::new(), "the key left the page");
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    assert!(view.read_with(cx, |view, _| view.ilo_keys.is_none()));
+}
+
+/// Where the panel has neither, an outside app's thread with nothing asked, the key leaves the
+/// page for the conversation, and says so once.
+#[gpui::test]
+fn standing_on_a_page_the_focus_key_leaves_it_where_the_panel_has_neither(cx: &mut TestAppContext) {
+    let outside = Card {
+        replies: false,
+        ..card()
+    };
+    let (shell, _host, view, cx) = standing_on_page_30(outside, Vec::new(), cx);
+    assert!(!view.read_with(cx, |view, _| view.takes_reply()));
+    let left = focus_key_heard(&shell, cx);
+    assert_eq!(left, ["browser: focus key leaves task page 30"]);
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.task_standing()),
+        "the page is still stood on"
+    );
+    // Back in the conversation the key has nothing to leave.
+    assert_eq!(focus_key_heard(&shell, cx), Vec::<String>::new());
+}
+
 /// Where task-1's folder chip under the reply field was drawn, with its conversation `talk`.
 fn folder_chip_with(
     talk: Conversation,
