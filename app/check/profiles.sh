@@ -286,7 +286,11 @@ quit
 # keeps and the first doesn't: the first profile's page of the site with no icon of its own shows
 # none, and the same page in the first profile keeps its icon as new (#3431).
 profile_icon=
-if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ -n "${CHECK_APP:-}" ]; then
+  # A release takes no BROWSER_STREAMING_TEST_HOST (main.rs), so no page of the checks' server
+  # opens in Safari's engine there.
+  echo "skip: each profile's icons in Safari's engine, as a release opens none of the checks' pages in it."
+elif [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   forget_engine_sites
   log="$out/profiles-icon.log"
   step=0
