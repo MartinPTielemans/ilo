@@ -219,7 +219,7 @@ else
     # row, a tab of its own after them, and Chromium settings a button.
     settings="$out/access-settings.txt"
     send menu Settings…
-    expect '^browser: settings shown General$' "Settings… didn't show Settings on General"
+    settings_on_general "Settings… didn't show Settings"
     settings_drew General
     read_tree '"Sections"' > "$settings"
     under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"General\" $shown" ||

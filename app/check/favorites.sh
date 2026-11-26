@@ -325,7 +325,7 @@ expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back
 # off; and ⌘W hides it.
 send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+settings_on_general "⌘, didn't show Settings"
 settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
 click_in_sight "switch warn before quitting"
@@ -751,7 +751,7 @@ expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back
 send click $sidebar_point
 send key , cmd
 expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
-expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
+settings_on_general "⌘, from the UI didn't show Settings"
 settings_drew General
 send clickkey $(drawn "toolbar Tabs & Spaces")
 expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"

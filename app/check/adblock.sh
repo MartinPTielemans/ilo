@@ -223,7 +223,7 @@ expect "^browser: title $tab ad script loaded, element shown\$" \
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_on_general "Settings… didn't show Settings"
 settings_drew General
 send clickkey $(drawn "toolbar Privacy")
 expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"

@@ -152,6 +152,10 @@ impl Settings {
             saved_and_filled: saved == Some(true),
             logins,
             signed_in: account.state().status == account::Status::On,
+            signed_out: matches!(
+                account.state().status,
+                account::Status::SignedOut | account::Status::SigningIn
+            ),
             devices: account.device_count(),
         }
     }

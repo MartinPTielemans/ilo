@@ -194,6 +194,26 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     );
 }
 
+/// Opened with no page named, Settings shows Overview: the column marks it the one shown, as an
+/// assistive app reads it.
+#[gpui::test]
+fn settings_opens_on_overview(cx: &mut TestAppContext) {
+    use gpui::accesskit::Role;
+    let (view, cx) = shown(cx);
+    view.update(cx, |view, cx| {
+        view.shown = Section::OPENS;
+        cx.notify();
+    });
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let selected: Vec<&str> = (tree.nodes.iter())
+        .filter(|(_, node)| node.role() == Role::Tab && node.is_selected() == Some(true))
+        .filter_map(|(_, node)| node.label())
+        .collect();
+    assert_eq!(selected, ["Overview"]);
+}
+
 /// VoiceOver reads the column as a tab list of the fourteen sections, the one shown selected, and
 /// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
 #[gpui::test]

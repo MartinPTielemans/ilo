@@ -962,13 +962,13 @@ fn open(cx: &mut App) {
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
     let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
-    let title = Section::General.name().into();
+    let title = Section::OPENS.name().into();
     let options = WindowOptions {
         show: false,
         focus: false,
         ..browser::settings_column::window_options(bounds, title)
     };
-    SHOWN_SECTION.set(Section::General.name());
+    SHOWN_SECTION.set(Section::OPENS.name());
     let window = cx.open_window(options, |window, cx| {
         let settings = view(cx);
         settings.update(cx, |settings, cx| {
@@ -1169,7 +1169,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             version,
             nightly,
             _agents: agents,
-            section: Section::General,
+            section: Section::OPENS,
             focus: cx.focus_handle(),
             dark,
             appearance: shell::app_appearance(cx),
