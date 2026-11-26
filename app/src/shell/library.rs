@@ -154,7 +154,6 @@ use crate::tokens::shell::library::ARCHIVED_RADIUS;
 use crate::tokens::shell::library::ARCHIVED_RIGHT;
 use crate::tokens::shell::library::ARCHIVED_TEXT_X;
 use crate::tokens::shell::library::HEADING_BOTTOM;
-use crate::tokens::shell::library::HEADING_GAP;
 use crate::tokens::shell::library::HEADING_HEIGHT;
 use crate::tokens::shell::library::HEADING_TOP;
 use crate::tokens::shell::library::HEADING_X;
@@ -2680,11 +2679,7 @@ impl Shell {
         let tab = match *item {
             Item::Heading(heading) => {
                 return div()
-                    .pt(px(if index == 0 {
-                        HEADING_TOP
-                    } else {
-                        HEADING_TOP + HEADING_GAP
-                    }))
+                    .pt(px(HEADING_TOP))
                     .pb(px(HEADING_BOTTOM))
                     .pl(px(HEADING_X))
                     .child(
@@ -2693,6 +2688,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .text_size(px(text::SMALL))
+                            .line_height(px(HEADING_HEIGHT))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(self.palette.gray(SECONDARY))
                             .child(heading),

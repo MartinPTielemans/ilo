@@ -2382,9 +2382,10 @@ search-top = 10.0
 search-width = 289.0
 search-height = 36.0
 search-radius = 12.0
-search-glyph = 15.0
-search-glyph-x = 14.5
-search-text-x = 44.0
+# Inside it, as drawn: the magnifier 14 square, 12 in, and the text 8 after it.
+search-glyph = 14.0
+search-glyph-x = 12.0
+search-text-x = 34.0
 search-placeholder = 0.56
 filter-x = 220.0
 filter-width = 73.0
@@ -2395,12 +2396,12 @@ filter-pad = 12.0
 # The archive's list, beside the column.
 archive-top = 56.0
 archive-width = 304.0
+# A day's heading is a row of 36, as drawn, after rows as at the list's top: its small semibold
+# line, 14, at the row's foot, 8 over the rows under it.
 heading-x = 12.0
-heading-top = 8.0
-heading-height = 15.0
-heading-bottom = 4.0
-# Over a heading after rows. Ours: Arc's capture had one heading.
-heading-gap = 12.0
+heading-top = 14.0
+heading-height = 14.0
+heading-bottom = 8.0
 archived-pitch = 56.0
 archived-plate = 50.0
 archived-left = 8.0
