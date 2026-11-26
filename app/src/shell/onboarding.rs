@@ -1950,7 +1950,13 @@ impl Shell {
     fn assistant_rows(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
         use crate::agents::runner::Cli;
         use crate::settings_rows::{Act, first_run_row};
-        let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
+        // The line in text-2 and the mark in the text's ink (v9 §1, §4): mixed over the card's
+        // see-through ground, as Look::on would, they'd all but vanish.
+        let look = Look {
+            detail: inks.text_2(),
+            glyph: inks.text(1.),
+            ..Look::on(inks.group(), inks.text(1.), rgb(SIGNAL))
+        };
         let shell = cx.weak_entity();
         let a11y = self.a11y;
         let rows = crate::agents::global(cx).map(|agents| {

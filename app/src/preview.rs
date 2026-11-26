@@ -3304,8 +3304,8 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
-                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start or =signed-in gives
-                        // the assistants' step its rows in each state they read.
+                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start, =waiting, =failed or
+                        // =signed-in gives the assistants' step its rows in each state they read.
                         let assistants = states::var("PREVIEW_ONBOARDING_ASSISTANTS").ok();
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
                             shell.onboarding_show_assistants(rows, cx);
