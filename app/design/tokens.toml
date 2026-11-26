@@ -258,7 +258,8 @@ foot-line = 16.0
 # The composer's row of choices over its foot: 48 high with 6 of it under the triggers, 14 in at
 # the left and 12 at the right, 2 between (P3, screen 48). A trigger is 26 high, its words 13 on a
 # 16 line and a chevron 10 after them, 8 in at each side and 5 between, with a plate only while
-# its menu shows; the model's starts 7 in, its assistant's mark 14 and 6 between. Start is a
+# its menu shows; the model's starts 7 in, its assistant's mark 14 and 6 after it, its chevron 5
+# after its words as the level's (the lead, 26 Nov). Start is a
 # circle 30 with an arrow 14, 6 after the triggers. A trigger's menu hangs 6 under it. The plus,
 # first, is a trigger 26 square with a plus 16 in the secondary ink (spec-bar-composer 48); with
 # nothing to add it stays in its place at 0.26 of that ink and takes no press (the lead, 24 Nov).
@@ -3540,7 +3541,9 @@ live-line = 16.0
 # without its mark, the round button `composer-round` with Stop's square at `composer-square`. The
 # drawing gives no arrow or space under the row here: `composer-arrow` is the stage's less one, by
 # the round button's, and the row keeps the stage's `composer-row-under`. Its corner is the stage
-# composer's, `radius.panel`, where the drawing has 14: a corner is one of the four.
+# composer's, `radius.panel`, where the drawing has 14: a corner is one of the four. The round
+# button stands the row's gap from the model, with `composer-round-space` more (the bar has its
+# `start-space`).
 composer-radius = 16.0
 composer-field = 38.0
 composer-field-x = 12.0
@@ -3552,6 +3555,7 @@ composer-level-x = 7.0
 composer-level = 12.0
 composer-level-line = 16.0
 composer-round = 28.0
+composer-round-space = 0.0
 composer-arrow = 13.0
 composer-square = 9.0
 # The user's message, reduced: `bubble-most` wide at most, its words wrapping inside it, which

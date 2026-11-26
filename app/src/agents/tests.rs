@@ -11195,10 +11195,15 @@ mod tasks {
             "Claude's program can't take another model"
         );
         assert!(
-            !model(&claude, cx).unwrap().2,
+            !model(&claude, cx).unwrap().3,
             "Claude's model opens nothing"
         );
-        assert!(model(&codex, cx).unwrap().2, "Codex's model opens its menu");
+        assert!(model(&codex, cx).unwrap().3, "Codex's model opens its menu");
+        assert_eq!(
+            model(&codex, cx).unwrap().2,
+            crate::command_bar::DEFAULT_ROW,
+            "a default's own word is the model menu's"
+        );
         assert_eq!(
             menu(&codex, cx).as_deref(),
             Some("Codex's default [GPT A] (checked), GPT A, GPT B")
@@ -11211,6 +11216,11 @@ mod tasks {
         };
         pick(&codex, "gpt-b", cx);
         assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        assert_eq!(
+            model(&codex, cx).unwrap().2,
+            "GPT B",
+            "the model's own word"
+        );
         assert_eq!(
             menu(&codex, cx).as_deref(),
             Some("Codex's default [GPT A], GPT A, GPT B (checked)")

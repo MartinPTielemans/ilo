@@ -2853,6 +2853,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
             model: Some((
                 "icons/terminal.svg",
                 "Claude Code \u{b7} Opus".into(),
+                "Opus".into(),
                 false,
             )),
             ..conversation(1)
@@ -4729,4 +4730,303 @@ fn a_kept_card_is_told_only_of_a_picture_an_agent_could_have_had(cx: &mut TestAp
 
     shell.update(cx, |shell, _| shell.private = true);
     assert_eq!(taken(&|_, _| {}, cx), None);
+}
+
+/// The words a thread's model trigger says for each assistant in Cli's own lists, its default
+/// first, then one longer than any of them, as a CLI can list: whole, and the model's own word, a
+/// default's being the model menu's `Default`.
+fn models_in_cli_lists() -> Vec<(String, String)> {
+    use crate::agents::runner::Cli;
+    let mut models = Vec::new();
+    for cli in Cli::ALL {
+        let default = crate::agents::task::model_default(cli);
+        models.push((default, crate::command_bar::DEFAULT_ROW.to_string()));
+        for (_, name) in cli.unlisted_models() {
+            models.push((format!("{} \u{b7} {name}", cli.name()), name.to_string()));
+        }
+    }
+    let long = "Sonnet 4.5 with a context of a million";
+    models.push((format!("Claude \u{b7} {long}"), long.into()));
+    models
+}
+
+/// How wide `words` are at the panel's size, laid out whole, and their first word alone.
+fn panel_widths(words: &str, cx: &mut VisualTestContext) -> (f32, f32) {
+    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL;
+    let first = words
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    cx.update(|_, cx| {
+        let system = WindowTextSystem::new(cx.text_system().clone());
+        let width = |text: &str| {
+            text_width(
+                &text.to_string().into(),
+                COMPOSER_LEVEL,
+                FontWeight::NORMAL,
+                &system,
+            )
+        };
+        (width(words), width(&first))
+    })
+}
+
+/// The composer's inside edges in the 300 panel: the panel less its foot at each side and the
+/// composer's line of 1.
+fn composer_inside(panel: gpui::Bounds<gpui::Pixels>) -> (gpui::Pixels, gpui::Pixels) {
+    use crate::tokens::shell::conversation::panel::FOOT;
+    (panel.left() + px(FOOT + 1.), panel.right() - px(FOOT + 1.))
+}
+
+/// The panel's composer row fits the panel beside a page (300) with its plus drawn: the round
+/// button's right edge is the row's inset inside the composer, at Stop and at Send, at every
+/// level, for every model in Cli's lists. The model trigger draws the model's own word; nothing
+/// of the row is cut but that word, which gives way at its end and is never narrower than its
+/// first word. The level's words are always whole. The one difference the lead named for now
+/// (26 Nov): Work on pages with a default's row stands exactly 1 over, at Stop and at Send.
+#[gpui::test]
+fn the_panels_composer_row_fits_the_panel_with_its_plus(_: &mut TestAppContext) {
+    use crate::tokens::command_bar::{TRIGGER_CHEVRON, TRIGGER_GAP};
+    use crate::tokens::shell::conversation::COMPOSER_ROW_GAP;
+    use crate::tokens::shell::conversation::panel::{
+        COMPOSER_LEVEL_X, COMPOSER_ROUND, COMPOSER_ROW_X,
+    };
+    let (_, long) = models_in_cli_lists().pop().unwrap();
+    let mut cut = false;
+    let (mut fit, mut named) = (0, 0);
+    for tier in Tier::ALL {
+        for (said, word) in models_in_cli_lists() {
+            for stoppable in [true, false] {
+                let mut each = TestAppContext::single();
+                let talk = Conversation {
+                    stoppable,
+                    tier,
+                    model: Some((
+                        "icons/terminal.svg",
+                        said.clone().into(),
+                        word.clone().into(),
+                        true,
+                    )),
+                    ..conversation(3)
+                };
+                let (_, _, view, cx) = standing_with(card(), talk, &mut each);
+                let case = format!("{tier:?}, {said:?}, Stop {stoppable}");
+                let (panel, round, plus, level, model) = view.read_with(cx, |view, _| {
+                    (
+                        view.drawn_at.get().expect("no panel"),
+                        view.round_drawn.get().expect("no round button"),
+                        view.plus.drawn().expect("no plus"),
+                        view.level_drawn.get().expect("no level"),
+                        view.model_drawn.get().expect("no model"),
+                    )
+                });
+                assert_eq!(panel.size.width, px(BESIDE), "{case}: the panel's width");
+                assert_eq!(
+                    round.size.width,
+                    px(COMPOSER_ROUND),
+                    "{case}: the round button"
+                );
+                let (left, right) = composer_inside(panel);
+                let over = tier == Tier::Work && word == crate::command_bar::DEFAULT_ROW;
+                assert_eq!(
+                    round.right(),
+                    right - px(COMPOSER_ROW_X) + px(if over { 1. } else { 0. }),
+                    "{case}: the round button's right edge isn't the row's inset inside the composer{}",
+                    if over {
+                        ", 1 over as the lead named"
+                    } else {
+                        ""
+                    }
+                );
+                *if over { &mut named } else { &mut fit } += 1;
+                let start = left + px(COMPOSER_ROW_X);
+                let end = round.left() - px(COMPOSER_ROW_GAP);
+                for (name, item) in [("plus", plus), ("level", level), ("model", model)] {
+                    assert!(
+                        item.left() >= start && item.right() <= end,
+                        "{case}: the {name} is drawn at {:?}..{:?}, outside the row's {start:?}..{end:?}",
+                        item.left(),
+                        item.right()
+                    );
+                }
+                // The level whole: its insets, its words and its chevron.
+                let whole = panel_widths(tier.label(), cx).0
+                    + 2. * COMPOSER_LEVEL_X
+                    + TRIGGER_GAP
+                    + TRIGGER_CHEVRON;
+                assert!(
+                    f32::from(level.size.width) + 1. >= whole,
+                    "{case}: the level is {:?} wide, its words cut (whole it's {whole})",
+                    level.size.width
+                );
+                // The model's word: the trigger less its insets and its chevron, as it opens.
+                let drawn = f32::from(model.size.width)
+                    - 2. * COMPOSER_LEVEL_X
+                    - TRIGGER_GAP
+                    - TRIGGER_CHEVRON;
+                let (whole, least) = panel_widths(&word, cx);
+                assert!(
+                    drawn + 1. >= least,
+                    "{case}: the model's word is {drawn} wide, under its first word ({least})"
+                );
+                // Cut only where it has no room: it then stands against the round button.
+                if drawn + 1. < whole {
+                    assert!(
+                        model.right() + px(1.) >= end,
+                        "{case}: {word:?} is cut to {drawn} with room left before the button"
+                    );
+                    cut |= word == long;
+                }
+            }
+        }
+    }
+    assert!(
+        cut,
+        "the longest model's word was never cut, so this tests no cut"
+    );
+    // Each assistant's default at Work on pages, at Stop and at Send: 1 over; every other fits.
+    assert_eq!(
+        (fit, named),
+        (32, 4),
+        "(cases that fit, Work on pages with a default 1 over)"
+    );
+}
+
+/// In the panel the model trigger draws the model's own word alone, without its assistant's
+/// name.
+#[gpui::test]
+fn the_panels_model_trigger_draws_the_models_own_word(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL_X;
+    let talk = Conversation {
+        model: Some((
+            "icons/terminal.svg",
+            "Claude \u{b7} Sonnet".into(),
+            "Sonnet".into(),
+            false,
+        )),
+        ..conversation(3)
+    };
+    let (_, _, view, cx) = standing_with(card(), talk, cx);
+    let model = view
+        .read_with(cx, |view, _| view.model_drawn.get())
+        .expect("no model");
+    // A model that can't change has no chevron: the trigger is its insets and its word.
+    let drawn = f32::from(model.size.width) - 2. * COMPOSER_LEVEL_X;
+    let (sonnet, _) = panel_widths("Sonnet", cx);
+    let (both, _) = panel_widths("Claude \u{b7} Sonnet", cx);
+    assert!(
+        (drawn - sonnet).abs() <= 1.,
+        "the panel's model is {drawn} wide: Sonnet alone is {sonnet}, with Claude's name {both}"
+    );
+}
+
+/// The panel's row alone, at the composer's width in the 300 panel and at a wider one, with and
+/// without the plus, at Stop and at Send: the round button stands the row's inset inside, and the
+/// model's word is cut at 300 only, never under its first word, and whole again where there's
+/// room.
+#[gpui::test]
+fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::panel::{COMPOSER_LEVEL_X, COMPOSER_ROW_X, FOOT};
+    use gpui::prelude::*;
+    use gpui::{Bounds, IntoElement, Pixels, SharedString, Window};
+    use std::cell::Cell;
+    type At = Rc<Cell<Option<Bounds<Pixels>>>>;
+    struct Drawn {
+        width: f32,
+        plus: bool,
+        round: choices::Round,
+        word: SharedString,
+        least: f32,
+        model: At,
+        round_at: At,
+    }
+    impl gpui::Render for Drawn {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            let ink = gpui::black();
+            let trigger = |id, at: At| choices::Trigger {
+                id,
+                at,
+                click: None,
+            };
+            let look = choices::plus_look(ink, ink, 16., 6., false);
+            let plus = (self.plus).then(|| {
+                crate::plus::Plus::default().draw("plus", Vec::new(), &look, cx.entity_id())
+            });
+            let round_at = self.round_at.clone();
+            gpui::div()
+                .font_family(crate::face::UI)
+                .w(px(self.width))
+                .flex()
+                .flex_col()
+                .child(choices::row(choices::Row {
+                    form: super::Composer::of(true).row,
+                    inks: choices::Inks {
+                        text: ink,
+                        dim: ink,
+                        plate: ink,
+                        primary: ink,
+                        on_primary: ink,
+                    },
+                    a11y: false,
+                    plus,
+                    added: Vec::new(),
+                    level: (Tier::Work, trigger("level", Rc::default())),
+                    model: Some((
+                        None,
+                        self.word.clone(),
+                        self.word.clone(),
+                        trigger("model", self.model.clone()),
+                    )),
+                    model_least: self.least,
+                    effort: None,
+                    held: Vec::new(),
+                    open: None,
+                    round: ("round", "Send".into(), self.round, Box::new(|_, _, _| {})),
+                    round_at: Some(Box::new(move |bounds| round_at.set(Some(bounds)))),
+                }))
+        }
+    }
+    let (_, long) = models_in_cli_lists().pop().unwrap();
+    // The composer's row inside the 300 panel: its foot at each side and the composer's line.
+    let narrow = BESIDE - 2. * (FOOT + 1.);
+    for width in [narrow, narrow + 240.] {
+        for plus in [true, false] {
+            for round in [choices::Round::Stop, choices::Round::Go { ready: false }] {
+                let case = format!("{width}, plus {plus}, {round:?}");
+                let least = cx.update(|cx| {
+                    use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL;
+                    let system = WindowTextSystem::new(cx.text_system().clone());
+                    let first = long.split_whitespace().next().unwrap().to_string().into();
+                    text_width(&first, COMPOSER_LEVEL, FontWeight::NORMAL, &system).ceil()
+                });
+                let (model, round_at) = (At::default(), At::default());
+                let (word, at, drawn) = (long.clone().into(), model.clone(), round_at.clone());
+                let (_, cx) = cx.add_window_view(|_, _| Drawn {
+                    width,
+                    plus,
+                    round,
+                    word,
+                    least,
+                    model: at,
+                    round_at: drawn,
+                });
+                cx.run_until_parked();
+                let round = round_at.get().expect("no round button");
+                assert_eq!(round.right(), px(width - COMPOSER_ROW_X), "{case}");
+                let model = model.get().expect("no model");
+                assert!(
+                    model.right() <= round.left(),
+                    "{case}: the model past the button"
+                );
+                let shown = f32::from(model.size.width) - 2. * COMPOSER_LEVEL_X;
+                let (whole, first) = panel_widths(&long, cx);
+                assert!(shown + 1. >= first, "{case}: under its first word");
+                match width == narrow {
+                    true => assert!(shown + 1. < whole, "{case}: not cut where it hasn't room"),
+                    false => assert!(shown + 1. >= whole, "{case}: cut where there's room"),
+                }
+            }
+        }
+    }
 }
