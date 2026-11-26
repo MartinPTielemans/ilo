@@ -3068,6 +3068,12 @@ impl Agents {
     /// a page's own, one the agent handed the user to sign in, or its assistant's own. The page's own camera,
     /// microphone and sharing, and a private window, are the window's to add.
     pub fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        self.keeps_picture_at(tab, &self.browser.tab(tab, cx).url)
+    }
+
+    /// `keeps_picture` of a tab whose page is at `url`, for the window that asks from inside its
+    /// own update: there the browser's `tab` can't be asked, as it reads that window.
+    pub fn keeps_picture_at(&self, tab: u64, url: &str) -> bool {
         let withheld = (self.tasks.tasks.iter())
             .filter_map(|task| task.session.as_ref())
             .any(|session| session.withheld && session.tabs.contains(&tab));
@@ -3078,7 +3084,7 @@ impl Agents {
             || self.unkept.marked(tab)
             || withheld
             || sign_in
-            || self.came_to(tab, cx).is_some())
+            || self.came_to_at(tab, url).is_some())
     }
 
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
@@ -3921,7 +3927,12 @@ impl Agents {
     /// the UI thread posted before the page settles and the action's answer is posted, so the
     /// report reaches the app first (mcp.sh's forward step guards it).
     fn came_to(&self, tab: u64, cx: &App) -> Option<String> {
-        let site = site(&self.browser.tab(tab, cx).url);
+        self.came_to_at(tab, &self.browser.tab(tab, cx).url)
+    }
+
+    /// `came_to` of a tab whose page is at `url`.
+    fn came_to_at(&self, tab: u64, url: &str) -> Option<String> {
+        let site = site(url);
         let entry = self.fence_of(&site)?;
         (self.cleared.get(&tab).map(|cleared| &cleared.entry) != Some(&entry)).then_some(site)
     }
