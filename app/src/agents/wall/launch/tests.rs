@@ -701,6 +701,7 @@ mod walled {
             tools: Vec::new(),
             helpers: false,
             wall: Some(Arc::new(wall)),
+            reads: Vec::new(),
         }
     }
 

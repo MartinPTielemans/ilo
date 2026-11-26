@@ -33,6 +33,7 @@ fn launch(helpers: bool) -> Launch {
             .into(),
         helpers,
         wall: None,
+        reads: Vec::new(),
     }
 }
 

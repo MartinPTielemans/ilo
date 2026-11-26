@@ -2365,6 +2365,11 @@ impl Agents {
             tools: tools::names(agent),
             helpers: task.helpers.on,
             wall,
+            // The files it starts with: a task whose wall was refused has none by now.
+            reads: (task.files.folder.iter())
+                .map(|folder| folder.root().to_path_buf())
+                .chain(task.files.attached.clone())
+                .collect(),
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
