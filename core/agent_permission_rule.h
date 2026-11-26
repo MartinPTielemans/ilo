@@ -64,6 +64,8 @@ enum class Kind {
   kShare,
   // The dialog that asks whether to install the page as an app of its own.
   kAppInstall,
+  // The dialog that has the user verify a digital ID, such as a driving licence, with their phone.
+  kDigitalIdentity,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
