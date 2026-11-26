@@ -616,7 +616,7 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-settings_on_general "⌘, didn't show Settings"
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
 expect '^browser: settings drew General$' "Settings didn't draw General"
 in_sight "switch link previews" '^browser: settings drew General$' ||
   fail "Settings didn't draw the link previews' switch"
