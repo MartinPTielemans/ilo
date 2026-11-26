@@ -2339,38 +2339,46 @@ fn preview_profiles() -> Vec<(u64, SharedString)> {
         .collect()
 }
 
-/// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
-/// as a headless session has none to switch.
-/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS, and the one marked.
+/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS: checking, start, waiting, failed or
+/// signed-in.
 fn onboarding_assistants(
     state: &str,
-) -> Option<(
+) -> Option<
     Vec<(
         browser::agents::runner::Cli,
         browser::agents::sign_in::Shown,
     )>,
-    Option<browser::agents::runner::Cli>,
-)> {
+> {
     use browser::agents::ready::Ready;
     use browser::agents::runner::Cli;
     use browser::agents::sign_in::{Row, shown};
-    let ([claude, codex], plan, marked) = match state {
-        "checking" => ([Ready::Unknown, Ready::Unknown], None, None),
-        "start" => ([Ready::SignedOut, Ready::NotFound], None, None),
-        "signed-in" => (
-            [Ready::SignedIn, Ready::SignedIn],
-            Some("Plus"),
-            Some(Cli::Claude),
+    let idle = |ready| (ready, Row::Idle);
+    // Each row as a press would leave it: first run's words come from these.
+    let ([claude, codex], plan) = match state {
+        "checking" => ([idle(Ready::Unknown), idle(Ready::Unknown)], None),
+        "start" => ([idle(Ready::SignedOut), idle(Ready::NotFound)], None),
+        "waiting" => (
+            [
+                (Ready::SignedOut, Row::SigningIn),
+                (Ready::SignedOut, Row::SigningIn),
+            ],
+            None,
         ),
+        "failed" => (
+            [(Ready::SignedOut, Row::Failed(None)), idle(Ready::SignedIn)],
+            Some("Plus"),
+        ),
+        "signed-in" => ([idle(Ready::SignedIn), idle(Ready::SignedIn)], Some("Plus")),
         _ => return None,
     };
-    let rows = vec![
-        (Cli::Claude, shown(Cli::Claude, claude, None, &Row::Idle)),
-        (Cli::Codex, shown(Cli::Codex, codex, plan, &Row::Idle)),
-    ];
-    Some((rows, marked))
+    Some(vec![
+        (Cli::Claude, shown(Cli::Claude, claude.0, None, &claude.1)),
+        (Cli::Codex, shown(Cli::Codex, codex.0, plan, &codex.1)),
+    ])
 }
 
+/// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
+/// as a headless session has none to switch.
 fn preview_tone() -> Option<Tone> {
     match states::var("PREVIEW_APPEARANCE").ok()?.as_str() {
         "light" => Some(Tone::Light),
@@ -3300,8 +3308,7 @@ fn main() {
                         // the assistants' step its rows in each state they read.
                         let assistants = states::var("PREVIEW_ONBOARDING_ASSISTANTS").ok();
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
-                            let (rows, marked) = rows;
-                            shell.onboarding_show_assistants(rows, marked, cx);
+                            shell.onboarding_show_assistants(rows, cx);
                         }
                         // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();

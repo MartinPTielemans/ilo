@@ -606,7 +606,7 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
         offer: Offer::SignedIn,
     };
     shell.update(cx, |shell, cx| {
-        shell.onboarding_show_assistants(vec![(Cli::Claude, signed_in)], None, cx)
+        shell.onboarding_show_assistants(vec![(Cli::Claude, signed_in)], cx)
     });
     settle(&shell, cx);
     assert!(placed("just-the-browser", cx).is_none());
@@ -891,7 +891,7 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
         offer: Offer::SignedIn,
     };
     shell.update(cx, |shell, cx| {
-        shell.onboarding_show_assistants(vec![(Cli::Claude, signed_in)], None, cx)
+        shell.onboarding_show_assistants(vec![(Cli::Claude, signed_in)], cx)
     });
     host.take();
     let mut passed = Vec::new();
@@ -2447,4 +2447,90 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
              {row:?}"
         );
     }
+}
+
+/// Each row on the card says v9's words for its state, never Settings' own: its maker's plan
+/// before a press and once signed in, the wait in the place its sign-in opened, and a failed or
+/// closed sign-in as one line, with Sign In again. A missing program is never "Not installed".
+#[test]
+fn the_assistants_rows_say_the_cards_words_in_each_state() {
+    use crate::agents::ready::Ready;
+    use crate::agents::sign_in::{Row, shown};
+    let card = |cli, ready, plan, row: Row, learned| {
+        let said = super::card_words(cli, shown(cli, ready, plan, &row), learned);
+        (said.line, said.offer)
+    };
+    let said = |line: &str, offer| (line.to_string(), offer);
+    for (cli, plan) in [
+        (Cli::Claude, "Your Claude plan"),
+        (Cli::Codex, "Your ChatGPT plan"),
+    ] {
+        for ready in [Ready::Unknown, Ready::NotFound, Ready::SignedOut] {
+            let before = card(cli, ready, None, Row::Idle, false);
+            assert_eq!(before, said(plan, Offer::SignIn), "{cli:?} before a press");
+        }
+        let missing = card(cli, Ready::NotFound, None, Row::Idle, true);
+        assert_eq!(missing, said(plan, Offer::Get), "{cli:?}'s program missing");
+        let signed_in = card(cli, Ready::SignedIn, Some("Plus"), Row::Idle, true);
+        assert_eq!(signed_in, said(plan, Offer::SignedIn), "{cli:?} signed in");
+        for row in [Row::Failed(None), Row::Failed(Some("said".into()))] {
+            let failed = card(cli, Ready::SignedOut, None, row, true);
+            assert_eq!(failed, said("Sign-in didn't finish.", Offer::TryAgain));
+        }
+    }
+    assert_eq!(
+        card(Cli::Claude, Ready::SignedOut, None, Row::SigningIn, true),
+        said("Finish in the browser that opened.", Offer::Cancel),
+        "Claude's sign-in is in the computer's browser"
+    );
+    assert_eq!(
+        card(Cli::Codex, Ready::SignedOut, None, Row::SigningIn, true),
+        said("Finish in the window that opened.", Offer::Cancel),
+        "ChatGPT's is in a window here"
+    );
+}
+
+/// A signed-in row on the card has the check disc and its ⋯, not Settings' mark, and the foot's
+/// right is Next in Just the Browser's place.
+#[gpui::test]
+fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    let signed_in = Found {
+        ready: Ready::SignedIn,
+        ..Default::default()
+    };
+    let (agents, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_in)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    settle(&shell, cx);
+    assert!(
+        placed("just-the-browser", cx).is_some(),
+        "nobody is signed in yet"
+    );
+
+    shell.update(cx, |shell, cx| shell.onboarding_sign_in(Cli::Claude, cx));
+    cx.run_until_parked();
+    settle(&shell, cx);
+    let found = agents.read_with(cx, |agents, _| agents.found(Cli::Claude));
+    assert_eq!(found, Ready::SignedIn, "the press looked for Claude");
+    assert_eq!(
+        card_lines(&shell, &agents, cx),
+        ["Your Claude plan", "Your ChatGPT plan"]
+    );
+    let said = read(cx);
+    let named = |name: &str| said.iter().any(|(_, said, _)| said == name);
+    assert!(named("Claude options"), "Claude's ⋯ in {said:?}");
+    assert!(
+        !said
+            .iter()
+            .any(|(_, name, _)| name.starts_with("Run threads with")),
+        "no mark in {said:?}"
+    );
+    assert!(placed("just-the-browser", cx).is_none());
+    assert!(placed("main", cx).is_some(), "Next");
 }
