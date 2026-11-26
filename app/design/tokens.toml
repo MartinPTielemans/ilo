@@ -2422,7 +2422,22 @@ archived-left = 8.0
 archived-right = 3.0
 archived-favicon-x = 14.0
 archived-text-x = 44.0
+# A board's row's words end this far before its plate's end.
+archived-text-end = 12.0
 archived-radius = 12.0
+# A History row, as drawn: 34 high, the rows touching, in the list's padding (search-x and
+# search-right), its plate's radius archived-radius, 10 in either side and 9 between its favicon,
+# its title and its time. Its title is 13 on 16, one line; its time 11 on 16 in text-3, and never
+# shrinks. Under the pointer its end comes in to 4, so its buttons (a download's, 26 high) sit as
+# far in from its end as from its top.
+history-pitch = 34.0
+history-pad = 10.0
+history-gap = 9.0
+history-title-size = 13.0
+history-title-line = 16.0
+history-time-size = 11.0
+history-time-line = 16.0
+history-pointed-right = 4.0
 # Ours, as Arc's Media isn't measured: three tiles a row in the rows' width, 6 apart, at the
 # favorites' tiles' radius.
 media-gap = 6.0

@@ -16,13 +16,16 @@ use gpui::{
 use std::time::Instant;
 
 use super::{
-    ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, POINTED_ROW, SECONDARY, STATE_PRESSED,
-    Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
+    ARCHIVED_RADIUS, ARCHIVED_TEXT_END, ARCHIVED_TEXT_X, Item, MenuEntry, Only, POINTED_ROW,
+    SECONDARY, STATE_PRESSED, Section, Shell, UNSELECTED_TITLE, favicon, text, text_line,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::access::Accessible;
-use crate::tokens::shell::{CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_RIGHT, CLOSE_SIZE, NAV_RADIUS};
+use crate::tokens::shell::library::{
+    HISTORY_GAP, HISTORY_PAD, HISTORY_PITCH, HISTORY_POINTED_RIGHT, HISTORY_TIME_LINE,
+    HISTORY_TIME_SIZE, HISTORY_TITLE_LINE, HISTORY_TITLE_SIZE, SEARCH_RIGHT, SEARCH_X,
+};
+use crate::tokens::shell::{CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_SIZE, NAV_RADIUS};
 
 /// How many pages History asks for at a time: a few screens of its rows.
 const PAGE: usize = 60;
@@ -156,21 +159,19 @@ pub(super) fn history_when(at: f64, starts: [f64; 4], twelve: bool) -> String {
     time.format(&format).to_string()
 }
 
-/// Where a History row's text ends, from the row's end: 4 before its trash while the trash shows,
-/// as a tab row's title before its ✕, and otherwise 12, over the trash's place.
-pub(super) fn history_text_end(trash: bool) -> f32 {
-    match trash {
-        true => 4. + CLOSE_SIZE + CLOSE_RIGHT,
-        false => 12.,
+/// When a History row's tab closed or its page was visited, as its end says it: the time alone,
+/// as the row is under its day's heading, on the system's clock, 12- or 24-hour (`twelve`).
+pub(super) fn history_time(at: f64, twelve: bool) -> String {
+    match Local.timestamp_millis_opt(at as i64).single() {
+        Some(time) => time.format(crate::clock::hour_minute(twelve)).to_string(),
+        None => String::new(),
     }
 }
 
-/// A History row's title over what it is and when, which truncate before the row's trash while it
-/// shows, and otherwise have the row's whole width.
+/// A board's row's title over what it is and when, which truncate before the row's end.
 pub(super) fn history_text(
     title: SharedString,
     about: SharedString,
-    trash: bool,
     palette: &crate::palette::Palette,
 ) -> gpui::Div {
     let on_plate = palette.gray_on_plate(SECONDARY);
@@ -182,7 +183,7 @@ pub(super) fn history_text(
         .flex_col()
         .justify_center()
         .pl(px(ARCHIVED_TEXT_X))
-        .pr(px(history_text_end(trash)))
+        .pr(px(ARCHIVED_TEXT_END))
         .child(text_line(
             title,
             text::BODY,
@@ -234,10 +235,71 @@ impl Shell {
         }
     }
 
-    /// A History row's trash: the sidebar's close button, the same control in the same place, 5
-    /// inside the plate's end, with History's glyph, as the owner's "trash removes" has it
-    /// (11-02). It shows only under the pointer, and the title truncates before it then, as a tab
-    /// row's does before its ✕, so at rest a title has the row's whole width.
+    /// A History row as drawn: `plate`, the row's own control, holding its favicon, its title on
+    /// one line, and `end`, which takes what room the title leaves. Under the pointer the row's
+    /// end comes in, so the buttons there sit as far in from its end as from its top.
+    pub(super) fn history_row(
+        &self,
+        plate: gpui::Stateful<gpui::Div>,
+        row: Item,
+        icon: impl IntoElement,
+        title: SharedString,
+        end: Vec<AnyElement>,
+        pointed: bool,
+    ) -> gpui::Div {
+        let right = match pointed {
+            true => HISTORY_POINTED_RIGHT,
+            false => HISTORY_PAD,
+        };
+        div()
+            .h(px(HISTORY_PITCH))
+            .pl(px(SEARCH_X))
+            .pr(px(SEARCH_RIGHT))
+            .child(
+                plate
+                    .map(|plate| self.library_row(plate, row, 0, ARCHIVED_RADIUS))
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(px(HISTORY_GAP))
+                    .pl(px(HISTORY_PAD))
+                    .pr(px(right))
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .block_mouse_except_scroll()
+                    .group(POINTED_ROW)
+                    .child(div().flex_none().flex().items_center().child(icon))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(HISTORY_TITLE_SIZE))
+                            .line_height(px(HISTORY_TITLE_LINE))
+                            .text_color(self.palette.text(UNSELECTED_TITLE))
+                            .child(title),
+                    )
+                    .children(end),
+            )
+    }
+
+    /// A History row's time at its end, in text-3, or a plate's gray while the row is under the
+    /// pointer.
+    pub(super) fn history_end_words(&self, words: SharedString) -> AnyElement {
+        let on_plate = self.palette.gray_on_plate(SECONDARY);
+        div()
+            .flex_none()
+            .text_size(px(HISTORY_TIME_SIZE))
+            .line_height(px(HISTORY_TIME_LINE))
+            .text_color(self.palette.gray(SECONDARY))
+            .group_hover(POINTED_ROW, move |style| style.text_color(on_plate))
+            .child(words)
+            .into_any_element()
+    }
+
+    /// A History row's trash: the sidebar's close button with History's glyph, as the owner's
+    /// "trash removes" has it (11-02), at the row's end. It shows only under the pointer, and the
+    /// title truncates before it then, so at rest a title has the row's whole width.
     pub(super) fn history_trash(
         &self,
         id: impl Into<gpui::ElementId>,
@@ -248,9 +310,7 @@ impl Shell {
         div()
             .id(id)
             .when(self.a11y, |button| button.button_named(name))
-            .absolute()
-            .right(px(CLOSE_RIGHT))
-            .top(px((ARCHIVED_PLATE - CLOSE_SIZE) / 2.))
+            .flex_none()
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
             .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
@@ -453,9 +513,10 @@ impl Shell {
         }
     }
 
-    /// A visited page's line in History, as a closed tab's: its favicon, its title over when it
-    /// was visited, by an agent's tab if one did, and its host. A click opens it in Peek, and a
-    /// right-click shows its menu.
+    /// A visited page's line in History, as a closed tab's: its favicon, its title, and when it
+    /// was visited at its end, after the agent whose tab visited it if one did, as a thread's row
+    /// names what it is before its time. A click opens it in Peek, and a right-click shows its
+    /// menu.
     pub(super) fn visited_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(library) = &self.library else {
             return div().into_any_element();
@@ -468,14 +529,10 @@ impl Shell {
             true => url.clone(),
             false => visit.page.title.clone(),
         };
-        let when = history_when(
-            visit.page.visited,
-            library.starts,
-            crate::clock::twelve_hour(),
-        );
-        let about = match &visit.by {
-            Some(agent) => format!("Visited {when} by {agent} · {}", host(&url)),
-            None => format!("Visited {when} · {}", host(&url)),
+        let when = history_time(visit.page.visited, crate::clock::twelve_hour());
+        let when = match &visit.by {
+            Some(agent) => format!("{agent} · {when}"),
+            None => when,
         };
         let day = visit.day;
         let pointed = library.history.pointed == Some(Pointed::Visited(index));
@@ -494,54 +551,25 @@ impl Shell {
             };
             self.history_trash(("visited-trash", index), "Remove from History", remove, cx)
         });
-        div()
-            .h(px(ARCHIVED_PITCH))
-            .pl(px(ARCHIVED_LEFT))
-            .pr(px(ARCHIVED_RIGHT))
-            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
-            .child(
-                div()
-                    .id(("visited", index))
-                    .map(|plate| self.library_row(plate, Item::Visit(index), 0, ARCHIVED_RADIUS))
-                    .size_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .rounded(px(ARCHIVED_RADIUS))
-                    .block_mouse_except_scroll()
-                    .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
-                        shell.point_history(Pointed::Visited(index), *hovered, cx)
-                    }))
-                    .group(POINTED_ROW)
-                    .hover(|style| style.bg(self.palette.hovered_plate()))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
-                        shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                            shell.visited_menu(menu.clone(), day, event.position, cx)
-                        }),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(ARCHIVED_FAVICON_X))
-                            .top_0()
-                            .bottom_0()
-                            .flex()
-                            .items_center()
-                            .child(icon),
-                    )
-                    .child(history_text(
-                        title,
-                        about.into(),
-                        trash.is_some(),
-                        &self.palette,
-                    ))
-                    .children(trash),
-            )
+        let plate = div()
+            .id(("visited", index))
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                shell.point_history(Pointed::Visited(index), *hovered, cx)
+            }))
+            .hover(|style| style.bg(self.palette.hovered_plate()))
+            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    shell.visited_menu(menu.clone(), day, event.position, cx)
+                }),
+            );
+        let mut end = vec![self.history_end_words(when.into())];
+        end.extend(trash.map(IntoElement::into_any_element));
+        self.history_row(plate, Item::Visit(index), icon, title, end, pointed)
             .into_any_element()
     }
 
