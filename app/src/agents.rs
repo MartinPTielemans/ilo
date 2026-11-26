@@ -1189,7 +1189,6 @@ impl Agents {
         }))
         .collect();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -5459,7 +5458,6 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
-            "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({

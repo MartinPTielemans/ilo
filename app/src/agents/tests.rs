@@ -9807,7 +9807,9 @@ mod tasks {
                 tabs: Vec::new(),
             };
         });
-        assert_eq!(card_of(&agents, cx).line, None, "Finished says Done twice");
+        let card = card_of(&agents, cx);
+        assert_eq!(card.line, None, "a line would say Done twice");
+        assert_eq!(card.status.as_ref(), card.word.after_name());
     }
 
     /// A done card's line is cleaned as a title is: a link shows its label alone, what wouldn't

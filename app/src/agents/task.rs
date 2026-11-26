@@ -4214,9 +4214,10 @@ fn plain_text(text: &str) -> String {
     plain.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A result's first words for its card's line: its first line of text, or "Finished" with none.
+/// A result's first words for its card's line: its first line of text, or its state's word alone
+/// with none, which no card draws a second time.
 fn first_words(result: &str) -> SharedString {
-    first_line(result).unwrap_or_else(|| "Finished".into())
+    first_line(result).unwrap_or_else(|| Word::Done.after_name().into())
 }
 
 /// A result's first line of text, without the marks that make it a heading, a list's item or
