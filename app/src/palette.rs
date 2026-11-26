@@ -1966,7 +1966,6 @@ pub fn composite(under: Rgba, top: Rgba) -> Rgba {
     }
 }
 
-/// `color` at `alpha` over opaque `base`.
 /// A filled button's `fill` with each channel at `by`, as a coloured one goes under the pointer.
 pub fn darker(fill: Rgba, by: f32) -> Rgba {
     Rgba {
@@ -1987,6 +1986,7 @@ pub fn ink_states(fill: Rgba, label: Rgba) -> (Rgba, Rgba) {
     )
 }
 
+/// `color` at `alpha` over opaque `base`.
 pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
     let mix = |b: f32, c: f32| b + (c - b) * alpha;
     Rgba {
