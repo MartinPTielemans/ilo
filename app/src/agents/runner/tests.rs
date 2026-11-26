@@ -22,6 +22,8 @@ fn launch(cli: Cli) -> Launch {
         model: Some("haiku".into()),
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
+        helpers: false,
+        wall: None,
     }
 }
 
@@ -31,6 +33,51 @@ fn read(lines: &[Value]) -> Vec<Out> {
         .iter()
         .flat_map(|line| claude_read(line, &mut turn))
         .collect()
+}
+
+/// What ilo sets on a CLI's process, by name.
+fn set(launch: &Launch) -> Vec<(String, String)> {
+    let mut command = crate::child::command(&launch.program);
+    environment(&mut command, launch);
+    (command.get_envs())
+        .filter_map(|(name, value)| {
+            let text = |text: &std::ffi::OsStr| text.to_string_lossy().into_owned();
+            Some((text(name), text(value?)))
+        })
+        .collect()
+}
+
+/// A task without helpers is started with none of the helpers' variables, and one with them has
+/// each, set on its process, so ilo's value is the one it reads whatever ilo's own environment
+/// holds. Codex's start has none either way.
+#[test]
+fn only_a_task_with_helpers_is_started_with_their_variables() {
+    let helpers = |set: &[(String, String)]| -> Vec<(String, String)> {
+        let ours = |(name, _): &&(String, String)| name.starts_with("CLAUDE_");
+        set.iter().filter(ours).cloned().collect()
+    };
+    let off = set(&launch(Cli::Claude));
+    assert_eq!(helpers(&off), []);
+    assert_eq!(off.len(), 1, "more than the PATH is set: {off:?}");
+    let mut on = launch(Cli::Claude);
+    on.helpers = true;
+    let wanted: Vec<(String, String)> = (crate::agents::helpers::ENV.iter())
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let mut has = helpers(&set(&on));
+    has.sort();
+    let mut sorted = wanted.clone();
+    sorted.sort();
+    assert_eq!(has, sorted);
+    for name in [
+        "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
+        "CLAUDE_CODE_FORK_SUBAGENT",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+        "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
+    ] {
+        assert!(wanted.iter().any(|(each, _)| each == name), "{name}");
+    }
+    assert_eq!(helpers(&set(&launch(Cli::Codex))), []);
 }
 
 #[test]
@@ -159,12 +206,14 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    let Out::Thought { text, .. } = &outs[0] else {
+    // Its first line lists no kind of helper, which is read as one that isn't ilo's (helpers.rs).
+    assert_eq!(outs[0], Out::Kinds { ours: false });
+    let Out::Thought { text, .. } = &outs[1] else {
         panic!("{outs:?}")
     };
     assert_eq!(text, "Hmm.");
     assert_eq!(
-        outs[1..],
+        outs[2..],
         [
             Out::Said("Looking for flights.".into()),
             Out::Calling,
@@ -677,3 +726,119 @@ for line in sys.stdin:
         result = {}
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\n"); sys.stdout.flush()
 "#;
+
+/// A start inside a wall, as put_up answers one for a task with files.
+fn walled(cli: Cli, tmp: Option<&str>) -> Launch {
+    Launch {
+        wall: Some(Arc::new(Wall::for_test(tmp.map(PathBuf::from)))),
+        ..launch(cli)
+    }
+}
+
+/// A start with no wall is as it was: the PATH alone, and no setting of Claude Code's own.
+/// Inside a wall Claude Code is started with each knob that keeps its own files out of the
+/// user's folders, its temporary files in the wall's folder for them, and its own sandbox off
+/// (#4101). It keeps no conversation there, as on any run that isn't kept.
+#[test]
+fn only_a_walled_claude_is_started_with_the_walls_knobs() {
+    let plain = launch(Cli::Claude);
+    let path = ("PATH".to_string(), "/usr/local/bin:/usr/bin".to_string());
+    assert_eq!(set(&plain), [path]);
+    assert!(!claude_args(&plain).iter().any(|arg| arg == "--settings"));
+
+    let inside = walled(Cli::Claude, Some("/nonexistent/tmp"));
+    let knobs = set(&inside);
+    for name in [
+        "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+        "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+        "DISABLE_UPDATES",
+        "DISABLE_TELEMETRY",
+    ] {
+        let on = (name.to_string(), "1".to_string());
+        assert!(knobs.contains(&on), "{name} isn't on: {knobs:?}");
+    }
+    let tmp = ("CLAUDE_CODE_TMPDIR".to_string(), "/nonexistent/tmp".into());
+    assert!(knobs.contains(&tmp), "{knobs:?}");
+    let args = claude_args(&inside);
+    let at = (args.iter().position(|arg| arg == "--settings")).expect("no --settings");
+    let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
+    assert_eq!(settings, json!({ "sandbox": { "enabled": false } }));
+    assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+
+    // A wall with no folder for them names none, and Codex's start is as it was.
+    let bare = set(&walled(Cli::Claude, None));
+    assert!(!bare.iter().any(|(name, _)| name == "CLAUDE_CODE_TMPDIR"));
+    assert_eq!(set(&walled(Cli::Codex, None)), set(&launch(Cli::Codex)));
+}
+
+/// Every name a start sets on its process is one the wall's launcher is told to keep: the wall
+/// drops every other on the way, and nothing would say so. The list itself is one the launcher
+/// takes: no name twice, and no more than it reads.
+#[test]
+fn every_name_a_start_sets_is_in_the_kept_list() {
+    for cli in Cli::ALL {
+        let names = kept(cli);
+        let mut once = names.clone();
+        once.sort();
+        once.dedup();
+        assert_eq!(once.len(), names.len(), "{cli:?} keeps a name twice");
+        assert!(names.len() <= crate::agents::wall::launch::KEPT_MAX);
+        // Claude Code's alone, as a task's helpers are.
+        let with_helpers = Launch {
+            helpers: cli == Cli::Claude,
+            ..walled(cli, None)
+        };
+        let starts = [
+            launch(cli),
+            with_helpers,
+            walled(cli, Some("/nonexistent/tmp")),
+        ];
+        for start in starts {
+            for (name, _) in set(&start) {
+                assert!(names.contains(&name.as_str()), "{name} is set and not kept");
+            }
+        }
+    }
+}
+
+/// Inside a wall told to keep the runner's names, a program has each name the start set and no
+/// name outside the list, whatever the browser's own environment holds and whatever else is
+/// set on the command.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_walled_start_carries_no_name_outside_the_list() {
+    use crate::agents::wall::launch::Rules;
+    let rules = Rules {
+        text: "(version 1)(allow default)".into(),
+        params: Vec::new(),
+    };
+    let names = kept(Cli::Claude);
+    let wall = Arc::new(Wall::inside(None, &rules, &names).unwrap());
+    let start = Launch {
+        wall: Some(wall.clone()),
+        ..launch(Cli::Claude)
+    };
+    let mut command = wall.command(std::path::Path::new("/usr/bin/env"));
+    environment(&mut command, &start);
+    command
+        .env("ILO_NOT_KEPT", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, rising) = wall.start(&mut command).unwrap();
+    drop(child.stdin.take());
+    assert_eq!(rising.expect("a walled start").risen(), Ok(()));
+    let output = child.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    // Names alone are read: a value is never the test's to print.
+    let has: Vec<&str> = (out.lines())
+        .filter_map(|line| line.split('=').next())
+        .collect();
+    for name in &has {
+        assert!(names.contains(name), "{name} reached the program");
+    }
+    for (name, _) in set(&start) {
+        assert!(has.contains(&name.as_str()), "{name} was set and lost");
+    }
+}

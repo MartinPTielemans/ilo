@@ -5,7 +5,6 @@
 //! shows over the browser window, as its child, and the mouse goes through it. What it asks of its
 //! window goes through `Host`.
 
-use std::time::Instant;
 use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
@@ -16,26 +15,30 @@ use gpui::{
 
 /// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
 /// shows (Arc 1.170, twice), so a pointer passing over on its way somewhere brings none.
-pub const DELAY: Duration = Duration::from_millis(1600);
+pub const DELAY: Duration = ms(motion::DELAY);
 /// How soon after a tooltip went the next shows at once, as the pointer crosses the gap between
 /// two tiles (ours: the system's half second).
-pub const GRACE: Duration = Duration::from_millis(500);
+pub const GRACE: Duration = ms(motion::GRACE);
 /// It shows in a frame and fades out over 0.27 s, ease-out (Arc).
 pub const FADE_IN: Duration = Duration::ZERO;
-pub const FADE_OUT: Duration = Duration::from_millis(270);
+pub const FADE_OUT: Duration = ms(motion::FADE_OUT);
+use crate::motion::ms;
 pub use crate::tokens::tooltip::BESIDE;
 pub use crate::tokens::tooltip::EDGE_INSET;
 pub use crate::tokens::tooltip::GAP;
 use crate::tokens::tooltip::HEIGHT;
+// Its times, as tokens (#4108).
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
+use crate::tokens::tooltip::motion;
 pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
 use crate::tokens::tooltip::{DETAIL, DETAIL_GAP};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
 use crate::elevation::{Level, WINDOW_MARGIN};
-use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
+use crate::hover_intent::{Intent, Next};
+use crate::palette::{Float, INK, OVERLAY_DARK, PAPER, Tone, over};
 use crate::tokens::tooltip::CHIP;
 use crate::tokens::tooltip::CHIP_AFTER_TEXT;
 use crate::tokens::tooltip::CHIP_BODY;
@@ -329,8 +332,8 @@ pub struct Tooltip {
     /// The one-shot timer a tooltip waits on, and what it shows when it fires. Dropping it
     /// cancels it.
     wait: Option<(Task<()>, Waiting)>,
-    /// When a tooltip last went.
-    went: Option<Instant>,
+    /// When it shows: after DELAY, or at once within GRACE of the last going.
+    intent: Intent,
 }
 
 /// A tooltip waiting to show: the window it shows over, what it says and what it hangs from.
@@ -384,7 +387,7 @@ pub fn open_at(
             shown: None,
             drawn: None,
             wait: None,
-            went: None,
+            intent: Intent::new(DELAY).with_grace(GRACE),
         })
     });
     match window {
@@ -417,15 +420,13 @@ pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
     tooltip
         .update(cx, |tooltip, _, cx| {
             let now = cx.background_executor().now();
-            let soon = tooltip
-                .went
-                .is_some_and(|went| now.duration_since(went) < GRACE);
-            if tooltip.shown.is_some() || soon {
-                tooltip.wait = None;
-                tooltip.show(over, tip, anchor, cx);
-                return;
+            match tooltip.intent.enter(now) {
+                Next::Open => {
+                    tooltip.wait = None;
+                    tooltip.show(over, tip, anchor, cx);
+                }
+                Next::Wait(delay) => tooltip.wait_for((over, tip, anchor), delay, cx),
             }
-            tooltip.wait_for((over, tip, anchor), cx);
         })
         .ok();
 }
@@ -442,8 +443,11 @@ pub fn moved(cx: &mut App) {
     }
     tooltip
         .update(cx, |tooltip, _, cx| {
-            if let Some((_, waiting)) = tooltip.wait.take() {
-                tooltip.wait_for(waiting, cx);
+            let now = cx.background_executor().now();
+            if let Some(delay) = tooltip.intent.restart(now)
+                && let Some((_, waiting)) = tooltip.wait.take()
+            {
+                tooltip.wait_for(waiting, delay, cx);
             }
         })
         .ok();
@@ -459,15 +463,21 @@ pub fn dismiss(cx: &mut App) {
 }
 
 impl Tooltip {
-    /// Shows `waiting` after DELAY, on a new timer that drops any before it.
-    fn wait_for(&mut self, waiting: Waiting, cx: &mut Context<Self>) {
+    /// Shows `waiting` after `delay`, on a new timer that drops any before it.
+    fn wait_for(&mut self, waiting: Waiting, delay: Duration, cx: &mut Context<Self>) {
         let (over, tip, anchor) = waiting.clone();
         let timer = cx.spawn(async move |tooltip, cx| {
-            cx.background_executor().timer(DELAY).await;
+            cx.background_executor().timer(delay).await;
             tooltip
                 .update(cx, |tooltip, cx| {
                     tooltip.wait = None;
-                    tooltip.show(over, tip, anchor, cx)
+                    let now = cx.background_executor().now();
+                    if tooltip.intent.due(now) {
+                        tooltip.show(over, tip, anchor, cx)
+                    } else if let Some(left) = tooltip.intent.early(now) {
+                        // A timer that woke early waits out the rest.
+                        tooltip.wait_for((over, tip, anchor), left, cx)
+                    }
                 })
                 .ok();
         });
@@ -493,8 +503,8 @@ impl Tooltip {
     /// The window fades out with what it drew, so this draws nothing new.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         self.wait = None;
+        self.intent.close(cx.background_executor().now());
         if self.shown.take().is_some() {
-            self.went = Some(cx.background_executor().now());
             self.host.hide();
             // check.sh reads this line.
             log!("browser: tooltip hidden");
@@ -592,7 +602,7 @@ impl Render for Tooltip {
         root.child(
             shape(div().relative().w(px(layout.width)).h(px(HEIGHT)))
                 .shadow(Level::Popover.shadow())
-                .bg(rgb(OVERLAY_DARK))
+                .bg(Float::Tooltip.fill(Tone::Dark))
                 .child(text)
                 .children(chips)
                 .child(rim),

@@ -380,7 +380,8 @@ mod tests {
     }
 
     /// While the command bar is open over the empty card, the card draws nothing, as its one offer
-    /// is the bar; Esc brings it back, fading in as when the card first showed (#669).
+    /// is the bar; Esc brings it back, fading in as when the card first showed (#669). The bar is
+    /// the sidebar's: ⌘T and ⌘L give the card's field the keyboard instead (#4140).
     #[gpui::test]
     fn the_empty_card_draws_nothing_under_the_bar(cx: &mut TestAppContext) {
         use crate::shell::{Command, empty::FADE};
@@ -396,7 +397,7 @@ mod tests {
         };
         assert!(shown(cx) > 0.99, "the empty card didn't show");
         for opens in [Command::NewTab, Command::EditUrl] {
-            shell.update(cx, |shell, cx| shell.run(opens, "ui", cx));
+            shell.update(cx, |shell, cx| shell.run(opens, "sidebar", cx));
             assert_eq!(
                 shown(cx),
                 0.,

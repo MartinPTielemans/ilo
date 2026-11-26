@@ -1,4 +1,4 @@
-//! The tasks Archived Tabs lists among the tabs: by when they left the foot, back with a click,
+//! The tasks Archived Tabs lists among the tabs: by when they ended, back with a click,
 //! out with Delete from Archive or Clear Archive, alone under the Filter's Tasks, found by search,
 //! and never in a private window.
 
@@ -12,7 +12,7 @@ use super::{
     ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
     HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP,
 };
-use crate::agents::task::{ArchivedTask, Card, Dot};
+use crate::agents::task::{ArchivedTask, Card, Dot, Word};
 use crate::shell::recorder::Recorder;
 use crate::shell::{Folders, Section, Shell};
 
@@ -26,14 +26,15 @@ fn tab(id: u64, archived: f64, little: bool) -> Archived {
     }
 }
 
-fn task(n: u64, left: f64) -> ArchivedTask {
+fn task(n: u64, ended: f64) -> ArchivedTask {
     ArchivedTask {
         agent: format!("task-{n}").into(),
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: Dot::Done,
-        about: "Claude · Done 13:31 · 1 page".into(),
-        left,
+        about: "Claude · Done".into(),
+        ended,
+        pages: "1 page".into(),
     }
 }
 
@@ -47,13 +48,18 @@ fn card() -> Card {
         replies: true,
         title: "Lisbon museum hours".into(),
         status: "Most open at 10".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Done,
-        answers: Vec::new(),
+        word: Word::for_dot(Dot::Done),
+        pages: Vec::new(),
+        tier: Default::default(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 
@@ -151,8 +157,8 @@ fn search(shell: &Entity<Shell>, text: &str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// A task the user dismissed lists among the archived tabs, by when it left the foot, under the
-/// same headings, and the Filter button comes with it.
+/// A task the user dismissed lists among the archived tabs, by when it ended, under the same
+/// headings, and the Filter button comes with it.
 #[gpui::test]
 fn a_dismissed_task_lists_among_the_tabs(cx: &mut TestAppContext) {
     let (shell, _, cx) = archive(cx);

@@ -868,3 +868,54 @@ fn no_card_asks_in_an_agents_space_or_a_private_window(cx: &mut TestAppContext) 
     assert!(asked_on_show(&shell, cx, &host, 20).is_empty());
     assert_eq!(host.card.borrow().clone().unwrap().card.recent, None);
 }
+
+/// No card rests while a row's menu is up, the pointer on that row or another, and once the menu
+/// closes with the pointer still on the row, its card rests again with no move, to show after its
+/// wait (#4108; a menu opened by a real click in the overlays run).
+#[gpui::test]
+fn a_rows_card_rests_again_once_its_menu_closes_under_the_pointer(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let frame = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&3]);
+    cx.simulate_mouse_move(frame.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    let rests = |host: &Recorder| {
+        (host.take().into_iter())
+            .filter(|call| call.starts_with("card rest"))
+            .count()
+    };
+    assert_eq!(rests(&host), 1, "the pointer on the row rests for its card");
+    shell.update(cx, |shell, cx| shell.tab_menu(3, frame.center(), cx));
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.hover_card(Row::Tab(3), true, cx));
+    assert_eq!(rests(&host), 0, "a card rested under the row's open menu");
+    cx.update(|_, cx| host.dismiss(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        rests(&host),
+        1,
+        "the row's card didn't rest again as its menu closed"
+    );
+}
+
+/// A pick in a row's menu under the pointer rests no card for it: Archive Tab's row is going, and a
+/// renamed row holds its field; the next move does, as for any row.
+#[gpui::test]
+fn a_pick_in_a_rows_menu_rests_no_card_for_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let frame = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&3]);
+    cx.simulate_mouse_move(frame.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    for pick in ["Archive Tab", "Rename…"] {
+        host.take();
+        shell.update(cx, |shell, cx| shell.tab_menu(3, frame.center(), cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| host.choose(pick, cx));
+        cx.run_until_parked();
+        let asked = host.take();
+        assert!(
+            !asked.iter().any(|call| call.starts_with("card rest")),
+            "{pick} rested a card for its row: {asked:?}"
+        );
+        shell.update(cx, |shell, cx| shell.renaming = None);
+    }
+}

@@ -74,8 +74,8 @@ struct Shown {
 }
 
 thread_local! {
-    static OVERLAYS: RefCell<[Option<Overlay>; 7]> =
-        const { RefCell::new([None, None, None, None, None, None, None]) };
+    static OVERLAYS: RefCell<[Option<Overlay>; 6]> =
+        const { RefCell::new([None, None, None, None, None, None]) };
     /// The app's overlays that have each browser window's keyboard, by their views.
     static LENT: RefCell<Vec<(bc::bc_id, usize)>> = const { RefCell::new(Vec::new()) };
     /// Reduce Motion, under which they grow and shrink no more, and only fade.
@@ -128,14 +128,13 @@ pub(crate) fn keyboard_lent_to_another(window: bc::bc_id, view: *mut c_void) -> 
 /// and HOST_BOOST_EDITOR.
 const PICKERS: [c_int; 3] = [1, 2, 4];
 
-const NAMES: [&str; 7] = [
+const NAMES: [&str; 6] = [
     "command bar",
     "icon picker",
     "theme picker",
     "folder preview",
     "boost editor",
     "tab switcher",
-    "agent request",
 ];
 
 fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<R> {

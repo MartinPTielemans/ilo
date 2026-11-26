@@ -18,11 +18,16 @@ use gpui::{
     WindowKind, WindowOptions, actions, div, img, point, prelude::*, px, size, svg, uniform_list,
 };
 
+use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::hover_card::{Anchor, Icon};
+use crate::hover_intent::{Intent, Next};
+use crate::motion::ms;
+// Its times, as tokens (#4108).
 use crate::palette::{Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
+use crate::tokens::folder_preview::motion;
 use crate::tokens::folder_preview::{
     AGE_LINE, AGE_SIZE, DIVIDER, DIVIDER_ALPHA, HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_FILL,
     ROW_RADIUS, SEARCH, SEARCH_GLYPH, TALLEST, TITLE, TITLE_LINE, TITLE_SIZE, TITLE_X,
@@ -36,11 +41,11 @@ actions!(folder_preview, [Dismiss, Choose, Up, Down]);
 /// comes onto the folder's row, and goes within 40 ms of it leaving both, fading out over 80 ms.
 /// It comes in over 90 ms, fading in as it grows from 0.85 of its size about the middle of its left
 /// edge. The host grows and fades its window, as the host draws its blur and shadow.
-pub const DWELL: Duration = Duration::from_millis(450);
-pub const LEAVE: Duration = Duration::from_millis(40);
+pub const DWELL: Duration = ms(motion::DWELL);
+pub const LEAVE: Duration = ms(motion::LEAVE);
 pub const FROM: f32 = 0.85;
-pub const IN: Duration = Duration::from_millis(90);
-pub const OUT: Duration = Duration::from_millis(80);
+pub const IN: Duration = ms(motion::IN);
+pub const OUT: Duration = ms(motion::OUT);
 /// It's 4 right of the sidebar, and kept 18 inside the window (Arc 1.171).
 const BESIDE: f32 = 4.;
 const INSIDE: f32 = 18.;
@@ -168,6 +173,8 @@ pub struct FolderPreview {
     /// The dwell's timer, or the leave's once the pointer has left the shown preview's row.
     /// Dropping it cancels it.
     wait: Option<Task<()>>,
+    /// When the preview shows: after DWELL, or at once while another shows.
+    intent: Intent,
     /// The pointer is on the preview, which keeps it.
     on_card: bool,
     /// The pointer is on the shown preview's row, which keeps it too.
@@ -226,6 +233,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
             shown: None,
             resting: None,
             wait: None,
+            intent: Intent::new(DWELL),
             on_card: false,
             on_row: false,
         })
@@ -263,22 +271,15 @@ pub fn ask(ask: Ask, cx: &mut App) {
     update(cx, |preview, window, cx| match ask {
         Ask::Rest(rest) => preview.rest(rest, window, cx),
         Ask::Left(folder) => preview.left(folder, cx),
-        Ask::Close => preview.close(cx),
+        Ask::Close => preview.close(Close::new(Why::FocusLeft, By::Code), cx),
     });
 }
 
 /// The user left the preview without choosing a tab, such as with a click outside it, and the
 /// host has hidden it.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |preview, _, cx| {
-        preview.wait = None;
-        preview.on_card = false;
-        preview.on_row = false;
-        if preview.shown.take().is_some() {
-            log!("browser: folder preview dismissed");
-            cx.notify();
-        }
-    });
+    let close = Close::left(cx.active_window().is_none());
+    update(cx, |preview, _, cx| preview.close(close, cx));
 }
 
 impl FolderPreview {
@@ -295,31 +296,44 @@ impl FolderPreview {
         if rest.items.is_empty() {
             return;
         }
-        if let Some(shown) = &self.shown {
-            if shown.rest.folder == rest.folder {
-                self.wait = None;
-                self.on_row = true;
-                return;
-            }
-            self.resting = None;
+        if (self.shown.as_ref()).is_some_and(|shown| shown.rest.folder == rest.folder) {
             self.wait = None;
-            return self.show(rest, window, cx);
-        }
-        let waiting = self
-            .resting
-            .as_ref()
-            .is_some_and(|resting| resting.folder == rest.folder);
-        self.resting = Some(rest);
-        if waiting {
+            self.on_row = true;
             return;
         }
+        // The folder it already waits on keeps its wait, and shows as it is now.
+        if (self.resting.as_ref()).is_some_and(|resting| resting.folder == rest.folder) {
+            self.resting = Some(rest);
+            return;
+        }
+        match self.intent.enter(cx.background_executor().now()) {
+            Next::Open => {
+                self.resting = None;
+                self.wait = None;
+                self.show(rest, window, cx)
+            }
+            Next::Wait(delay) => {
+                self.resting = Some(rest);
+                self.wake_after(delay, window, cx);
+            }
+        }
+    }
+
+    /// Wakes after `delay` for the row it waits on, and shows its preview once the pointer has
+    /// rested its whole delay; a wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, window: &mut Window, cx: &mut Context<Self>) {
         self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
-            cx.background_executor().timer(DWELL).await;
+            cx.background_executor().timer(delay).await;
             preview
                 .update_in(cx, |preview, window, cx| {
                     preview.wait = None;
-                    if let Some(rest) = preview.resting.take() {
-                        preview.show(rest, window, cx)
+                    let now = cx.background_executor().now();
+                    if preview.intent.due(now) {
+                        if let Some(rest) = preview.resting.take() {
+                            preview.show(rest, window, cx)
+                        }
+                    } else if let Some(left) = preview.intent.early(now) {
+                        preview.wake_after(left, window, cx)
                     }
                 })
                 .ok();
@@ -334,6 +348,7 @@ impl FolderPreview {
         {
             self.resting = None;
             self.wait = None;
+            self.intent.leave();
         }
         let leaves = self
             .shown
@@ -358,7 +373,7 @@ impl FolderPreview {
             preview
                 .update(cx, |preview, cx| {
                     preview.wait = None;
-                    preview.close(cx)
+                    preview.close(Close::new(Why::PointerLeft, By::Pointer), cx)
                 })
                 .ok();
         }));
@@ -409,7 +424,7 @@ impl FolderPreview {
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
         // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
-        let from = if cx.reduce_motion() { 1. } else { FROM };
+        let from = if crate::motion::still(cx) { 1. } else { FROM };
         self.host.show(over, left, top, height, from);
         cx.notify();
     }
@@ -463,10 +478,10 @@ impl FolderPreview {
         self.go(1, cx);
     }
 
-    /// ↩ shows the tab selected. While an input method composes, it's the method's.
+    /// ↩ shows the tab selected, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
     fn choose_selected(&mut self, _: &Choose, _: &mut Window, cx: &mut Context<Self>) {
-        if self.search.read(cx).composing() {
-            cx.propagate();
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
             return;
         }
         let Some(shown) = &self.shown else {
@@ -474,35 +489,45 @@ impl FolderPreview {
         };
         if let Some(at) = shown.selected {
             let tab = shown.rest.items[shown.found[at]].tab;
-            self.choose(tab, cx);
+            self.choose(tab, By::Keyboard, cx);
         }
     }
 
-    fn choose(&mut self, tab: u64, cx: &mut Context<Self>) {
+    fn choose(&mut self, tab: u64, by: By, cx: &mut Context<Self>) {
         let Some(shown) = &self.shown else {
             return;
         };
         let chosen = shown.rest.chosen.clone();
         // check.sh reads this line.
         log!("browser: folder preview chose {tab}");
-        self.close(cx);
+        self.close(Close::new(Why::Chosen, by), cx);
         chosen(tab, cx);
     }
 
+    /// Esc closes the preview, unless it was an input method's, composing in the search.
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        self.close(cx);
+        if let Some(close) = Close::escape_from([&self.search.clone()], cx) {
+            self.close(close, cx);
+        }
     }
 
-    /// The preview goes, and the browser window gets the keyboard back.
-    fn close(&mut self, cx: &mut Context<Self>) {
+    /// The preview goes for `close`, and the browser window gets the keyboard back. The host has
+    /// hidden it already when the user left it for outside it, and the folder it waited on to show
+    /// waits no more either way, so a rest on it begins again.
+    fn close(&mut self, close: Close, cx: &mut Context<Self>) {
         self.wait = None;
         self.resting = None;
+        self.intent.close(cx.background_executor().now());
         self.on_card = false;
         self.on_row = false;
         if self.shown.take().is_some() {
-            self.host.hide();
-            // check.sh reads this line.
-            log!("browser: folder preview hidden");
+            if matches!(close.why, Why::PressOutside | Why::WindowLeft) {
+                log!("browser: folder preview dismissed");
+            } else {
+                self.host.hide();
+                // check.sh reads this line.
+                log!("browser: folder preview hidden");
+            }
             cx.notify();
         }
     }
@@ -564,7 +589,9 @@ impl FolderPreview {
                             }),
                     )
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |preview, _, _, cx| preview.choose(tab, cx)));
+                    .on_click(
+                        cx.listener(move |preview, _, _, cx| preview.choose(tab, By::Pointer, cx)),
+                    );
                 div().h(px(ROW)).w_full().child(plate).into_any_element()
             })
             .collect()

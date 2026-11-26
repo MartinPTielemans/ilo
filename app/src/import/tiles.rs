@@ -1,27 +1,24 @@
 //! The favorites an import offers, as tiles (#1673), one part for the first launch's Favorites
 //! step and Settings' end of an import: the site's letter on a plate over its name, ticked in the
-//! accent at the cards' badge place, which a click unticks. They're four to a row across the view,
-//! and land as the cards do, in order of most visits.
+//! look's on colour at the cards' badge place, which a click unticks. They're four to a row across
+//! the view, and land as the cards do, in order of most visits.
 
 use std::time::Instant;
 
-use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, relative, rgb, svg};
+use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, relative, svg};
 
 use super::arrival::pose;
 use crate::settings_rows::Look;
+use crate::shell::swap::{arriving, going};
 use crate::tokens::radius;
-use crate::tokens::settings::{CHECK_TICK, ROW_X};
+use crate::tokens::settings::ROW_X;
 use crate::tokens::shell::import::{
     BADGE, BADGE_INSET, CARD_GAP, TILE_HEIGHT, TILE_LETTER, TILE_NAME, TILE_NAME_GAP,
     TILE_NAME_LINE, TILE_PLATE, TILE_UNTICKED, TILES_PER_ROW,
 };
+// A badge changes as a glyph does, ux-spec's Glyph change, in `SWAP` all told.
+use crate::tokens::shell::swap::motion::SWAP;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_STAGGER};
-
-/// A badge's change, as ux-spec's Glyph change: the old one fades out and shrinks to 0.6 over
-/// `LEAVE`, the new fades in over `COME` and grows from 0.8 over `SWAP`, all from one moment.
-const SWAP: f32 = 0.08;
-const LEAVE: f32 = 0.07;
-const COME: f32 = 0.04;
 
 /// A favorite offered, as its tile shows it.
 pub struct Tile {
@@ -114,7 +111,7 @@ pub fn tile(tile: &Tile, look: &Look, settings: bool, still: bool, now: Instant)
         )
 }
 
-/// The badge: the accent with a tick, or an empty ring; for a moment after a click, the one
+/// The badge: the look's on colour with a tick, or an empty ring; for a moment after a click, the one
 /// before leaving as the new comes, each about the badge's middle.
 fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
     let elapsed = tile
@@ -125,7 +122,7 @@ fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
         let mark = div().size(px(size)).rounded_full().opacity(opacity);
         let mark = match on {
             true => mark
-                .bg(look.accent)
+                .bg(look.on)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -133,7 +130,7 @@ fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
                     svg()
                         .path("icons/check.svg")
                         .size(px(size * 0.625))
-                        .text_color(rgb(CHECK_TICK)),
+                        .text_color(look.knob_on),
                 ),
             false => mark.border_1().border_color(look.detail),
         };
@@ -145,16 +142,15 @@ fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
             .justify_center()
             .child(mark)
     };
-    let left = (elapsed / LEAVE).clamp(0., 1.);
-    let come = (elapsed / COME).clamp(0., 1.);
-    let grown = (elapsed / SWAP).clamp(0., 1.);
+    let (old, old_scale) = going(elapsed);
+    let (new, new_scale) = arriving(elapsed);
     div()
         .relative()
         .size_full()
-        .when(left < 1., |badge| {
-            badge.child(mark(!tile.on, 1. - 0.4 * left, 1. - left))
+        .when(old > 0., |badge| {
+            badge.child(mark(!tile.on, old_scale, old))
         })
-        .child(mark(tile.on, 0.8 + 0.2 * grown, come))
+        .child(mark(tile.on, new_scale, new))
 }
 
 /// The tiles in rows of `tiles-per-row`, each a row's share wide less the gap. A single row is
