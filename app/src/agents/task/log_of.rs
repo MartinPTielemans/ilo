@@ -18,7 +18,7 @@ use crate::shell::conversation::words;
 impl Agents {
     /// `task`'s conversation as its kept log's records.
     pub(super) fn log_of(&self, task: &Task, cx: &App) -> Vec<Record> {
-        let Some(talk) = self.conversation(&task.agent, cx) else {
+        let Some(talk) = self.conversation_with(&task.agent, false, cx) else {
             return Vec::new();
         };
         // The page the user asked on, as the chip over what they asked; one the agent was kept from,

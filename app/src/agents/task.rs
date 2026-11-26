@@ -986,9 +986,9 @@ pub struct Tasks {
     /// What each kept task a run before left read back of its card, until a reply takes it up or
     /// it goes (pick_up.rs).
     came_back: HashMap<String, super::kept::cards::Back>,
-    /// The kept log of each task a run before left that was shown, asked once (None until it's
-    /// read, and for one with none), until a reply takes the task up or it goes.
-    came_logs: HashMap<String, Option<Vec<super::kept::log::Record>>>,
+    /// The kept log of each task a run before left that was shown or replied to, asked once,
+    /// which stays through its replies until the task goes (pick_up.rs).
+    came_logs: HashMap<String, pick_up::CameLog>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1248,6 +1248,18 @@ impl Agents {
     /// as it worked folded into its steps, so only the user's messages, the agent's questions and
     /// each turn's last message show.
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
+        self.conversation_with(agent, true, cx)
+    }
+
+    /// `agent`'s conversation, with its kept log drawn first where it has one and `kept` says,
+    /// or without it, as its next log is made: the earlier records go into that log as they were
+    /// read, never through what they draw (log_of.rs).
+    pub(super) fn conversation_with(
+        &self,
+        agent: &str,
+        kept: bool,
+        cx: &App,
+    ) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -1324,7 +1336,8 @@ impl Agents {
         // A task a run before left draws its kept log first, settled, under what was asked,
         // which heads it already (kept/log.rs).
         let mut kept_finished = Vec::new();
-        if let Some(log) = self.kept_log(task) {
+        let mut kept_lines = 0;
+        if let Some(log) = self.kept_log(task).filter(|_| kept) {
             let mut drawn = log_of::drawn(log);
             let asked = matches!(drawn.lines.first(), Some(Line::You(text)) if *text == task.asked);
             if asked {
@@ -1334,10 +1347,11 @@ impl Agents {
             kept_finished = (drawn.finished.into_iter())
                 .filter_map(|(at, when)| Some((at.checked_sub(past)?, when)))
                 .collect();
+            kept_lines = drawn.lines.len();
             lines.splice(0..0, drawn.lines);
         }
         // ilo's own lines of a task that can be replied to after it ended (#4105).
-        self.kept_lines(task, &mut lines);
+        self.kept_lines(task, &mut lines, kept_lines);
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.

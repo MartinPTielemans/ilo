@@ -190,7 +190,7 @@ fn the_queue_runs_its_jobs_in_the_order_asked(cx: &mut gpui::TestAppContext) {
         id: id.clone(),
         line: Some(line.to_string()),
         picture,
-        log: None,
+        log: Log::Remove,
     };
     let (first, second, third) = (CardId::new(), CardId::new(), CardId::new());
     queue.ask(
