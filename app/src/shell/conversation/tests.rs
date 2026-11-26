@@ -5431,3 +5431,137 @@ fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut Te
         "the sign moves in a window not shown"
     );
 }
+
+/// While the thread waits on the user, at the top of the upper right loop a gap opens to its share
+/// of the cord over `open`, holds, closes over `open`, and the knot rests whole for `rest`, over
+/// and over, the gap's middle always at the loop's top.
+#[test]
+fn the_waiting_gap_opens_and_closes_at_the_loops_top_then_rests() {
+    use super::sign::{Sign, gap};
+    use crate::tokens::shell::conversation::sign::{HOLD, OPEN, REST, WAITING_GAP};
+    let crown = crate::product::crown();
+    let cycle = OPEN + HOLD + OPEN + REST;
+    let length = |gone: f32| {
+        let (at, length) = gap(Sign::Waiting, gone);
+        assert!(
+            (at + length / 2. - crown).abs() < 1e-4,
+            "{gone} s in the gap's middle is at {}, not the loop's top {crown}",
+            at + length / 2.
+        );
+        length
+    };
+    assert!(
+        length(0.) < 1e-4,
+        "the wait doesn't start with the knot whole"
+    );
+    let opening: Vec<f32> = (0..=4).map(|n| length(OPEN * n as f32 / 4.)).collect();
+    assert!(
+        opening.windows(2).all(|pair| pair[0] < pair[1]),
+        "the gap doesn't open steadily: {opening:?}"
+    );
+    for gone in [OPEN, OPEN + HOLD / 2., OPEN + HOLD] {
+        assert!((length(gone) - WAITING_GAP).abs() < 1e-4, "{gone} s in");
+    }
+    let closing: Vec<f32> = (0..=4)
+        .map(|n| length(OPEN + HOLD + OPEN * n as f32 / 4.))
+        .collect();
+    assert!(
+        closing.windows(2).all(|pair| pair[0] > pair[1]),
+        "the gap doesn't close steadily: {closing:?}"
+    );
+    for gone in [
+        OPEN + HOLD + OPEN + 0.01,
+        OPEN + HOLD + OPEN + REST / 2.,
+        cycle - 0.01,
+    ] {
+        assert!(length(gone) < 1e-3, "the knot isn't whole {gone} s in");
+    }
+    assert_eq!(length(cycle + OPEN), length(OPEN), "it doesn't go again");
+}
+
+/// At a wait with nothing else under way no line of the log moves and the sign is in its waiting
+/// motion, on the shimmer's clock; with a second tab's step under way, that step moves too; after
+/// the hand back the next step moves again and the sign works; with the window not shown nothing
+/// is scheduled.
+#[gpui::test]
+fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
+    use super::Sign;
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let pending =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.breath.pending());
+    let show = |talk: &Conversation, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        // Its trace opens as it first draws, and shimmers from the next frame.
+        redraw(&shell, &view, cx);
+        redraw(&shell, &view, cx);
+    };
+    // Its step handed to the user: nothing under way.
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        trace.items = vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))];
+    }
+    talk.lines.push(handed(1));
+    talk.live = Live::Handed;
+    show(&talk, cx);
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "a line moves at the wait"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Sign::Waiting)
+    );
+    assert!(
+        sign_gap(&view, cx).is_some(),
+        "the waiting sign doesn't move"
+    );
+    assert!(pending(cx), "the waiting sign isn't on the shimmer's clock");
+
+    // A step under way on a second tab moves too, while the thread still waits.
+    let mut second = talk.clone();
+    if let Line::Trace(trace) = &mut second.lines[0] {
+        trace
+            .items
+            .push(TraceItem::Step(step(1, "Opened tap.pt", true)));
+    }
+    show(&second, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the second tab's step holds still"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Sign::Waiting)
+    );
+
+    // Handed back, the next step moves and the sign works.
+    let mut back = conversation(2);
+    back.lines.insert(1, handed(1));
+    show(&back, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the next step holds still"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Sign::Working)
+    );
+
+    // Waiting again, in a window not shown: nothing is scheduled.
+    show(&talk, cx);
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        redraw(&shell, &view, cx);
+    }
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "the waiting sign moves in a window not shown"
+    );
+}

@@ -436,6 +436,27 @@ mod tests {
         assert_eq!(gapped(0.4, 0.), small.to_vec(), "no gap isn't the mark");
     }
 
+    /// The waiting sign's gap opens at the top of the small mark's upper right loop: all the ink
+    /// it leaves out is in the drawing's upper right quarter.
+    #[test]
+    fn the_waiting_gap_is_at_the_top_of_the_upper_right_loop() {
+        let (_, small) = MARKS.iter().find(|(each, _)| *each == SMALL).unwrap();
+        let whole = alphas(small);
+        let crown = super::crown();
+        let cut = alphas(&gapped(crown - 0.07, 0.14));
+        let side = (whole.len() as f32).sqrt() as usize;
+        let out: Vec<(usize, usize)> = (whole.iter().zip(&cut).enumerate())
+            .filter(|(_, (whole, cut))| *whole > *cut)
+            .map(|(at, _)| (at % side, at / side))
+            .collect();
+        assert!(!out.is_empty(), "the gap left nothing out");
+        assert!(
+            out.iter().all(|(x, y)| *x >= side / 2 && *y < side / 2),
+            "the gap at {crown} left out ink outside the upper right quarter: {:?}",
+            out.iter().find(|(x, y)| *x < side / 2 || *y >= side / 2)
+        );
+    }
+
     /// The small drawing has no under-passes to close, so the drawn mark never uses it.
     #[test]
     fn the_drawn_mark_is_never_the_small_drawing() {

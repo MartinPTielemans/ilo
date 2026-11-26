@@ -4707,7 +4707,6 @@ impl Render for TalkView {
         }
         let composed = self.replies || !look.standing;
         let gap = (self.sign_since)
-            .filter(|(sign, _)| *sign == Sign::Working)
             .filter(|_| composed && !still && window.is_visible())
             .map(|(sign, since)| sign::gap(sign, now.duration_since(since).as_secs_f32()));
         if !self.folding.is_empty() || busy {
