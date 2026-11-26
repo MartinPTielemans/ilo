@@ -1,6 +1,8 @@
 #ifndef BROWSER_CORE_AGENT_CLOSE_H_
 #define BROWSER_CORE_AGENT_CLOSE_H_
 
+#include <string>
+
 #include "browser_core/public/browser_core.h"
 
 namespace browser_core {
@@ -12,6 +14,10 @@ namespace browser_core {
 // while it's asked joins that answer. |discard| closes it at once without its handlers, one being
 // asked too.
 int AgentCloseTab(bc_id tab, bool discard);
+
+// Archives |tab|, which bc_agent_archive_tab has checked the user handed |agent|, and returns a
+// BC_AGENT_CLOSE value at once, never PENDING: its page is never asked (AgentArchive).
+int AgentArchiveTab(const std::string& agent, bc_id tab, bool discard);
 
 }  // namespace browser_core
 

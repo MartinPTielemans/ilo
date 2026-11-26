@@ -53,6 +53,36 @@ class AgentCloseAsk {
   bool answered_ = false;
 };
 
+// An agent's archive of a tab the user handed it (bc_agent_archive_tab), from what the core knows
+// at the call. Its page is never asked: one that agreed would be closed by Chromium in the agent's
+// Space, where nothing is archived and the tab never goes back, and one that asked would need its
+// dialog. So nothing shows and nothing moves but the tab, at once (#4278).
+struct AgentArchive {
+  // The tab is in |agent|'s Space, and the user handed it there (handed::Of).
+  bool handed = false;
+  // The user holds it, taken over or at a handoff.
+  bool held = false;
+  // It goes back pinned or onto a favorite's tile, which only the user closes.
+  bool pinned = false;
+  // A frame of its page has a beforeunload handler, so it may hold unsaved changes
+  // (Tab::AsksBeforeLeaving).
+  bool asks = false;
+  // The agent said to lose what it holds (and its user's access allows it).
+  bool discard = false;
+
+  enum class Does {
+    // Not its to archive: it stays as it is.
+    kRefused,
+    // Stays handed: only the user closes a pinned tab or a favorite.
+    kPinned,
+    // Stays handed, its page untouched: it may hold unsaved changes.
+    kAsks,
+    // Goes back to its place and closes there without its handlers, into the archive.
+    kArchives,
+  };
+  Does What() const;
+};
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AGENT_CLOSE_RULE_H_
