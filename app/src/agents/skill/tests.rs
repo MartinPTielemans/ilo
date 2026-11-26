@@ -77,20 +77,20 @@ fn a_click_writes_the_file_into_a_real_skills_folder() {
     let home = Home::new();
     home.dir(".claude/skills");
     let kept = home.click(Client::ClaudeCode, None).unwrap();
-    let file = home.at(".claude/skills/ilo/SKILL.md");
+    let file = home.at(&format!(".claude/skills/{NAME}/SKILL.md"));
     assert_eq!(fs::read_to_string(&file).unwrap(), text(NAME));
     assert!(kept.written.is_some(), "the run knows which file it wrote");
     assert_eq!(kept.sha256, sha256(text(NAME).as_bytes()));
     assert!(!kept.made_skills, "the skills folder was the user's");
     assert_eq!(mode(&file), 0o600);
-    assert_eq!(mode(&home.at(".claude/skills/ilo")), 0o700);
+    assert_eq!(mode(&home.at(&format!(".claude/skills/{NAME}"))), 0o700);
     assert_eq!(
         home.tree(),
         [
-            ".claude",
-            ".claude/skills",
-            ".claude/skills/ilo",
-            ".claude/skills/ilo/SKILL.md"
+            ".claude".to_string(),
+            ".claude/skills".into(),
+            format!(".claude/skills/{NAME}"),
+            format!(".claude/skills/{NAME}/SKILL.md"),
         ],
         "nothing else, no file left beside"
     );
@@ -103,7 +103,10 @@ fn the_skills_folder_is_made_only_where_the_makers_folder_is_real() {
     let kept = home.click(Client::Codex, None).unwrap();
     assert!(kept.made_skills);
     assert_eq!(mode(&home.at(".agents/skills")), 0o700);
-    assert!(home.at(".agents/skills/ilo/SKILL.md").is_file());
+    assert!(
+        home.at(&format!(".agents/skills/{NAME}/SKILL.md"))
+            .is_file()
+    );
 
     // No maker's folder: the product never makes one.
     let home = Home::new();
@@ -138,7 +141,11 @@ fn a_link_anywhere_on_the_way_writes_nothing() {
     // The skill's own folder a link, with no kept entry: not ours.
     let home = Home::new();
     home.dir(".claude/skills").dir("elsewhere");
-    symlink(home.at("elsewhere"), home.at(".claude/skills/ilo")).unwrap();
+    symlink(
+        home.at("elsewhere"),
+        home.at(&format!(".claude/skills/{NAME}")),
+    )
+    .unwrap();
     assert_eq!(home.click(Client::ClaudeCode, None), Err(Refused::NotOurs));
     assert!(fs::read_dir(home.at("elsewhere")).unwrap().next().is_none());
 }
@@ -146,11 +153,11 @@ fn a_link_anywhere_on_the_way_writes_nothing() {
 #[test]
 fn a_users_own_skill_of_that_name_is_never_written_over() {
     let home = Home::new();
-    home.dir(".claude/skills/ilo");
-    home.file(".claude/skills/ilo/SKILL.md", "mine");
+    home.dir(&format!(".claude/skills/{NAME}"));
+    home.file(&format!(".claude/skills/{NAME}/SKILL.md"), "mine");
     assert_eq!(home.click(Client::ClaudeCode, None), Err(Refused::NotOurs));
     assert_eq!(
-        fs::read_to_string(home.at(".claude/skills/ilo/SKILL.md")).unwrap(),
+        fs::read_to_string(home.at(&format!(".claude/skills/{NAME}/SKILL.md"))).unwrap(),
         "mine"
     );
 }
@@ -160,7 +167,7 @@ fn a_file_of_ours_swapped_for_a_link_is_left() {
     let home = Home::new();
     home.dir(".claude/skills");
     let kept = home.click(Client::ClaudeCode, None).unwrap();
-    let file = home.at(".claude/skills/ilo/SKILL.md");
+    let file = home.at(&format!(".claude/skills/{NAME}/SKILL.md"));
     fs::remove_file(&file).unwrap();
     home.file("target", &text(NAME));
     symlink(home.at("target"), &file).unwrap();
@@ -200,10 +207,10 @@ fn off_leaves_a_changed_file_and_a_folder_the_user_put_something_in() {
     let home = Home::new();
     home.dir(".agents");
     let kept = home.click(Client::Codex, None).unwrap();
-    home.file(".agents/skills/ilo/SKILL.md", "changed");
+    home.file(&format!(".agents/skills/{NAME}/SKILL.md"), "changed");
     assert_eq!(remove(&home.0, &kept), Removed::Changed);
     assert_eq!(
-        fs::read_to_string(home.at(".agents/skills/ilo/SKILL.md")).unwrap(),
+        fs::read_to_string(home.at(&format!(".agents/skills/{NAME}/SKILL.md"))).unwrap(),
         "changed"
     );
 
@@ -224,13 +231,13 @@ fn a_second_add_rewrites_only_an_unchanged_file_of_ours() {
     let home = Home::new();
     home.dir(".claude/skills");
     let old = write(&home.0, Client::ClaudeCode, NAME, "old", None).unwrap();
-    let file = home.at(".claude/skills/ilo/SKILL.md");
+    let file = home.at(&format!(".claude/skills/{NAME}/SKILL.md"));
     let new = home.click(Client::ClaudeCode, Some(&old)).unwrap();
     assert_eq!(new.sha256, sha256(text(NAME).as_bytes()));
     assert_eq!(fs::read_to_string(&file).unwrap(), text(NAME));
 
     // Changed by the user: left.
-    home.file(".claude/skills/ilo/SKILL.md", "mine");
+    home.file(&format!(".claude/skills/{NAME}/SKILL.md"), "mine");
     assert_eq!(
         write(&home.0, Client::ClaudeCode, NAME, "newer", Some(&new)),
         Err(Refused::Changed)
@@ -241,8 +248,10 @@ fn a_second_add_rewrites_only_an_unchanged_file_of_ours() {
 #[test]
 fn a_kept_entry_that_isnt_one_of_ours_is_dropped_and_touches_nothing() {
     let home = Home::new();
-    home.dir("profile").dir(".claude/skills/ilo").dir("x");
-    home.file(".claude/skills/ilo/SKILL.md", &text(NAME));
+    home.dir("profile")
+        .dir(&format!(".claude/skills/{NAME}"))
+        .dir("x");
+    home.file(&format!(".claude/skills/{NAME}/SKILL.md"), &text(NAME));
     home.file("x/SKILL.md", &text(NAME));
     let file = home.at("profile/skills.json");
     let hash = sha256(text(NAME).as_bytes());
@@ -283,7 +292,10 @@ fn a_kept_entry_that_isnt_one_of_ours_is_dropped_and_touches_nothing() {
         assert_eq!(remove(&home.0, &kept), Removed::Missing, "{name}");
     }
     assert!(home.at("x/SKILL.md").is_file());
-    assert!(home.at(".claude/skills/ilo/SKILL.md").is_file());
+    assert!(
+        home.at(&format!(".claude/skills/{NAME}/SKILL.md"))
+            .is_file()
+    );
 }
 
 #[test]
@@ -323,9 +335,9 @@ fn a_file_put_in_place_of_the_one_written_is_left() {
     let kept = home.click(Client::ClaudeCode, None).unwrap();
     // The same words in a new file: not the one this run wrote. Made beside it and renamed over
     // it, since a file made after a delete may be given the freed inode's number.
-    let file = home.at(".claude/skills/ilo/SKILL.md");
-    home.file(".claude/skills/ilo/new", &text(NAME));
-    fs::rename(home.at(".claude/skills/ilo/new"), &file).unwrap();
+    let file = home.at(&format!(".claude/skills/{NAME}/SKILL.md"));
+    home.file(&format!(".claude/skills/{NAME}/new"), &text(NAME));
+    fs::rename(home.at(&format!(".claude/skills/{NAME}/new")), &file).unwrap();
     assert_eq!(remove(&home.0, &kept), Removed::Changed);
     assert!(file.is_file());
 }
@@ -347,7 +359,7 @@ fn nothing_is_written_where_others_may_write() {
     let home = Home::new();
     home.dir(".claude/skills");
     let kept = home.click(Client::ClaudeCode, None).unwrap();
-    let folder = home.at(".claude/skills/ilo");
+    let folder = home.at(&format!(".claude/skills/{NAME}"));
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o777)).unwrap();
     assert_eq!(
         home.click(Client::ClaudeCode, Some(&kept)),
@@ -385,13 +397,16 @@ fn a_list_that_cant_be_kept_takes_away_what_was_just_written() {
     let after = add(&home.0, &[Client::ClaudeCode], &[]);
     let kept = kept_or_undone(after, |_| Ok(()), |_| panic!("nothing to undo"));
     assert_eq!(kept.len(), 1);
-    assert!(home.at(".claude/skills/ilo/SKILL.md").is_file());
+    assert!(
+        home.at(&format!(".claude/skills/{NAME}/SKILL.md"))
+            .is_file()
+    );
 }
 
 #[test]
 fn a_kept_entry_under_another_name_isnt_ours_for_this_one() {
     let home = Home::new();
-    home.dir(".claude/skills/ilo");
+    home.dir(&format!(".claude/skills/{NAME}"));
     let other = Kept {
         program: Client::ClaudeCode,
         name: "another".into(),
@@ -434,7 +449,7 @@ fn a_name_that_is_a_path_writes_nothing() {
 fn the_text_names_the_command_and_holds_no_secret_path_or_level() {
     let text = text(NAME);
     assert!(
-        text.starts_with("---\nname: ilo\ndescription: "),
+        text.starts_with(&format!("---\nname: {NAME}\ndescription: ")),
         "frontmatter on line one"
     );
     assert!(!text.contains('{') && !text.contains('}'));
@@ -453,8 +468,14 @@ fn the_text_names_the_command_and_holds_no_secret_path_or_level() {
         .split(|c: char| !c.is_ascii_hexdigit())
         .any(|run| run.len() >= 32);
     assert!(!hex_run, "nothing like a token");
-    for line in ["ilo help", "ilo help <command>", "ilo done", "--as"] {
-        assert!(text.contains(line), "{line}");
+    let lines = [
+        format!("{NAME} help"),
+        format!("{NAME} help <command>"),
+        format!("{NAME} done"),
+        "--as".into(),
+    ];
+    for line in lines {
+        assert!(text.contains(&line), "{line}");
     }
 }
 
@@ -542,7 +563,7 @@ fn the_look_says_where_each_file_is_and_changes_nothing() {
     let kept = home.click(Client::ClaudeCode, None).unwrap();
     let before = home.tree();
     assert_eq!(look(&home.0, &kept), Place::Ours);
-    home.file(".claude/skills/ilo/SKILL.md", "mine");
+    home.file(&format!(".claude/skills/{NAME}/SKILL.md"), "mine");
     assert_eq!(look(&home.0, &kept), Place::Changed);
     assert_eq!(home.tree(), before, "read only");
     assert_eq!(remove(&home.0, &kept), Removed::Changed);
@@ -551,12 +572,12 @@ fn the_look_says_where_each_file_is_and_changes_nothing() {
         Place::Changed,
         "left as the user had it"
     );
-    fs::remove_file(home.at(".claude/skills/ilo/SKILL.md")).unwrap();
+    fs::remove_file(home.at(&format!(".claude/skills/{NAME}/SKILL.md"))).unwrap();
     assert_eq!(look(&home.0, &kept), Place::Missing);
     // Past a link the remover wouldn't follow, the look finds nothing either.
     let home = Home::new();
-    home.dir("elsewhere/skills/ilo").dir(".claude");
-    home.file("elsewhere/skills/ilo/SKILL.md", &text(NAME));
+    home.dir(&format!("elsewhere/skills/{NAME}")).dir(".claude");
+    home.file(&format!("elsewhere/skills/{NAME}/SKILL.md"), &text(NAME));
     symlink(home.at("elsewhere/skills"), home.at(".claude/skills")).unwrap();
     let mut linked = kept.clone();
     linked.written = None;
@@ -568,7 +589,9 @@ fn the_reveal_is_made_from_the_home_program_and_checked_name() {
     let home = Path::new("/made-up");
     assert_eq!(
         at(home, Client::Codex, NAME),
-        Some(PathBuf::from("/made-up/.agents/skills/ilo/SKILL.md"))
+        Some(PathBuf::from(format!(
+            "/made-up/.agents/skills/{NAME}/SKILL.md"
+        )))
     );
     for name in ["", "..", "../x", "a/b"] {
         assert_eq!(at(home, Client::ClaudeCode, name), None, "{name}");
