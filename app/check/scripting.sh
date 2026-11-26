@@ -9,6 +9,9 @@
 # In a check VM with System Integrity Protection off the run lets osascript control the app
 # first, as no one answers macOS's Automation prompt there, so a script is answered or refused by
 # the app, not held at the prompt; scripting-tcc.txt says what TCC held. Never on a Mac with it on.
+# Over ssh, tccd takes the app's responsible process, sshd-keygen-wrapper, as both the client and
+# the object of the script's Apple Events, so that pair is granted too, and the run fails naming
+# the row if TCC doesn't then hold it.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: scripting: AppleScript is the Mac's alone."
@@ -32,7 +35,7 @@ else
   if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ] && csrutil status | grep -q disabled; then
     cat > "$out/scripting-grant.py" << 'EOF'
 import sqlite3, sys
-db, target = sys.argv[1:]
+db, target, responsible = sys.argv[1:]
 # tccd may hold the database, so it waits for its lock (#2966).
 tcc = sqlite3.connect(db, timeout=30)
 names = [column[1] for column in tcc.execute("pragma table_info(access)")]
@@ -44,12 +47,36 @@ for row in rows:
     row["indirect_object_code_identity"] = None
     tcc.execute(f"insert or replace into access ({', '.join(names)})"
                 f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
+if responsible:
+    pair = ("select * from access where service = 'kTCCServiceAppleEvents' and client = ?"
+            " and indirect_object_identifier = ?")
+    base = tcc.execute("select * from access where service = 'kTCCServiceAppleEvents'"
+                       " and client = ? limit 1", [responsible]).fetchone()
+    if base is None:
+        sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect object"
+                 f" {responsible}, auth_value 2, and no row of that client's to make it from")
+    row = dict(zip(names, base))
+    # A path, as client and object, allowed by the user (reason 0), with no code requirement.
+    row.update(indirect_object_identifier=responsible, indirect_object_identifier_type=1,
+               auth_value=2, auth_reason=0, flags=0, csreq=None, indirect_object_code_identity=None)
+    tcc.execute(f"insert or replace into access ({', '.join(names)})"
+                f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
+    tcc.commit()
+    held = tcc.execute(pair + " and auth_value = 2", [responsible, responsible]).fetchone()
+    if held is None:
+        sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect object"
+                 f" {responsible}, auth_value 2")
 tcc.commit()
 print(len(rows))
 EOF
+    # sshd-keygen-wrapper is the process macOS's sshd starts each session's shell under.
+    responsible=
+    [ -z "${SSH_CONNECTION:-}" ] || responsible=/usr/libexec/sshd-keygen-wrapper
     granted=$(python3 -I "$out/scripting-grant.py" \
-      "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$app_id") ||
-      fail "the VM's TCC database couldn't let osascript control the app"
+      "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$app_id" "$responsible" \
+      2> "$out/scripting-grant.err") ||
+      fail "the VM's TCC database couldn't let osascript control the app: $(tail -1 \
+        "$out/scripting-grant.err")"
     echo "granted: $granted clients" >> "$out/scripting-tcc.txt"
     # TCC's daemon reads the database again as it starts, on the next request.
     killall tccd 2> /dev/null || true
