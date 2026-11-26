@@ -996,6 +996,25 @@ fn voiceover_reads_the_panel_and_moves_its_bars(cx: &mut TestAppContext) {
     assert!(intensity.is_disabled(), "Intensity without a colour");
 }
 
+/// The appearance radios and the palette radios are each a group VoiceOver reads by its name,
+/// Appearance and Palettes, never one run of radios with two picked.
+#[gpui::test]
+fn voiceover_reads_the_appearances_and_the_palettes_each_a_named_group(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(layout::palette_theme(1, None), cx);
+    panel.cx.simulate_a11y_activation();
+    panel.cx.run_until_parked();
+    for (group, radios) in [
+        ("Appearance", ["Automatic", "Light", "Dark"].as_slice()),
+        ("Palettes", ["None", "Dusk"].as_slice()),
+    ] {
+        let (_, node) = named(&mut panel, Role::RadioGroup, group);
+        for radio in radios {
+            let (id, _) = named(&mut panel, Role::RadioButton, radio);
+            assert!(node.children().contains(&id), "{radio} isn't in {group}");
+        }
+    }
+}
+
 /// The empty pad tells VoiceOver how to place the first colour, and its press places it, as a
 /// click there does; with a colour, the hint and the press go.
 #[gpui::test]

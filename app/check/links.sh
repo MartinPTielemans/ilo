@@ -422,7 +422,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
   settings_drew Links
   meet="URL contains \"meet.google.com\" → $front"
-  expect "$(rules_drawn "$meet" "Little ilo")" \
+  expect "$(rules_drawn "$meet" "Little Window")" \
     "the Links tab didn't start with the Meet rule, everything else to Little ilo"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-meet.png" || fail "no window to capture"
   send key w cmd
@@ -434,7 +434,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   click_in_sight "link remove 0"
-  expect "$(rules_drawn none "Little ilo")" "the trash didn't take the Meet rule, leaving the empty box"
+  expect "$(rules_drawn none "Little Window")" "the trash didn't take the Meet rule, leaving the empty box"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
   post clickkey $(drawn "link otherwise")
   expect "^browser: menu shown $front, [^,]*, Little Window (checked)\$" \
@@ -530,10 +530,10 @@ if [ "$driven" = 1 ]; then
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front, [^,]*, work (checked), Little ilo\$" \
+  expect "^browser: menu shown $front, [^,]*, work (checked), Little Window\$" \
     "the rule's Space pop-up didn't offer Little ilo"
   send choose "Little Window"
-  expect "$(rules_drawn 'URL contains "work" → Little ilo' work)" "the rule's pop-up didn't pick Little ilo"
+  expect "$(rules_drawn 'URL contains "work" → Little Window' work)" "the rule's pop-up didn't pick Little ilo"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   open_little_link "?work-little" "$second"
