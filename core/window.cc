@@ -397,7 +397,7 @@ bool OffTheRecord(const Tab* tab) {
 void Seen(bc_id tab) {
   if (Tab* seen = Tab::Get(tab)) {
     seen->set_last_seen(base::Time::Now());
-    seen->LeftWindow();
+    seen->LeftSight();
   }
   ScheduleAutoArchive();
 }

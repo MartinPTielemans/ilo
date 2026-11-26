@@ -175,6 +175,16 @@ TEST(TileRule, ATileThatEndsIsOutOfSightUnlessAWindowOrAnotherTileHasItsPage) {
   EXPECT_FALSE(tiles.InSight(1, false));
 }
 
+TEST(TileRule, APageAWindowLetsGoOfIsInSightOnceATileHasIt) {
+  // A page that died in a window's pane and is handed back with no reload stays crashed in the
+  // tile that takes it, and is unloaded if none does.
+  TileRule tiles;
+  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/true));
+  EXPECT_FALSE(tiles.InSight(1, /*window_shows=*/false));
+  EXPECT_EQ(tiles.Show(1, &kView, true, /*window_shows=*/false, true), Shown::kNew);
+  EXPECT_TRUE(tiles.InSight(1, /*window_shows=*/false));
+}
+
 TEST(TileRule, OnlyATilesPageIsParked) {
   TileRule tiles;
   EXPECT_EQ(tiles.End(7), nullptr);

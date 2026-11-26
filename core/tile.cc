@@ -63,6 +63,12 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
     case TileRule::Shown::kFramed:
     case TileRule::Shown::kMoved:
       platform::ShowTile(contents, view, frame, corner_radius);
+      // A tile made for a page that died draws nothing, as one whose page dies in it: one a window
+      // let go of, handed back with no reload. Not for each frame the app moves it by.
+      if (shown != TileRule::Shown::kFramed) {
+        const Tab* shows = Tab::Get(tab);
+        platform::HideTile(contents, shows && shows->crashed());
+      }
       return true;
     default:
       return false;
@@ -88,7 +94,7 @@ void EndTile(bc_id tab) {
     platform::ParkTile(contents);
   }
   if (Tab* left = Tab::Get(tab)) {
-    left->LeftTile();
+    left->LeftSight();
   }
 }
 
@@ -96,7 +102,7 @@ void ShowInCard(bc_id tab) {
   const bool parked = Rule().Parked(tab);
   Out(tab, Rule().ShowInCard(tab), parked, /*leaves_window=*/true);
   if (Tab* left = Tab::Get(tab)) {
-    left->LeftTile();
+    left->LeftSight();
   }
 }
 

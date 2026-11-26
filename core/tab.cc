@@ -2046,27 +2046,12 @@ void Tab::ClearHang() {
   hung_process_ = 0;
 }
 
-void Tab::LeftWindow() {
+void Tab::LeftSight() {
   if (!crashed_) {
     return;
   }
-  // Posted: the window letting go of the tab still lists it, and another may be taking it.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(
-                     [](base::WeakPtr<Tab> tab) {
-                       if (tab && !Window::Showing(tab->id_)) {
-                         tab->UnloadDead();
-                       }
-                     },
-                     weak_factory_.GetWeakPtr()));
-}
-
-void Tab::LeftTile() {
-  if (!crashed_) {
-    return;
-  }
-  // Posted: the app is in the call that ended the tile, and a window or another of its views may
-  // be taking the page.
+  // Posted: the window letting go of the tab still lists it, the app is in the call that ended
+  // its tile, and a window or a tile may be taking the page.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Tab> tab) {
