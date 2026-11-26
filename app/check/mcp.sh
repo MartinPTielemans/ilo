@@ -4414,13 +4414,31 @@ PLATE
   await_more "$thumbnail" "$shrunk" || fail "the reconnected client's handoff's page didn't go back into its picture"
   [ "$(grep "^browser: task $session \(shimmers\|still\)\$" "$log" | tail -1)" != "browser: task $session shimmers" ] ||
     fail "the conversation shimmered while its step waited on the user"
+  # A step that is really under way moves, and the driver reads its commands meanwhile, whatever
+  # the renderer (#1700): the thread carries on in another page while the first waits on the user,
+  # opening one whose picture never comes, so its step is under way for the 15 s the agent waits
+  # out a load (kLoadTimeout in agent_page.cc). That step alone moves (#4320), and the click on
+  # Stop comes while it does.
+  shimmers=$(counted "^browser: task $session shimmers\$")
+  request open_tab "{\"url\":\"localhost:$port/keys-loading.html\"}" >&4
+  # With motion reduced, as on GitHub's Windows runner, the step holds still rather than shimmer.
+  if ! grep -q '^browser: reduce motion on$' "$log"; then
+    await_more "^browser: task $session shimmers\$" "$shimmers" ||
+      fail "the step under way in the thread's other page didn't shimmer while its first waited on the user"
+  fi
   await_log '^browser: task stop at ' "the new card's conversation drew no Stop"
   read -r sx sy sw sh <<STOP
 $(grep '^browser: task stop at ' "$log" | tail -1 | cut -d' ' -f5-)
 STOP
   ../tools/window-screenshot.sh "$pid" "$out/agent-session.png" || fail "no window to capture"
   send click $((sx + sw / 2)) $((sy + sh / 2))
-  expect '^browser: command stop-task via conversation$' "the click on Stop didn't arrive"
+  expect '^browser: command stop-task via conversation$' "the click on Stop while a step was under way didn't arrive"
+  # The click arrived while the step shimmered: the conversation's last word before it is shimmers.
+  if ! grep -q '^browser: reduce motion on$' "$log"; then
+    [ "$(sed -n '/^browser: command stop-task via conversation$/q;p' "$log" |
+      grep "^browser: task $session \(shimmers\|still\)\$" | tail -1)" = "browser: task $session shimmers" ] ||
+      fail "the conversation held still before the click on Stop, with a step under way"
+  fi
   expect '^browser: agent mcp-client stopped by the user$' "Stop didn't stop the client"
   # No task waits once it's stopped, and the count and the urgency go with it.
   # Waits for the last line matching $1 to be $2, for up to 10 s.
@@ -4438,12 +4456,15 @@ STOP
     last_is '^browser: window [0-9]* urgent ' "browser: window $window_urgent urgent off" ||
       fail "the window stayed urgent once no task waited"
   fi
-  stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
-  stopped=$(printf '%s\n' "$stopped" | answered "the hand_off it stopped")
-  case "$stopped" in
-    "error: The user stopped you."*) ;;
-    *) fail "the hand_off stopped answered: $stopped" ;;
-  esac
+  # Both calls under way are answered, the hand_off and the page's opening.
+  for under_way in 1 2; do
+    stopped=$(next_answer) || fail "the browser didn't answer call $under_way of the two it stopped"
+    stopped=$(printf '%s\n' "$stopped" | answered "a call it stopped")
+    case "$stopped" in
+      "error: The user stopped you."*) ;;
+      *) fail "a call stopped answered: $stopped" ;;
+    esac
+  done
   await_log '^browser: agent mcp-client connection [0-9]* closed, as the user stopped it$' \
     "Stop didn't close the client's connection"
   for _ in $(seq 100); do kill -0 "$bridge_pid" 2>/dev/null || break; sleep 0.1; done
