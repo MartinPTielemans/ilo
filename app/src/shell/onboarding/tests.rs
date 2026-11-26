@@ -19,9 +19,8 @@ use crate::agents::sign_in::{Offer, Shown};
 use crate::import::ImportEvent;
 use crate::settings_rows::spoken::{press, stops};
 use crate::shell::{Broom, Folders, Shell, commands::Command, recorder::Recorder};
-use crate::theme::Theme;
-use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::card as t;
+use crate::tokens::theme_panel::PALETTE_NAMES;
 use crate::transparency;
 
 const DAY: f64 = 24. * 3600.;
@@ -440,58 +439,170 @@ fn the_card_has_no_close(cx: &mut TestAppContext) {
 #[gpui::test]
 fn back_goes_to_the_step_before_and_keeps_picks(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
-    let picked = |shell: &Entity<Shell>, cx: &VisualTestContext| card(shell, cx, |o| o.picked);
     started(&shell, cx);
     assert!(placed("back", cx).is_none(), "the first step has no Back");
     on_to(&shell, cx, Step::Space);
     cx.simulate_keystrokes("right right");
-    assert_eq!(picked(&shell, cx), Some(1));
+    type_name("Lisbon", &shell, cx);
+    assert_eq!(space_shown(&shell, cx), (Some(3), "Lisbon".into()));
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Done));
     cx.simulate_keystrokes("secondary-[");
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Space), "⌘[ went back");
-    assert_eq!(picked(&shell, cx), Some(1), "the pick stays");
+    assert_eq!(
+        space_shown(&shell, cx),
+        (Some(3), "Lisbon".into()),
+        "the palette and the name stay"
+    );
     click("back", cx);
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import), "Back went back");
 }
 
-/// The arrows go along the swatches, each showing on the window at once, and ↩ gives the first
-/// Space the one picked, as the theme picker's swatch does.
+/// The palette the Space step's editor shows chosen, and its name's field's text.
+fn space_shown(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<usize>, String) {
+    shell.read_with(cx, |shell, cx| {
+        let editor = (shell.onboarding.as_ref())
+            .and_then(|onboarding| onboarding.space.as_ref())
+            .expect("the Space step's editor");
+        (
+            editor.picker.read(cx).palette_shown(),
+            editor.name.read(cx).text().to_string(),
+        )
+    })
+}
+
+/// Puts `name` in the Space step's name field, as typing over its text does.
+fn type_name(name: &str, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    use gpui::EntityInputHandler as _;
+    let field = shell.read_with(cx, |shell, _| {
+        let editor = (shell.onboarding.as_ref()).and_then(|onboarding| onboarding.space.as_ref());
+        editor.expect("the Space step's editor").name.clone()
+    });
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            let all = field.text().encode_utf16().count();
+            field.replace_text_in_range(Some(0..all), name, window, cx)
+        })
+    });
+    cx.run_until_parked();
+}
+
+/// Your first Space comes with the fifth mock's look on the window, kept by Next, and the field
+/// holding Home; the arrows go along the palettes, each kept as it's picked, as the theme panel
+/// keeps a pick; Next names the Space.
 #[gpui::test]
-fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
+fn the_space_step_is_the_theme_panels_parts_for_the_first_space(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     started(&shell, cx);
     on_to(&shell, cx, Step::Space);
     assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        None,
-        "none is picked for the user"
+        space_shown(&shell, cx),
+        (Some(t::SPACE_START[0] as usize), "Home".into()),
+        "the mock's palette, and Home"
     );
-    cx.simulate_keystrokes("left");
-    assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        Some(SWATCHES.len() - 1),
-        "← starts at the last"
+    assert!(
+        settings_set(host.take()).is_empty(),
+        "shown on the window, kept by nothing yet"
     );
     cx.simulate_keystrokes("right");
-    assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        Some(SWATCHES.len() - 1),
-        "it stops at the end"
-    );
-    cx.simulate_keystrokes("left left");
-    host.take();
-    cx.simulate_keystrokes("enter");
+    assert_eq!(space_shown(&shell, cx).0, Some(2));
     let calls = host.take();
-    let theme = Theme::of_color(SWATCHES[SWATCHES.len() - 3]).to_text();
     assert!(
-        calls.contains(&format!("space theme 1 {theme}")),
-        "{calls:?}"
+        calls.iter().any(|call| call.starts_with("space color 1 ")),
+        "the pick is kept as it's made: {calls:?}"
+    );
+    cx.simulate_keystrokes("left left left");
+    assert_eq!(space_shown(&shell, cx).0, Some(0), "← stops at None");
+    cx.simulate_keystrokes("right");
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    let edits = host.take_edits();
+    assert!(
+        edits.contains(&"rename space 1 Home".to_string()),
+        "{edits:?}"
     );
     assert_eq!(step(&shell, cx), Some(Step::Done));
+}
+
+/// The look the step comes with is kept only by Next: Back leaves the Space as it was.
+#[gpui::test]
+fn back_from_the_space_step_keeps_no_look(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    host.take();
+    click("back", cx);
+    settle(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    assert!(settings_set(host.take()).is_empty());
+}
+
+/// An empty name is Home, and one longer than the field keeps is cut to it.
+#[gpui::test]
+fn the_space_steps_name_is_home_when_empty_and_cut_to_the_fields_most(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    type_name("   ", &shell, cx);
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    assert!(
+        host.take_edits()
+            .contains(&"rename space 1 Home".to_string())
+    );
+    cx.simulate_keystrokes("secondary-[");
+    settle(&shell, cx);
+    let long = "Lisbon trip, the long one";
+    type_name(long, &shell, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    let most: String = long.chars().take(t::SPACE_NAME as usize).collect();
+    assert!(
+        host.take_edits()
+            .contains(&format!("rename space 1 {most}")),
+        "cut to {most:?}"
+    );
+}
+
+/// ↩ that commits an input method's composition (Japanese) in the Space's name is the method's:
+/// it doesn't pass the step, and the name waits for Next.
+#[gpui::test]
+fn return_ending_a_composition_in_the_spaces_name_passes_no_step(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    let field = shell.read_with(cx, |shell, _| {
+        let editor = (shell.onboarding.as_ref()).and_then(|onboarding| onboarding.space.as_ref());
+        editor.expect("the Space step's editor").name.clone()
+    });
+    cx.update(|window, cx| {
+        window.focus(&field.focus_handle(cx), cx);
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "いえ", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Space),
+        "↩ was the composition's"
+    );
+    assert!(
+        !host
+            .take_edits()
+            .iter()
+            .any(|call| call.starts_with("rename space")),
+        "the name waits for Next"
+    );
 }
 
 /// The Welcome: ↩ is Continue, which signs in, and the step waits while it does; signed in, the
@@ -922,11 +1033,16 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
     // The last settle has played the end's fade, and the card has gone.
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), None, "Start Browsing ended the card");
-    assert_eq!(settings_set(host.take()), Vec::<String>::new());
+    // Your first Space has no way past but Next, which keeps the look it shows (v9 §6).
+    let set: Vec<String> = (settings_set(host.take()).into_iter())
+        .filter(|call| !call.starts_with("space color 1 ") && !call.starts_with("space theme 1 "))
+        .collect();
+    assert_eq!(set, Vec::<String>::new());
 }
 
-/// ⌘Q at a step sets nothing turned or picked there: the colour, the tidy bar, Help improve.
-/// They're set only as their step is left.
+/// ⌘Q at a step sets nothing turned there: the tidy bar, Help improve. They're set only as their
+/// step is left. The Space's look is kept as it's picked, as the theme panel keeps it, so a quit
+/// there resumes with it.
 #[gpui::test]
 fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
     for at in [Step::Space, Step::Tidy, Step::Done] {
@@ -942,9 +1058,12 @@ fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
             Step::Tidy => cx.simulate_keystrokes("right"),
             _ => shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx)),
         }
+        let picked = settings_set(host.take());
         shell.update(cx, |shell, cx| shell.run(Command::Quit, "keys", cx));
         cx.run_until_parked();
         assert_eq!(settings_set(host.take()), Vec::<String>::new(), "{at:?}");
+        let kept = picked.iter().any(|call| call.starts_with("space color 1 "));
+        assert_eq!(kept, at == Step::Space, "{at:?}: {picked:?}");
         assert_eq!(
             step(&shell, cx),
             Some(at),
@@ -1048,14 +1167,14 @@ fn each_step_rests_where_the_design_says(cx: &mut TestAppContext) {
     click("just-the-browser", cx);
     settle(&shell, cx);
     on_to(&shell, cx, Step::Space);
-    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Color".into())));
+    assert_eq!(
+        keyed(cx),
+        button("Next"),
+        "the Space's parts are the pointer's and the arrows'"
+    );
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Tidy),
-        "↩ on the colours went on"
-    );
+    assert_eq!(step(&shell, cx), Some(Step::Tidy), "↩ on Next went on");
     assert_eq!(keyed(cx).map(|(role, _)| role), Some(Role::Slider));
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
@@ -1326,12 +1445,17 @@ fn no_line_names_a_pick(cx: &mut TestAppContext) {
         ours.iter().any(|line| *line == "browser: onboarding done"),
         "{ours:?}"
     );
-    let picked = Theme::of_color(SWATCHES[2]).to_text();
     let words = [
         "hours", "days", "Never", "on", "off", "true", "false", "Standard",
     ];
+    assert!(
+        !(lines.iter()).any(|line| line.starts_with("browser: theme picker")),
+        "the Space's editor says nothing of its picks"
+    );
     for line in ours {
-        assert!(!line.contains(picked.as_str()), "{line:?} names {picked:?}");
+        for name in PALETTE_NAMES {
+            assert!(!line.contains(name), "{line:?} names {name:?}");
+        }
         for word in line.split_whitespace() {
             assert!(!words.contains(&word), "{line:?} names {word:?}");
         }
@@ -1508,38 +1632,32 @@ fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
     assert_eq!(step(&shell, cx), Some(Step::Import), "Done goes on");
 }
 
-/// A colour picked shows on the window at once, as the theme picker's does, and only Next keeps
-/// it: Esc and Back set nothing of it.
+/// The look the Space step shows is on the window at once, as the theme panel's is: the mock's
+/// as it comes, and each palette as it's picked.
 #[gpui::test]
-fn a_colour_picked_shows_at_once_and_only_next_keeps_it(cx: &mut TestAppContext) {
-    let (shell, cx, host) = first_window(cx);
+fn the_space_steps_look_shows_on_the_window_at_once(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
     let shown = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| {
             shell.theme_of(1).map(|theme| theme.main_color())
         })
     };
-    for leave in ["escape", "back", "enter"] {
-        started(&shell, cx);
-        on_to(&shell, cx, Step::Space);
-        host.take();
-        cx.simulate_keystrokes("right");
-        assert_eq!(
-            shown(&shell, cx),
-            Some(SWATCHES[0]),
-            "{leave}: shown at once"
-        );
-        assert!(
-            !host.take().iter().any(|call| call.contains("space color")),
-            "{leave}: nothing kept while it shows"
-        );
-        match leave {
-            "back" => click("back", cx),
-            key => cx.simulate_keystrokes(key),
-        }
-        let kept = host.take().iter().any(|call| call.contains("space color"));
-        assert_eq!(kept, leave == "enter", "{leave}");
-        shell.update(cx, |shell, _| shell.onboarding = None);
-    }
+    let main = |index: usize| {
+        crate::theme_picker::palette_theme(index, None).map(|theme| theme.main_color())
+    };
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    assert_eq!(
+        shown(&shell, cx),
+        main(t::SPACE_START[0] as usize),
+        "as it comes"
+    );
+    cx.simulate_keystrokes("right");
+    assert_eq!(
+        shown(&shell, cx),
+        main(t::SPACE_START[0] as usize + 1),
+        "picked"
+    );
 }
 
 /// A screen reader reads each step as a dialog called by its title, its line said after, and each
@@ -1588,34 +1706,27 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     let said = read(cx);
     assert_eq!(dialogs(&said), [Step::Space.message(os).0.to_string()]);
     assert!(button(&said, "Back") && button(&said, "Next"), "{said:?}");
-    assert!(
-        (said.iter()).any(|(role, name, _)| *role == Role::RadioGroup && name == "Color"),
-        "{said:?}"
-    );
-    let colours = |said: &[(Role, String, Option<Toggled>)]| {
-        let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
-        swatches
+    let palettes = |said: &[(Role, String, Option<Toggled>)]| {
+        (said.iter())
+            .filter(|(role, name, _)| {
+                *role == Role::RadioButton && PALETTE_NAMES.contains(&name.as_str())
+            })
             .map(|(_, name, on)| (name.clone(), *on))
             .collect::<Vec<_>>()
     };
-    let unpicked = colours(&said);
-    assert_eq!(unpicked.len(), SWATCHES.len(), "a radio button a colour");
-    assert!(
-        unpicked.iter().all(|(_, on)| *on == Some(Toggled::False)),
-        "none picked yet"
-    );
+    let shown = palettes(&said);
+    assert_eq!(shown.len(), PALETTE_NAMES.len(), "a radio button a palette");
+    let chosen = |shown: &[(String, Option<Toggled>)]| {
+        (shown.iter())
+            .filter(|(_, on)| *on == Some(Toggled::True))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>()
+    };
+    let first = PALETTE_NAMES[t::SPACE_START[0] as usize].to_string();
+    assert_eq!(chosen(&shown), [first], "the mock's palette");
     cx.simulate_keystrokes("right");
-    let picked = colours(&read(cx));
-    assert_eq!(
-        picked[0],
-        (unpicked[0].0.clone(), Some(Toggled::True)),
-        "→ picks the first"
-    );
-    assert!(
-        picked[1..]
-            .iter()
-            .all(|(_, on)| *on == Some(Toggled::False))
-    );
+    let next = PALETTE_NAMES[t::SPACE_START[0] as usize + 1].to_string();
+    assert_eq!(chosen(&palettes(&read(cx))), [next], "→ picks the next");
 
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
@@ -1659,21 +1770,10 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     on_to(&shell, cx, Step::Space);
     assert_eq!(
         keyed(cx),
-        Some((Role::RadioGroup, "Color".into())),
-        "the colours have the keyboard as the step comes"
-    );
-    cx.simulate_keystrokes("right");
-    let first = swatch_name(SWATCHES[0]).to_string();
-    assert_eq!(
-        keyed(cx),
-        Some((Role::RadioButton, first)),
-        "→ picks the first, which it reads"
+        Some((Role::Button, "Next".into())),
+        "the step rests on Next, the arrows going along the palettes"
     );
     // The foot, in its reading order: Back, then the step's button.
-    cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
-    cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Next".into())));
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     host.take();
@@ -1684,7 +1784,7 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         "↩ on Back went back, once"
     );
     let kept = (host.take().iter()).any(|call| call.starts_with("space"));
-    assert!(!kept, "as Back, keeping nothing of the colour");
+    assert!(!kept, "as Back, keeping nothing of the look shown");
 
     // The last step's stops: its row's button, its switch, its main button and Back.
     on_to(&shell, cx, Step::Done);

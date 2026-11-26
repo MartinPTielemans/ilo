@@ -16,11 +16,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
-    KeystrokeEvent, MouseButton, Pixels, Rgba, SharedString, Subscription, Window,
-    accesskit::{Role, Toggled},
-    canvas, div,
-    prelude::*,
-    px, rgb,
+    KeystrokeEvent, MouseButton, Pixels, Rgba, SharedString, Subscription, Window, accesskit::Role,
+    canvas, div, prelude::*, px, rgb,
 };
 
 use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
@@ -29,16 +26,14 @@ use crate::default_browser::{self, Os};
 use crate::import::{ImportEvent, ImportView, Look};
 use crate::product::PRODUCT;
 use crate::settings_rows::{self, group, named_button, stop_switch};
-use crate::theme::Theme;
-use crate::theme_picker::{SWATCHES, swatch_name};
+use crate::tokens::shell::onboarding::SIGNAL;
 use crate::tokens::shell::onboarding::card as t;
-use crate::tokens::shell::onboarding::{SIGNAL, SWATCH, SWATCH_EDGE, SWATCH_PITCH, SWATCH_RING};
-use crate::transparency::{self, Transparency};
 use card::Inks;
 
 mod bring;
 mod card;
 mod resume;
+mod space;
 mod window;
 
 pub use resume::waiting as first_run_waiting;
@@ -236,13 +231,8 @@ pub(super) struct Onboarding {
     /// The steps this run shows, in order: those of STEPS with something to ask.
     steps: Vec<Step>,
     pub(super) step: Step,
-    /// The swatch picked at the Space step, if one is.
-    pub(super) picked: Option<usize>,
-    /// The level the Space step shows, which the app is at, as a pick applies at once.
-    pub(super) level: Transparency,
-    /// Where the transparency picker's pictures were drawn, its own log as it's asked outside
-    /// Settings.
-    level_drawn: settings_rows::Drawn,
+    /// Your first Space's name and look, once its step has come.
+    pub(super) space: Option<space::SpaceEditor>,
     /// The system it runs on.
     os: Os,
     /// The switch last turned, and when, for its knob's slide.
@@ -516,14 +506,11 @@ impl Shell {
         log!("browser: onboarding started");
         log!("browser: onboarding steps {}", numbers.join(" "));
         log!("browser: onboarding step {}", first.number());
-        let level = transparency::level(cx);
         let now = cx.background_executor().now();
         let mut onboarding = Onboarding {
             steps,
             step: first,
-            picked: None,
-            level,
-            level_drawn: Default::default(),
+            space: None,
             os: self.browser.os(),
             switched: None,
             slid: false,
@@ -784,11 +771,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Picks the `index`th swatch at the Space step, as a click does, for the preview's captures.
-    pub fn onboarding_pick_swatch(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.onboarding_pick(index, cx);
-    }
-
     /// Shows the assistants' step with `rows`, each as a press would leave it, for the preview's
     /// captures: the preview has no Agents for them to come from.
     pub fn onboarding_show_assistants(
@@ -839,11 +821,11 @@ impl Shell {
         let Some(onboarding) = self.onboarding.as_ref().filter(|o| o.ending.is_none()) else {
             return;
         };
-        match (onboarding.step, onboarding.picked) {
+        match onboarding.step {
             // The import's button does what its view's state is for; the view says when it has
             // read what it brings, which goes on.
             // Import brings the kinds on; with none on it's dimmed, and ↩ does nothing (v9 §5).
-            (Step::Import, _) => {
+            Step::Import => {
                 log!("browser: onboarding import button via {how}");
                 let ready = (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
                 if ready {
@@ -852,7 +834,7 @@ impl Shell {
                 return cx.notify();
             }
             // Signed in, the view says so and the card goes on (signing); until then it stays.
-            (Step::Account, _) => {
+            Step::Account => {
                 if let Some(view) = self.account_view()
                     && view.read(cx).state().status == Status::SignedOut
                 {
@@ -862,8 +844,8 @@ impl Shell {
                 return;
             }
             // With nobody signed in the step has no main button, so ↩ does nothing there.
-            (Step::Assistant, _) if !signed_in => return,
-            (Step::Favorites, _) => {
+            Step::Assistant if !signed_in => return,
+            Step::Favorites => {
                 let (ticked, space) = (self.favorites_ticked(cx), self.space);
                 if let Some(importing) = self.importing.as_ref() {
                     importing
@@ -871,12 +853,10 @@ impl Shell {
                         .update(cx, |view, _| view.add_offered(space, &ticked));
                 }
             }
-            (Step::Space, Some(picked)) => {
-                self.theme_changed(self.space, Theme::of_color(SWATCHES[picked]), true, cx);
-            }
+            Step::Space => self.space_keep(cx),
             // Set only if it moved, as Settings sets it, which puts away at once the tabs that have
             // waited that long.
-            (Step::Tidy, _) => {
+            Step::Tidy => {
                 if let Some(tidy) = onboarding.tidy.as_ref().filter(|t| t.seconds() != t.was) {
                     let seconds = tidy.seconds();
                     self.browser.set_archive_after(self.space, seconds, cx);
@@ -1071,32 +1051,6 @@ impl Shell {
         }
     }
 
-    /// Picks `level` at the Space step: Settings' own way of setting it, so the window takes it at
-    /// once.
-    fn onboarding_transparency(&mut self, level: Transparency, cx: &mut Context<Self>) {
-        let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.level != level) else {
-            return;
-        };
-        onboarding.level = level;
-        transparency::set(level, cx);
-        cx.notify();
-    }
-
-    /// Picks swatch `index` at the Space step; the window shows it at once, as the theme picker
-    /// does, and Next keeps it.
-    fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(onboarding) = self.onboarding.as_mut() else {
-            return;
-        };
-        let picked = index.min(SWATCHES.len() - 1);
-        onboarding.picked = Some(picked);
-        if onboarding.step == Step::Space {
-            let theme = Theme::of_color(SWATCHES[picked]);
-            self.theme_changed(self.space, theme, false, cx);
-        }
-        cx.notify();
-    }
-
     /// A key in first run's window. Any key during the entry ends it. ↩ is the main button, but
     /// never from a field, whose ↩ is its own (and an input method's, which confirms the text
     /// first); ⌘[ goes back; Esc cancels a wait and nothing else; ⌘W does nothing.
@@ -1117,7 +1071,7 @@ impl Shell {
             onboarding.end_entry();
             return cx.notify();
         }
-        let (step, picked) = (onboarding.step, onboarding.picked);
+        let step = onboarding.step;
         let modifiers = key.modifiers;
         if modifiers.secondary(cx) {
             if key.key == "[" && !modifiers.shift && !modifiers.alt {
@@ -1132,11 +1086,9 @@ impl Shell {
         }
         match (step, key.key.as_str()) {
             (_, "escape") => self.onboarding_escape(cx),
-            // From none picked, → starts at the first and ← at the last.
-            (Step::Space, "right") => self.onboarding_pick(picked.map_or(0, |at| at + 1), cx),
-            (Step::Space, "left") => {
-                self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
-            }
+            // Along the palettes, from none chosen → starting at the first and ← at the last.
+            (Step::Space, "right") => self.space_palette_by(1, cx),
+            (Step::Space, "left") => self.space_palette_by(-1, cx),
             (Step::Tidy, "left" | "down") => self.onboarding_tidy_by(-1, cx),
             (Step::Tidy, "right" | "up") => self.onboarding_tidy_by(1, cx),
             (_, "tab") => match modifiers.shift {
@@ -1206,11 +1158,12 @@ impl Shell {
 
     /// Where the keyboard rests as the step shown comes: on its choice where the choice is the
     /// step, on its main button where it has one, else on the step's dialog, so nothing is focused
-    /// and ↩ does nothing (v9 §4).
+    /// and ↩ does nothing (v9 §4). Your first Space rests on Next, its arrows going along the
+    /// palettes.
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Space | Step::Tidy => onboarding.first_stop.clone(),
+            Step::Tidy => onboarding.first_stop.clone(),
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
@@ -1382,6 +1335,9 @@ impl Shell {
         if onboarding.shaped.replace((w, h, radius)) != Some((w, h, radius)) {
             self.browser.shape_first_run(w, h, radius);
         }
+        if step == Step::Space {
+            self.space_editor(light, window, cx);
+        }
         let content = self.step_content(step, inks, entry.is_some(), window, cx);
         let onboarding = self.onboarding.as_ref()?;
         let entry_knot = entry_knot.map(|((size, x, y, drawn), opacity)| {
@@ -1488,10 +1444,16 @@ impl Shell {
                 let mut trail_parts = Vec::new();
                 trail_parts.extend(skip);
                 trail_parts.extend(trail);
+                // Your first Space's editor starts under its heading, as the mock's does.
+                let top = match step {
+                    Step::Space => t::SPACE_EDITOR[0],
+                    _ => t::BODY_TOP,
+                };
                 let body = match step.split() {
-                    true => card::at(span.0, t::BODY_TOP).w(px(span.1 - span.0)),
-                    false => card::at((t::WIDTH - t::CENTRED_COLUMN) / 2., t::BODY_TOP)
-                        .w(px(t::CENTRED_COLUMN)),
+                    true => card::at(span.0, top).w(px(span.1 - span.0)),
+                    false => {
+                        card::at((t::WIDTH - t::CENTRED_COLUMN) / 2., top).w(px(t::CENTRED_COLUMN))
+                    }
                 };
                 let [foot_top, _] = t::FOOT;
                 div()
@@ -1499,7 +1461,7 @@ impl Shell {
                     .children(step.split().then(|| card::plane(inks)))
                     .child(card::heading((title, line), !step.split(), inks, cx))
                     .child(
-                        body.h(px(foot_top - t::BODY_TOP - t::FOOT_GAP))
+                        body.h(px(foot_top - top - t::FOOT_GAP))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .flex()
                             .flex_col()
@@ -1559,7 +1521,7 @@ impl Shell {
             Step::Assistant => self.assistant_rows(step, inks, cx).into_any_element(),
             Step::Import => self.bring_controls(bring, inks, cx),
             Step::Favorites => self.bring_tiles(bring, inks, cx),
-            Step::Space => self.space_controls(inks, cx).into_any_element(),
+            Step::Space => self.space_controls(inks).into_any_element(),
             Step::Tidy => div()
                 .flex()
                 .flex_col()
@@ -2032,34 +1994,6 @@ impl Shell {
             .children(rows)
     }
 
-    /// Your first Space until the theme editor's parts come (#4274): the theme picker's swatches,
-    /// and where the window has glass, Settings' transparency picker under them.
-    fn space_controls(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
-        let picked = self.onboarding.as_ref().and_then(|o| o.picked);
-        let swatches = swatch_row(picked, self.first_stop(Step::Space), inks, self.a11y, cx);
-        let level = self.blurred.then(|| self.level_slot(inks, cx));
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(t::SPACE_GAP))
-            .child(swatches)
-            .children(level)
-    }
-
-    /// Settings › Appearance's transparency picker, the one form of it, at the level shown.
-    fn level_slot(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
-        let (level, drawn) = (self.onboarding.as_ref())
-            .map_or_else(Default::default, |o| (o.level, o.level_drawn.clone()));
-        let look = settings_rows::Look::settings(inks.light);
-        let shell = cx.weak_entity();
-        let picker = transparency::picker(level, &look, drawn, move |level, _, cx| {
-            shell
-                .update(cx, |shell, cx| shell.onboarding_transparency(level, cx))
-                .ok();
-        });
-        div().w_full().child(picker)
-    }
-
     /// The stop of the choice of `step`, while it's the step shown.
     fn first_stop(&self, step: Step) -> Option<gpui::FocusHandle> {
         self.step_stop(step, |onboarding| &onboarding.first_stop)
@@ -2150,58 +2084,6 @@ fn opt_in_frame(
     )
     .absolute()
     .inset_0()
-}
-
-/// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline
-/// edge so the lightest still reads on a light card. A screen reader reads them as one choice, a
-/// radio button each called by its colour.
-fn swatch_row(
-    picked: Option<usize>,
-    first: Option<gpui::FocusHandle>,
-    inks: Inks,
-    a11y: bool,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement + use<> {
-    // Each swatch's ring and the gap inside it, on both sides.
-    let ringed = SWATCH + 4. * SWATCH_RING;
-    div()
-        .id("onboarding-swatches")
-        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Color"))
-        // One stop, the arrows going along it, with the swatch picked read as they move.
-        .tab_index(0)
-        .when_some(first, |row, stop| row.track_focus(&stop))
-        .focus_from_keys_only()
-        .rounded_full()
-        .focus_visible(card::card_ring(inks))
-        .flex()
-        .flex_wrap()
-        .gap(px(SWATCH_PITCH - ringed))
-        .children(SWATCHES.iter().enumerate().map(|(index, &color)| {
-            let on = picked == Some(index);
-            div()
-                .id(("onboarding-swatch", index))
-                .when(a11y, |swatch| {
-                    swatch
-                        .role(Role::RadioButton)
-                        .aria_label(swatch_name(color))
-                        .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                        .when(on, |swatch| swatch.aria_active_descendant())
-                })
-                .p(px(SWATCH_RING))
-                .rounded_full()
-                .border(px(SWATCH_RING))
-                .border_color(inks.text(if on { 1. } else { 0. }))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_pick(index, cx)))
-                .child(
-                    div()
-                        .size(px(SWATCH))
-                        .rounded_full()
-                        .bg(rgb(color))
-                        .border_1()
-                        .border_color(inks.text(SWATCH_EDGE)),
-                )
-        }))
 }
 
 /// First run's main button for the welcome card, outside the card: `button` with its label in it

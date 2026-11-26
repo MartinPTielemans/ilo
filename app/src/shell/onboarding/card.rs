@@ -72,6 +72,11 @@ impl Inks {
         self.text(if self.light { t::LIGHT_GROUP } else { t::GROUP })
     }
 
+    /// A field's ground.
+    pub(super) fn field(&self) -> Rgba {
+        self.text(if self.light { t::LIGHT_FIELD } else { t::FIELD })
+    }
+
     /// A quiet button's fill.
     pub(super) fn button(&self) -> Rgba {
         self.text(if self.light {
