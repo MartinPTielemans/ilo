@@ -102,7 +102,7 @@ fn said_ink(palette: &super::Palette) -> Hsla {
 }
 
 /// The stage's fill, the conversation's ground in the page area: also the fill of the shown
-/// thread's card, which is one shape with it (task_cards.rs).
+/// thread's card, a shape of its own beside it (task_cards.rs).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }

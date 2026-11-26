@@ -1,20 +1,22 @@
-//! The open tab's line in its page's own colour, one shape with the page: which line takes it,
-//! where it runs, and what a line without one keeps.
+//! The open tab's line in its page's own colour, a shape of its own: which line takes it, where
+//! it lies, and what a line without one keeps. And the page area, of which nothing moves for it.
 
 use std::rc::Rc;
 
-use gpui::{Entity, Hsla, TestAppContext, VisualTestContext, px, rgb};
+use gpui::{Corners, Entity, Hsla, TestAppContext, VisualTestContext, px, rgb};
 
-use super::{JOINED, Joined};
+use super::{OWN_SHAPE, OwnShape};
 use crate::{
     palette::{TEXT, Tone, contrast, drawn as shown_as, over},
     shell::{
-        Command, Folders, Page, SHOWN_FILL, Shell, SidebarRight, browser::Split, recorder::Recorder,
+        Command, Folders, PAGE_OUTLINES, Page, SHOWN_FILL, Shell, SidebarRight, browser::Split,
+        recorder::Recorder,
     },
     theme::{self, Appearance},
     tokens::palette::SHOWN,
     tokens::shell::{
-        DIVIDER, HAIRLINE, JOIN_RADIUS, PAGE_OUTLINE_WIDTH, PLATE_HEIGHT, PLATE_INSET,
+        DIVIDER, HAIRLINE, PAGE_OUTLINE, PAGE_OUTLINE_LIGHT, PLATE_HEIGHT, PLATE_INSET,
+        PLATE_RADIUS,
     },
 };
 
@@ -55,14 +57,14 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
     (shell, cx)
 }
 
-/// The join the next frame paints, if it paints one, and the fill it lays the shown row's plain
-/// plate in, if it lays one.
-fn drawn(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<Joined>, Option<Hsla>) {
-    JOINED.set(None);
+/// The shape of its own the next frame paints, if it paints one, and the fill it lays the shown
+/// row's plain plate in, if it lays one.
+fn drawn(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<OwnShape>, Option<Hsla>) {
+    OWN_SHAPE.set(None);
     SHOWN_FILL.set(None);
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    (JOINED.take(), SHOWN_FILL.take())
+    (OWN_SHAPE.take(), SHOWN_FILL.take())
 }
 
 fn show(shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64, color: Option<u32>) {
@@ -77,21 +79,22 @@ fn hex(color: Hsla) -> u32 {
 }
 
 #[gpui::test]
-fn the_open_tabs_line_is_its_pages_colour_from_its_plate_to_the_page(cx: &mut TestAppContext) {
+fn the_open_tabs_line_is_a_shape_of_its_own_in_its_pages_colour(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     show(&shell, cx, 10, Some(BLUE));
-    let (joined, plain) = drawn(&shell, cx);
-    let joined = joined.expect("the open tab's line isn't joined to its page");
-    assert_eq!(hex(joined.fill), BLUE);
-    assert_eq!(joined.fill.a, 1.);
+    let (own, plain) = drawn(&shell, cx);
+    let own = own.expect("the open tab's line has no shape of its own");
+    assert_eq!(hex(own.fill), BLUE);
+    assert_eq!(own.fill.a, 1.);
     // The page's colour is the line's whole fill: no plate of the window's lies with it.
     assert_eq!(plain, None);
     let (width, page) = shell.read_with(cx, |shell, _| (shell.width(), shell.card_left()));
-    assert!(!joined.page_left);
-    assert_eq!(f32::from(joined.line.left()), PLATE_INSET);
-    assert_eq!(f32::from(joined.line.right()), width);
-    assert_eq!(f32::from(joined.line.right()), page);
-    assert_eq!(f32::from(joined.line.size.height), PLATE_HEIGHT);
+    // Inset at both sides, as the plain shown plate: the sidebar shows between it and the page.
+    assert_eq!(f32::from(own.shape.left()), PLATE_INSET);
+    assert_eq!(f32::from(own.shape.right()), width - PLATE_INSET);
+    assert!(f32::from(own.shape.right()) < page);
+    assert_eq!(f32::from(own.shape.size.height), PLATE_HEIGHT);
+    assert_eq!(own.corners, Corners::all(px(PLATE_RADIUS)));
 }
 
 #[gpui::test]
@@ -123,8 +126,8 @@ fn a_pages_colour_fills_its_own_tabs_line_and_no_other(cx: &mut TestAppContext) 
         }
     });
     shell.update(cx, |shell, cx| shell.set_selected(11, cx));
-    let (joined, _) = drawn(&shell, cx);
-    assert_eq!(joined.map(|joined| hex(joined.fill)), Some(BLUE));
+    let (own, _) = drawn(&shell, cx);
+    assert_eq!(own.map(|own| hex(own.fill)), Some(BLUE));
     shell.read_with(cx, |shell, _| {
         assert_eq!(shell.page_fill(5), None);
         assert_eq!(shell.page_fill(10), None);
@@ -132,15 +135,17 @@ fn a_pages_colour_fills_its_own_tabs_line_and_no_other(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn an_open_pinned_line_joins_its_page_as_a_tabs_does(cx: &mut TestAppContext) {
+fn an_open_pinned_line_is_a_shape_of_its_own_as_a_tabs_is(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     show(&shell, cx, 5, Some(WHITE));
-    let (joined, plain) = drawn(&shell, cx);
-    let joined = joined.expect("the open pinned line isn't joined to its page");
-    assert_eq!((hex(joined.fill), plain), (WHITE, None));
+    let (own, plain) = drawn(&shell, cx);
+    let own = own.expect("the open pinned line has no shape of its own");
+    assert_eq!((hex(own.fill), plain), (WHITE, None));
     let width = shell.read_with(cx, |shell, _| shell.width());
-    assert_eq!(f32::from(joined.line.left()), PLATE_INSET);
-    assert_eq!(f32::from(joined.line.right()), width);
+    assert_eq!(f32::from(own.shape.left()), PLATE_INSET);
+    assert_eq!(f32::from(own.shape.right()), width - PLATE_INSET);
+    assert_eq!(f32::from(own.shape.size.height), PLATE_HEIGHT);
+    assert_eq!(own.corners, Corners::all(px(PLATE_RADIUS)));
 }
 
 #[gpui::test]
@@ -165,16 +170,14 @@ fn a_split_views_line_keeps_the_plain_plate_whatever_its_panes_colours(cx: &mut 
 fn a_dark_page_has_a_hairline_round_its_line_and_a_light_one_none(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     show(&shell, cx, 10, Some(WHITE));
-    let (joined, _) = drawn(&shell, cx);
-    assert_eq!(joined.and_then(|joined| joined.outline), None);
+    let (own, _) = drawn(&shell, cx);
+    let own = own.expect("the open tab's line has no shape of its own");
+    assert_eq!(own.outline, None);
     show(&shell, cx, 10, Some(DARK));
-    let (joined, _) = drawn(&shell, cx);
+    let (own, _) = drawn(&shell, cx);
     let on = shell.read_with(cx, |shell, _| shell.line_palette(10));
     assert_eq!(on.tone, Tone::Dark);
-    assert_eq!(
-        joined.and_then(|joined| joined.outline),
-        Some(on.faint(DIVIDER))
-    );
+    assert_eq!(own.and_then(|own| own.outline), Some(on.faint(DIVIDER)));
 }
 
 #[gpui::test]
@@ -207,11 +210,11 @@ fn a_white_page_and_a_black_one_in_a_dark_window_both_keep_a_title_that_reads(
     assert_eq!(dark, Tone::Dark, "the made-up window isn't a dark one");
     for (color, tone) in [(0xffffff, Tone::Light), (0x000000, Tone::Dark)] {
         show(&shell, cx, 10, Some(color));
-        let (joined, plain) = drawn(&shell, cx);
-        let joined = joined.expect("the open tab's line isn't joined to its page");
-        assert_eq!((hex(joined.fill), plain), (color, None), "{color:06x}");
+        let (own, plain) = drawn(&shell, cx);
+        let own = own.expect("the open tab's line has no shape of its own");
+        assert_eq!((hex(own.fill), plain), (color, None), "{color:06x}");
         // A black page in a dark window is told from it by its hairline alone.
-        assert_eq!(joined.outline.is_some(), tone == Tone::Dark, "{color:06x}");
+        assert_eq!(own.outline.is_some(), tone == Tone::Dark, "{color:06x}");
         let on = shell.read_with(cx, |shell, _| shell.line_palette(10));
         assert_eq!(on.tone, tone, "{color:06x}");
         let (fill, title) = (rgb(color), on.text(0.));
@@ -224,83 +227,57 @@ fn a_white_page_and_a_black_one_in_a_dark_window_both_keep_a_title_that_reads(
 }
 
 #[gpui::test]
-fn with_the_sidebar_on_the_right_the_line_runs_to_the_page_on_its_left(cx: &mut TestAppContext) {
+fn with_the_sidebar_on_the_right_the_line_keeps_both_its_insets(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     // The side is the setting's, which the shell reads as it draws.
     cx.update(|_, cx| cx.set_global(SidebarRight(true)));
     show(&shell, cx, 10, Some(BLUE));
-    let (joined, _) = drawn(&shell, cx);
-    let joined = joined.expect("the open tab's line isn't joined to its page");
+    let (own, _) = drawn(&shell, cx);
+    let own = own.expect("the open tab's line has no shape of its own");
     let (left, width) = shell.read_with(cx, |shell, _| (shell.column_x(), shell.width()));
-    assert!(joined.page_left);
-    assert_eq!(f32::from(joined.line.left()), left);
-    assert_eq!(f32::from(joined.line.right()), left + width - PLATE_INSET);
+    assert_eq!(f32::from(own.shape.left()), left + PLATE_INSET);
+    assert_eq!(f32::from(own.shape.right()), left + width - PLATE_INSET);
+    assert_eq!(own.corners, Corners::all(px(PLATE_RADIUS)));
 }
 
+/// The page keeps its place, its corners and its own outline whatever its tab's line wears: the
+/// line at the window's side and none at the docked sidebar's for a light page or one with no
+/// colour, and a dark page's hairline round all of it.
 #[gpui::test]
-fn the_shape_ends_on_the_pixel_of_the_screen_the_page_starts_on(cx: &mut TestAppContext) {
+fn nothing_of_the_page_area_moves_for_its_tabs_line(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
-    show(&shell, cx, 10, Some(BLUE));
-    for scale in [1., 2.] {
-        cx.simulate_scale_factor_change(scale);
-        // Widths between two of the screen's pixels too, as the sidebar's is while it settles.
-        for width in [228., 228.3, 228.7, 301.25] {
-            shell.update(cx, |shell, cx| {
-                shell.sidebar_width = width;
-                cx.notify();
-            });
-            let (joined, _) = drawn(&shell, cx);
-            let joined = joined.expect("the open tab's line isn't joined to its page");
-            let page = shell.read_with(cx, |shell, _| shell.card_left());
-            assert_eq!(page, width);
-            // A path is drawn where it's laid, between two pixels too, and the page's card on
-            // the whole one nearest its place: so is the line's end.
-            let end = f32::from(joined.line.right()) * scale;
-            assert_eq!(end.fract(), 0., "{width} at {scale}x: ends at {end}");
-            assert!(
-                (end - page * scale).abs() <= 0.5,
-                "{width} at {scale}x: {end}"
-            );
-        }
-    }
-}
-
-#[gpui::test]
-fn the_line_round_a_dark_pages_shape_stops_at_the_pages_own(cx: &mut TestAppContext) {
-    let (shell, cx) = window(cx);
-    let (line, curve) = (px(PAGE_OUTLINE_WIDTH), px(JOIN_RADIUS));
-    // A light page's shape has no line, so none to keep anywhere.
-    show(&shell, cx, 10, Some(WHITE));
-    let (joined, _) = drawn(&shell, cx);
-    assert_eq!(joined.and_then(|joined| joined.lined), None);
-    show(&shell, cx, 10, Some(DARK));
+    let viewport = cx.update(|window, _| window.viewport_size());
     for right in [false, true] {
         cx.update(|_, cx| cx.set_global(SidebarRight(right)));
-        let (joined, _) = drawn(&shell, cx);
-        let joined = joined.expect("the open tab's line isn't joined to its page");
-        assert_eq!(joined.page_left, right);
-        let lined = joined
-            .lined
-            .expect("a dark page's shape has no line round it");
-        // The page's own line is a line's width outside the page, down its whole side: the
-        // shape's stops beside it, from the curve above the line to the one below.
-        // Round the line's far end it is all there.
-        match right {
-            false => {
-                assert_eq!(lined.right(), joined.line.right() - line);
-                assert!(lined.left() <= joined.line.left() - line);
-            }
-            true => {
-                assert_eq!(lined.left(), joined.line.left() + line);
-                assert!(lined.right() >= joined.line.right() + line);
-            }
+        show(&shell, cx, 10, None);
+        drawn(&shell, cx);
+        let place = |shell: &Shell| (shell.page_frame(viewport), shell.card_left());
+        let plain = shell.read_with(cx, |shell, _| place(shell));
+        for color in [None, Some(WHITE), Some(DARK), Some(BLUE)] {
+            show(&shell, cx, 10, color);
+            PAGE_OUTLINES.take();
+            drawn(&shell, cx);
+            let lines = PAGE_OUTLINES.take();
+            let (now, radius, tone, on) = shell.read_with(cx, |shell, _| {
+                let on = shell.line_palette(10);
+                (place(shell), shell.card_radius(), shell.palette.tone, on)
+            });
+            assert_eq!(now, plain, "{color:?}, right {right}");
+            let ((frame, corner), _) = now;
+            assert_eq!(corner, radius, "{color:?}, right {right}");
+            let lit = color.is_some() && on.tone == Tone::Dark;
+            let line = match (lit, tone) {
+                (true, _) => on.faint(DIVIDER),
+                (false, Tone::Dark) => gpui::rgba(PAGE_OUTLINE).into(),
+                (false, Tone::Light) => gpui::rgba(PAGE_OUTLINE_LIGHT).into(),
+            };
+            let open = (!lit).then_some(right);
+            assert_eq!(
+                lines,
+                [(frame, radius, open, line)],
+                "{color:?}, right {right}"
+            );
         }
-        assert_eq!(lined.top(), joined.line.top() - curve, "right {right}");
-        assert_eq!(
-            lined.bottom(),
-            joined.line.bottom() + curve,
-            "right {right}"
-        );
     }
 }
 
@@ -336,7 +313,7 @@ fn a_line_the_page_isnt_beside_keeps_the_plain_plate(cx: &mut TestAppContext) {
 fn an_open_favorites_tile_fills_with_its_pages_colour_where_it_stands(cx: &mut TestAppContext) {
     let (shell, cx) = window(cx);
     show(&shell, cx, 20, Some(WHITE));
-    // A tile has no way to the sidebar's edge: no join.
+    // A tile is its own shape already: no line's.
     assert_eq!(drawn(&shell, cx).0, None);
     let look = |shell: &Shell| shell.open_look(shell.page_fill(20), None);
     let (fill, width, _) = shell.read_with(cx, |shell, _| look(shell));

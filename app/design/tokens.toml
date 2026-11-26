@@ -1675,10 +1675,6 @@ card-radius = 10.0
 page-outline = 0x00000080
 page-outline-light = 0x00000029
 page-outline-width = 1.0
-# The open tab's line takes its page's own colour and runs to the sidebar's edge, where a curve of
-# this radius above it and one below take it into the page's side, so the two are one shape. A dark
-# page's shape has one hairline (divider) of the ink that reads on it round the line and the page.
-join-radius = 8.0
 # Between the pages of a split view, as in Arc. The core's is the same.
 split-gap = 10.0
 # The glow outside a split view's focused page, in its ring's colour (Arc: ≈ 8 pt).
