@@ -2929,8 +2929,17 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let answer = call(&agents, "claude-code", "select", paying, cx);
     let what = "choose “Pay now” in “Payment” on example.com";
-    let at = "choose “Pay now” in “Payment”";
-    refused(&agents, &browser, answer, what, Why::Order, at, cx);
+    // A list the core says nothing of keeps the option out of the refusal's line, which names
+    // the site (page::typed_shown); the agent's answer still says it.
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert_eq!(browser.pages.borrow().len(), pages, "it chose");
 }
 
@@ -3027,7 +3036,24 @@ fn a_key_press_that_activates_a_control_is_refused_as_a_click_on_it(cx: &mut Tes
     snapshot(None, cx);
     let card = json!({ "tab": 20, "ref": "e1", "text": "4242", "submit": true });
     let what = "press Enter, which may click “Pay now” on example.com, after typing “4242” into “Card number”";
-    asks("type", card, what, cx);
+    // A field the core says nothing of keeps what was typed out of the refusal's line, which
+    // names the site (page::typed_shown); the agent's answer still says it.
+    let pages = browser.pages.borrow().len();
+    let answer = call(&agents, "claude-code", "type", card, cx);
+    refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "{what} reached the page"
+    );
     goes(
         "type",
         json!({ "tab": 20, "ref": "e4", "text": "socks", "submit": true }),
@@ -3465,8 +3491,15 @@ fn a_names_direction_marks_dont_reach_the_refusals(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "type", typed, cx);
     let what = "press Enter, which may click \u{201C}Pay now 'moc.buhtig\u{201D} on example.com, \
                 after typing \u{201C}4242\u{201D} into \u{201C}Card 'number\u{201D}";
-    let at = what.replace(" on example.com", "");
-    let told = refused(&agents, &browser, answer, what, Why::Order, &at, cx);
+    let told = refused(
+        &agents,
+        &browser,
+        answer,
+        what,
+        Why::Order,
+        "example.com",
+        cx,
+    );
     assert!(
         !told.text.contains(['\u{202E}', '\u{2066}', '"']),
         "{:?}",

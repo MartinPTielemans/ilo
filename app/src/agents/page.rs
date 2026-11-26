@@ -151,6 +151,14 @@ impl Element {
     }
 }
 
+/// What an agent typed or chose in `element` that may be shown again, cut as a step's line shows
+/// it, or None where `shows_typed` doesn't let it or the element isn't known. Every road that keeps
+/// what was put in a field, a trace's step, a kept card and a refusal's line, goes by this.
+pub fn typed_shown(element: Option<&Element>, text: &str) -> Option<String> {
+    let shown = element.is_some_and(Element::shows_typed);
+    shown.then(|| clip(&one_line(text), super::tools::TYPED_SHOWN))
+}
+
 /// What has the keyboard in a page, as its outline says.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Focus {
