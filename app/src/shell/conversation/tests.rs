@@ -236,6 +236,92 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
     );
 }
 
+/// Task-1's conversation shown, its page 30 its card's last and one whose picture the agents'
+/// rules let a kept card keep.
+fn kept_card_shown(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(card, cx);
+    host.keeps.borrow_mut().insert(30);
+    (shell, host, cx)
+}
+
+/// Whether a kept card may keep a page's picture is the agents' rules', asked as the
+/// conversation the Agents send is set, inside the shell's change, so the question carries the
+/// page's address. Looked up from the shell there, the app went down at the first thread opened
+/// by its card.
+#[gpui::test]
+fn the_agents_send_a_conversation_whose_pictures_are_judged_before_its_shell_changes(
+    cx: &mut TestAppContext,
+) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    let weak = shell.downgrade();
+    cx.update(|_, cx| {
+        let made = |agent: &str, _: &gpui::App| (agent == "task-1").then(|| conversation(1));
+        super::super::send_agents(
+            Vec::new(),
+            vec![card()],
+            Vec::new(),
+            Vec::new(),
+            made,
+            &[weak.clone()],
+            cx,
+        );
+    });
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the conversation wasn't sent"
+    );
+}
+
+/// A picture the conversation asked for comes while the shell changes, as the core answers in
+/// the shell's update: whether its card may keep it is still judged, without reading the shell,
+/// and the card is told.
+#[gpui::test]
+fn a_picture_that_comes_is_judged_for_its_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let request = picture_request(&shell, 30, cx);
+    host.reads_shell(shell.downgrade());
+    shell.update(cx, |shell, cx| {
+        let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+        shell.page_pictured(request, picture, cx)
+    });
+    assert_eq!(
+        host.card_pictures.borrow_mut().pop(),
+        Some(("task-1".into(), 30, true))
+    );
+}
+
+/// A page watched over the conversation goes back into its picture after its pages changed: the
+/// pictures taken again are judged for the card from inside the shell's change, without reading
+/// the shell.
+#[gpui::test]
+fn pictures_taken_again_are_judged_for_the_card_without_reading_the_shell(cx: &mut TestAppContext) {
+    let (shell, host, cx) = kept_card_shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |view, _| view.stale = true);
+    host.reads_shell(shell.downgrade());
+    host.take();
+    shell.update(cx, |shell, cx| shell.retake_talk_pictures(cx));
+    assert!(
+        host.take().contains(&"task picture 30".to_string()),
+        "the pictures weren't taken again"
+    );
+}
+
 /// A click on the notification a task's need posted opens its card's conversation, as the card's
 /// click does, and leaves it open if it shows already, where the card's click would put it away.
 #[gpui::test]
@@ -3963,6 +4049,38 @@ fn standing_with(
     redraw(&shell, &view, cx);
     assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
     (shell, host, view, cx)
+}
+
+/// Standing on one of the thread's pages, the panel head's button of its other page stands on that
+/// one at once. Its press runs in the panel's own update, as here, so nothing the shell does for it
+/// may read the panel.
+#[gpui::test]
+fn the_panel_heads_button_of_its_other_page_stands_on_it(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        ..conversation(3)
+    };
+    let (shell, host, view, cx) = standing_with(card(), talk, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    redraw(&shell, &view, cx);
+    host.take();
+    // As the button's listener does: the stand runs inside the panel's own update.
+    view.update(cx, |view, cx| view.stand(31, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
+    );
+    assert!(host.take().contains(&"select 31".to_string()));
 }
 
 fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
