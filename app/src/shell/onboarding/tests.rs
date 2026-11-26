@@ -3101,7 +3101,7 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
         match cli {
             Cli::Claude => assert_eq!(
                 missing,
-                said("Installs Anthropic's Claude Code first", Offer::Install)
+                said("Installs Anthropic's Claude Code", Offer::Install)
             ),
             Cli::Codex => assert_eq!(missing, said(plan, Offer::Get), "Codex missing"),
         }
@@ -3127,13 +3127,10 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
         card(claude, Ready::NotFound, None, Row::Installing, true),
         said("Installing Claude Code", Offer::Cancel)
     );
-    let offline = Row::InstallFailed(Some("you're offline".into()));
+    let offline = Row::InstallFailed(Some(crate::agents::install::OFFLINE.into()));
     assert_eq!(
         card(claude, Ready::NotFound, None, offline, true),
-        said(
-            "Couldn't install Claude Code: you're offline",
-            Offer::TryInstall
-        )
+        said("You're offline.", Offer::TryInstall)
     );
     let failed = card(
         claude,
@@ -3168,7 +3165,7 @@ fn a_missing_claude_code_installs_only_on_its_own_press(cx: &mut TestAppContext)
     assert!(installs().is_empty(), "the look installed nothing");
     assert_eq!(
         card_lines(&shell, &agents, cx)[0],
-        "Installs Anthropic's Claude Code first"
+        "Installs Anthropic's Claude Code"
     );
 
     shell.update(cx, |shell, cx| shell.onboarding_sign_in(Cli::Claude, cx));

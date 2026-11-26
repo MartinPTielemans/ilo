@@ -995,8 +995,11 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
     let name = cli.assistant();
     match (row, ready) {
         (Row::Installing, _) => shown(&format!("Installing {name}"), Offer::Cancel),
+        (Row::InstallFailed(Some(reason)), _) if reason == super::install::OFFLINE => {
+            shown(reason, Offer::TryInstall)
+        }
         (Row::InstallFailed(Some(reason)), _) => shown(
-            &format!("Couldn't install {name}: {reason}"),
+            &format!("Couldn't install {name}: {reason}."),
             Offer::TryInstall,
         ),
         (Row::InstallFailed(None), _) => {
@@ -1021,10 +1024,9 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         ),
         (Row::Failed(None), _) => shown("The sign-in didn't finish", Offer::TryAgain),
         (Row::Idle, Ready::Unknown) => shown("Checking…", Offer::Nothing),
-        (Row::Idle, Ready::NotFound) if cli.installs() => shown(
-            &format!("Installs {} {name} first", cli.maker()),
-            Offer::Install,
-        ),
+        (Row::Idle, Ready::NotFound) if cli.installs() => {
+            shown(&format!("Installs {} {name}", cli.maker()), Offer::Install)
+        }
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
         (Row::Idle, Ready::SignedIn) => match plan {

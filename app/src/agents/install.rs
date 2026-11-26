@@ -21,9 +21,9 @@ pub const CLAUDE_SH: &str = "https://claude.ai/install.sh";
 /// Anthropic's installer for Claude Code on Windows, as its setup page has it.
 pub const CLAUDE_PS1: &str = "https://claude.ai/install.ps1";
 
-/// The reason a failed install's line gives where the installer couldn't be fetched for want of a
-/// connection (AS4, in TS2's form).
-pub const OFFLINE: &str = "you're offline";
+/// A failed install's line where the installer couldn't be fetched for want of a connection:
+/// FR11's own, on its own, never a reason after the name (AS4).
+pub const OFFLINE: &str = "You're offline.";
 
 /// The exit codes of curl's fetch that mean no connection: the host couldn't be found or reached.
 const CURL_OFFLINE: &[i32] = &[6, 7];

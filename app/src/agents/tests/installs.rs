@@ -78,7 +78,7 @@ fn says(line: &str, offer: Offer) -> Shown {
 #[gpui::test]
 fn a_missing_claude_code_offers_install_and_sign_in(cx: &mut TestAppContext) {
     let (agents, _, configs) = missing(None, cx);
-    let first = says("Installs Anthropic's Claude Code first", Offer::Install);
+    let first = says("Installs Anthropic's Claude Code", Offer::Install);
     assert_eq!(shown(&agents, cx), first);
     let codex = agents.read_with(cx, |agents, _| agents.assistant_row(Cli::Codex));
     assert_eq!(codex.offer, Offer::Get);
@@ -157,10 +157,7 @@ fn a_failed_install_says_why_and_tries_again(cx: &mut TestAppContext) {
     let (agents, _, configs) = missing(None, cx);
     press(&agents, cx);
     end(&configs, 0, Ended::Failed(Some(OFFLINE.into())), cx);
-    let offline = says(
-        "Couldn't install Claude Code: you're offline",
-        Offer::TryInstall,
-    );
+    let offline = says("You're offline.", Offer::TryInstall);
     assert_eq!(shown(&agents, cx), offline);
     press(&agents, cx);
     assert_eq!(configs.installs.lock().unwrap().len(), 2);

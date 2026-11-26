@@ -400,7 +400,7 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     let missing = row(claude, Ready::NotFound, None, Row::Idle);
     assert_eq!(
         missing,
-        says("Installs Anthropic's Claude Code first", Offer::Install)
+        says("Installs Anthropic's Claude Code", Offer::Install)
     );
     assert_eq!(
         Offer::Install.label(claude).as_deref(),
@@ -408,11 +408,16 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     );
     let installing = row(claude, Ready::NotFound, None, Row::Installing);
     assert_eq!(installing, says("Installing Claude Code", Offer::Cancel));
-    let offline = Row::InstallFailed(Some("you're offline".into()));
+    let offline = Row::InstallFailed(Some(crate::agents::install::OFFLINE.into()));
     assert_eq!(
         row(claude, Ready::NotFound, None, offline),
+        says("You're offline.", Offer::TryInstall)
+    );
+    let said = Row::InstallFailed(Some("a made-up reason".into()));
+    assert_eq!(
+        row(claude, Ready::NotFound, None, said),
         says(
-            "Couldn't install Claude Code: you're offline",
+            "Couldn't install Claude Code: a made-up reason.",
             Offer::TryInstall
         )
     );
