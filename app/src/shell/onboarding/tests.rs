@@ -1904,6 +1904,39 @@ fn return_presses_the_welcomes_button_once(cx: &mut TestAppContext) {
     assert_eq!(signed_in, 1, "↩ on Continue signed in once");
 }
 
+/// ⇥ from the Welcome's Continue comes to Not Now, and ↩ there goes on without signing in: it's
+/// the way the checks pass the Welcome, so a slip here would open the sign-in page on the hosted
+/// server.
+#[gpui::test]
+fn tab_from_continue_comes_to_not_now_whose_return_signs_nothing_in(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Form);
+    assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        keyed(cx),
+        Some((Role::Button, "Not Now".into())),
+        "⇥ from Continue"
+    );
+    account_calls(&host);
+    crate::heard::listen();
+    press("enter", cx);
+    let lines = crate::heard::take();
+    assert!(
+        account_calls(&host).is_empty(),
+        "↩ on Not Now signed nothing in"
+    );
+    let signed = lines
+        .iter()
+        .any(|line| line.contains("onboarding sign in via"));
+    assert!(!signed, "{lines:?}");
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Not Now went on");
+}
+
 /// At the last step the keyboard rests on Start Browsing; ⇥ to the default browser's row, ↩ is
 /// that button's press: it asks the system once and goes nowhere.
 #[gpui::test]
