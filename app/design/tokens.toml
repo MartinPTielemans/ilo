@@ -3436,7 +3436,11 @@ arm = 0.5
 # apart. While the thread works on it, the step's ring, the live line at `live`/`live-line` in
 # text-2, then Take Over as a held step's second button; while the user holds it, the live line and
 # Hand Back; once the thread has ended with it, Open alone. An outside app's session, which has no
-# composer here, has Stop at its right end in the composer's round button's form.
+# composer here, has Stop at its right end in the composer's round button's form, and under its
+# title, `from-gap` below it, the line its card has on top: the product's mark, then
+# `from-name-gap` after it the name the app gave ([shell.task-card] from-*).
+from-gap = 3.0
+from-name-gap = 6.0
 head = 50.0
 head-left = 16.0
 head-right = 10.0

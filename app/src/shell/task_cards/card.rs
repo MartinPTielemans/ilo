@@ -14,6 +14,7 @@ use super::{
 };
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
+use crate::palette::Palette;
 use crate::shell::conversation::{stage_fill, words};
 use crate::shell::join::join;
 use crate::shell::page_ends::StripStop;
@@ -98,6 +99,18 @@ pub(super) struct Look {
     pub(super) dot: bool,
     /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
     pub(super) from: bool,
+}
+
+/// The product's mark for an outside app's session, in `palette`'s ink at `from-ink`: its card's
+/// and its panel's.
+pub(in crate::shell) fn from_mark(palette: &Palette) -> impl IntoElement + use<> {
+    let colour = Hsla::from(palette.ink).opacity(FROM_INK);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
+    )
+    .flex_none()
+    .size(px(FROM_MARK))
 }
 
 /// Whether `card` is an outside app's session rather than a thread: from the kind of its connection
@@ -380,17 +393,6 @@ impl Shell {
             .child(drawn)
     }
 
-    /// The product's mark for an outside app's session, in the ink at `from-ink`.
-    fn from_mark(&self) -> impl IntoElement + use<> {
-        let colour = Hsla::from(self.palette.ink).opacity(FROM_INK);
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
-        )
-        .flex_none()
-        .size(px(FROM_MARK))
-    }
-
     /// An outside app's line over a whole card's first row: the product's mark in the glyph's
     /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
     /// an ellipsis.
@@ -405,7 +407,7 @@ impl Shell {
                     .w(px(GLYPH))
                     .flex()
                     .justify_center()
-                    .child(self.from_mark()),
+                    .child(from_mark(&self.palette)),
             )
             .child(
                 div()
@@ -675,7 +677,7 @@ impl Shell {
             .map(|tab| self.card_icon(tab, 1.));
         // An outside app's mark at the right, before the page's icon; its name is the line's
         // tooltip and spoken label, not drawn.
-        let from = outside(card).then(|| self.from_mark());
+        let from = outside(card).then(|| from_mark(&self.palette));
         let end = (from.is_some() || on.is_some()).then(|| {
             div()
                 .flex_none()
