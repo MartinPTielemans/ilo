@@ -334,8 +334,9 @@ def engine_patches(src, checkout, built, mac=True):
     """Brings the pack's headers from the series the engine was built with to the branch's: the
     headers' part of each patch from the first that differs is taken out, last first, and the
     branch's from there are put in. Returns the summary's lines, an error when one can't be, and
-    the branch's patches whose change to what the engine generates headers from isn't the engine's,
-    which the pack can't follow."""
+    the patches, the branch's or the engine's, whose change to what the engine generates headers
+    from differs between the two, which the pack can't follow. A patch renamed with the same change
+    to them, or the series's changes to them in another order, is no difference."""
     pins = open(os.path.join(checkout, "engine/pins.ini")).read()
     major = int(re.search(r"^\s*version\s*=\s*(\d+)\.", pins, re.M).group(1))
 
@@ -351,10 +352,15 @@ def engine_patches(src, checkout, built, mac=True):
     had, wants = headers(built), headers(os.path.join(checkout, "engine"))
     # What the build generates from, where it differs from the engine's: the pack can't follow it.
     generated = {name: g for name, _, g in had}
-    unpacked = [
-        f"{name} ({', '.join(path for path, _ in g)})"
-        for name, _, g in wants
-        if g and generated.get(name) != g
+    wanted = {name: g for name, _, g in wants}
+
+    def generators(patches):
+        return sorted(hunk for _, _, g in patches for hunk in g)
+
+    unpacked = [] if generators(had) == generators(wants) else [
+        f"{name} ({', '.join(path for path, _ in wanted.get(name) or generated[name])})"
+        for name in dict.fromkeys([*wanted, *generated])
+        if wanted.get(name, []) != generated.get(name, [])
     ]
     had = [(name, text) for name, text, _ in had if text]
     wants = [(name, text) for name, text, _ in wants if text]
