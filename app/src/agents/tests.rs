@@ -8379,6 +8379,28 @@ mod tasks {
         heads_as_worked(live, head);
     }
 
+    /// The conversation's held pages, each theirs on its row in the panel, are those the user took
+    /// over, by the hold's kind: never a page the agent handed them, nor one it asks back, whose
+    /// own line has its own button.
+    #[gpui::test]
+    fn a_conversations_held_pages_are_those_the_user_took_over(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+        let _handed = call(&agents, &agent, "hand_off", reason, cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::TakeOver(30), cx)
+        });
+        let held = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| {
+                agents.conversation(&agent, cx).unwrap().held
+            })
+        };
+        assert_eq!(held(cx), vec![30]);
+        let back = json!({ "reason": "The basket is mine to finish.", "tab": 30 });
+        let _asked = call(&agents, &agent, "ask_for_tab", back, cx);
+        assert_eq!(held(cx), Vec::<u64>::new());
+    }
+
     /// Calls `tool` as the server does and leaves it unanswered, a step under way: its reply, which
     /// a wait's answer comes on.
     fn begun(
