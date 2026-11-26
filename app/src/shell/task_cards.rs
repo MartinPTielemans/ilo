@@ -37,7 +37,7 @@ use super::{
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
+use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word, head_name};
 use crate::agents::tier::Tier;
 use crate::needs_you::Told;
 use crate::palette::FIELD_PLATE as URL_FIELD;
@@ -117,10 +117,11 @@ fn chip(card: &Card) -> Option<Chip> {
     (card.fix.map(|(cli, offer)| Chip::Assistant(cli, offer))).or(card.retry.then_some(Chip::Retry))
 }
 
-/// The line a card says its task's state on, but at work and waiting: who works on the task, or
-/// Full access where it has that, and its state, in ilo's words alone. The agent's own words are
-/// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
-/// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
+/// The line a card says its task's state on, but at work and waiting: who works on the task as a
+/// thread's rows name it (`head_name`), or Full access where it has that, and its state, in ilo's
+/// words alone. The agent's own words are the title's (#3690). The state is the task's one word,
+/// in the fuller form its card has for it where that names the same state: "Stopped after 6
+/// steps", "Working · 3 helpers".
 #[cfg(test)]
 fn state_line(card: &Card) -> SharedString {
     state(card).0
@@ -136,7 +137,7 @@ fn state(card: &Card) -> (SharedString, usize) {
     };
     let (lead, led) = match card.tier {
         Tier::Full => (Tier::Full.label(), Tier::Full.label().len()),
-        _ => (card.name.as_ref(), 0),
+        _ => (head_name(&card.name, !card.replies), 0),
     };
     (format!("{lead} · {state}").into(), led)
 }

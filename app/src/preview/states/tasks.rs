@@ -2,6 +2,7 @@
 
 use crate::*;
 use browser::agents::runner::Cli;
+use browser::product::PRODUCT;
 
 /// The first task's Space, apart from the ids the rest of the preview takes.
 pub(crate) const FIRST_TASK: u64 = 9001;
@@ -438,7 +439,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         agent,
         name: "Claude".into(),
         title: title.into(),
-        about: "Claude · Working".into(),
+        about: format!("{PRODUCT} · Working").into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -500,9 +501,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
     let pages = task_pages(at);
     talk.title = card.title.clone();
     talk.asked = ASKED[at].into();
+    let name = browser::agents::task::head_name(&card.name, !card.replies);
     talk.about = match card.word {
-        Word::Done => format!("{} · Done at 14:02", card.name).into(),
-        word => format!("{} · {}", card.name, word.after_name()).into(),
+        Word::Done => format!("{name} · Done at 14:02").into(),
+        word => format!("{name} · {}", word.after_name()).into(),
     };
     talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
     talk.on = None;
@@ -627,7 +629,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             line(100, stopped(Why::Fenced, "seatmap.example", 1)),
         ],
         "yours" => {
-            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            talk.about = format!("{PRODUCT} · {}", browser::agents::task::NEEDS_YOU).into();
             talk.on = None;
             vec![
             done(0, before),
@@ -679,7 +681,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             use browser::agents::task::ilo::{LeftOut, Reach};
             let folder = || gpui::SharedString::from("Lisbon trip");
             let said = |key, kind| ilo(key, kind, true);
-            talk.about = format!("{} · Stopped", talk.name).into();
+            talk.about = format!("{PRODUCT} · Stopped").into();
             talk.stoppable = false;
             talk.on = None;
             vec![
@@ -737,7 +739,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 talk.model = Some(model(Cli::Codex, None));
             }
             talk.about = match ended {
-                true => format!("{} · Done at 14:02", talk.name).into(),
+                true => format!("{PRODUCT} · Done at 14:02").into(),
                 false => talk.about.clone(),
             };
             talk.stoppable = !ended;
@@ -772,7 +774,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         // Space, that, in the field's place. It ended on an earlier day, so it says the day.
         "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
-            talk.about = format!("{} · Done · 21 Nov", talk.name).into();
+            talk.about = format!("{PRODUCT} · Done · 21 Nov").into();
             talk.asked = "".into();
             talk.tabs.clear();
             talk.on = None;
@@ -793,7 +795,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         // the task's first page alone, as the task did; `helper_tabs` are the rest, which the
         // bench gives it once it shows.
         "helpers" => {
-            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            talk.about = format!("{PRODUCT} · {}", browser::agents::task::NEEDS_YOU).into();
             // One of several pages: its line names the page's site (O1).
             let (tab, site) = helper_tabs().remove(HELPER_WAITING);
             let yours = IloKind::Yours {
@@ -828,7 +830,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         ],
         // The turn ended with its helpers: the stretch is over, and no helper's line is under way.
         "helpers-ended" => {
-            talk.about = format!("{} · Done at 14:02", talk.name).into();
+            talk.about = format!("{PRODUCT} · Done at 14:02").into();
             talk.stoppable = false;
             talk.on = None;
             vec![

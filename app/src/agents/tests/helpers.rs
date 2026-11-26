@@ -1058,7 +1058,7 @@ fn a_task_with_a_helper_waiting_says_it_needs_you(cx: &mut TestAppContext) {
     let handoff = json!({ "reason": "Sign in, please.", "tab": waiting });
     calls.push(call(&run.agents, &agent, "hand_off", handoff, cx));
     let talk = run.talk(&agent, cx);
-    assert_eq!(talk.about, format!("{} · {NEEDS_YOU}", talk.name));
+    assert_eq!(talk.about, format!("{PRODUCT} · {NEEDS_YOU}"));
     let card = card(&run, cx);
     assert_eq!(card.dot, Dot::Waiting);
     assert!(card.status.starts_with(NEEDS_YOU), "{}", card.status);

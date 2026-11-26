@@ -14,6 +14,7 @@ use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{AskedOn, Conversation, Line, State, TaskAction, Word};
 use crate::agents::tier::Tier;
+use crate::product::PRODUCT;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
 /// numbered by run, then keeps what it's sent and never answers. Asked to purge, it writes what
@@ -725,7 +726,7 @@ fn a_task_under_way_whose_conversation_went_is_interrupted(cx: &mut TestAppConte
     assert_eq!(card.word, Word::Interrupted);
     assert_eq!(card.status.as_ref(), why);
     let talk = run.talk(&agent, cx);
-    assert_eq!(talk.about.as_ref(), "Claude · Interrupted");
+    assert_eq!(talk.about, format!("{PRODUCT} · Interrupted"));
     assert_eq!(run.ilo_lines(&agent, cx), [IloKind::Gone]);
     let Some(Line::Ilo(last)) = talk.lines.last() else {
         panic!("ilo's line isn't last");

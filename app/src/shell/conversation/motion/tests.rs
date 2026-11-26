@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::product::PRODUCT;
 
 fn at(start: Instant, seconds: f32) -> Instant {
     start + Duration::from_secs_f32(seconds)
@@ -46,7 +47,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         agent: "task-1".into(),
         name: "Claude".into(),
         title: "Museums in Lisbon".into(),
-        about: "Claude · Haiku · Working".into(),
+        about: format!("{PRODUCT} · Haiku · Working").into(),
         asked: "what's on at maat".into(),
         page: None,
         lines,
@@ -107,7 +108,7 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     let old = conversation(vec![Line::You("what's on".into()), trace(true, 2)]);
     let answer = "Two shows.\n\nBoth close at six.".into();
     let new = Conversation {
-        about: "Claude · Haiku · Done 13:31".into(),
+        about: format!("{PRODUCT} · Haiku · Done 13:31").into(),
         stoppable: false,
         live: Default::default(),
         ..conversation(vec![
