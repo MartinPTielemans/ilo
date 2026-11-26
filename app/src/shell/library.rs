@@ -4320,7 +4320,7 @@ impl Shell {
             .justify_center()
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
-            .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
+            .map(|button| self.with_tip_frame(button, command, cx))
             .when(!plated, |button| {
                 button
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))

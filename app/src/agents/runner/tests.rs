@@ -959,6 +959,27 @@ fn a_walled_start_carries_no_name_outside_the_list() {
     }
 }
 
+/// A walled run's reap sweeps its place and answers its task with what the sweep found, by the
+/// run's own process; a wall with no place, or a run with no wall, sweeps nothing and says
+/// nothing. Off the Mac nothing is inside a wall, so the sweep finds nothing in one walk.
+#[test]
+fn a_walled_runs_reap_answers_its_task_with_the_sweep() {
+    let root = std::env::temp_dir().join(format!("ilo-reaped-{}", std::process::id()));
+    let place = leftovers::Place::make(&root).unwrap();
+    let wall = Wall::for_test(None).in_place(Arc::new(place));
+    let (events, mut heard) = futures::channel::mpsc::unbounded();
+    let to = || Some(("task".to_string(), events.clone()));
+    reaped(Some(&wall), 7, to());
+    let event = heard.try_recv().unwrap();
+    let swept = leftovers::Swept { ended: 0, walks: 1 };
+    assert_eq!((event.agent.as_str(), event.run), ("task", 7));
+    assert_eq!(event.out, Out::Swept(Ok(swept)));
+    reaped(Some(&Wall::for_test(None)), 8, to());
+    reaped(None, 9, to());
+    assert!(heard.try_recv().is_err(), "nothing more was said");
+    _ = std::fs::remove_dir_all(&root);
+}
+
 /// Claude's start has its provider's search and never its fetch, walled or not. The wall's hosts
 /// are the ones it had, as the search rides the assistant's own call to its service.
 #[test]

@@ -875,6 +875,59 @@ fn providers_found(
     })
 }
 
+/// Overview's loose ends read what the app already found and ask nothing: a sign-in is one only
+/// for an assistant known signed out or missing while another is signed in, none while its state
+/// is unknown or threads are off, none once put away, and no assistant is looked for to list them.
+#[gpui::test]
+fn overview_lists_only_what_the_app_already_knows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::settings_overview::{LooseEnd, PutAway, loose_ends};
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let found = |cli, ready, cx: &mut TestAppContext| {
+        agents.update(cx, |agents, _| {
+            let found = Found {
+                ready,
+                ..Default::default()
+            };
+            agents.tasks.found.insert(cli, found);
+        })
+    };
+    let listed = |away: &PutAway, cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| loose_ends(agents, away))
+    };
+    let away = PutAway::default();
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(true, Ordering::SeqCst)
+    });
+    let looks = configs.looks.load(Ordering::SeqCst);
+    assert_eq!(listed(&away, cx), [], "nothing known, nothing listed");
+    found(Cli::Claude, Ready::SignedIn, cx);
+    assert_eq!(listed(&away, cx), [], "ChatGPT's state isn't known");
+    found(Cli::Codex, Ready::SignedOut, cx);
+    assert_eq!(listed(&away, cx), [LooseEnd::SignIn(Cli::Codex)]);
+    found(Cli::Claude, Ready::SignedOut, cx);
+    assert_eq!(
+        listed(&away, cx),
+        [],
+        "with none signed in, threads don't run without it"
+    );
+    found(Cli::Claude, Ready::SignedIn, cx);
+    let mut away = PutAway::default();
+    away.put_away(&LooseEnd::SignIn(Cli::Codex).key());
+    assert_eq!(listed(&away, cx), [], "a put-away loose end came back");
+    agents.update(cx, |agents, _| {
+        agents.switches.threads.store(false, Ordering::SeqCst)
+    });
+    assert_eq!(listed(&PutAway::default(), cx), [], "threads are off");
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        looks,
+        "Overview looked for an assistant"
+    );
+}
+
 /// Models is never only its title: an assistant not on this computer is listed with what Settings
 /// offers for it, and no model under it.
 #[gpui::test]
@@ -12265,11 +12318,19 @@ mod sessions {
             "a client that gave no name has its kind's"
         );
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's.
+        // its kind's: the app's name, and the product's as the user reads it, in any case.
         let app = env!("APP_NAME");
+        let product = crate::product::PRODUCT;
+        let mut capital = product.chars();
+        let capital = capital.next().map_or(String::new(), |first| {
+            first.to_uppercase().chain(capital).collect()
+        });
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
+            product.to_string(),
+            format!("{} agent", product.to_uppercase()),
+            format!("My {capital} helper"),
             "The browser".into(),
             "Checked by your browser".into(),
             // Another client's name is that client's, however it's spaced, joined or stopped, and

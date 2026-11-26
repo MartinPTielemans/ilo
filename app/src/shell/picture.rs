@@ -79,6 +79,15 @@ impl PagePicture {
         })
     }
 
+    /// A kept card's picture, read back after a quit (agents/kept/cards.rs).
+    pub fn kept(plate: &crate::agents::kept::cards::Plate) -> Self {
+        let (width, height) = plate.size;
+        Self {
+            image: plate.image.clone(),
+            size: (width as f32, height as f32),
+        }
+    }
+
     /// The picture as GPUI draws it, and its size in pixels.
     pub(crate) fn image(&self) -> Arc<RenderImage> {
         self.image.clone()

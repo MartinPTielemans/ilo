@@ -48,6 +48,8 @@ mod tests;
 /// A page of Settings, as the owner drew the sidebar (spec-settings.md › The sidebar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
+    /// Above the groups: what still needs doing, then how each page is set (S1).
+    Overview,
     General,
     Window,
     Privacy,
@@ -97,21 +99,23 @@ impl Section {
         &[Section::TabsAndSpaces, Section::Links],
     ];
 
+    /// The rows above the groups, under the search.
+    pub const TOP: [Section; 1] = [Section::Overview];
+
     /// The heading over each of `GROUPS`, in its order.
     pub const LABELS: [&'static str; 3] = ["Personal", "Agents", "Features"];
 
     /// Every page, in the sidebar's order: its groups', then About's at the foot.
     pub fn all() -> impl Iterator<Item = Section> {
-        Section::GROUPS
-            .into_iter()
-            .flatten()
-            .copied()
+        (Section::TOP.into_iter())
+            .chain(Section::GROUPS.into_iter().flatten().copied())
             .chain([Section::About])
     }
 
     /// Its name, the page's title, and what the logs and check.sh call it.
     pub fn name(self) -> &'static str {
         match self {
+            Section::Overview => "Overview",
             Section::General => "General",
             Section::Window => "Window",
             Section::Privacy => "Privacy",
@@ -130,6 +134,7 @@ impl Section {
 
     pub fn glyph(self) -> &'static str {
         match self {
+            Section::Overview => "icons/settings-overview.svg",
             Section::General => "icons/settings-general.svg",
             Section::Window => "icons/settings-window.svg",
             Section::Privacy => "icons/settings-privacy.svg",
@@ -287,20 +292,22 @@ pub fn column(
             .child(drawn(format!("toolbar {}", section.name()), logged))
             .on_click(move |_, window, cx| pick(section, window, cx))
     };
+    let page_row = |section: Section| {
+        let selected = found.is_none() && section == shown;
+        entry(section, logged.clone())
+            .child(glyph(section.glyph(), form::ROW_GLYPH, ink.icon))
+            .child(
+                div()
+                    .when(selected, |name| name.font_weight(FontWeight::MEDIUM))
+                    .child(section.name()),
+            )
+    };
+    let top: Vec<_> = Section::TOP.into_iter().map(page_row).collect();
     let groups = Section::GROUPS
         .into_iter()
         .enumerate()
         .map(|(index, sections)| {
-            let rows = sections.iter().map(|&section| {
-                let selected = found.is_none() && section == shown;
-                entry(section, logged.clone())
-                    .child(glyph(section.glyph(), form::ROW_GLYPH, ink.icon))
-                    .child(
-                        div()
-                            .when(selected, |name| name.font_weight(FontWeight::MEDIUM))
-                            .child(section.name()),
-                    )
-            });
+            let rows = sections.iter().map(|&section| page_row(section));
             // The group's heading, on the rows' text; the list's tab stops are the rows.
             let heading = div()
                 .h(px(form::HEADING))
@@ -380,6 +387,7 @@ pub fn column(
         .size_full()
         .overflow_y_scroll()
         .track_scroll(&sections.scroll)
+        .children(top)
         .children(groups);
     div()
         .flex_none()

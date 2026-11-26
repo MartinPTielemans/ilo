@@ -1,39 +1,28 @@
 //! The card of a window that shows no page, which is a fresh ⌘N window, a Space with no tab shown
 //! and what's left after the last Today tab closes (docs/ux-spec.md › Window › Card, no page).
 //! Nothing native covers it, since the core lays out no page view with no tab shown
-//! (`Window::ShowNothing`), so GPUI draws ilo's mark, the Space's name and one quiet line on it and
-//! takes its clicks. On the first run it shows the welcome instead, until a page shows.
+//! (`Window::ShowNothing`), so GPUI draws the bar at rest on it under the product's mark
+//! (`composer`) and takes its clicks. On the first run it shows the welcome instead, until a page shows.
 
 use std::time::Instant;
 
-use gpui::{
-    Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba,
-};
+use gpui::{Context, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba};
 
+use super::onboarding;
 use super::{
     Command, SECONDARY, Shell,
     display_face::{cap_top, display_text},
     fade_at,
     keys::user_keys,
 };
-use crate::palette::Palette;
-use crate::tokens::text;
+use crate::palette::{Palette, Tone};
 
 /// The mark and the line fade in over this long on the scroll edge's curve, as the hover card's
 /// opacity does, from nothing, so a window that shows a page a frame later never shows them.
 pub(super) const FADE: f32 = 0.1;
 use crate::product;
 use crate::product::PRODUCT;
-use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
-use crate::tokens::shell::empty::BUTTON_HEIGHT;
-use crate::tokens::shell::empty::BUTTON_INSET;
-use crate::tokens::shell::empty::BUTTON_KEYS;
-use crate::tokens::shell::empty::BUTTON_KEYS_HEIGHT;
-use crate::tokens::shell::empty::BUTTON_KEYS_INSET;
-use crate::tokens::shell::empty::BUTTON_KEYS_RADIUS;
-use crate::tokens::shell::empty::BUTTON_RADIUS;
-use crate::tokens::shell::empty::BUTTON_TEXT;
 use crate::tokens::shell::empty::HINT_BOTTOM;
 use crate::tokens::shell::empty::KEYS_FILL;
 use crate::tokens::shell::empty::KEYS_GAP;
@@ -47,9 +36,6 @@ use crate::tokens::shell::empty::NAME;
 use crate::tokens::shell::empty::NAME_GAP;
 use crate::tokens::shell::empty::NAME_LINE;
 use crate::tokens::shell::empty::NAME_SIZE;
-use crate::tokens::shell::empty::TAGLINE;
-use crate::tokens::shell::empty::TAGLINE_LINE;
-use crate::tokens::shell::empty::TAGLINE_SIZE;
 use crate::tokens::shell::empty::WELCOME_LINE;
 use crate::tokens::shell::empty::WELCOME_MARK;
 use crate::tokens::shell::empty::WELCOME_SIZE;
@@ -160,7 +146,11 @@ impl Shell {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
-        if let Some(page) = self.resting_page(frame, cx) {
+        let page = match self.rests_on_bar() {
+            true => self.resting_page(frame, cx),
+            false => None,
+        };
+        if let Some(page) = page {
             let opacity = self.empty_opacity(cx.background_executor().now());
             return Some(
                 div()
@@ -276,34 +266,15 @@ impl Shell {
     }
 }
 
-/// The first run's welcome: a bigger mark, "Welcome to ilo" and "a good tool." in the display
-/// face, and a button that opens a new tab, as a click anywhere on the card does.
+/// The first run's welcome: a bigger mark, "Welcome to" the product in the display face, and
+/// first run's main button, which opens a new tab as a click anywhere on the card does.
 fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
-    let keys = user_keys(cx).label(Command::NewTab).map(|keys| {
-        div()
-            .h(px(BUTTON_KEYS_HEIGHT))
-            .px(px(BUTTON_KEYS_INSET))
-            .flex()
-            .items_center()
-            .rounded(px(BUTTON_KEYS_RADIUS))
-            .bg(rgba(BUTTON_KEYS))
-            .text_size(px(text::SMALL))
-            .child(keys)
-    });
+    let keys = user_keys(cx).label(Command::NewTab).map(Into::into);
     let button = div()
+        .id("welcome-button")
+        .debug_selector(|| "welcome-button".into())
         .mt(px(BUTTON_GAP))
-        .h(px(BUTTON_HEIGHT))
-        .px(px(BUTTON_INSET))
-        .flex()
-        .items_center()
-        .gap(px(KEYS_GAP))
-        .rounded(px(BUTTON_RADIUS))
-        .bg(rgba(BUTTON_FILL))
-        .text_color(rgba(BUTTON_TEXT))
-        .text_size(px(text::BODY))
-        .font_weight(FontWeight::MEDIUM)
-        .child("Open a new tab")
-        .children(keys);
+        .child("Open a new tab");
     div()
         .flex()
         .flex_col()
@@ -316,14 +287,15 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
                 WELCOME_LINE,
                 cx,
             )
+            .debug_selector(|| "welcome-title".into())
             .mt(px(MARK_GAP - cap_top(WELCOME_SIZE, WELCOME_LINE)))
             .text_color(palette.text(rgba(NAME).a)),
         )
-        .child(
-            display_text("a good tool.", TAGLINE_SIZE, TAGLINE_LINE, cx)
-                .text_color(palette.text(rgba(TAGLINE).a)),
-        )
-        .child(button)
+        .child(onboarding::main_button(
+            button,
+            keys,
+            palette.tone == Tone::Light,
+        ))
 }
 
 pub(super) mod composer;

@@ -223,7 +223,7 @@ names and groups, which are Unicode's and CLDR's, and their shortcodes, which ar
   authorization of the copyright holder.
 
 Outfit (https://github.com/Outfitio/Outfit-Fonts), SIL Open Font License 1.1
-Used in app/assets/fonts/Outfit-Medium.ttf, unmodified, at commit
+Used in app/assets/fonts/Outfit-Medium.ttf and Outfit-SemiBold.ttf, unmodified, at commit
 902773808eb372f70fb34e8946dd1ffe604efc79, and built into the app. The license's full text is next
 to it, in app/assets/fonts/OFL.txt, and at the end of this file.
 

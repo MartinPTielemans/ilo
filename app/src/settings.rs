@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -293,6 +294,9 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The loose ends Overview's ✕ put away, read from the profile's folder at Overview's first
+    /// draw, never at launch, when the search's index makes Settings.
+    put_away: Option<browser::settings_overview::PutAway>,
     /// The assistants the user clicked on Models while the inside switch is off, looked up and
     /// shown as usual until the page is left.
     looked_up: HashSet<Cli>,
@@ -1190,6 +1194,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            put_away: None,
             looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),
@@ -5841,7 +5846,8 @@ fn feature_row(
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished threads so you can reply";
-const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
+const KEPT_WHERE: &str =
+    "The thread as you saw it stays on this computer only. Your assistant keeps the conversation.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
@@ -6315,6 +6321,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
+            Section::Overview => self.overview(cx),
             Section::General => {
                 let profiles = profiles();
                 let general = self.general(&profiles, accent, cx);

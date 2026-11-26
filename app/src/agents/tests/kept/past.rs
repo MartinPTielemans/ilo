@@ -421,14 +421,19 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
 }
 
-/// A done task's finding comes from this run's conversation alone: its card says it, and after a
-/// quit the task brought back, its kept card and the kept list's row say none of it, nor does the
-/// file.
+/// A kept task's card comes back after a quit as it was: its title at once, then its line and its
+/// last page's picture once they're read, on its card in Latest tasks and on the task brought
+/// back. The line is in its card's folder alone: the kept list's row, the Archive's and the file
+/// of kept tasks say none of it. A reply takes the card's line and picture away, as its own turn
+/// has its own.
 #[gpui::test]
-fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext) {
+    use super::cards::{last_page, picture, pictured};
     let run = Run::new("finding", cx);
     let agent = run.start(Cli::Claude, cx);
     run.ran(1);
+    let tab = last_page(&run, &agent, cx);
+    pictured(&run, &agent, tab, Some(picture()), cx);
     name_it(&run, &agent, "Lisbon seats", cx);
     run.finish(&agent, cx);
     let finding = (run.agents).read_with(cx, |agents, cx| {
@@ -437,20 +442,36 @@ fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
     assert_eq!(finding, "Two seats at 9:05, car 4.");
 
     quit(&run, cx);
+    cx.run_until_parked();
     let next = next(&run, cx);
     let past = archive(&next, cx)[0].0.clone();
-    (next.agents).read_with(cx, |agents, cx| {
-        let back = agents.card(agents.task(&past).unwrap(), cx);
-        assert!(back.finding.is_empty(), "{:?}", back.finding);
-        let kept = agents.kept_cards(cx);
-        assert!(
-            kept.iter().any(|card| card.agent == past.as_str()),
-            "no kept card"
-        );
-        for card in kept {
-            assert!(card.finding.is_empty(), "{:?}", card.finding);
-        }
+    let kept = |next: &Run, cx: &mut TestAppContext| {
+        (next.agents).read_with(cx, |agents, cx| {
+            let card = (agents.kept_cards(cx).into_iter()).find(|card| card.agent == past.as_str());
+            card.expect("no kept card")
+        })
+    };
+    // Its title first: nothing is read on the launch's own path.
+    let first = kept(&next, cx);
+    assert_eq!(first.title, "Lisbon seats");
+    assert!(
+        first.finding.is_empty() && first.kept_picture.is_none(),
+        "{first:?}"
+    );
+
+    cx.run_until_parked();
+    let card = kept(&next, cx);
+    assert_eq!(card.finding, "Two seats at 9:05, car 4.");
+    assert_eq!(card.line.as_deref(), Some("Two seats at 9:05, car 4."));
+    assert!(!card.told.is_empty());
+    assert_eq!(
+        card.kept_picture.as_ref().map(|plate| plate.size),
+        Some((2, 2))
+    );
+    let back = (next.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&past).unwrap(), cx)
     });
+    assert_eq!(back.finding, card.finding);
     for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
         assert!(
             !title.contains("car 4") && !about.contains("car 4"),
@@ -459,6 +480,67 @@ fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
     }
     let text = std::fs::read_to_string(index(&next)).unwrap();
     assert!(!text.contains("car 4"), "the file has the finding");
+
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    next.ran(2);
+    let replied = (next.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&past).unwrap(), cx)
+    });
+    assert!(replied.finding.is_empty(), "{:?}", replied.finding);
+    assert!(replied.kept_picture.is_none());
+}
+
+/// Settings › Agents' Remove on a kept task brought back takes its card's line and picture off
+/// the card shown, as its card's folder goes; Remove All takes every one's.
+#[gpui::test]
+fn removing_a_kept_task_takes_its_cards_line_and_picture(cx: &mut TestAppContext) {
+    let run = Run::new("finding-removed", cx);
+    for at in 1..=2 {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at);
+        run.finish(&agent, cx);
+    }
+    quit(&run, cx);
+    cx.run_until_parked();
+    let next = next(&run, cx);
+    cx.run_until_parked();
+    let findings = |next: &Run, cx: &mut TestAppContext| {
+        (next.agents).read_with(cx, |agents, cx| {
+            (agents.kept_cards(cx).into_iter())
+                .map(|card| (card.agent.to_string(), card.finding.to_string()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let before = findings(&next, cx);
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert!(
+        before.iter().all(|(_, finding)| !finding.is_empty()),
+        "{before:?}"
+    );
+
+    let first = before[0].0.clone();
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_task(&first, cx));
+    cx.run_until_parked();
+    let after = (next.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&first).unwrap(), cx).finding
+    });
+    assert!(after.is_empty(), "{after:?}");
+    let other = findings(&next, cx);
+    assert!(
+        other
+            .iter()
+            .any(|(agent, finding)| *agent != first && !finding.is_empty())
+    );
+
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    cx.run_until_parked();
+    let all = (next.agents).read_with(cx, |agents, cx| {
+        (agents.tasks.tasks.iter())
+            .map(|task| agents.card(task, cx).finding.to_string())
+            .collect::<Vec<_>>()
+    });
+    assert!(all.iter().all(String::is_empty), "{all:?}");
 }
 
 /// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a

@@ -900,17 +900,19 @@ dark-line = 0xf3f0_e81a
 dark-disabled = 0xf3f0_e861
 # A destructive item's label: Delete Space, a folder or a profile, Delete from Archive.
 dark-destructive = 0xf07a_63ff
-light-rim = 0x1614_0f24
-light-label = 0x1614_0fe6
-light-secondary = 0x1614_0f9e
-light-line = 0x1614_0f1a
-light-disabled = 0x1614_0f61
-light-destructive = 0xb326_1eff
+light-rim = 0x1616_1824
+light-label = 0x1616_18e6
+light-secondary = 0x1616_189e
+light-line = 0x1616_181a
+light-disabled = 0x1616_1861
+# The dark look's red darkened so its words read on a light ground (#4276): 4.5:1 at least on the
+# floating fill over the material at its worst and on an own page with a white window behind.
+light-destructive = 0xc236_2bff
 # A destructive item's highlight, with a Paper label on it.
 destructive-fill = 0xb326_1eff
 destructive-label = 0xf3f0_e8ff
 # Ink over the destructive highlight while the button is down on it.
-pressed = 0x1614_0f2e
+pressed = 0x1616_182e
 # The others' highlight is a neutral plate, never the Space's accent (#4090): the look's label ink
 # at `plate`, and at `plate-pressed` while the button is down on it, under the label in its ink.
 plate = 0.11
@@ -967,8 +969,9 @@ panel = 16.0
 sheet = 20.0
 
 [palette]
-# The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320).
-ink = 0x16140f
+# The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320). Ink is the
+# dark look's ground, the one near-black of the light look (#4276): no place spells it but here.
+ink = 0x161618
 paper = 0xf3f0e8
 # The window is the HUD window's material, behind the window, under black at `tint` on a dark
 # window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
@@ -993,8 +996,15 @@ gray-text-more = 3.0
 # window behind (#6d6d6b at Standard, from the real app's own pixels at 469483355): 4.55, where
 # 0.97 reads 4.40 and the state line's 0.75 read 3.39. Over the check VM's desktop alone (#6b6a65
 # at Standard, #696762 at More, at f98ded880) it reads 4.76 and 4.96, where the state line read
-# 3.51 and 4.28. A light window's gray reads 7.7 or more on its white plate and stays as it is.
+# 3.51 and 4.28.
 plate-gray = 1.0
+# The same on a light window (#4276), whose plates are the ink's or a Space's colour and darker
+# than the window beside them: the ink at this, the least hundredth at which gray on the shown
+# plate holds 4.5:1 with a white window behind, all along the Transparency bar, with no theme and
+# on each of the picker's swatches. It reads 4.54 there on a Space's colour and 5.76 on the ink's
+# plate, where the look's quiet ink, 0.65, read 4.23 and 5.26. Over a black window it reads 3.71
+# and 4.31: the level's gray floor, 3:1, is what holds there.
+light-plate-gray = 0.71
 # The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind
@@ -1062,10 +1072,12 @@ light-material-solid = 0xffffff
 overlay-fill-less = 0.88
 overlay-fill = 0.78
 overlay-fill-more = 0.56
-# The light fill's and a light dialog's (#4090): at Less, the least at which text at 0.6 of Ink
-# holds 4.5:1 over a white, grey and black page through the material, as run 6 measured it; at
-# Standard and More, as far down as the dark fill steps. Where the host has no material, what
-# floats is opaque.
+# The light fill's and a light dialog's (#4090): at Less, where the light look's quiet ink
+# (`light-text-secondary`) holds 4.5:1 over a white, grey and black page through the material, as
+# run 6 measured it; at Standard and More, as far down as the dark fill steps. They were solved for
+# text at 0.6 of the warmer ink before #4276, which read 4.5 at these and the ink now reads 4.42
+# at: a word a float draws under its floor is drawn at the floor (`FloatInk::word`). Where the host
+# has no material, what floats is opaque.
 light-overlay-fill-less = 0.94
 light-overlay-fill = 0.84
 light-overlay-fill-more = 0.62
@@ -1113,14 +1125,10 @@ state-pressed = 0.065
 state-hovered = 0.12
 state-selected = 0.2
 state-selected-hovered = 0.36
-# On a light window the tab shown lies on white 0.85 over a black 0.20 shadow rather than on a plate
-# of Ink (Arc's light `TabCellBackgroundCurrent`). Ours, as Arc's light rows aren't recorded: the
-# shadow 1 down and blurred 2, and the plate white 1 under the pointer.
-light-selected = 0.85
-light-selected-hovered = 1.0
-light-selected-shadow = 0.2
-light-selected-shadow-y = 1.0
-light-selected-shadow-blur = 2.0
+# On a light window the selected plate is the ink too, a step weaker (#4276): dark ink over a light
+# glass weighs more than light ink over a dark one. No white plate lies on a light window, and
+# nothing lifts this one but its own strength, which it keeps under the pointer.
+light-state-selected = 0.16
 # The tab shown keeps the Space's colour on its row, the only colour in the chrome (#4089): its
 # main colour at `shown` on a dark window and `light-shown` on a light one, and a step firmer under
 # the pointer (ours: the mock has no hovered shown row). Where the ink wouldn't read on it at 4.5:1
@@ -1561,6 +1569,36 @@ light-page-line = 0x0000000d
 shown = 0xf3f0e833
 light-shown = 0.16
 
+[settings.overview]
+# Overview (spec-settings.md › S1, values-settings.md › S1): the default browser's notice, a row of
+# its own 60 tall; Loose ends' rows 52 tall, 14 in at the left and 10 at the right, their empty
+# ring 16 and 12 before the text, their ✕ 12 in a 26 box.
+notice = 60.0
+loose = 52.0
+loose-left = 14.0
+loose-right = 10.0
+loose-ring = 16.0
+loose-gap = 12.0
+close = 12.0
+close-box = 26.0
+# How it's set up: two rows of three tiles, 10 apart, each 112 tall at radius 12, 12 in above and
+# under and 14 at the sides, its head's glyph 16 and 8 before the page's name at 13 on 16, the
+# drawing's 590 read as semibold, its two lines at 12 on 17, 10 under the head.
+tile = 112.0
+tile-radius = 12.0
+tile-y = 12.0
+tile-x = 14.0
+tile-gap = 10.0
+tile-glyph = 16.0
+tile-head-gap = 8.0
+tile-title = 13.0
+tile-title-line = 16.0
+tile-body = 12.0
+tile-body-line = 17.0
+# The line under the tiles, 10 under them and 4 in, at 12 on 17.
+note-top = 10.0
+note-x = 4.0
+
 [settings.sync]
 # Sync & Import's account row, 56 tall, the account's initial on a round tile 28 across, 12
 # before the address; a device's row 44, its glyph 16 and 10 before its name, its ✕ 12 on a
@@ -1846,7 +1884,8 @@ space-icon-pitch = 34.0
 space-height = 34.0
 # A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
 # pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window, as the redesign's foot has it.
+# on a dark window, as the redesign's foot has it, where that reads at 3:1 on the footer; otherwise
+# only as much nearer the ink as 3:1 needs, and never weaker than the other dots (the lead, 25 Nov).
 space-swatch-shown = 7.0
 space-swatch = 7.0
 space-swatch-hovered = 9.0
@@ -1905,10 +1944,10 @@ selected-hovered = 0.36
 # A row chosen with ⌘- or ⇧-click besides the tab shown: Arc's secondary selection, P3 #FAFBFF
 # 0.10 over dark and black 0.10 over light (docs/ux-spec.md › Tokens).
 chosen = 0.1
-# A row under the pointer is the only plate a row has but the tab shown's (#4091): 0.12 on a dark
-# window, 0.07 on a light one.
+# A row under the pointer is the only plate a row has but the tab shown's (#4091): the ink at 0.12
+# in both looks (#4276), where 0.07 on a light window told from it at 1.16 at most, under the 1.2
+# a plate under the pointer has to.
 hovered = 0.12
-light-hovered = 0.07
 pressed = 0.065
 secondary = 0.62
 # The close button's square under the pointer: Dia's subtle fill, 0.12, at the header buttons'
@@ -1937,14 +1976,13 @@ scroll-edge = 0.09
 clear-hovered = 0.81
 # A tab whose page isn't loaded fades its favicon (ours: Arc's alpha isn't measured).
 sleeping-favicon = 0.5
-# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 on a dark window and
-# white at 0.55 on a light one, with the resting level's rim, and under the pointer the ladder's
+# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 in both looks (#4276),
+# with the resting level's rim, and under the pointer the ladder's
 # hover over that (palette's `state-hovered`). The one shown is
 # themed by its icon (tile_theme.rs), and black with Dia's default selection ring, white 0.45,
-# where the icon gives no theme. A light window's is white (Dia), unthemed whatever its icon until
+# where the icon gives no theme. A light window's is unthemed whatever its icon until
 # the light theme is built (ours).
 tile = 0.07
-light-tile = 0.55
 tile-ring = 0.45
 keyed = 0.45
 tile-unthemed = 0x0000_00ff
@@ -2100,9 +2138,9 @@ keys-radius = 6.0
 keys-fill = 0xffff_ff14
 # From the words to their keys, as the toast sets its chip.
 keys-gap = 8.0
-# The product's mark (app/src/product.rs) over the line, this far across: the smallest size that
-# takes the large drawing, a point more than the mark it replaces stood tall.
-mark-size = 40.0
+# The product's mark (app/src/product.rs), its box this far across, as the asset has it; its ink
+# falls where the drawing puts it. Over the bar at rest (`shell.composer`), and over the welcome.
+mark-size = 48.0
 # From the mark's foot to the line, so they read as a sign and its caption, not one block.
 mark-gap = 24.0
 # The Space's name between the mark and the line, in the display face: its caps start the mark's
@@ -2111,26 +2149,13 @@ name-size = 28.0
 name-line = 34.0
 name-gap = 12.0
 name = 0xffff_ffd9
-# The first run's welcome, in place of the name and the line: "Welcome to ilo" in the display
-# face, "a good tool." under it, dimmer, and one button that opens a new tab, under a mark this
-# much bigger.
+# The first run's welcome, in place of the name and the line: "Welcome to" the product in the
+# display face under a mark this much bigger, and this far under it one button that opens a new
+# tab, first run's main button (`shell.onboarding.window`).
 welcome-mark = 1.5
 welcome-size = 44.0
 welcome-line = 52.0
-tagline-size = 20.0
-tagline-line = 26.0
-tagline = 0xffff_ff99
 button-gap = 28.0
-button-height = 30.0
-button-inset = 12.0
-button-radius = 6.0
-# Signal, the mark's green, with white words and a key chip of white 0.2.
-button-fill = 0x0e9f_55ff
-button-text = 0xffff_ffff
-button-keys = 0xffff_ff33
-button-keys-height = 20.0
-button-keys-inset = 5.0
-button-keys-radius = 6.0
 # The onboarding's last line, at the card's foot under the command bar it leaves up, as the line
 # under the mark is set.
 hint-bottom = 40.0
@@ -2138,11 +2163,12 @@ hint-bottom = 40.0
 
 [shell.composer]
 # The page an empty Space rests on (#4140), as its drawing measures it on the window's ink. Its
-# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark this far
-# over the field. The group moves up only as far as it needs to fit the card, never nearer its top
-# than `top`, which it keeps under the cards too.
+# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark
+# (`shell.empty`'s) this far over the field, in its column, where the card has that much room over
+# it. The group moves up only as far as it needs to fit the card, never nearer its top than `top`,
+# which it keeps under the cards too.
 top = 40.0
-mark-gap = 26.0
+mark-gap = 28.0
 # The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
 # words at 15 start 18 in, and the ⇥ chip and the switch end 9 in.
 field-width = 540.0
@@ -3888,15 +3914,18 @@ chosen-disc = 22.0
 chosen-ring = 1.5
 disc-rim = 0.15
 # The first disc is no colour, drawn as the drawing's plain one; the rest are a Space's colours, the
-# main first, as many of `palettes` as `palette-colors` says for each. `palette-names` names each
+# main first, as many of `palettes` as `palette-colors` says for each, two of them running from the
+# main at the top left to the second at the bottom right. `palette-names` names each
 # disc in the same order, the chosen one's shown at the right of the label.
 no-color = 0xede8df
 palette-colors = [2, 2, 2, 2, 2, 1, 2]
 palettes = [0x7a70f4, 0xe86ba8, 0x5fa9e8, 0x5fcb8d, 0xe5605f, 0xf08a4b, 0x6fa06a, 0xd3c97e, 0xedc95a, 0xe88bb3, 0x6b7088, 0x4a4f8c, 0x17181f]
 palette-names = ["None", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight"]
+disc-angle = 135.0
 # The pad: the colours' handles on the hue they take, going once round from the left edge, and
 # their lightness, from the top down. Its ground and rim as drawn; its dots 10 apart from 13 and 14
-# in, 26 across and 15 down, as strong as drawn; its foot shaded from 40% of the way down.
+# in, 26 across and 15 down, as strong as drawn; its foot shaded from 40% of the way down, the shade
+# running down it.
 pad-width = 276.0
 pad-height = 168.0
 pad-radius = 12.0
@@ -3911,6 +3940,7 @@ dot-size = 3.0
 dot-alpha = 0.45
 shade-from = 0.4
 shade = 0x17171bb8
+shade-angle = 180.0
 # The hue at the pad's left edge in turns, the drawing's green, and the lightness at its top and at
 # its foot (ours: the drawing's handles are its made-up data).
 hue-start = 0.4
@@ -3939,24 +3969,29 @@ plus = 12.0
 plus-stroke = 1.4
 field-width = 64.0
 # The bars: a label row, then 4 under it a track 12 tall across the panel's inside less the label's
-# 2 each side, rimmed as drawn, with a white thumb 20 round on it; 9 between bars.
+# 2 each side, rimmed as drawn, with a white thumb 20 round on it; 9 between bars. Each track's
+# picture runs from its left to its right.
 bar-gap = 9.0
 bar-label-gap = 4.0
 track = 12.0
 track-rim = 0.08
 thumb = 20.0
 thumb-shadow = 0x00000080
+track-angle = 90.0
 # Intensity's track, as drawn: the Space's first colour from this much to full by 62% of the way,
 # then the second. With no colour (Open) the bar is dimmed to this and doesn't move.
 intensity-from = 0.12
 intensity-full = 0.62
 dimmed = 0.4
 # Transparency's, as drawn: a solid ground from 8% of the way, darkening to the right, and three
-# dashed lines over it fading in to 62% off-white.
+# dashed lines over it, panes of glass, fading in from 20 along to 62% off-white at the clear end.
+# Each dash is 4 square and 4 from the next, the middle line a dash along.
 glass-from = 0x565661
 glass-to = 0x1a1a1e
 glass-solid = 0.08
 glass-lines = 0.62
+glass-dash = 4.0
+glass-fade = 20.0
 # Grain's, as drawn: the field plate with three rows of dots 1.6 round, 5 apart, the middle row a
 # half step along, fading in across it to 85% off-white. Its word reads Off at none.
 grain-dot = 1.6
