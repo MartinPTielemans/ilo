@@ -141,7 +141,7 @@ impl Shell {
     pub(super) fn bring_now(&mut self, window: &Window, cx: &mut Context<Self>) -> Option<Bring> {
         let bring = self.bring_state(window, cx)?;
         self.bring_follow(&bring, cx);
-        let moving = self.bring_moving(Some(&bring));
+        let moving = !crate::motion::still(cx) && self.bring_moving(Some(&bring));
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.bring.moving = moving;
         }
@@ -160,12 +160,7 @@ impl Shell {
             && motion.flight.map(|(_, to, _)| to) != Some(picked)
         {
             let from = motion.flight.map(|(_, to, _)| to);
-            // The first pick, as the step comes, is in its slot already.
-            let at = match from {
-                Some(_) => now,
-                None => now.checked_sub(Duration::from_secs(1)).unwrap_or(now),
-            };
-            motion.flight = Some((from, picked, at));
+            motion.flight = Some((from, picked, now));
         }
         let Bringing::Running { chips, done, .. } = &bring.state else {
             motion.written.clear();
@@ -256,6 +251,22 @@ impl Shell {
         }
     }
 
+    /// Try Again: asks a stalled import's profiles again, as the view's own button does, or reads
+    /// again the browser that couldn't be read.
+    pub(super) fn bring_try_again(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.bring_view() else {
+            return;
+        };
+        if view.read(cx).bring_stalled() {
+            log!("browser: onboarding import tries again");
+            return view.update(cx, |view, cx| view.press(cx));
+        }
+        let picked = view.update(cx, |view, _| view.card_state(0)).picked;
+        if let Some(picked) = picked {
+            self.bring_pick(picked, cx);
+        }
+    }
+
     /// Whether the step is drawing: a flight, a strand or the knot's gap.
     pub(super) fn bring_moving(&self, bring: Option<&Bring>) -> bool {
         let Some(onboarding) = self.onboarding.as_ref() else {
@@ -264,9 +275,15 @@ impl Shell {
         let now = onboarding.clock.now();
         let motion = &onboarding.bring;
         let [out, _, _, _] = t::BRING_FLIGHT;
-        let flying = (motion.flight)
-            .is_some_and(|(_, _, at)| now.saturating_duration_since(at).as_secs_f32() < out);
-        let running = matches!(bring.map(|b| &b.state), Some(Bringing::Running { .. }));
+        // The first pick, as the step comes, is in its slot already: only one from another flies.
+        let flying = (motion.flight).is_some_and(|(from, _, at)| {
+            from.is_some() && now.saturating_duration_since(at).as_secs_f32() < out
+        });
+        // A stalled import's knot stands still until it's asked again.
+        let running = matches!(
+            bring.map(|b| &b.state),
+            Some(Bringing::Running { stalled: None, .. })
+        );
         let [_, close] = t::BRING_LAP;
         let closing = (motion.all_here)
             .is_none_or(|at| now.saturating_duration_since(at).as_secs_f32() < close + t::BRING_ON);
@@ -340,7 +357,7 @@ impl Shell {
                 .child(
                     div()
                         .size(px(size))
-                        .rounded(px(size * 0.22))
+                        .rounded(px(size * t::BRING_PLATE[0]))
                         .when(picked, |plate| {
                             plate
                                 .border(px(t::RING))
@@ -389,7 +406,7 @@ impl Shell {
                     .child(
                         div()
                             .size(px(size))
-                            .rounded(px(size * 0.22))
+                            .rounded(px(size * t::BRING_PLATE[0]))
                             .bg(inks.button())
                             .flex()
                             .items_center()
@@ -397,7 +414,7 @@ impl Shell {
                             .child(
                                 svg()
                                     .path("icons/ellipsis.svg")
-                                    .size(px(size / 2.5))
+                                    .size(px(size * t::BRING_PLATE[2]))
                                     .text_color(inks.text(1.)),
                             ),
                     )
@@ -514,13 +531,13 @@ impl Shell {
                 card::at(x, y)
                     .size(px(sized))
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 0., 0.25 * along),
-                        offset: point(px(0.), px(sized / 10.)),
-                        blur_radius: px(sized / 4.),
+                        color: gpui::hsla(0., 0., 0., t::BRING_SHADOW[0] * along),
+                        offset: point(px(0.), px(sized * t::BRING_SHADOW[1])),
+                        blur_radius: px(sized * t::BRING_SHADOW[2]),
                         spread_radius: px(0.),
                         inset: false,
                     }])
-                    .rounded(px(sized * 0.22))
+                    .rounded(px(sized * t::BRING_PLATE[0]))
                     .child(plate)
                     .into_any_element(),
             )
@@ -532,7 +549,12 @@ impl Shell {
         {
             drawn.extend(icon(from, moving(elapsed / back), false));
         }
-        drawn.extend(icon(to, super::arrive(elapsed / out), true));
+        // The first pick, as the step comes, is in its slot already.
+        let along = match from {
+            Some(_) => super::arrive(elapsed / out),
+            None => 1.,
+        };
+        drawn.extend(icon(to, along, true));
         drawn
     }
 
@@ -551,10 +573,16 @@ impl Shell {
             .map_or(String::new(), |(name, _)| name.clone());
         let chips = match &bring.state {
             Bringing::Kinds(chips) => chips.clone(),
+            Bringing::Running {
+                stalled: Some(said),
+                ..
+            } => return vec![self.bring_again(said.to_string(), inks, cx)],
             Bringing::Running { chips, .. } => chips.clone(),
             Bringing::Reading => Vec::new(),
             Bringing::NoAccess => return vec![self.bring_notice(&name, inks, cx)],
-            Bringing::Unread => return vec![self.bring_unread(&name, inks, cx)],
+            Bringing::Unread => {
+                return vec![self.bring_again(format!("Couldn't read {name}."), inks, cx)];
+            }
         };
         let running = matches!(bring.state, Bringing::Running { .. });
         let motion = self.onboarding.as_ref().map(|o| &o.bring);
@@ -636,10 +664,10 @@ impl Shell {
                         .when(a11y, |chip| named_check(chip, label, on))
                         .w(px(width))
                         .h(px(height))
-                        .px(px(height / 3.))
+                        .px(px(height * t::BRING_CHIP_INSET[0]))
                         .flex()
                         .items_center()
-                        .gap(px(height / 4.))
+                        .gap(px(height * t::BRING_CHIP_INSET[1]))
                         .rounded(px(radius))
                         .bg(inks.group())
                         .opacity(if on { 1. } else { t::BRING_OFF })
@@ -741,19 +769,15 @@ impl Shell {
             .into_any_element()
     }
 
-    /// A browser that couldn't be read: so, with Try Again; another can still be picked.
-    fn bring_unread(&self, name: &str, inks: Inks, cx: &mut Context<Self>) -> AnyElement {
+    /// What keeps the import from going on, `said`, with Try Again: a browser that couldn't be
+    /// read, which reads it again, another still to be picked; or a run whose profile hasn't
+    /// opened, in the view's own words, which asks it again.
+    fn bring_again(&self, said: String, inks: Inks, cx: &mut Context<Self>) -> AnyElement {
         let [_, centre, ..] = t::BRING_CHIP;
         let [_, size, height] = t::LINE;
         let again = card::quiet("onboarding-try-again", "Try Again".into(), inks)
             .when(self.a11y, |again| named_button(again, "Try Again"))
-            .on_click(cx.listener(|shell, _, _, cx| {
-                let picked = (shell.bring_view())
-                    .and_then(|view| view.update(cx, |view, _| view.card_state(0)).picked);
-                if let Some(picked) = picked {
-                    shell.bring_pick(picked, cx);
-                }
-            }))
+            .on_click(cx.listener(|shell, _, _, cx| shell.bring_try_again(cx)))
             .relative()
             .children(self.place(Step::Import, "try-again"));
         card::at(0., centre - height)
@@ -767,7 +791,7 @@ impl Shell {
                     .text_size(px(size))
                     .line_height(px(height))
                     .text_color(inks.text_2())
-                    .child(format!("Couldn't read {name}.")),
+                    .child(said),
             )
             .child(again)
             .into_any_element()
@@ -840,7 +864,7 @@ impl Shell {
                     .child(
                         div()
                             .size(px(t::TILE_PLATE))
-                            .rounded(px(t::TILE_PLATE / 4.))
+                            .rounded(px(t::TILE_PLATE * t::TILE_PLATE_CORNER))
                             .bg(inks.group())
                             .flex()
                             .items_center()
@@ -897,12 +921,12 @@ fn letter_plate(name: &str, size: f32, inks: Inks) -> gpui::Div {
         .unwrap_or_default();
     div()
         .size(px(size))
-        .rounded(px(size * 0.22))
+        .rounded(px(size * t::BRING_PLATE[0]))
         .bg(inks.button())
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(size * 0.45))
+        .text_size(px(size * t::BRING_PLATE[1]))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(inks.text(1.))
         .child(letter)

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use gpui::{Context, RenderImage};
+use gpui::{Context, RenderImage, SharedString};
 
 use super::read::{self, Kind, Tally};
 use super::{ImportView, Step};
@@ -31,11 +31,13 @@ pub(crate) enum Bringing {
     /// Its files couldn't be read.
     Unread,
     /// An import of it under way, each kind it brings with whether it's written; `stoppable` while
-    /// Cancel can still leave everything out, stalled or not, `done` once all of it is in.
+    /// Cancel can still leave everything out, stalled or not, `done` once all of it is in, and
+    /// `stalled` with the view's own sentence while a profile it waits for hasn't opened.
     Running {
         chips: Vec<Chip>,
         stoppable: bool,
         done: bool,
+        stalled: Option<SharedString>,
     },
 }
 
@@ -87,6 +89,11 @@ impl ImportView {
     /// Where the card's chips are drawn is logged as the view's own were, for check.sh to click.
     pub(crate) fn card_drawn(&self) -> crate::settings_rows::Drawn {
         self.drawn_at.clone()
+    }
+
+    /// An import is waiting on a profile that hasn't opened, which the view's Try Again asks for again.
+    pub(crate) fn bring_stalled(&self) -> bool {
+        matches!(&self.step, Step::Running { run, .. } if run.stalled.is_some())
     }
 
     /// The card offers its Import and Skip: no import is under way or over.
@@ -187,6 +194,7 @@ impl ImportView {
                         chips,
                         stoppable,
                         done: false,
+                        stalled: run.stalled.clone(),
                     },
                 )
             }
@@ -199,6 +207,7 @@ impl ImportView {
                         chips,
                         stoppable: false,
                         done: true,
+                        stalled: None,
                     },
                 )
             }

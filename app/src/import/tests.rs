@@ -1020,7 +1020,10 @@ impl Host for Browser {
 
     fn add_favorite(&self, space: u64, tab: &Tab) {
         let mut state = self.state.borrow_mut();
-        let profile = state.space(space).profile;
+        // First run adds them to the window's own Space, which this core didn't make: its first
+        // profile's.
+        let profile =
+            (state.spaces.iter().find(|each| each.id == space)).map_or(0, |each| each.profile);
         state.favorites.push((profile, tab.clone()));
     }
 

@@ -2672,11 +2672,19 @@ bring-lap = [1.3, 0.4]
 bring-on = 0.9
 # The Safari notice: its left and width.
 bring-notice = [214.0, 448.0]
+# An app icon's plate: its corners as a share of its size, the letter standing in for an icon and
+# More…'s glyph at these shares of it; the flying icon's shadow at most this alpha, its drop and
+# blur as shares of its size; a chip's sides and the gap after its glyph as shares of its height.
+bring-plate = [0.22, 0.45, 0.4]
+bring-shadow = [0.25, 0.1, 0.25]
+bring-chip-inset = [0.333333, 0.25]
 # The favourites' tiles: width, height, corners and gap; four in a row; the plate, the name's size
 # and line, and the check disc.
 tile = [76.0, 72.0, 12.0, 8.0]
 tile-row = 4.0
 tile-plate = 28.0
+# The plate's corners as a share of its size.
+tile-plate-corner = 0.25
 tile-name = [11.0, 14.0]
 tile-disc = 16.0
 # MOVE and DRAW, the curves a thing moving and a cord drawing take.
