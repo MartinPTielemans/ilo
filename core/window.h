@@ -137,8 +137,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The dialog Chrome has for |contents|'s tab, over whichever window, shown or not, or null.
   static views::Widget* TabDialog(content::WebContents* contents);
   // The hook for Chrome's tabs (hooks.h): |contents|, which asked to be shown, as Picture in
-  // Picture's way back to its tab does, shows in the window holding it, in its Space.
-  static void ActivateContents(content::WebContents* contents);
+  // Picture's way back to its tab does, shows in the window holding it, in its Space. Returns
+  // whether Chrome activates that window: not for an agent's tab, which stays where it is.
+  static bool ActivateContents(content::WebContents* contents);
   // |tab|'s page committed in a new view: each window showing it gives that view the keyboard, if
   // the page had it.
   static void PageCommittedInNewView(bc_id tab);

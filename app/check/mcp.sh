@@ -16,7 +16,7 @@
 # as busy, never as its splash alone, and navigate waits for a text it names past the page's
 # settling. A tab
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
-# it. A page with fields gives its prose and none of their values in its text. Its outline gives
+# it; the page's focus() on it later shows nothing and makes no window key. A page with fields gives its prose and none of their values in its text. Its outline gives
 # the page's own values and the agent's own typing, and of the rest only that they're filled: the
 # user's typing, a script's fill as autofill's is, a card's and a password's. The agent can't type
 # into the password field. It types into another, whose line then holds what it typed (#2355).
@@ -1063,6 +1063,61 @@ if [ -n "$yours_step" ]; then
   fi
 else
   echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
+fi
+# A page in an agent's tab that opened another can ask for it with focus(). The opened tab is the
+# agent's too, so it isn't selected, its Space isn't shown and its window, the first, which holds
+# the agent's tabs, isn't made key. The user is in a second window then, with the keyboard, which a
+# window made key would take: their window, Space and keyboard stay as they were.
+if [ -n "$yours_step" ]; then
+  printf '%s' '<!doctype html><title>Focuser</title>
+<button onclick="const w = open(&quot;opened.html?focused&quot;); setTimeout(() => { w.focus(); document.title = &quot;focused it&quot; }, 1000)">Open</button>' \
+    > "$out/site/focuser.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/focuser.html\"}")
+  focuser=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Open" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  focus_window=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
+  send window 2
+  send order
+  case "$(grep '^browser: order ' "$log" | tail -1)" in
+    *", key window 2") ;;
+    *) fail "the second window wasn't key: $(grep '^browser: order ' "$log" | tail -1)" ;;
+  esac
+  focus_space=$(space)
+  send state
+  focus_key=$key
+  focus_focus=$focus
+  focus_step=$step
+  behind=$(grep -c "^browser: tab [0-9]* opened by $focuser in the background\$" "$log" || true)
+  clicked=$(call click "{\"tab\":$focuser,\"ref\":\"$ref\"}")
+  await_more "^browser: tab [0-9]* opened by $focuser in the background\$" "$behind" ||
+    fail "the agent's page didn't open a tab behind: $clicked"
+  focused=$(sed -n "s/^browser: tab \([0-9]*\) opened by $focuser in the background\$/\1/p" "$log" | tail -1)
+  await_log "^browser: agent's tab $focused refused focus (page)\$" \
+    "the agent's page's focus() on the tab it opened never reached the core"
+  await_log "^browser: title $focuser focused it\$" "the agent's page never called focus() on the tab it opened"
+  # A call answered after the refusal, so a window made key in it has been by now.
+  call list_tabs '{}' > /dev/null
+  send order
+  case "$(grep '^browser: order ' "$log" | tail -1)" in
+    *", key window 2") ;;
+    *) fail "the agent's page's focus() made a window key: $(grep '^browser: order ' "$log" | tail -1)" ;;
+  esac
+  sed -n "/^browser: drive $focus_step: /,\$p" "$log" | grep -q "^browser: selected $focused\( in .*\)\{0,1\}\$" &&
+    fail "the agent's page's focus() selected the tab it opened"
+  [ "$(space)" = "$focus_space" ] || fail "the agent's page's focus() showed Space $(space)"
+  send state
+  [ "$key $focus" = "$focus_key $focus_focus" ] ||
+    fail "the agent's page's focus() took the keyboard from $focus_key, on $focus_focus, to $key, on $focus"
+  for each in "$focused" "$focuser"; do
+    closed=$(call close_tab "{\"tab\":$each}")
+    case "$closed" in "Closed tab $each."*) ;; *) fail "closing tab $each answered: $closed" ;; esac
+  done
+  send key w cmd shift
+  expect "^browser: window closed $focus_window\$" "⇧⌘W didn't close the second window"
+  send window 1
 fi
 presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
