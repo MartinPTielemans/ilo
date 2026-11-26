@@ -920,7 +920,9 @@ impl Browser for Recorder {
         !self.history_unloaded.get()
     }
 
-    fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
+    fn act_on_download(&self, id: u64, action: DownloadAction, _: &mut App) {
+        self.record(format!("act on download {id} {action:?}"));
+    }
 
     fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
         self.record(format!("clear downloads {private:?}"));

@@ -2420,11 +2420,44 @@ archived-radius = 12.0
 # favorites' tiles' radius.
 media-gap = 6.0
 media-radius = 12.0
-# Ours: a running download's bar, under its text.
-progress-height = 3.0
-progress-bottom = 6.0
-progress-track = 0.12
-progress-fill = 0.6
+# A download's row, as drawn: 54 high, the rows touching, in the list's padding (search-x and
+# search-right), its plate's radius archived-radius, 10 in on the left and 8 on the right, and 11
+# between its tile, its words and its buttons.
+download-pitch = 54.0
+download-left = 10.0
+download-right = 8.0
+download-gap = 11.0
+# Its file's tile: 32 square, radius 8, in `card` with a line 1 wide inside it, the ink at this,
+# and the file's picture or the glyph, 16, in the glyphs' ink at text-2's alpha.
+download-tile = 32.0
+download-tile-radius = 8.0
+download-tile-line = 0.05
+download-tile-line-width = 1.0
+download-glyph = 16.0
+download-glyph-ink = 0.7
+# Its name, medium, 13 on 16, over a line 11 on 14, 1 below it, in text-2; or a running one's bar
+# row, 4 below it: the bar 84 by 3, radius 2, its track `shown` and what has come in the text's
+# ink, 8 before how much has come.
+download-name-size = 13.0
+download-name-line = 16.0
+download-detail-size = 11.0
+download-detail-line = 14.0
+download-detail-above = 1.0
+download-bar-above = 4.0
+download-bar-width = 84.0
+download-bar-height = 3.0
+download-bar-radius = 2.0
+download-bar-gap = 8.0
+# Its buttons at its end: 26 high, radius 8, in `button`; a glyph's square, the pause 12 and the
+# folder and the dots 14; a word's 10 either side, medium, 12 on 16; 6 apart (ours, as the drawing
+# has two words or two glyphs side by side without saying how far).
+download-button = 26.0
+download-button-radius = 8.0
+download-button-pad = 10.0
+download-button-text = 12.0
+download-button-gap = 6.0
+download-pause-glyph = 12.0
+download-button-glyph = 14.0
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
