@@ -30,6 +30,7 @@ fail() {
 }
 
 name=$(cat "$app/branding/name")
+product=$(cat "$app/branding/product")
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$app/Cargo.toml" | head -1)
 publisher=$(git config -f "$app/branding/winget.ini" winget.publisher)
 store() { git config -f "$app/branding/windows-store.ini" "store.$1"; }
@@ -66,11 +67,11 @@ if [ -z "$alone" ]; then
   rm -f "$stage/app/chrome.dll.lib" "$stage/app/.from"
 fi
 cp "$dll" "$bridge" "$here/Assets/ilo.ico" "$stage/app/"
-# The ilo command (src/agents/cli.rs) in a folder of its own, which Add puts on the user's PATH in
+# The command (src/agents/cli.rs), named as the product, in a folder of its own, which Add puts on the user's PATH in
 # the installer's copy: chrome.exe's folder there would bring the engine's programs with it. The
 # MSIX runs it by its alias.
 mkdir "$stage/app/bin"
-cp "$command" "$stage/app/bin/ilo.exe"
+cp "$command" "$stage/app/bin/$product.exe"
 # uBlock Origin and a Board's page beside chrome.exe, where the core loads them, and the licences
 # About opens, as build.sh puts them beside the engine.
 cp -R "$("$app/fetch-ublock.sh")" "$stage/app/ublock"
@@ -84,7 +85,7 @@ msix=$out/$name-$version-x64$alone$test_identity.msix
 
 iscc=$(command -v iscc || echo "/c/Program Files (x86)/Inno Setup 6/ISCC.exe")
 [ -x "$iscc" ] || fail "no ISCC.exe: install Inno Setup 6."
-MSYS2_ARG_CONV_EXCL='*' "$iscc" /Q "/DAppName=$name" "/DAppPublisher=$publisher" \
+MSYS2_ARG_CONV_EXCL='*' "$iscc" /Q "/DAppName=$name" "/DProduct=$product" "/DAppPublisher=$publisher" \
   "/DAppVersion=$version" "/DSuffix=$alone" "/DSource=$(cygpath -w "$stage/app")" \
   "/DOutput=$(cygpath -w "$out")" "$(cygpath -w "$here/ilo.iss")"
 
