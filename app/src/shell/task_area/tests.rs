@@ -2707,9 +2707,9 @@ fn the_panel_stands_on_another_page_at_once(cx: &mut TestAppContext) {
     cx.update(|_, cx| cx.set_reduce_motion(false));
     draw(&shell, cx);
     host.take();
-    assert!(!shell.update(cx, |shell, cx| shell.stand_on_task_page(10, None, cx)));
+    assert!(!shell.update(cx, |shell, cx| shell.stand_on_task_page(10, None, None, cx)));
     assert!(host.take().is_empty(), "the user's own tab was selected");
-    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, cx)));
+    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, None, cx)));
     assert!(
         host.take().contains(&"select 31".to_string()),
         "the core wasn't asked for tab 31"
