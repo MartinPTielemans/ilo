@@ -1448,6 +1448,13 @@ display_bounds() {
     [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
      frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
 }
+# The value design/tokens.toml gives <key> in its [<section>], as the app is built with it, a whole
+# number without its ".0": so a check measures the look the app has, not a copy of it.
+token() {
+  awk -v section="[$1]" -v key="$2" '
+    /^\[/ { in_section = ($0 == section) }
+    in_section && $1 == key && $2 == "=" { sub(/\.0$/, "", $3); print $3; exit }' design/tokens.toml
+}
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
 # and no server (#1369).

@@ -686,9 +686,18 @@ private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -
 expect "^browser: window opened $private\$" "the private window didn't open"
 new_window_bar
 send window 2
-# private_page <name>: opens the call page named <name> in the private window, as $p.
+# private_page <name> [over]: opens the call page named <name> in the private window, as $p: from
+# its empty Space's resting bar, or with over, from ⌘T's command bar over the page it shows.
 private_page() {
-  resting_key t "private window"
+  if [ -n "${2:-}" ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' \
+      "⌘T over the private window's page didn't open the command bar"
+    expect '^browser: new tab plate 1$' \
+      "⌘T in the private window didn't give New Tab the selected plate"
+  else
+    resting_key t "private window"
+  fi
   send insert "${site}call.html?$1"
   send key return
   expect "^browser: title [0-9]* $1\$" "the private window's $1 page didn't draw"
@@ -701,7 +710,7 @@ send key m
 expect "^browser: title $music playing\$" "m in the private page didn't play its silence"
 played=$step
 # Its player comes as ⌘T's new tab hides the page, before the next page is shown.
-private_page Hidden
+private_page Hidden over
 players=$(sed -n "/^browser: drive $played: /,\$p" "$log" | grep '^browser: media players' |
   tail -1)
 [ "$players" = "browser: media players $music" ] ||
