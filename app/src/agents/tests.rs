@@ -12265,11 +12265,19 @@ mod sessions {
             "a client that gave no name has its kind's"
         );
         // A name that would pass for the browser, whose words the cards set beside an agent's, has
-        // its kind's.
+        // its kind's: the app's name, and the product's as the user reads it, in any case.
         let app = env!("APP_NAME");
+        let product = crate::product::PRODUCT;
+        let mut capital = product.chars();
+        let capital = capital.next().map_or(String::new(), |first| {
+            first.to_uppercase().chain(capital).collect()
+        });
         for posing in [
             app.to_string(),
             format!("{} agent", app.to_uppercase()),
+            product.to_string(),
+            format!("{} agent", product.to_uppercase()),
+            format!("My {capital} helper"),
             "The browser".into(),
             "Checked by your browser".into(),
             // Another client's name is that client's, however it's spaced, joined or stopped, and
