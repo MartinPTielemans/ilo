@@ -51,6 +51,18 @@ impl Host for Recorder {
         self.record("sign in");
     }
 
+    fn sign_in_google(&self) {
+        self.record("sign in google");
+    }
+
+    fn read_google(&self) {
+        self.record("read google");
+    }
+
+    fn remove_google(&self) {
+        self.record("remove google");
+    }
+
     fn cancel(&self) {
         self.record("cancel");
     }
@@ -1294,4 +1306,110 @@ fn since_reads_as_the_line_puts_it() {
 #[test]
 fn the_sign_in_wait_says_the_assistants_line() {
     assert_eq!(FINISH_SIGN_IN, crate::agents::sign_in::CHATGPT_WAITING);
+}
+
+fn google(status: Status) -> State {
+    State {
+        google: true,
+        ..state(status)
+    }
+}
+
+/// Continue with Google shows beside Sign In only while the server's discovery offers it, and
+/// only where Sign In does.
+#[gpui::test]
+fn continue_with_google_shows_only_where_the_server_offers_it(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::SignedOut), cx);
+    assert!(tab.drawn("sign-in") && !tab.drawn("sign-in-google"));
+
+    tab.set(google(Status::SignedOut));
+    assert!(tab.drawn("sign-in") && tab.drawn("sign-in-google"));
+    assert!(spoken_names(&mut tab).contains(&GOOGLE.into()));
+    tab.click("sign-in-google");
+    assert_eq!(tab.host.take(), ["sign in google"]);
+
+    tab.set(google(Status::SigningIn));
+    assert!(!tab.drawn("sign-in-google"), "Cancel alone while it waits");
+
+    // With no server named yet, the address comes first.
+    tab.set(State {
+        server: "".into(),
+        ..google(Status::SignedOut)
+    });
+    assert!(!tab.drawn("sign-in-google"));
+}
+
+/// A Google sign-in that comes back without finishing, its window closed or cancelled, says so
+/// until the next sign-in starts; a plain sign-in's doesn't.
+#[gpui::test]
+fn a_google_sign_in_that_didnt_finish_says_so(cx: &mut TestAppContext) {
+    let unfinished =
+        |tab: &mut Shown| (tab.account).read_with(tab.cx, |account, _| account.google_unfinished());
+    let mut tab = shown(google(Status::SignedOut), cx);
+    tab.click("sign-in-google");
+    tab.set(google(Status::SigningIn));
+    assert!(!unfinished(&mut tab));
+    tab.click("cancel");
+    tab.set(google(Status::SignedOut));
+    assert!(unfinished(&mut tab));
+
+    tab.click("sign-in");
+    assert!(!unfinished(&mut tab), "a new sign-in starts clean");
+    tab.set(google(Status::SigningIn));
+    tab.set(google(Status::SignedOut));
+    assert!(!unfinished(&mut tab), "only Google's trip says so");
+
+    tab.click("sign-in-google");
+    tab.set(google(Status::SigningIn));
+    tab.set(google(Status::NeedsSecret));
+    tab.set(google(Status::SignedOut));
+    assert!(!unfinished(&mut tab), "it finished, then signed out");
+}
+
+/// Signed in to a server that offers Google, the account's Google sign-in is asked for once as it
+/// shows, its row comes once it's listed, and Remove… asks before it unlinks.
+#[gpui::test]
+fn the_google_row_lists_once_and_asks_before_removing(cx: &mut TestAppContext) {
+    let linked = State {
+        google_email: "ada@example.org".into(),
+        ..google(Status::On)
+    };
+    let mut tab = shown(google(Status::On), cx);
+    let asked = tab.host.take();
+    assert_eq!(
+        asked.iter().filter(|call| *call == "read google").count(),
+        1,
+        "{asked:?}"
+    );
+    assert!(!tab.drawn("remove-google"), "nothing linked yet");
+
+    tab.set(linked.clone());
+    assert!(tab.drawn("remove-google"));
+    assert!(spoken_names(&mut tab).contains(&"Remove Google Sign-In…".into()));
+    assert!(!tab.host.take().contains(&"read google".into()), "once");
+
+    tab.click("remove-google");
+    assert_eq!(tab.host.take(), ["ask Stop signing in with Google? Remove"]);
+    tab.confirm();
+    assert_eq!(tab.host.take(), ["remove google"]);
+    tab.set(google(Status::On));
+    assert!(!tab.drawn("remove-google"), "the row goes with the link");
+
+    // Signed out and in again, it asks again.
+    tab.set(google(Status::SignedOut));
+    tab.host.take();
+    tab.set(google(Status::On));
+    assert!(tab.host.take().contains(&"read google".into()));
+}
+
+/// A server that doesn't offer Google is never asked of it, and draws no row whatever it lists.
+#[gpui::test]
+fn no_google_row_from_a_server_without_it(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::On), cx);
+    assert!(!tab.host.take().contains(&"read google".into()));
+    tab.set(State {
+        google_email: "ada@example.org".into(),
+        ..state(Status::On)
+    });
+    assert!(!tab.drawn("remove-google"));
 }

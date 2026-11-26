@@ -55,6 +55,10 @@ pub(crate) const ASK_ANOTHER: &str = "Ask a device already signed in to add this
 /// While the sign-in window is open: ChatGPT's own line, as both wait in a window the browser
 /// opens, so the account and the assistant say it alike (FR19).
 pub(crate) const FINISH_SIGN_IN: &str = crate::agents::sign_in::CHATGPT_WAITING;
+/// The quiet button that signs in through Google, at the Welcome and in Settings (v9 §3).
+pub(crate) const GOOGLE: &str = "Continue with Google";
+/// The form's line once a Google sign-in comes back without finishing (v9 §3).
+pub(crate) const GOOGLE_UNFINISHED: &str = "Google sign-in didn't finish.";
 /// The metadata that has GPUI's Linux clipboard offer a copy with KDE's password manager hint,
 /// which Klipper and the clipboard managers that follow it don't record (patches/
 /// gpui-linux-embedded.patch).
@@ -100,6 +104,10 @@ pub struct State {
     /// This device syncs ilo's settings that follow the account, and the extensions.
     pub settings: bool,
     pub extensions: bool,
+    /// The server's discovery says it signs in with Google, so its button is drawn.
+    pub google: bool,
+    /// The address the account's Google sign-in was linked with, as last listed, else "".
+    pub google_email: SharedString,
 }
 
 /// What else a device can choose to sync, besides the Spaces, bookmarks and passwords it always
@@ -222,6 +230,12 @@ pub trait Host {
     /// Signs in to `server` from now on, signing out first; false for an address it won't take.
     fn set_server(&self, server: &str) -> bool;
     fn sign_in(&self);
+    /// Opens the same sign-in window straight on to Google's page, for a server that offers it.
+    fn sign_in_google(&self);
+    /// Asks the server which sign-ins the account has linked, answered through the state.
+    fn read_google(&self);
+    /// Unlinks the account's Google sign-in, answered through the state.
+    fn remove_google(&self);
     /// Stops what the account waits for: the sign-in, or the request to the other devices.
     fn cancel(&self);
     fn sign_out(&self);
@@ -293,6 +307,12 @@ pub struct Account {
     asked: bool,
     /// Where each button was last drawn, by its name, for the tests to press.
     drawn: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+    /// The sign-in under way went straight on to Google.
+    google_trip: bool,
+    /// The last sign-in went to Google and came back without finishing, so the form says so.
+    google_unfinished: bool,
+    /// The account's Google sign-in was asked for since it signed in.
+    google_read: bool,
     /// The colours it's drawn in: Settings', or the ground of the view it's shown in.
     look: Look,
     /// It's the first launch's step, whose title, line and button say what its signed-out box
@@ -466,6 +486,9 @@ impl Account {
             server: None,
             entering: None,
             asked: false,
+            google_trip: false,
+            google_unfinished: false,
+            google_read: false,
             drawn: Rc::default(),
             a11y: false,
             switched: None,
@@ -539,6 +562,18 @@ impl Account {
         let was = self.state.status;
         if state.status != Status::On {
             self.devices = None;
+            self.google_read = false;
+        }
+        match state.status {
+            // The window closed, or Cancel: a Google trip says it didn't finish (v9 §3).
+            Status::SignedOut if was == Status::SigningIn => {
+                self.google_unfinished = std::mem::take(&mut self.google_trip);
+            }
+            Status::SignedOut | Status::SigningIn => {}
+            _ => {
+                self.google_trip = false;
+                self.google_unfinished = false;
+            }
         }
         match state.status {
             Status::SignedOut | Status::SigningIn => {
@@ -616,6 +651,11 @@ impl Account {
             }
             _ => {}
         }
+        // Once each time it shows signed in, and only from a server that offers Google.
+        if self.state.status == Status::On && self.state.google && !self.google_read {
+            self.google_read = true;
+            self.host.read_google();
+        }
     }
 
     fn show_words(&mut self, words: String) {
@@ -641,8 +681,46 @@ impl Account {
             true => {}
             false => self.server = None,
         }
+        self.google_trip = false;
+        self.google_unfinished = false;
         self.host.sign_in();
         cx.notify();
+    }
+
+    /// Signs in through Google, as its button does, which shows only while the server offers it.
+    pub fn sign_in_google(&mut self, cx: &mut Context<Self>) {
+        if !self.state.google || self.no_server() {
+            return;
+        }
+        self.server = None;
+        self.google_trip = true;
+        self.google_unfinished = false;
+        self.host.sign_in_google();
+        cx.notify();
+    }
+
+    /// The last sign-in went to Google and came back without finishing.
+    pub(crate) fn google_unfinished(&self) -> bool {
+        self.google_unfinished && self.state.problem.is_none()
+    }
+
+    /// Stops signing in with Google, once the user confirms; the account's mailed code then links
+    /// it again.
+    fn remove_google(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        self.host.confirm(
+            "Stop signing in with Google?".into(),
+            format!(
+                "You'll sign in with a code sent to {}. To use Google again, sign in with it and \
+                 enter that code.",
+                self.state.google_email
+            ),
+            "Remove",
+            Return::Action,
+            Box::new(move |_| host.remove_google()),
+            window,
+            cx,
+        );
     }
 
     fn change_server(&mut self, cx: &mut Context<Self>) {
@@ -955,11 +1033,27 @@ impl Account {
                 account.sign_in(window, cx)
             }),
         };
+        // Beside Sign In, which keeps the row's end, while the server offers Google (v9 §3).
+        let google = (!signing_in && self.state.google && !self.no_server()).then(|| {
+            self.button("sign-in-google", GOOGLE, cx, |account, _, cx| {
+                account.sign_in_google(cx)
+            })
+        });
+        let control = match google {
+            Some(google) => div()
+                .flex()
+                .gap(px(END_GAP))
+                .child(google)
+                .child(control)
+                .into_any_element(),
+            None => control.into_any_element(),
+        };
         let detail = match (signing_in, self.state.problem) {
             (true, _) => Some(FINISH_SIGN_IN),
             // The address it needs, not a server it couldn't reach, which the user can't act on.
             (false, _) if self.no_server() => Some("Enter your sync server's address to sign in."),
             (false, Some(problem)) => Some(problem_text(problem)),
+            (false, None) if self.google_unfinished => Some(GOOGLE_UNFINISHED),
             (false, None) => None,
         };
         let server = match &self.server {
@@ -995,14 +1089,14 @@ impl Account {
         };
         let said = match self.step {
             true => detail.map(|detail| {
-                let control = signing_in.then(|| control.into_any_element());
+                let control = signing_in.then_some(control);
                 lines(&self.look, detail, None, control)
             }),
             false => Some(lines(
                 &self.look,
                 "Sync Spaces, bookmarks and passwords across your devices.",
                 detail.map(SharedString::from),
-                Some(control.into_any_element()),
+                Some(control),
             )),
         };
         let boxed = said.is_some();
@@ -1303,6 +1397,22 @@ impl Account {
             "The only way back in if you lose every device.",
             Some(show.into_any_element()),
         );
+        // The account's Google sign-in, once the server has listed it, from a server that offers it.
+        let google = (self.state.google && !self.state.google_email.is_empty()).then(|| {
+            let remove = self.button_said(
+                "remove-google",
+                "Remove…",
+                "Remove Google Sign-In…",
+                cx,
+                |account, window, cx| account.remove_google(window, cx),
+            );
+            detailed_row(
+                look,
+                "Google",
+                format!("Signs in as {}", self.state.google_email),
+                Some(remove.into_any_element()),
+            )
+        });
 
         let removable: Vec<_> = (self.devices.iter().flatten())
             .filter(|device| !device.current)
@@ -1422,7 +1532,7 @@ impl Account {
         div()
             .flex()
             .flex_col()
-            .child(group(look, [account, words]))
+            .child(group(look, [account, words].into_iter().chain(google)))
             .child(always)
             .child(group(look, chosen))
             .when(!devices.is_empty(), |section| {

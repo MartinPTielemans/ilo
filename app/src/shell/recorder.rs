@@ -2397,6 +2397,18 @@ impl crate::account::Host for Account {
         self.calls.borrow_mut().push("sign in".into());
     }
 
+    fn sign_in_google(&self) {
+        self.calls.borrow_mut().push("sign in google".into());
+    }
+
+    fn read_google(&self) {
+        self.calls.borrow_mut().push("read google".into());
+    }
+
+    fn remove_google(&self) {
+        self.calls.borrow_mut().push("remove google".into());
+    }
+
     fn cancel(&self) {
         self.calls.borrow_mut().push("cancel".into());
     }

@@ -3261,3 +3261,76 @@ fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
 }
 
 mod exit;
+
+/// The account as the core says it is, its server offering Google or not.
+fn synced_google(cx: &mut VisualTestContext, status: Status, google: bool) {
+    let state = State {
+        status,
+        server: SERVER.into(),
+        default_server: true,
+        google,
+        ..State::default()
+    };
+    cx.update(|_, cx| cx.set_global(account::Synced(state)));
+    cx.run_until_parked();
+}
+
+/// The Welcome draws Continue with Google under Continue only while the server's discovery offers
+/// it (v9 §3): its press opens the sign-in window straight on to Google, ⇥ comes to it between
+/// Continue and Not Now, and ↩ on Continue still signs in the usual way.
+#[gpui::test]
+fn the_welcome_offers_google_only_when_the_server_does(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced_google(cx, Status::SignedOut, false);
+    started(&shell, cx);
+    assert!(placed("main", cx).is_some());
+    assert!(placed("google", cx).is_none(), "no Google from this server");
+    shell.update(cx, |shell, _| shell.onboarding = None);
+
+    synced_google(cx, Status::SignedOut, true);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let (main, google) = (placed("main", cx).unwrap(), placed("google", cx).unwrap());
+    assert!(google.top() > main.bottom(), "under Continue");
+    assert_eq!(google.size, main.size, "the same size");
+    tabbed_to(Role::Button, "Continue", cx);
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, account::GOOGLE.to_string())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Not Now".to_string())));
+
+    account_calls(&host);
+    click("google", cx);
+    assert_eq!(account_calls(&host), ["sign in google"]);
+    synced_google(cx, Status::SigningIn, true);
+    assert_eq!(welcome(&shell, cx), super::Welcome::SigningIn);
+    assert!(
+        placed("google", cx).is_none(),
+        "Cancel alone while it waits"
+    );
+}
+
+/// A Google sign-in whose window closes without finishing brings the form back saying so (v9 §3),
+/// and Not Now still goes on without an account.
+#[gpui::test]
+fn a_google_sign_in_that_didnt_finish_brings_the_form_back(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced_google(cx, Status::SignedOut, true);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    click("google", cx);
+    synced_google(cx, Status::SigningIn, true);
+    synced_google(cx, Status::SignedOut, true);
+    assert_eq!(welcome(&shell, cx), super::Welcome::Form);
+    let unfinished = shell.read_with(cx, |shell, cx| {
+        (shell.account_view()).is_some_and(|view| view.read(cx).google_unfinished())
+    });
+    assert!(unfinished, "the form says Google's sign-in didn't finish");
+    assert!(placed("google", cx).is_some(), "it can be tried again");
+    account_calls(&host);
+    click("not-now", cx);
+    assert!(account_calls(&host).is_empty(), "nothing to stop");
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+}
