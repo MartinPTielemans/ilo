@@ -174,9 +174,11 @@ pub struct Conversation {
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
     /// The model it runs on, as the composer's model trigger reads it, with its assistant's mark:
-    /// its CLI's name and the model's, or its default's row, and whether its program takes another
-    /// for the next message, so the trigger opens its menu. None for an outside agent's session.
-    pub model: Option<(&'static str, SharedString, bool)>,
+    /// its CLI's name and the model's, or its default's row; then the model's own word as the model
+    /// menu's row says it (D3's `Default` for its default), which the panel beside a page draws
+    /// alone; and whether its program takes another for the
+    /// next message, so the trigger opens its menu. None for an outside agent's session.
+    pub model: Option<(&'static str, SharedString, SharedString, bool)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -1410,11 +1412,17 @@ impl Agents {
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
             model: task.cli.map(|cli| {
-                let words = match task.model.is_empty() {
-                    true => model_default(cli),
-                    false => format!("{} \u{b7} {}", cli.name(), task.model),
+                let (words, word): (SharedString, SharedString) = match task.model.is_empty() {
+                    true => (
+                        model_default(cli).into(),
+                        crate::command_bar::DEFAULT_ROW.into(),
+                    ),
+                    false => (
+                        format!("{} \u{b7} {}", cli.name(), task.model).into(),
+                        task.model.clone(),
+                    ),
                 };
-                (cli.glyph(), words.into(), cli.switches_model())
+                (cli.glyph(), words, word, cli.switches_model())
             }),
         })
     }

@@ -44,6 +44,12 @@ pub struct Form {
     pub arrow: f32,
     pub square: f32,
     pub square_radius: f32,
+    /// What stands between the round button and the row's other items, beyond the row's gap.
+    pub round_space: f32,
+    /// Whether the model trigger draws the model's own word alone, without its assistant's name,
+    /// its whole words still spoken; it's then the one item that gives way where the row hasn't
+    /// room, cut at its end (spec-bar-composer.md, "The model's trigger in the panel beside a page").
+    pub model_word: bool,
 }
 
 impl Form {
@@ -63,6 +69,8 @@ impl Form {
         arrow: START_ARROW,
         square: 0.,
         square_radius: 0.,
+        round_space: START_SPACE,
+        model_word: false,
     };
 }
 
@@ -106,9 +114,13 @@ pub struct Row {
     /// What the plus added, between it and the level.
     pub added: Vec<Added>,
     pub level: (Tier, Trigger),
-    /// The model's words, with the assistant's mark where the form leads with it; none where the
-    /// app doesn't know the model, an outside agent's session.
-    pub model: Option<(Option<&'static str>, SharedString, Trigger)>,
+    /// The model's words, with the assistant's mark where the form leads with it, then the model's
+    /// own word, which a form that says less draws in their place; none where the app doesn't
+    /// know the model, an outside agent's session.
+    pub model: Option<(Option<&'static str>, SharedString, SharedString, Trigger)>,
+    /// The narrowest the model's own word gets where the form lets it give way: the width of its
+    /// first word.
+    pub model_least: f32,
     /// The effort's words and trigger, after the model, for an assistant whose program takes one;
     /// none for any other.
     pub effort: Option<(SharedString, Trigger)>,
@@ -156,6 +168,7 @@ pub fn row(row: Row) -> gpui::Div {
         added,
         level: (tier, level),
         model,
+        model_least,
         effort,
         held,
         open,
@@ -215,24 +228,56 @@ pub fn row(row: Row) -> gpui::Div {
         .child(words(level_said, inks.text))
         .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.text));
     let model_ink = if form.model_dim { inks.dim } else { inks.text };
-    let model = model.map(|(mark, said, model)| {
+    let model = model.map(|(mark, said, word, model)| {
         let mark = mark.filter(|_| form.mark);
+        let drawn = if form.model_word { word } else { said.clone() };
         // A chevron, and a button to a screen reader, only on a trigger that opens; one that
-        // can't is the model's words alone.
+        // can't is the model's words alone, spoken whole where fewer are drawn.
         let opens = model.click.is_some();
+        let fewer = drawn != said;
+        let left = if mark.is_some() {
+            MODEL_LEFT
+        } else {
+            form.level_x
+        };
+        // Where it gives way, the trigger is never narrower than its insets, its mark, its
+        // chevron and the least of its words: nowrap words would hold it at their whole width.
+        let least = left
+            + form.level_x
+            + model_least
+            + mark.map_or(0., |_| MODEL_MARK + MODEL_GAP)
+            + if opens {
+                TRIGGER_GAP + TRIGGER_CHEVRON
+            } else {
+                0.
+            };
         trigger(model)
             .when(a11y && opens, |model| {
                 model.role(Role::Button).aria_label(said.clone())
             })
-            .pl(px(if mark.is_some() {
-                MODEL_LEFT
-            } else {
-                form.level_x
-            }))
+            .when(a11y && !opens && fewer, |model| {
+                model.role(Role::Label).aria_label(said.clone())
+            })
+            .pl(px(left))
             .pr(px(form.level_x))
-            .gap(px(MODEL_GAP))
-            .children(mark.map(|mark| glyph(mark, MODEL_MARK, inks.text)))
-            .child(words(said, model_ink))
+            // Its chevron stands the level's gap after its words; its mark, the model's own.
+            .gap(px(TRIGGER_GAP))
+            // The row's spring, so nothing stands between it and the level but the row's gap.
+            .ml_auto()
+            // Where the form lets them, the model's words give way first, cut at their end, and
+            // the trigger with them; its name to a screen reader stays whole.
+            .when(form.model_word, |model| {
+                model.flex_shrink(1.).min_w(px(least))
+            })
+            .children(mark.map(|mark| {
+                div()
+                    .flex_none()
+                    .mr(px(MODEL_GAP - TRIGGER_GAP))
+                    .child(glyph(mark, MODEL_MARK, inks.text))
+            }))
+            .child(words(drawn, model_ink).when(form.model_word, |words| {
+                words.flex_shrink(1.).min_w(px(model_least)).truncate()
+            }))
             .when(opens, |model| {
                 model.child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
             })
@@ -255,7 +300,7 @@ pub fn row(row: Row) -> gpui::Div {
         (round_id, round_said, round, go),
         round_at,
     )
-    .ml(px(START_SPACE));
+    .ml(px(form.round_space));
     div()
         .h(px(form.height))
         .flex_none()
@@ -269,7 +314,7 @@ pub fn row(row: Row) -> gpui::Div {
         .children(added)
         .child(level)
         .children(held)
-        .child(div().flex_1())
+        .when(model.is_none(), |row| row.child(div().flex_1()))
         .children(model)
         .children(effort)
         .child(round)

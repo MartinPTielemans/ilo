@@ -238,6 +238,8 @@ pub struct TalkView {
     visited: HashSet<u64>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the composer's round button was drawn last, Stop or Send, for a test.
+    round_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Whether its step under way shimmered as it last drew, which check.sh hears of.
@@ -483,6 +485,7 @@ impl Shell {
                     said_logged: RefCell::default(),
                     visited: HashSet::new(),
                     stop_logged: Rc::default(),
+                    round_drawn: Rc::default(),
                     stale: false,
                     shimmering: false,
                     scroll: ScrollHandle::new(),
@@ -3031,9 +3034,14 @@ impl TalkView {
                 Box::new(cx.listener(|view, _, window, cx| view.send_reply(window, cx))),
             ),
         };
-        let logged = self.stop_logged.clone();
-        let round_at = (round == choices::Round::Stop)
-            .then(|| Box::new(stop_told(logged)) as Box<dyn Fn(Bounds<Pixels>)>);
+        let stop = (round == choices::Round::Stop).then(|| stop_told(self.stop_logged.clone()));
+        let drawn = self.round_drawn.clone();
+        let round_at: Box<dyn Fn(Bounds<Pixels>)> = Box::new(move |bounds| {
+            drawn.set(Some(bounds));
+            if let Some(stop) = &stop {
+                stop(bounds);
+            }
+        });
         let level = choices::Trigger {
             id: LEVEL,
             at: self.level_drawn.clone(),
@@ -3043,18 +3051,36 @@ impl TalkView {
         };
         // The model opens its menu where the thread's program takes another for its next message;
         // elsewhere it's plain words.
-        let model = (shown.and_then(|shown| shown.model.clone())).map(|(mark, said, opens)| {
-            let click: Option<Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>> = opens
-                .then(|| {
-                    Box::new(cx.listener(|view, _, window, cx| view.model_menu(window, cx))) as _
-                });
-            let trigger = choices::Trigger {
-                id: MODEL,
-                at: self.model_drawn.clone(),
-                click,
-            };
-            (Some(mark), said, trigger)
-        });
+        let model =
+            (shown.and_then(|shown| shown.model.clone())).map(|(mark, said, word, opens)| {
+                let click: Option<Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>> =
+                    opens.then(|| {
+                        Box::new(cx.listener(|view, _, window, cx| view.model_menu(window, cx)))
+                            as _
+                    });
+                let trigger = choices::Trigger {
+                    id: MODEL,
+                    at: self.model_drawn.clone(),
+                    click,
+                };
+                // The panel speaks a default by its own word, as it draws it; a named model whole.
+                let said = match form.row.model_word && word == crate::command_bar::DEFAULT_ROW {
+                    true => word.clone(),
+                    false => said,
+                };
+                (Some(mark), said, word, trigger)
+            });
+        // Where the model's own word gives way, never under its first word's width.
+        let model_least = match (&model, form.row.model_word) {
+            (Some((_, _, word, _)), true) => {
+                let first = word.split_whitespace().next().unwrap_or_default();
+                let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+                let first = SharedString::from(first.to_string());
+                crate::tooltip::text_width(&first, form.row.text, gpui::FontWeight::NORMAL, &system)
+                    .ceil()
+            }
+            _ => 0.,
+        };
         let inks = self.inks(look);
         let plus = choices::plus_look(
             inks.dim,
@@ -3077,6 +3103,7 @@ impl TalkView {
             added: Vec::new(),
             level: (tier, level),
             model,
+            model_least,
             effort: None,
             held: self
                 .folder_chip(look, cx)
@@ -3085,7 +3112,7 @@ impl TalkView {
                 .collect(),
             open: self.menu_open,
             round: ("conversation-round", said, round, go),
-            round_at,
+            round_at: Some(round_at),
         })
     }
 
@@ -3610,6 +3637,8 @@ impl Composer {
                     round: panel::COMPOSER_ROUND,
                     arrow: panel::COMPOSER_ARROW,
                     square: panel::COMPOSER_SQUARE,
+                    round_space: panel::COMPOSER_ROUND_SPACE,
+                    model_word: true,
                     ..stage
                 },
             },

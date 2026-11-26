@@ -5651,3 +5651,54 @@ fn settings_model_is_the_composers_model_menu() {
         assert_eq!(checked, [&starts]);
     }
 }
+
+/// The bar's model trigger still says its assistant's name and the model's: only the panel beside
+/// a page draws the model's own word alone.
+#[gpui::test]
+fn the_bars_model_trigger_says_its_assistant_and_its_model(cx: &mut TestAppContext) {
+    use crate::tokens::command_bar::{
+        MODEL_GAP, MODEL_LEFT, MODEL_MARK, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_TEXT, TRIGGER_X,
+    };
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        last: RefCell::new(Opens {
+            tier: Tier::Look,
+            model: Some(("claude".into(), "sonnet".into())),
+            effort: None,
+        }),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("read the menu");
+    bar.keys("tab");
+    let (_, said) = bar.choices();
+    assert_eq!(said, "claude \u{b7} Sonnet");
+    bar.cx.run_until_parked();
+    let model = bar
+        .window
+        .read_with(&bar.cx.cx, |bar, _| bar.model_at.get())
+        .unwrap();
+    let model = model.expect("no model trigger");
+    // The trigger less its inset, the assistant's mark, its chevron and the gaps between them.
+    let drawn = f32::from(model.size.width)
+        - MODEL_LEFT
+        - MODEL_MARK
+        - MODEL_GAP
+        - TRIGGER_GAP
+        - TRIGGER_CHEVRON
+        - TRIGGER_X;
+    let width = bar.cx.update(|_, cx| {
+        let system = gpui::WindowTextSystem::new(cx.text_system().clone());
+        let measure = |text: &str| {
+            let text = gpui::SharedString::from(text.to_string());
+            crate::tooltip::text_width(&text, TRIGGER_TEXT, gpui::FontWeight::NORMAL, &system)
+        };
+        (measure(&said), measure("Sonnet"))
+    });
+    assert!(
+        (drawn - width.0).abs() <= 1.,
+        "the bar's model is {drawn} wide: both words are {}, Sonnet alone {}",
+        width.0,
+        width.1
+    );
+}

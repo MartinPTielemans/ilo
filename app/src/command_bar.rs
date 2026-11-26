@@ -452,7 +452,7 @@ const SETTINGS: &str = "Settings";
 const SEARCH_MODELS: &str = "Search models";
 /// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
 /// `{assistant}'s default`.
-const DEFAULT_ROW: &str = "Default";
+pub const DEFAULT_ROW: &str = "Default";
 /// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
 fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
     let (plate, kind) = match palette.tone {
@@ -4096,7 +4096,8 @@ impl CommandBar {
             plus: Some(plus),
             added,
             level: (tier, level),
-            model: Some((mark, said.into(), model)),
+            model: Some((mark, said.clone().into(), said.into(), model)),
+            model_least: 0.,
             effort,
             held: Vec::new(),
             open: self.menu_open,
