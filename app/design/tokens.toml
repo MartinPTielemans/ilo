@@ -2166,9 +2166,6 @@ tag-radius = 6.0
 # panel holds what a strip under the page would, as GPUI can't draw over a page.
 beside = 300.0
 beside-gap = 8.0
-# The room a strip under the page had, which an agent's page's own size is still cut by, as the core
-# gives it (core/window.cc, kAgentPageSize). No strip is drawn.
-page-room = 46.0
 # In a narrow window the page keeps this much, the least a page lays out in usably, and the panel
 # gives way down to its least; narrower still, both give way in proportion. Proposed, for the
 # lead's call.
