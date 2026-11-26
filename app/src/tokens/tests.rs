@@ -120,6 +120,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
+    // The Library's downloads as drawn (values-library-foot.md, 33): the file's tile and the row's
+    // buttons at 8, and the bar at 2.
+    "shell.library.download-tile-radius",
+    "shell.library.download-bar-radius",
+    "shell.library.download-button-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
     // The two curves that take the open tab's line into its page, which round no corner.

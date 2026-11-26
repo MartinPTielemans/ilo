@@ -12,11 +12,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity,
-    Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
+    AnyElement, App, Bounds, BoxShadow, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent,
+    Entity, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, list, prelude::*, px, relative, svg,
+    canvas, div, img, list, point, prelude::*, px, relative, rgba, svg,
 };
 
 use super::{
@@ -77,7 +77,9 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{FIELD_PLATE, Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
+use crate::palette::{
+    BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone,
+};
 use crate::tokens::shell::library::COLUMN_WIDTH;
 pub(super) use crate::tokens::shell::library::LIBRARY_BACK_INSET;
 use crate::tokens::shell::library::LIBRARY_PLATE;
@@ -146,6 +148,9 @@ use crate::tokens::shell::library::{
 };
 
 use crate::tokens::shell::library::ARCHIVE_LEAST;
+use super::recent_downloads::{come, progress, tile_glyph};
+use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+use crate::tokens::palette::{LIGHT_SHOWN, SHOWN};
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
 use crate::tokens::shell::library::ARCHIVED_FAVICON_X;
@@ -162,6 +167,15 @@ use crate::tokens::shell::library::HEADING_X;
 use crate::tokens::shell::library::MEDIA_GAP;
 use crate::tokens::shell::library::MEDIA_RADIUS;
 use crate::tokens::shell::library::PAGE_LEAST;
+use crate::tokens::shell::library::{
+    DOWNLOAD_BAR_ABOVE, DOWNLOAD_BAR_GAP, DOWNLOAD_BAR_HEIGHT, DOWNLOAD_BAR_RADIUS,
+    DOWNLOAD_BAR_WIDTH, DOWNLOAD_BUTTON, DOWNLOAD_BUTTON_GAP, DOWNLOAD_BUTTON_GLYPH,
+    DOWNLOAD_BUTTON_PAD, DOWNLOAD_BUTTON_RADIUS, DOWNLOAD_BUTTON_TEXT, DOWNLOAD_DETAIL_ABOVE,
+    DOWNLOAD_DETAIL_LINE, DOWNLOAD_DETAIL_SIZE, DOWNLOAD_GAP, DOWNLOAD_GLYPH, DOWNLOAD_GLYPH_INK,
+    DOWNLOAD_LEFT, DOWNLOAD_NAME_LINE, DOWNLOAD_NAME_SIZE, DOWNLOAD_PAUSE_GLYPH, DOWNLOAD_PITCH,
+    DOWNLOAD_RIGHT, DOWNLOAD_TILE, DOWNLOAD_TILE_LINE, DOWNLOAD_TILE_LINE_WIDTH,
+    DOWNLOAD_TILE_RADIUS,
+};
 /// Media's tiles a row.
 const MEDIA_COLUMNS: usize = 3;
 
@@ -189,15 +203,23 @@ use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK_PLATED;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
 use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
-use crate::tokens::shell::library::PROGRESS_BOTTOM;
-use crate::tokens::shell::library::PROGRESS_FILL;
-use crate::tokens::shell::library::PROGRESS_HEIGHT;
-use crate::tokens::shell::library::PROGRESS_TRACK;
 use crate::tokens::text;
 
 /// The headings of today and yesterday, by the starts of `Browser::day_starts`; a day before them
 /// is headed by its date (`Item::Day`), as drawn.
 const HEADINGS: [&str; 2] = ["Today", "Yesterday"];
+/// Downloads' heading over what's still coming or held, ahead of the days.
+const NOW: &str = "Now";
+
+/// Whether a download is listed under `NOW`: one still coming, paused too, as it hasn't finished,
+/// or one the browser holds until it's kept or deleted.
+fn comes_now(download: &Download) -> bool {
+    download.held
+        || matches!(
+            download.state,
+            DownloadState::Running | DownloadState::Paused
+        )
+}
 
 /// A tab in the archive, as the browser reports it.
 #[derive(Clone)]
@@ -330,6 +352,12 @@ const TRASH: &str = match cfg!(all(target_os = "windows", not(test))) {
     false => "Move to Trash",
 };
 
+/// What shows a file where it is: off the Mac, Chrome's word for the file manager there.
+const SHOW: &str = match super::OFF_THE_MAC {
+    true => "Show in Folder",
+    false => "Show in Finder",
+};
+
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
 fn download_menu_items(
@@ -359,14 +387,7 @@ fn download_menu_items(
         ],
         DownloadState::Done => vec![
             act("Open", DownloadAction::Open),
-            // Off the Mac, Chrome's word for the file manager there.
-            act(
-                match super::OFF_THE_MAC {
-                    true => "Show in Folder",
-                    false => "Show in Finder",
-                },
-                DownloadAction::Show,
-            ),
+            act(SHOW, DownloadAction::Show),
             (
                 MenuEntry::new(TRASH, true).destructive(),
                 Some(DownloadChoice::Trash),
@@ -1374,10 +1395,19 @@ impl Shell {
                 .filter(|(_, board)| query.is_empty() || found(&board.name.clone().into()))
                 .map(|(index, board)| (Item::Board(index), board.changed))
                 .collect(),
-            Section::Downloads => (self.downloads.iter().enumerate())
-                .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
-                .map(|(index, download)| (Item::Download(index), download.started))
-                .collect(),
+            // What's still coming or held first, under Now, then the rest by day, each newest
+            // first.
+            Section::Downloads => {
+                let mut listed: Vec<_> = (self.downloads.iter().enumerate())
+                    .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
+                    .collect();
+                listed.sort_by(|(_, a), (_, b)| {
+                    (comes_now(b).cmp(&comes_now(a))).then(b.started.total_cmp(&a.started))
+                });
+                (listed.into_iter())
+                    .map(|(index, download)| (Item::Download(index), download.started))
+                    .collect()
+            }
             Section::Media => {
                 let tile = |medium| Item::Media([Some(medium), None, None]);
                 let captures = (self.captures.iter().enumerate())
@@ -1401,8 +1431,11 @@ impl Shell {
         }
         let mut heading = None;
         for (item, time) in found {
-            let day = match starts.iter().position(|&start| time >= start) {
-                Some(day @ (0 | 1)) => Item::Heading(HEADINGS[day]),
+            let day = match (item, starts.iter().position(|&start| time >= start)) {
+                (Item::Download(index), _) if comes_now(&self.downloads[index]) => {
+                    Item::Heading(NOW)
+                }
+                (_, Some(day @ (0 | 1))) => Item::Heading(HEADINGS[day]),
                 _ => history_list::day(time).map_or(Item::Heading(""), Item::Day),
             };
             if self.section != Section::Boosts && heading != Some(day) {
@@ -3986,8 +4019,10 @@ impl Shell {
             .count()
     }
 
-    /// A download's row: its file's icon, its name over where it is, and while it runs, a bar. A
-    /// click opens a finished file or shows a held one's menu, and a right-click shows the menu.
+    /// A download's row, as drawn: its file's tile, its name over where it is or, while it comes,
+    /// a bar and how much has come, and at its end the buttons for what it's waiting on, or under
+    /// the pointer the folder and the rest of its menu. A click opens a finished file or shows a
+    /// held one's menu, and a right-click shows the menu.
     fn download_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(download) = self.downloads.get(index) else {
             return div().into_any_element();
@@ -3995,104 +4030,262 @@ impl Shell {
         let id = download.id;
         let (state, held) = (download.state, download.held);
         let site = host(&download.url);
+        let when = (self.library.as_ref()).map_or(String::new(), |library| {
+            history_when(
+                download.started,
+                library.starts,
+                crate::clock::twelve_hour(),
+            )
+        });
+        let come = come(download.received, download.total);
         let status: SharedString = match state {
             _ if held => "May harm your computer".into(),
-            DownloadState::Running => of(download.received, download.total).into(),
-            DownloadState::Paused => {
-                format!("Paused · {}", of(download.received, download.total)).into()
-            }
-            DownloadState::Done => format!("{} · {site}", bytes(download.received)).into(),
+            DownloadState::Running => come.into(),
+            DownloadState::Paused => format!("Paused · {come}").into(),
+            DownloadState::Done => format!("{} · {site} · {when}", bytes(download.received)).into(),
             DownloadState::Cancelled => format!("Cancelled · {site}").into(),
             DownloadState::Failed => format!("Failed · {site}").into(),
         };
-        let progress = match state {
-            DownloadState::Running | DownloadState::Paused if download.total > 0 && !held => {
-                Some((download.received as f32 / download.total as f32).clamp(0., 1.))
-            }
-            _ => None,
-        };
-        let name = download.name.clone();
-        // Asked for once a row first shows, as the archive's favicons are.
-        if !self.download_icons.contains_key(&id) {
-            self.download_icons.insert(id, None);
-            self.browser.download_icon(id, cx);
+        let progress = progress(download);
+        let (name, glyph) = (download.name.clone(), tile_glyph(download));
+        let filed = state == DownloadState::Done && !held && !download.path.is_empty();
+        // A finished picture's, asked for once its row first shows, as Media's tiles' are.
+        if filed && is_video(&download.name).is_some() && !self.download_previews.contains_key(&id)
+        {
+            let path = download.path.clone();
+            self.download_previews.insert(id, None);
+            self.browser.file_preview(id, &path, cx);
         }
-        let icon = match self.download_icons.get(&id).cloned().flatten() {
-            Some(icon) => favicon(&self.palette, Some(icon)).into_any_element(),
-            None => (svg()
-                .path("icons/file.svg")
-                .size(px(16.))
-                .text_color(self.palette.text(SECONDARY)))
-            .into_any_element(),
+        let tile = div()
+            .flex_none()
+            .size(px(DOWNLOAD_TILE))
+            .rounded(px(DOWNLOAD_TILE_RADIUS));
+        let tile = match self.download_previews.get(&id).cloned().flatten() {
+            Some(preview) if preview.photo => tile.overflow_hidden().child(
+                img(preview.image)
+                    .size(px(DOWNLOAD_TILE))
+                    .rounded(px(DOWNLOAD_TILE_RADIUS))
+                    .object_fit(ObjectFit::Cover),
+            ),
+            _ => tile
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(self.palette.plate(CARD_PLATE))
+                .shadow(vec![BoxShadow {
+                    color: self.palette.plate(DOWNLOAD_TILE_LINE),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(DOWNLOAD_TILE_LINE_WIDTH),
+                    inset: true,
+                }])
+                .child(
+                    svg()
+                        .path(glyph)
+                        .size(px(DOWNLOAD_GLYPH))
+                        .text_color(self.palette.glyph(DOWNLOAD_GLYPH_INK)),
+                ),
         };
         // Over the window, so the plate anything has under the pointer there, and the gray on it.
         let (lit, on_plate) = (
             self.palette.hovered_plate(),
             self.palette.gray_on_plate(SECONDARY),
         );
-        div()
-            .h(px(ARCHIVED_PITCH))
-            .pl(px(ARCHIVED_LEFT))
-            .pr(px(ARCHIVED_RIGHT))
-            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+        let ink = self.palette.text(UNSELECTED_TITLE);
+        let line = div()
+            .min_w_0()
+            .h(px(DOWNLOAD_DETAIL_LINE))
+            .flex()
+            .items_center()
+            .text_size(px(DOWNLOAD_DETAIL_SIZE))
+            .text_color(self.palette.gray(SECONDARY))
+            .group_hover(POINTED_ROW, move |style| style.text_color(on_plate))
+            .child(div().truncate().child(status));
+        let under = match progress {
+            Some(done) => div()
+                .mt(px(DOWNLOAD_BAR_ABOVE))
+                .flex()
+                .items_center()
+                .gap(px(DOWNLOAD_BAR_GAP))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(DOWNLOAD_BAR_WIDTH))
+                        .h(px(DOWNLOAD_BAR_HEIGHT))
+                        .rounded(px(DOWNLOAD_BAR_RADIUS))
+                        .bg(self.palette.plate(self.palette.toned(SHOWN, LIGHT_SHOWN)))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(done))
+                                .rounded(px(DOWNLOAD_BAR_RADIUS))
+                                .bg(ink),
+                        ),
+                )
+                .child(line),
+            None => div().mt(px(DOWNLOAD_DETAIL_ABOVE)).flex().child(line),
+        };
+        let words = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
             .child(
-                self.download_row(div().id(("download", id)), id, "row", lit, cx)
-                    .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
-                    .group(POINTED_ROW)
-                    .block_mouse_except_scroll()
-                    .size_full()
-                    .relative()
-                    .rounded(px(ARCHIVED_RADIUS))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(ARCHIVED_FAVICON_X))
-                            .top_0()
-                            .bottom_0()
-                            .flex()
-                            .items_center()
-                            .child(icon),
-                    )
-                    .child(
-                        div()
-                            .size_full()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .pl(px(ARCHIVED_TEXT_X))
-                            .pr(px(12.))
-                            .child(text_line(
-                                name,
-                                text::BODY,
-                                17.,
-                                self.palette.text(UNSELECTED_TITLE),
-                            ))
-                            .child(
-                                text_line(status, text::SMALL, 15., self.palette.gray(SECONDARY))
-                                    .group_hover(POINTED_ROW, move |style| {
-                                        style.text_color(on_plate)
-                                    }),
-                            ),
-                    )
-                    .children(progress.map(|done| {
-                        div()
-                            .absolute()
-                            .left(px(ARCHIVED_TEXT_X))
-                            .right(px(12.))
-                            .bottom(px(PROGRESS_BOTTOM))
-                            .h(px(PROGRESS_HEIGHT))
-                            .rounded(px(PROGRESS_HEIGHT / 2.))
-                            .bg(self.palette.faint(PROGRESS_TRACK))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(relative(done))
-                                    .rounded(px(PROGRESS_HEIGHT / 2.))
-                                    .bg(self.palette.glyph(PROGRESS_FILL)),
-                            )
-                    })),
+                div()
+                    .h(px(DOWNLOAD_NAME_LINE))
+                    .flex()
+                    .items_center()
+                    .text_size(px(DOWNLOAD_NAME_SIZE))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(ink)
+                    .child(div().truncate().child(name)),
             )
+            .child(under);
+        let buttons = self.download_buttons(id, state, held, filed, cx);
+        let row = self
+            .download_row(div().id(("download", id)), id, "row", lit, cx)
+            .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
+            .group(POINTED_ROW)
+            .block_mouse_except_scroll()
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                let pointed = match hovered {
+                    true => Some(id),
+                    false if shell.download_pointed == Some(id) => None,
+                    false => return,
+                };
+                if shell.download_pointed != pointed {
+                    shell.download_pointed = pointed;
+                    cx.notify();
+                }
+            }))
+            .size_full()
+            .pl(px(DOWNLOAD_LEFT))
+            .pr(px(DOWNLOAD_RIGHT))
+            .flex()
+            .items_center()
+            .gap(px(DOWNLOAD_GAP))
+            .rounded(px(ARCHIVED_RADIUS))
+            .child(tile)
+            .child(words)
+            .when(!buttons.is_empty(), |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .gap(px(DOWNLOAD_BUTTON_GAP))
+                        .children(buttons),
+                )
+            });
+        // In the list's padding, as its search field is.
+        div()
+            .h(px(DOWNLOAD_PITCH))
+            .pl(px(SEARCH_X))
+            .pr(px(SEARCH_RIGHT))
+            .child(row)
             .into_any_element()
+    }
+
+    /// The buttons at the end of a download's row: Pause or Resume while it comes, Keep and Delete
+    /// while the browser holds it, and under the pointer the folder it's in and More, its menu,
+    /// for one that's done, or More alone for the rest. Each is a press of its own, not the
+    /// row's, and does what its menu item does; the keys reach them through that menu.
+    fn download_buttons(
+        &self,
+        id: u64,
+        state: DownloadState,
+        held: bool,
+        filed: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
+        let ink = self.palette.text(UNSELECTED_TITLE);
+        let button = |name: &'static str, label: &'static str| {
+            div()
+                .id((name, id))
+                .when(self.a11y, |button| button.button_named(label))
+                .flex_none()
+                .h(px(DOWNLOAD_BUTTON))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(DOWNLOAD_BUTTON_RADIUS))
+                .bg(self.palette.plate(BUTTON_PLATE))
+                .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
+                // Not the row's press, which would open the file or drag it out.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
+        let glyph = |name, label, path: &'static str, size: f32| {
+            button(name, label)
+                .w(px(DOWNLOAD_BUTTON))
+                .child(svg().path(path).size(px(size)).text_color(ink))
+        };
+        let word = |name, label: &'static str, color: Hsla| {
+            button(name, label)
+                .px(px(DOWNLOAD_BUTTON_PAD))
+                .text_size(px(DOWNLOAD_BUTTON_TEXT))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color)
+                .child(label)
+        };
+        let act = |action| {
+            cx.listener(move |shell: &mut Shell, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                shell.act_on_download(id, action, "row button", cx)
+            })
+        };
+        let more = glyph(
+            "download-more",
+            "More",
+            "icons/ellipsis.svg",
+            DOWNLOAD_BUTTON_GLYPH,
+        )
+        .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            shell.download_menu(id, event.position(), cx)
+        }));
+        let pointed = self.download_pointed == Some(id);
+        match state {
+            _ if held => {
+                let delete = self
+                    .palette
+                    .toned(rgba(DARK_DESTRUCTIVE), rgba(LIGHT_DESTRUCTIVE));
+                vec![
+                    word("download-keep", "Keep", ink).on_click(act(DownloadAction::Keep)),
+                    word("download-delete", "Delete", delete.into())
+                        .on_click(act(DownloadAction::Remove)),
+                ]
+            }
+            DownloadState::Running => vec![
+                glyph(
+                    "download-pause",
+                    "Pause",
+                    "icons/pause.svg",
+                    DOWNLOAD_PAUSE_GLYPH,
+                )
+                .on_click(act(DownloadAction::Pause)),
+            ],
+            DownloadState::Paused => vec![
+                glyph(
+                    "download-resume",
+                    "Resume",
+                    "icons/play.svg",
+                    DOWNLOAD_PAUSE_GLYPH,
+                )
+                .on_click(act(DownloadAction::Resume)),
+            ],
+            _ if !pointed => Vec::new(),
+            _ if filed => vec![
+                glyph(
+                    "download-show",
+                    SHOW,
+                    "icons/folder.svg",
+                    DOWNLOAD_BUTTON_GLYPH,
+                )
+                .on_click(act(DownloadAction::Show)),
+                more,
+            ],
+            _ => vec![more],
+        }
     }
 
     /// What a download's row does, in the Library or the Library button's recent downloads, with
@@ -4581,13 +4774,13 @@ mod task_tests;
 mod tests {
     use super::{
         ARCHIVE_LEAST, ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived,
-        CARD_WIDTH, COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice,
-        DownloadState, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT,
-        HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST,
-        SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space,
-        bar_drawn, card_x, day_heading, download_menu_items, downloads_progress, history_list,
-        library_band, list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity,
-        spaces_width,
+        CARD_WIDTH, COLUMN_WIDTH, Captured, DOWNLOAD_BUTTON, DOWNLOAD_BUTTON_GAP, DOWNLOAD_PITCH,
+        DOWNLOAD_RIGHT, Download, DownloadAction, DownloadChoice, DownloadState, FILTER_CHEVRON,
+        FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
+        LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST, SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
+        SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, day_heading,
+        download_menu_items, downloads_progress, history_list, library_band, list_width,
+        media_tile, panel_at_rest, past_end, plus_x, receded_opacity, spaces_width,
     };
     use std::rc::Rc;
 
@@ -5460,6 +5653,116 @@ mod tests {
         assert!(!none.window && !none.library && !none.sidebar);
         // Taken past where it opens, the panel is still at rest, its column under them.
         assert!(panel_at_rest(1., 417.) && !panel_at_rest(0.99, 417.));
+    }
+
+    /// Downloads lists what's still coming or held under Now, ahead of the days, and the rest by
+    /// day, each newest first.
+    #[gpui::test]
+    fn downloads_list_what_still_comes_under_now(cx: &mut TestAppContext) {
+        use DownloadState::{Done, Paused, Running};
+        let host = Rc::new(Recorder::default());
+        host.day_starts.set([200., 100., 0., 0.]);
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        let some = |id, state, held, started| Download {
+            id,
+            started,
+            ..download(state, held)
+        };
+        shell.update(cx, |shell, cx| {
+            shell.section = Section::Downloads;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+            let downloads = vec![
+                some(1, Done, false, 300.),
+                some(2, Done, true, 250.),
+                some(3, Running, false, 150.),
+                some(4, Done, false, 150.),
+                some(5, Paused, false, 50.),
+            ];
+            shell.set_downloads(downloads, cx);
+        });
+        cx.run_until_parked();
+        let lines = shell.read_with(cx, |shell, _| {
+            let items = &shell.library.as_ref().unwrap().items;
+            (items.iter())
+                .map(|item| match item {
+                    Item::Heading(heading) => heading.to_string(),
+                    Item::Download(index) => shell.downloads[*index].id.to_string(),
+                    _ => "?".into(),
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            lines,
+            ["Now", "2", "3", "5", "Today", "1", "Yesterday", "4"]
+        );
+    }
+
+    /// A download's row has the buttons for what it waits on at its end, each doing what its menu
+    /// item does, not what a click on the row does: Pause while it comes and Delete while it's
+    /// held, and under the pointer a finished file's folder and More, which shows its menu.
+    #[gpui::test]
+    fn a_download_s_buttons_do_what_its_menu_does(cx: &mut TestAppContext) {
+        use DownloadState::{Done, Running};
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let some = |id, state, held| Download {
+            id,
+            ..download(state, held)
+        };
+        shell.update(cx, |shell, cx| {
+            shell.section = Section::Downloads;
+            shell.set_library(true, cx);
+            shell.library_motion = None;
+            shell.sidebar_fade = None;
+            let downloads = vec![
+                Download {
+                    total: 100,
+                    received: 40,
+                    ..some(1, Running, false)
+                },
+                some(2, Done, true),
+                some(3, Done, false),
+            ];
+            shell.set_downloads(downloads, cx);
+        });
+        cx.run_until_parked();
+        // Under Now the running file, then the held one, and under Today the finished one.
+        let heading = HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
+        let at = |headings: f32, row: f32, from_end: f32| {
+            point(
+                px(COLUMN_WIDTH + ARCHIVE_WIDTH - SEARCH_RIGHT - DOWNLOAD_RIGHT - from_end),
+                px(ARCHIVE_TOP + heading * headings + DOWNLOAD_PITCH * (row + 0.5)),
+            )
+        };
+        let click = |point, cx: &mut gpui::VisualTestContext| {
+            cx.simulate_click(point, Modifiers::none());
+            cx.run_until_parked();
+        };
+        let end = DOWNLOAD_BUTTON / 2.;
+        let folder = DOWNLOAD_BUTTON + DOWNLOAD_BUTTON_GAP + end;
+        host.take();
+        click(at(1., 0., end), cx);
+        assert_eq!(host.take(), ["act on download 1 Pause"]);
+        click(at(1., 1., 4.), cx);
+        assert_eq!(host.take(), ["act on download 2 Remove"]);
+        // At rest a finished file's row has no buttons, so where its folder goes is the row's.
+        click(at(2., 2., folder), cx);
+        assert_eq!(host.take(), ["act on download 3 Open"]);
+        cx.simulate_mouse_move(at(2., 2., 200.), None, Modifiers::none());
+        cx.run_until_parked();
+        click(at(2., 2., folder), cx);
+        assert_eq!(host.take(), ["act on download 3 Show"]);
+        assert!(host.menus.borrow().is_empty());
+        click(at(2., 2., end), cx);
+        assert!(host.take().is_empty(), "More acted on the file");
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert_eq!(
+            menu.first().map(|(title, _)| title.to_string()),
+            Some("Open".into())
+        );
     }
 
     fn download(state: DownloadState, held: bool) -> Download {
