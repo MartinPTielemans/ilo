@@ -66,9 +66,7 @@ impl Shell {
     /// Where ⌘T's bar's field sits on the card when the card doesn't rest on its own: its top, in
     /// the card's frame whose top is `card_top`.
     pub(in crate::shell) fn opened_bar_top(&self, card_top: f32) -> f32 {
-        command_bar::centered_row_middle(f32::from(self.viewport.height))
-            - BAR_HEIGHT / 2.
-            - card_top
+        command_bar::centered_top(f32::from(self.viewport.height)) - card_top
     }
 
     /// Where the empty page's mark sits over its landing field in a browser window `viewport`
@@ -79,8 +77,7 @@ impl Shell {
         let (frame, _) = self.page_frame(viewport);
         let (left, top) = (f32::from(frame.left()), f32::from(frame.top()));
         let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
-        let row = command_bar::centered_row_middle(f32::from(viewport.height)) - top;
-        let mark = mark_top(group_top(row, height, false, false), false)?;
+        let mark = mark_top(group_top(height, false, false), false)?;
         Some((left + (width - MARK_SIZE) / 2., top + mark))
     }
 }

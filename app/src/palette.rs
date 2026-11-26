@@ -25,8 +25,8 @@ use crate::tokens::icon_picker::{
 };
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
-    ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
-    SWATCH_MAIN_TO,
+    ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
+    INTENSITY_SPAN, NO_THEME_SELECTION, RING, SELECTION, SWATCH_MAIN_TO,
 };
 pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
@@ -43,7 +43,7 @@ use crate::tokens::palette::{
     FLOAT_MATERIAL, FLOAT_MATERIAL_MORE, LIGHT_FLOAT_MATERIAL, LIGHT_FLOAT_MATERIAL_MORE,
 };
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
-pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
+pub use crate::tokens::palette::{INK, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{LIGHT_PLATE_GRAY, LIGHT_STATE_SELECTED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
@@ -761,19 +761,13 @@ impl Palette {
         }
     }
 
-    /// No theme: the tinted material alone, and ilo green, as light as it has to
-    /// be to read on it, as the accent.
+    /// No theme: the tinted material alone. Its accent is the text's ink with the other look's
+    /// ink on it, as a switch that's on is, so a Space without a colour wears none.
     fn untinted(tone: Tone, glass: f32) -> Palette {
         let window = Window::of_none(tone, glass);
         let palette = Palette::with(0., &window, None);
-        let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
-        let section_glyph = palette.solve_section_glyph(accent, &window);
-        let swatch = Swatch::of(None, &window);
         Palette {
-            accent,
-            accent_label: label_on(accent),
-            section_glyph,
-            swatch,
+            accent_label: label_on(palette.accent),
             ..palette
         }
     }
@@ -1093,28 +1087,21 @@ impl Palette {
         }
     }
 
-    /// The accent under the pointer, darker, as every filled button goes.
+    /// The accent under the pointer, darker, as every filled button goes. Without a theme the
+    /// accent is the text's ink, which goes toward its label instead (`ink_states`).
     pub fn accent_hovered(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_HOVERED,
-            g: g * ACCENT_HOVERED,
-            b: b * ACCENT_HOVERED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_HOVERED).into(),
+            None => ink_states(self.accent, self.accent_label).0.into(),
         }
-        .into()
     }
 
-    /// The accent pressed, a step darker than under the pointer, whatever its label (the owner).
+    /// The accent pressed, a step further than under the pointer, whatever its label (the owner).
     pub fn accent_pressed(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_PRESSED,
-            g: g * ACCENT_PRESSED,
-            b: b * ACCENT_PRESSED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_PRESSED).into(),
+            None => ink_states(self.accent, self.accent_label).1.into(),
         }
-        .into()
     }
 
     /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
@@ -1129,9 +1116,24 @@ impl Palette {
         (fill, label_on(fill))
     }
 
-    /// Behind selected text in a field: the accent, faint.
+    /// Behind selected text in a field: the accent, faint. Without a theme the accent is the
+    /// text's ink, which is fainter there, since a selection lies under text of its own colour.
     pub fn selection(&self) -> Hsla {
-        Hsla::from(self.accent).opacity(SELECTION)
+        let alpha = match self.shown {
+            Some(_) => SELECTION,
+            None => NO_THEME_SELECTION,
+        };
+        Hsla::from(self.accent).opacity(alpha)
+    }
+
+    /// The accent and its label on a fill that's dark in either look, as the find bar's material
+    /// and the pickers' card are: the Space's, or without a theme the dark look's ink, as a light
+    /// window's own ink is such a fill's colour.
+    pub fn accent_on_dark(&self) -> (Rgba, Rgba) {
+        match self.shown {
+            Some(_) => (self.accent, self.accent_label),
+            None => (Tone::Dark.ink(), label_on(Tone::Dark.ink())),
+        }
     }
 
     /// Where a dragged row or Space would go: the ink, firm, so it shows on either window.
@@ -1546,7 +1548,7 @@ fn nearest(main: Rgba, passes: impl Fn(Rgba) -> bool) -> Option<Rgba> {
 }
 
 impl Swatch {
-    /// `theme`'s swatch, or ilo green's for none, without the rest of its palette.
+    /// `theme`'s swatch, or the ink's for none, without the rest of its palette.
     pub fn of_theme(theme: Option<&Theme>) -> Swatch {
         let glass = crate::space_transparency::START;
         match theme {
@@ -1557,7 +1559,7 @@ impl Swatch {
 
     fn of(theme: Option<&Theme>, window: &Window) -> Swatch {
         let Some(theme) = theme else {
-            let accent = rgb(NO_THEME_ACCENT);
+            let accent = window.tone.ink();
             let lum = luminance(accent);
             return Swatch {
                 from: accent,
@@ -1998,6 +2000,26 @@ pub fn composite(under: Rgba, top: Rgba) -> Rgba {
         b: mix(under.b, top.b),
         a,
     }
+}
+
+/// A filled button's `fill` with each channel at `by`, as a coloured one goes under the pointer.
+pub fn darker(fill: Rgba, by: f32) -> Rgba {
+    Rgba {
+        r: fill.r * by,
+        g: fill.g * by,
+        b: fill.b * by,
+        a: fill.a,
+    }
+}
+
+/// A button filled with the text's ink, under the pointer and pressed: its fill a step toward
+/// `label`, the other look's ink on it, and a step further. Ink has no darker to go to, so the
+/// rule is one for both looks.
+pub fn ink_states(fill: Rgba, label: Rgba) -> (Rgba, Rgba) {
+    (
+        over(fill, label, INK_HOVER_MIX),
+        over(fill, label, INK_PRESSED_MIX),
+    )
 }
 
 /// `color` at `alpha` over opaque `base`.

@@ -18,7 +18,7 @@ use crate::agents::lines::Happened;
 pub(in crate::agents) fn revoked_told(by_user: bool, attached: bool) -> String {
     let who = match by_user {
         true => "The user revoked this task's folder.",
-        false => "ilo revoked this task's folder.",
+        false => concat!(env!("PRODUCT_NAME"), " revoked this task's folder."),
     };
     let mut told = format!(
         "{who} You can no longer read or change anything in it. Don't try to reach it another \

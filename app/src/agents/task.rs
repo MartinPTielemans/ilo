@@ -29,6 +29,7 @@ use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
+mod log_of;
 mod pick_up;
 pub(super) mod revoke;
 pub(super) mod rewall;
@@ -633,6 +634,10 @@ pub struct Card {
     /// the word's place: how far a stopped task got, a session's receipt, the helpers at work.
     /// Set where the status is made, so no place reads it off the words.
     pub fuller: bool,
+    /// How much of `status` leads it: the step count while it works ("Step 5") and "Needs you"
+    /// while a step waits on the user, the one state that asks for them; zero for the rest. Set
+    /// where the status is made, as `fuller` is.
+    pub lead: usize,
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
@@ -720,6 +725,15 @@ pub enum Word {
 }
 
 impl Word {
+    pub const ALL: [Word; 6] = [
+        Self::Working,
+        Self::NeedsYou,
+        Self::Done,
+        Self::Stopped,
+        Self::Interrupted,
+        Self::AtLimit,
+    ];
+
     /// The word for `state`; `waits` says whether something of the task's waits on the user.
     pub fn of(state: &State, waits: bool) -> Self {
         match state {
@@ -851,12 +865,24 @@ pub struct Start {
 
 /// What the composer last started a thread with in a profile, which it opens with there next:
 /// its level, never Full access, and the model picked on its assistant. Nothing of the words.
+/// Settings' `A new thread starts with` sets these too, and its effort, which only Settings sets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Last {
     pub tier: Tier,
     /// The assistant, and the model picked on it by id, empty for its own default; None for
     /// Settings' assistant and model.
     pub model: Option<(Cli, String)>,
+    /// The effort level a new thread starts at, one a CLI's `efforts` lists, for an assistant
+    /// whose program takes it; None for the program's own. A composer's pick holds for its
+    /// thread alone and never comes here.
+    pub effort: Option<&'static str>,
+}
+
+/// `level` as one of the effort levels a CLI takes, the only ones ever kept or passed.
+pub fn known_effort(level: &str) -> Option<&'static str> {
+    (Cli::ALL.into_iter())
+        .flat_map(|cli| cli.efforts().iter().copied())
+        .find(|each| *each == level)
 }
 
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
@@ -960,6 +986,9 @@ pub struct Tasks {
     /// What each kept task a run before left read back of its card, until a reply takes it up or
     /// it goes (pick_up.rs).
     came_back: HashMap<String, super::kept::cards::Back>,
+    /// The kept log of each task a run before left that was shown, asked once (None until it's
+    /// read, and for one with none), until a reply takes the task up or it goes.
+    came_logs: HashMap<String, Option<Vec<super::kept::log::Record>>>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1022,7 +1051,8 @@ impl Agents {
 
     /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
     /// it opens there: its model, and its level unless that was Full access, which is set for one
-    /// thread and never remembered. Only the composer's own start calls it.
+    /// thread and never remembered. The composer's start calls it, and Settings' `A new thread
+    /// starts with`, whose rows are this same memory: a pick there is a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
@@ -1032,8 +1062,28 @@ impl Agents {
             Tier::Full => Tier::default(),
             tier => tier,
         };
-        let last = Last { tier, model };
+        let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
+        let last = Last {
+            tier,
+            model,
+            effort,
+        };
         if self.tasks.last.get(&profile) != Some(&last) {
+            self.tasks.last.insert(profile, last);
+            self.save();
+        }
+    }
+
+    /// Settings' Effort: the level a new thread in `space`'s profile starts at, None for the
+    /// program's own; what the composer last started with stays.
+    pub fn set_new_thread_effort(&mut self, space: u64, effort: Option<&'static str>) {
+        let profile = self.browser.space_profile(space);
+        if profile.is_empty() {
+            return;
+        }
+        let mut last = self.tasks.last.get(&profile).cloned().unwrap_or_default();
+        if last.effort != effort {
+            last.effort = effort;
             self.tasks.last.insert(profile, last);
             self.save();
         }
@@ -1271,6 +1321,21 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
+        // A task a run before left draws its kept log first, settled, under what was asked,
+        // which heads it already (kept/log.rs).
+        let mut kept_finished = Vec::new();
+        if let Some(log) = self.kept_log(task) {
+            let mut drawn = log_of::drawn(log);
+            let asked = matches!(drawn.lines.first(), Some(Line::You(text)) if *text == task.asked);
+            if asked {
+                drawn.lines.remove(0);
+            }
+            let past = usize::from(asked);
+            kept_finished = (drawn.finished.into_iter())
+                .filter_map(|(at, when)| Some((at.checked_sub(past)?, when)))
+                .collect();
+            lines.splice(0..0, drawn.lines);
+        }
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
@@ -1290,7 +1355,8 @@ impl Agents {
             (None, true) => format!("{} · {about}", task.name),
             (None, false) => format!("{} · {} · {about}", task.name, task.model),
         };
-        let finished = finished(&task.messages, &lines);
+        let mut finished = finished(&task.messages, &lines);
+        finished.splice(0..0, kept_finished);
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.name.clone(),
@@ -1423,25 +1489,29 @@ impl Agents {
     pub fn card(&self, task: &Task, cx: &App) -> Card {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
-        // With each status, whether it's its state's word in the fuller form (`Card::fuller`).
-        let (status, dot, fuller) = match (&task.state, &question) {
+        // With each status, whether it's its state's word in the fuller form (`Card::fuller`) and
+        // how much of it leads it (`Card::lead`).
+        let (status, dot, fuller, lead) = match (&task.state, &question) {
             (State::Working | State::Asking { .. }, Some(question)) => {
-                (needs_you(question), Dot::Waiting, false)
+                (needs_you(question), Dot::Waiting, false, NEEDS_YOU.len())
             }
             // A refusal the user hasn't settled says where it stopped, as its line says why.
             (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => (
                 format!("{STOPPED_AT} {}", stop.at).into(),
                 Dot::Waiting,
                 false,
+                0,
             ),
             (State::Working, None) => {
-                let (status, helpers) = working(task);
-                (status, Dot::Working, helpers)
+                let (status, helpers, lead) = working(task);
+                (status, Dot::Working, helpers, lead)
             }
             (State::Asking { question, .. }, None) if asks => {
-                (question.clone(), Dot::Waiting, false)
+                (question.clone(), Dot::Waiting, false, 0)
             }
-            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting, false),
+            (State::Asking { .. }, None) => {
+                (NEEDS_YOU.into(), Dot::Waiting, false, NEEDS_YOU.len())
+            }
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -1449,7 +1519,7 @@ impl Agents {
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (receipt(session, &at).into(), Dot::Done, true)
+                (receipt(session, &at).into(), Dot::Done, true, 0)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -1461,12 +1531,13 @@ impl Agents {
                 summary.clone().unwrap_or_else(|| first_words(result)),
                 Dot::Done,
                 false,
+                0,
             ),
             (State::Limit { resets }, _) => {
-                (limit_words(&task.name, resets).into(), Dot::Ended, false)
+                (limit_words(&task.name, resets).into(), Dot::Ended, false, 0)
             }
-            (State::Stopped, _) => (stopped(task), Dot::Ended, true),
-            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended, false),
+            (State::Stopped, _) => (stopped(task), Dot::Ended, true, 0),
+            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended, false, 0),
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
@@ -1496,6 +1567,7 @@ impl Agents {
             title: task.title.clone(),
             status,
             fuller,
+            lead,
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
@@ -3334,7 +3406,7 @@ impl Agents {
     /// A client said hello on `connection`: the name that connection's session's card shows. One
     /// the user connected in Settings › Agents by name has that; any other MCP client, the name it
     /// gives, as plain text, unless it would pass for the browser, whose words the cards set beside
-    /// an agent's.
+    /// an agent's, or for one of those words, a level's or a state's.
     pub(super) fn hello(&mut self, agent: &str, connection: u64, client: &str) {
         let given = super::request::plain(client);
         // Each of the `ilo` command's commands says hello, and its session keeps the name it
@@ -3346,7 +3418,10 @@ impl Agents {
         let (name, nameless) = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
-                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
+                if !given.is_empty()
+                    && !names_the_browser(&given)
+                    && !names_a_client(client)
+                    && !names_a_state(&given) =>
             {
                 (given, false)
             }
@@ -3998,8 +4073,9 @@ impl Agents {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
                 let shows = element.as_ref().is_some_and(page::Element::shows_typed);
-                if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
-                    did.text = typed;
+                // What may show is cut at its most, as a chosen option is, never dropped whole.
+                if tool == "type" && shows {
+                    did.text = page::clip(&page::one_line(&typed), tools::TYPED_SHOWN);
                 }
             }
             "select" => {
@@ -4568,8 +4644,12 @@ fn last_finished(task: &Task) -> Option<SharedString> {
 }
 
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
-/// status the card sets heavier (`status_lead`).
+/// status the card sets heavier (`Card::lead`).
 pub const NEEDS_YOU: &str = "Needs you";
+/// A page the user took over, on the bar over it and its row at the sidebar's foot, and one whose
+/// task waits at a refused step, broke off, or went on without it.
+pub const DRIVING: &str = "You're driving";
+pub const PAUSED: &str = "Paused";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
 
@@ -4604,35 +4684,29 @@ fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
 /// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
 /// step comes, never on a clock. With it, whether it's the helpers' line, the word Working in its
-/// fuller form (`Card::fuller`).
-fn working(task: &Task) -> (SharedString, bool) {
+/// fuller form (`Card::fuller`), and how much of it is the count that leads it (`Card::lead`).
+fn working(task: &Task) -> (SharedString, bool, usize) {
     // With helpers at work, the conversation's live line, in its own words: their steps come in
     // turn, and a card that said each would flicker between them.
     let helpers = helpers_under_way(task);
     if helpers > 0 {
         let (title, counted) = summary(None, (helpers, Counted::Helpers));
-        return (format!("{title} · {counted}").into(), true);
+        return (format!("{title} · {counted}").into(), true, 0);
     }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
     // name, then what it's doing, whose room the step count would take (#3690).
-    let step: SharedString = match (taken.first(), &task.session) {
-        (Some(step), Some(_)) => format!(
-            "{} · {}",
-            task.name,
-            tools::step_title(&step.did, tense(step))
-        )
-        .into(),
-        (Some(step), None) => format!(
-            "Step {} · {}",
-            taken.len(),
-            tools::step_title(&step.did, tense(step))
-        )
-        .into(),
-        (None, Some(_)) => format!("{} · no steps yet", task.name).into(),
-        (None, None) => "Thinking · no steps yet".into(),
-    };
-    (step, false)
+    let step = |step: &Traced| tools::step_title(&step.did, tense(step));
+    match (taken.first(), &task.session) {
+        (Some(first), Some(_)) => (format!("{} · {}", task.name, step(first)).into(), false, 0),
+        (Some(first), None) => {
+            let count = format!("Step {}", taken.len());
+            let lead = count.len();
+            (format!("{count} · {}", step(first)).into(), false, lead)
+        }
+        (None, Some(_)) => (format!("{} · no steps yet", task.name).into(), false, 0),
+        (None, None) => ("Thinking · no steps yet".into(), false, 0),
+    }
 }
 
 /// How many helpers the stretch under way of a working task has, which its conversation's live
@@ -4802,19 +4876,6 @@ fn needs_you(question: &Question) -> SharedString {
     match question.why.is_empty() {
         true => NEEDS_YOU.into(),
         false => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
-    }
-}
-
-/// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
-/// while it works ("Step 5"), and "Needs you" while a step waits on the
-/// user, the one state that asks for them. Zero for the rest. By the words alone, as a status
-/// rolling out has left its card's state behind.
-pub fn status_lead(status: &str) -> usize {
-    let counts = (status.strip_prefix("Step "))
-        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
-    match counts || status.starts_with(NEEDS_YOU) {
-        true => status.find(" · ").unwrap_or(status.len()),
-        false => 0,
     }
 }
 
@@ -5598,6 +5659,17 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// Whether a client's name reads as one of the browser's own words for a task's level or its
+/// state, which a card sets beside an agent's name: the whole name, in any case and however its
+/// words are joined. A name is a name only, so "Done" is none, and "Done Deals" is an agent's.
+fn names_a_state(name: &str) -> bool {
+    let reads = |words: &str| reads_as(words).replace(' ', "");
+    let given = reads(name);
+    let levels = Tier::ALL.into_iter().map(Tier::label);
+    let states = Word::ALL.into_iter().map(Word::after_name);
+    (levels.chain(states).chain([DRIVING, PAUSED])).any(|own| given == reads(own))
 }
 
 /// The files of the tasks a run before left, but for the places walled tasks left, which are swept

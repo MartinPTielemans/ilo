@@ -18,6 +18,8 @@ pub(in crate::shell) struct RestingBar {
     pub(in crate::shell) unlearned: Rc<std::cell::Cell<bool>>,
     /// Over a private window, which starts no thread.
     pub(in crate::shell) private: Rc<std::cell::Cell<bool>>,
+    /// The system can wall a thread in with the user's files.
+    pub(in crate::shell) files: Rc<std::cell::Cell<bool>>,
 }
 
 impl RestingBar {
@@ -147,6 +149,7 @@ impl command_bar::Host for RestingBar {
         _: crate::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: crate::agents::files::Picked,
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));
@@ -158,14 +161,23 @@ impl command_bar::Host for RestingBar {
         tier: crate::agents::tier::Tier,
         model: Option<String>,
         effort: Option<&'static str>,
+        files: crate::agents::files::Picked,
         _: &mut App,
     ) {
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
         let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
+        // How many files and whether a folder, as the start is given them.
+        let files = match (files.files.len(), files.folder.is_some()) {
+            (0, false) => String::new(),
+            (count, folder) => format!(" files {count} folder {folder}"),
+        };
         self.ask(format!(
-            "run task at rest {agent} {text} at {}{model}{effort}",
+            "run task at rest {agent} {text} at {}{model}{effort}{files}",
             tier.id()
         ));
+    }
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
     }
     fn set_up_agents(&self, _: &mut App) {
         self.ask("set up agents".into());

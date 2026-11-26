@@ -120,6 +120,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
+    // The Library's downloads as drawn (values-library-foot.md, 33): the file's tile and the row's
+    // buttons at 8, and the bar at 2.
+    "shell.library.download-tile-radius",
+    "shell.library.download-bar-radius",
+    "shell.library.download-button-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
     // The two curves that take the open tab's line into its page, which round no corner.
@@ -150,8 +155,7 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // The composer's switch round its parts, and a card's page inside the card (#4140).
-    "shell.composer.switch-radius",
+    // A resting card's page inside the card (#4140).
     "shell.composer.page-radius",
     // A thread's stage, at the drawing's values (spec-thread-stage.md): the rail's tiles, and the
     // user's message, rounder than a row as the drawing's bubble is.
@@ -229,10 +233,6 @@ fn a_corner_inside_another_is_concentric() {
         hover_card::RECENT_ROW_RADIUS + hover_card::PADDING
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
-    assert_eq!(
-        shell::composer::SWITCH_RADIUS,
-        shell::composer::SWITCH_PART_RADIUS + shell::composer::SWITCH_INSET
-    );
     assert_eq!(
         shell::composer::CARD_RADIUS,
         shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET

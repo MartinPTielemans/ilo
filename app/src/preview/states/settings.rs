@@ -119,9 +119,7 @@ impl gpui::Render for PicturesPage {
         let look = Look::settings(dark);
         // The page's look is this frame's, so its field gets it as the page draws.
         let colors = look.field();
-        self.search.update(cx, |search, _| {
-            search.set_colors(colors.placeholder, colors.caret, colors.selection)
-        });
+        self.search.update(cx, |search, _| search.wear(colors));
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let a11y = window.is_a11y_active();
         let field = browser::settings_search::field(
@@ -476,7 +474,12 @@ impl gpui::Render for PicturesPage {
                 let command = frame()
                     .flex_wrap()
                     .child(glyph_plate(&look, "icons/square-code.svg", true))
-                    .child(command_text(&look, "ilo CLI", &detail, mono))
+                    .child(command_text(
+                        &look,
+                        browser::agents::Client::Command.name(),
+                        &detail,
+                        mono,
+                    ))
                     .child(end(controls))
                     .children(export);
                 vec![

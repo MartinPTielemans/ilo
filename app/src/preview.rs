@@ -2240,6 +2240,7 @@ impl command_bar::Host for PreviewBar {
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: browser::agents::files::Picked,
         _: &mut App,
     ) {
     }
@@ -2251,6 +2252,7 @@ impl command_bar::Host for PreviewBar {
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: browser::agents::files::Picked,
         _: &mut App,
     ) {
     }
@@ -4037,7 +4039,7 @@ fn preview_mini_bar(
     }) else {
         return;
     };
-    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent_on_dark().0.into()) else {
         return;
     };
     let selection = shown.selection;

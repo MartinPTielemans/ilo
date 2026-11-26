@@ -1,19 +1,19 @@
-//! The `ilo` command (#3667): `ilo-command`, a program beside the browser's, which an agent in a
-//! terminal runs for one MCP call at a time, as one more client of the server. Settings › Agents
-//! adds it as it connects Claude Code: a link named `ilo` in the user's bin folder, and the
-//! command's agent file in the profile directory, which only the user can read and which holds
-//! the server's address and the agent's token. Remove takes away exactly those, never a line of
-//! the user's shell profile: the user pastes that line themselves.
+//! The command (#3667), named as the product: `ilo-command`, a program beside the browser's,
+//! which an agent in a terminal runs for one MCP call at a time, as one more client of the server.
+//! Settings › Agents adds it as it connects Claude Code: a link named as the product in the user's
+//! bin folder, and the command's agent file in the profile directory, which only the user can read
+//! and which holds the server's address and the agent's token. Remove takes away exactly those,
+//! never a line of the user's shell profile: the user pastes that line themselves.
 //!
 //! In a Flatpak, whose sandbox can't write the host's bin folder, Add writes the agent file alone,
-//! and the row gives a line to run once in a terminal, which puts a script named `ilo` there that
-//! runs the command in the sandbox, as a client on the host runs the bridge.
+//! and the row gives a line to run once in a terminal, which puts a script named as the command
+//! there that runs it in the sandbox, as a client on the host runs the bridge.
 //!
-//! On Windows the program is `ilo.exe` in a folder of its own. In the installer's copy that's
-//! `bin` beside chrome.exe, whose own folder on PATH would bring the engine's programs with it,
-//! and Add puts `bin` on the user's PATH, which Remove and the uninstaller take back. In the
-//! Store's copy it's the package's alias, on PATH from install, which does nothing but say it isn't
-//! added until Add writes the agent file.
+//! On Windows the program is `bin\<product>.exe`. In the installer's copy that's `bin` beside
+//! chrome.exe, whose own folder on PATH would bring the engine's programs with it, and Add puts
+//! `bin` on the user's PATH, which Remove and the uninstaller take back. In the Store's copy it's
+//! the package's alias, on PATH from install, which does nothing but say it isn't added until Add
+//! writes the agent file.
 
 use crate::product::PRODUCT;
 use std::io;
@@ -26,11 +26,21 @@ pub const PROGRAM: &str = if cfg!(windows) {
     "ilo-command"
 };
 
-/// What the agent types, the link's name in the bin folder.
-pub const LINK: &str = "ilo";
+/// What the agent types, the link's name in the bin folder: the product's name.
+pub const LINK: &str = env!("PRODUCT_NAME");
 
 /// The agent file's name in the profile directory.
-pub const FILE: &str = "ilo-command";
+pub const FILE: &str = concat!(env!("PRODUCT_NAME"), "-command");
+
+/// The command's name from before it took the product's: its link's, and its agent file's with
+/// "-command", which Add Again takes away when they're still the command's.
+pub const OLD_LINK: &str = env!("APP_NAME");
+
+/// Whether the command's name `new` is another than its `old` one. A build whose name and product
+/// are one has nothing old to take away: its old link and file are the ones Add just wrote.
+pub fn renamed(old: &str, new: &str) -> bool {
+    old != new
+}
 
 /// The folder Add puts the link in, as the row names it.
 pub const FOLDER_SHOWN: &str = "~/.local/bin";
@@ -60,6 +70,8 @@ pub enum State {
     /// Added, in a folder the user's shell doesn't look in: the line to paste, Copy Line and
     /// Remove.
     Unsearched,
+    /// Added under the name from before the command took the product's: Add Again.
+    Stale,
 }
 
 /// The row's line under its name: its words, the part of them set in the mono face, as a command
@@ -76,8 +88,9 @@ pub struct Detail {
 /// command is in on Windows, as the row names it, where Add links nothing and needs no line pasted.
 pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Detail {
     let what = "Lets an agent in a terminal use the browser.";
+    // The stale row says what a row not added says; only its button changes.
     match (state, flatpak) {
-        (State::Off, Some(_)) => Detail {
+        (State::Off | State::Stale, Some(_)) => Detail {
             line: format!(
                 "{what} {PRODUCT}'s sandbox can't write to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
             ),
@@ -86,15 +99,15 @@ pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Det
         },
         (_, Some(line)) => Detail {
             line: format!(
-                "Added in {PRODUCT}. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"
+                "Added in {PRODUCT}. Run this once in a terminal to put {LINK} in {FOLDER_SHOWN}:"
             ),
             mono: None,
             export: Some(line.into()),
         },
-        (State::Off, None) => Detail {
+        (State::Off | State::Stale, None) => Detail {
             line: match windows {
                 Some(_) => what.into(),
-                None => format!("{what} Add links ilo in {FOLDER_SHOWN}."),
+                None => format!("{what} Add links {LINK} in {FOLDER_SHOWN}."),
             },
             mono: None,
             export: None,
@@ -102,7 +115,7 @@ pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Det
         (State::On, None) => {
             let folder = windows.unwrap_or(FOLDER_SHOWN);
             let start = format!("Added in {folder}. Agents can run ");
-            let command = "ilo help";
+            let command = format!("{LINK} help");
             Detail {
                 line: format!("{start}{command} to list commands."),
                 mono: Some(start.len()..start.len() + command.len()),
@@ -120,8 +133,10 @@ pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Det
 }
 
 /// In a Flatpak, whose bridge a client on the host runs as `bridge` gives it (bridge::launch), the
-/// line that writes a script named `ilo` in the host's bin folder, which runs the command beside
-/// the bridge the same way: in the sandbox, with its permissions, so it opens no new way in.
+/// line that writes a script named as the command in the host's bin folder, which runs the command
+/// beside the bridge the same way: in the sandbox, with its permissions, so it opens no new way in.
+/// The script from before the command took the product's name runs the program the same way, so
+/// the line takes it away first, if it's still exactly that script, which the sandbox can't.
 pub fn flatpak_line(bridge: &[String]) -> Option<String> {
     let [flatpak, run, command, id] = bridge else {
         return None;
@@ -136,8 +151,10 @@ pub fn flatpak_line(bridge: &[String]) -> Option<String> {
         program.display()
     );
     let link = format!("{FOLDER_SHOWN}/{LINK}");
+    let old = format!("{FOLDER_SHOWN}/{OLD_LINK}");
     Some(format!(
-        "mkdir -p {FOLDER_SHOWN} && printf '{script}' > {link} && chmod +x {link}"
+        "if [ \"$(cat {old} 2>/dev/null)\" = \"$(printf '{script}')\" ]; then rm {old}; fi; \
+         mkdir -p {FOLDER_SHOWN} && printf '{script}' > {link} && chmod +x {link}"
     ))
 }
 
@@ -216,6 +233,8 @@ pub struct Install {
     pub file: PathBuf,
     pub linked: bool,
     pub store: bool,
+    /// The command's name before it took the product's (OLD_LINK), for Add Again.
+    pub old: String,
 }
 
 /// What Add says when the folder has an `ilo` of another program's, which it leaves.
@@ -229,13 +248,13 @@ pub fn taken(folder: &str) -> String {
 impl Install {
     /// The command on Windows, for the bridge at `bridge` and the agent file `file`: in the
     /// Store's copy, whose bridge is its alias, the package's alias beside it; in the installer's,
-    /// `bin\ilo.exe` beside the bridge.
+    /// `bin\<product>.exe` beside the bridge.
     pub fn windows(bridge: &Path, local_app_data: &str, file: PathBuf) -> Install {
         let store = bridge == super::bridge::store_alias(local_app_data);
         let (folder, program) = match store {
             true => {
                 let folder = super::bridge::store_aliases(local_app_data);
-                let program = format!(r"{folder}\{}.exe", env!("APP_NAME"));
+                let program = format!(r"{folder}\{LINK}.exe");
                 (folder.into(), program.into())
             }
             false => {
@@ -250,6 +269,7 @@ impl Install {
             file,
             linked: false,
             store,
+            old: OLD_LINK.into(),
         }
     }
 
@@ -260,9 +280,37 @@ impl Install {
     /// Whether the link is the command's: a link to a program named as it is, this copy's or
     /// another's, as a build in another folder makes.
     fn ours(&self) -> bool {
-        std::fs::symlink_metadata(self.link()).is_ok_and(|meta| meta.file_type().is_symlink())
-            && std::fs::read_link(self.link())
-                .is_ok_and(|to| to.file_name() == Some(PROGRAM.as_ref()))
+        is_ours(&self.link())
+    }
+
+    /// The agent file from before the command took the product's name, beside this one.
+    fn old_file(&self) -> PathBuf {
+        self.file.with_file_name(format!("{}-command", self.old))
+    }
+
+    /// The command had another name before, whose link and file are others than these.
+    fn renamed(&self) -> bool {
+        renamed(&self.old, LINK)
+    }
+
+    /// The agent file Add wrote, or the one from before the command took the product's name, whose
+    /// folders and PATH entry Add Again carries over for Remove to take back.
+    fn written(&self) -> Option<Agent> {
+        Agent::read(&self.file)
+            .or_else(|| (self.renamed()).then(|| Agent::read(&self.old_file()))?)
+    }
+
+    /// Takes away what Add made before the command took the product's name, once Add Again has
+    /// written the new: the old link, only while it's still the command's, and the old agent file.
+    fn take_old(&self) {
+        if !self.renamed() {
+            return;
+        }
+        let old = self.folder.join(&self.old);
+        if self.linked && is_ours(&old) {
+            _ = std::fs::remove_file(old);
+        }
+        _ = std::fs::remove_file(self.old_file());
     }
 
     /// Whether Add made the link, or without one the agent file, as Settings › Agents shows it.
@@ -272,7 +320,7 @@ impl Install {
 
     /// Makes the link to the program, and the agent file with the server's `address` and the
     /// agent's `token`, only the user's to read. A link of another copy's it replaces; anything
-    /// else named `ilo` there it leaves, and says so.
+    /// else named as the command there it leaves, and says so.
     #[cfg(unix)]
     pub fn add(&self, address: &Path, token: &str) -> Result<(), String> {
         let failed = |error: io::Error| error.to_string();
@@ -283,7 +331,9 @@ impl Install {
                 made: Vec::new(),
                 path: None,
             };
-            return self.write_agent(&agent).map_err(failed);
+            self.write_agent(&agent).map_err(failed)?;
+            self.take_old();
+            return Ok(());
         }
         let link = self.link();
         // A home with no `~/.local` gets both folders, and Remove takes back both.
@@ -291,7 +341,7 @@ impl Install {
             .take_while(|folder| !folder.exists())
             .map(Path::to_path_buf)
             .collect();
-        let mut made = Agent::read(&self.file).map_or(Vec::new(), |agent| agent.made);
+        let mut made = self.written().map_or(Vec::new(), |agent| agent.made);
         made.retain(|folder| !made_now.contains(folder));
         made.splice(0..0, made_now.iter().cloned());
         std::fs::create_dir_all(&self.folder).map_err(failed)?;
@@ -314,6 +364,7 @@ impl Install {
             }
             return Err(failed(error));
         }
+        self.take_old();
         Ok(())
     }
 
@@ -364,8 +415,8 @@ impl Install {
                 }
                 // Add's own from before, as after Revoke and Add again, is still Add's to take back.
                 None => {
-                    entry = (Agent::read(&self.file).and_then(|agent| agent.path))
-                        .filter(|was| *was == folder)
+                    entry =
+                        (self.written().and_then(|agent| agent.path)).filter(|was| *was == folder)
                 }
             }
         }
@@ -381,6 +432,7 @@ impl Install {
             }
             return Err(failed(error));
         }
+        self.take_old();
         Ok(())
     }
 
@@ -436,6 +488,13 @@ impl Install {
         }
         Ok(())
     }
+}
+
+/// Whether `link` is the command's: a link to a program named as it is, this copy's or another's,
+/// as a build in another folder makes.
+fn is_ours(link: &Path) -> bool {
+    std::fs::symlink_metadata(link).is_ok_and(|meta| meta.file_type().is_symlink())
+        && std::fs::read_link(link).is_ok_and(|to| to.file_name() == Some(PROGRAM.as_ref()))
 }
 
 /// `folder` as the row names it on Windows: under `%LOCALAPPDATA%`, as `~` stands for home on unix.
@@ -760,7 +819,7 @@ mod windows_tests {
             ));
             _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join("app/bin")).unwrap();
-            std::fs::write(dir.join("app/bin/ilo.exe"), "").unwrap();
+            std::fs::write(dir.join(format!("app/bin/{LINK}.exe")), "").unwrap();
             Temp(dir)
         }
 
@@ -786,7 +845,7 @@ mod windows_tests {
         let temp = Temp::new("bin");
         let install = temp.install();
         assert!(!install.store);
-        assert_eq!(install.program, install.folder.join("ilo.exe"));
+        assert_eq!(install.program, install.folder.join(format!("{LINK}.exe")));
         let folder = install.folder.to_string_lossy().into_owned();
         let before = value(r"C:\Tools", true);
         let path = Store::new(before.clone());
@@ -849,10 +908,7 @@ mod windows_tests {
         assert!(install.store);
         assert_eq!(
             install.program,
-            PathBuf::from(format!(
-                r"{local}\Microsoft\WindowsApps\{}.exe",
-                env!("APP_NAME")
-            ))
+            PathBuf::from(format!(r"{local}\Microsoft\WindowsApps\{LINK}.exe"))
         );
         let mut path = Store::new(value(r"C:\Tools", true));
         path.unreadable = true;
@@ -930,7 +986,7 @@ mod windows_tests {
         assert_eq!(shown, r"%LOCALAPPDATA%\Programs\ilo\bin");
         let on = detail(State::On, None, Some(&shown));
         assert!(on.line.starts_with(&format!("Added in {shown}.")));
-        assert_eq!(&on.line[on.mono.clone().unwrap()], "ilo help");
+        assert_eq!(&on.line[on.mono.clone().unwrap()], format!("{LINK} help"));
         let off = detail(State::Off, None, Some(&shown));
         assert!(!off.line.contains("~/.local/bin"));
         assert_eq!(super::shown(Path::new(r"D:\ilo\bin"), local), r"D:\ilo\bin");
@@ -998,6 +1054,7 @@ mod tests {
             file: agent_file(&temp.0.join("profile")),
             linked: true,
             store: false,
+            old: OLD_LINK.into(),
         }
     }
 
@@ -1057,6 +1114,85 @@ mod tests {
             std::fs::read_to_string(local.join("share")).unwrap(),
             "the user's"
         );
+    }
+
+    /// Add Again, after the command took the product's name: the old link goes while it's still
+    /// the command's, the old agent file goes, and the folders the first Add made pass to the new
+    /// one for Remove to take back. An old name that's another program's stays.
+    #[test]
+    fn add_again_takes_away_only_what_the_first_add_made() {
+        let temp = Temp::new("add-again");
+        let install = install(&temp);
+        let local = install.folder.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(install.file.parent().unwrap()).unwrap();
+        let before = contents(&temp.0);
+        std::fs::create_dir_all(&install.folder).unwrap();
+        let old_link = install.folder.join(OLD_LINK);
+        std::os::unix::fs::symlink(&install.program, &old_link).unwrap();
+        let first = Agent {
+            address: "/s".into(),
+            token: "before".into(),
+            made: vec![install.folder.clone(), local.clone()],
+            path: None,
+        };
+        std::fs::write(install.old_file(), first.text()).unwrap();
+        assert!(!install.added());
+
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added());
+        assert!(
+            std::fs::symlink_metadata(&old_link).is_err(),
+            "the old link stayed"
+        );
+        assert!(!install.old_file().exists(), "the old agent file stayed");
+        let made = Agent::read(&install.file).unwrap().made;
+        assert_eq!(made, [install.folder.clone(), local.clone()]);
+        install.remove().unwrap();
+        assert_eq!(contents(&temp.0), before);
+
+        // A file, or a link to another program, under the old name is the user's.
+        for theirs in [None, Some(temp.0.join("their-tool"))] {
+            std::fs::create_dir_all(&install.folder).unwrap();
+            match &theirs {
+                None => std::fs::write(&old_link, "the user's").unwrap(),
+                Some(to) => std::os::unix::fs::symlink(to, &old_link).unwrap(),
+            }
+            std::fs::write(install.old_file(), first.text()).unwrap();
+            let kept = contents(&install.folder);
+            install.add(Path::new("/s"), "t").unwrap();
+            assert!(!install.old_file().exists());
+            assert_eq!(
+                contents(&install.folder).get(&old_link),
+                kept.get(&old_link)
+            );
+            install.remove().unwrap();
+            std::fs::remove_file(&old_link).unwrap();
+        }
+    }
+
+    /// In a build whose name and product are one, the old link and file are the ones Add writes:
+    /// Add leaves them, Add again too, and Remove takes back exactly what Add made.
+    #[test]
+    fn with_one_name_add_takes_nothing_old() {
+        assert!(renamed(OLD_LINK, "another"));
+        assert!(!renamed(LINK, LINK));
+        let temp = Temp::new("one-name");
+        let install = Install {
+            old: LINK.into(),
+            ..install(&temp)
+        };
+        std::fs::create_dir_all(install.file.parent().unwrap()).unwrap();
+        let before = contents(&temp.0);
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added(), "the link and the agent file stayed");
+        assert_eq!(install.old_file(), install.file);
+        let made = contents(&temp.0);
+        install.add(Path::new("/s"), "t").unwrap();
+        assert!(install.added(), "and stay as Add runs again");
+        assert_eq!(contents(&temp.0), made);
+        install.remove().unwrap();
+        assert_eq!(contents(&temp.0), before);
     }
 
     /// The agent file holds the token, so only the user may read it, though a file left there
@@ -1127,7 +1263,7 @@ mod tests {
     #[test]
     fn the_row_says_where_and_what_to_run() {
         let on = detail(State::On, None, None);
-        assert_eq!(&on.line[on.mono.clone().unwrap()], "ilo help");
+        assert_eq!(&on.line[on.mono.clone().unwrap()], format!("{LINK} help"));
         assert_eq!(on.export, None);
         assert_eq!(
             detail(State::Unsearched, None, None).export.as_deref(),

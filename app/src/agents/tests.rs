@@ -15,6 +15,7 @@ use super::runner::Cli;
 use super::sign_in::Offer;
 use super::tier::{Stop, Tier, Why};
 use super::*;
+use crate::product::PRODUCT;
 
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
@@ -2112,8 +2113,58 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// A connection saved before the server took the product's name is void: its token reaches
+/// nothing and its row asks to connect again. Connect Again takes the old name out of the
+/// client's config before it writes the new, and the command's Add Again takes its own away.
+#[gpui::test]
+fn a_connection_from_before_the_products_name_connects_again(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let clients = [Client::Codex, Client::ClaudeCode, Client::Command];
+    let saved = json!({ "agents": [
+        { "client": Client::Codex.id(), "token": "codex-before" },
+        { "client": Client::ClaudeCode.id(), "token": "claude-before", "name": "another" },
+        { "client": Client::Command.id(), "token": "command-before" },
+    ] });
+    agents.update(cx, |agents, cx| agents.load(&saved.to_string(), cx));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(!agents.is_connected(client), "{client:?} is connected");
+            assert!(agents.is_stale(client), "{client:?} isn't asked again");
+        }
+        assert!(
+            agents.tokens.lock().unwrap().is_empty(),
+            "an old token works"
+        );
+        assert_eq!(agents.command_state(), crate::agents::cli::State::Stale);
+        assert_eq!(agents.setup(Client::Codex), None);
+    });
+
+    for client in clients {
+        agents.update(cx, |agents, cx| agents.connect(client, cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        *configs.disconnected.lock().unwrap(),
+        [
+            (Client::Codex, old_server_name()),
+            (Client::ClaudeCode, old_server_name())
+        ]
+    );
+    let connected: Vec<_> = (configs.connected.lock().unwrap().iter())
+        .map(|(client, entry)| (*client, entry.name.clone()))
+        .collect();
+    assert_eq!(connected, clients.map(|client| (client, server_name())));
+    agents.read_with(cx, |agents, _| {
+        for client in clients {
+            assert!(agents.is_connected(client) && !agents.is_stale(client));
+        }
+        assert_eq!(agents.tokens.lock().unwrap().len(), clients.len());
+    });
+}
+
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
-/// that orders.
+/// that orders. Its fields say what a core with the field kinds says of each.
 fn shop_tree() -> String {
     shop_tree_named("Place order")
 }
@@ -2125,9 +2176,9 @@ fn shop_tree_named(button: &str) -> String {
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
         { "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Coupon" },
-          "backendDOMNodeId": 31 },
+          "backendDOMNodeId": 31, "secret": false, "autofilled": false },
         { "nodeId": "4", "role": { "value": "textbox" }, "name": { "value": "Password" },
-          "backendDOMNodeId": 41, "password": true },
+          "backendDOMNodeId": 41, "password": true, "secret": true, "autofilled": false },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": button },
           "backendDOMNodeId": 51 },
     ]})
@@ -3336,9 +3387,12 @@ fn an_order_is_refused_until_the_user_gives_full_access(cx: &mut TestAppContext)
     );
     assert_eq!(
         told.text,
-        "ilo stopped this: click “Place order” on example.com. It isn't part of this task's access \
-         (Work on pages). Only the user can change a task's access, in ilo. Don't try another way \
-         to the same end; if they change it, the same call will go through."
+        format!(
+            "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of this \
+             task's access (Work on pages). Only the user can change a task's access, in \
+             {PRODUCT}. Don't try another way to the same end; if they change it, the same call \
+             will go through."
+        )
     );
     assert_eq!(browser.pages.borrow().len(), pages, "it clicked");
     assert!(log(&agents, "claude-code", cx).contains(&(
@@ -5694,10 +5748,10 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
     let stopped = run.recv().unwrap();
     assert!(stopped.error);
     assert!(
-        stopped.text.starts_with(
-            "Step 2 failed: ilo stopped this: click “Place order” on example.com. It isn't part \
-             of this task's access"
-        ),
+        stopped.text.starts_with(&format!(
+            "Step 2 failed: {PRODUCT} stopped this: click “Place order” on example.com. It isn't \
+             part of this task's access"
+        )),
         "{}",
         stopped.text
     );
@@ -8470,7 +8524,6 @@ mod tasks {
     /// you" lead it, which the card sets heavier.
     #[gpui::test]
     fn a_cards_status_says_how_far_its_task_has_got(cx: &mut TestAppContext) {
-        use crate::agents::task::status_lead;
         let (agents, browser) = ready(None, cx);
         let agent = start(&agents, "Use the coupon", cx);
         agents.update(cx, |agents, _| {
@@ -8478,7 +8531,7 @@ mod tasks {
         });
         let status = |cx: &mut TestAppContext| card_of(&agents, cx).status.to_string();
         assert_eq!(status(cx), "Thinking · no steps yet");
-        assert_eq!(status_lead(&status(cx)), 0);
+        assert_eq!(card_of(&agents, cx).lead, 0);
         browser
             .tabs
             .borrow_mut()
@@ -8505,7 +8558,7 @@ mod tasks {
             cx,
         );
         assert_eq!(status(cx), "Step 2 · Typed “SPRING10” in “Coupon”");
-        assert_eq!(status_lead(&status(cx)), "Step 2".len());
+        assert_eq!(card_of(&agents, cx).lead, "Step 2".len());
         browser
             .tabs
             .borrow_mut()
@@ -8522,18 +8575,14 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Needs you · Sign in, please", Dot::Waiting)
         );
-        assert_eq!(status_lead(&card.status), "Needs you".len());
+        assert_eq!(card.lead, "Needs you".len());
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
             ("Stopped after 3 steps", Dot::Ended)
         );
-        assert_eq!(
-            status_lead(&card.status),
-            0,
-            "a stopped card asks for nothing"
-        );
+        assert_eq!(card.lead, 0, "a stopped card asks for nothing");
     }
 
     /// A step that chose an option with a line break in it says it on one line, as the card's
@@ -11262,7 +11311,7 @@ mod tasks {
 
     /// The composer opens in a profile with what it last started a thread with there: its level,
     /// except Full access, which opens at the level every thread starts at, and its model. Each
-    /// profile keeps its own, and they're saved.
+    /// profile keeps its own, with the effort Settings set there, and they're saved.
     #[gpui::test]
     fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
         use crate::agents::task::Last;
@@ -11275,6 +11324,7 @@ mod tasks {
         let haiku = Some((Cli::Claude, "haiku".to_string()));
         agents.update(cx, |agents, _| {
             assert_eq!(agents.composer_last(1), Last::default(), "a first composer");
+            agents.set_new_thread_effort(1, Some("high"));
             agents.remember_composer(1, Tier::Look, haiku.clone());
             agents.remember_composer(2, Tier::Full, None);
         });
@@ -11283,9 +11333,11 @@ mod tasks {
                 (agents.composer_last(1), agents.composer_last(2))
             })
         };
+        // Settings' effort outlasts a composer's start, which never sets it.
         let looked = Last {
             tier: Tier::Look,
             model: haiku.clone(),
+            effort: Some("high"),
         };
         assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
         let again = super::agents(&browser, &configs, Some(path.clone()), cx);
@@ -12021,9 +12073,12 @@ mod sessions {
         assert!(refused.error, "it ordered: {}", refused.text);
         assert_eq!(
             refused.text,
-            "ilo stopped this: click “Place order” on example.com. It isn't part of this task's \
-             access (Work on pages). Only the user can change a task's access, in ilo. Don't try \
-             another way to the same end; if they change it, the same call will go through."
+            format!(
+                "{PRODUCT} stopped this: click “Place order” on example.com. It isn't part of \
+                 this task's access (Work on pages). Only the user can change a task's access, \
+                 in {PRODUCT}. Don't try another way to the same end; if they change it, the \
+                 same call will go through."
+            )
         );
         assert!(!refused.text.contains("Refund"), "{}", refused.text);
         assert_eq!(
@@ -13065,6 +13120,7 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
+            format!("the-{PRODUCT}-Command"),
             // So is one that only reads as one (#3585): a word mixing scripts, letters of one
             // script that look like another's, compatibility forms, marks that don't show or
             // join, and any case.
@@ -13090,6 +13146,33 @@ mod sessions {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
             assert!(nameless(&agents, cx), "{posing} passed as a name");
+        }
+        // Nor is a name one of the browser's own words for a level or a state, in any case and
+        // however its words are joined: it has its kind's, as one posing as the browser has.
+        use crate::agents::task::{DRIVING, PAUSED, Word};
+        let levels = Tier::ALL.into_iter().map(Tier::label);
+        let states = Word::ALL.into_iter().map(Word::after_name);
+        let words: Vec<&str> = levels.chain(states).chain([DRIVING, PAUSED]).collect();
+        assert_eq!(words.len(), 11);
+        for word in words {
+            let joined = word.replace(' ', "-");
+            for posing in [word, &word.to_uppercase(), &word.to_lowercase(), &joined] {
+                hello(&agents, "mcp-client", "Zed", cx);
+                hello(&agents, "mcp-client", posing, cx);
+                assert_eq!(
+                    named(&agents, cx).0,
+                    Client::Other.name(),
+                    "{posing} passed"
+                );
+                // With no name of its own, as any app that gave none: Settings calls it this app.
+                assert!(nameless(&agents, cx), "{posing} passed as a name");
+            }
+        }
+        // A longer name with such a word in it is an agent's own.
+        for taken in ["Done Deals", "Working Title", "Paused Player 2"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+            assert!(!nameless(&agents, cx), "{taken} is a name of its own");
         }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
@@ -13439,6 +13522,22 @@ mod sessions {
         assert!(card.question.is_some());
     }
 
+    /// A session's status begins with its client's name, which is no count of steps and asks for
+    /// nothing whatever it reads as: how much of a status leads it is its maker's fact.
+    #[gpui::test]
+    fn a_clients_name_is_never_its_statuss_lead(cx: &mut TestAppContext) {
+        let (agents, _browser) = at_work(cx);
+        let key = cards(&agents, cx).remove(0).agent.to_string();
+        for name in ["Step 5", crate::agents::task::NEEDS_YOU] {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&key).unwrap().name = name.into()
+            });
+            let card = card(&agents, &key, cx);
+            assert!(card.status.starts_with(name), "{}", card.status);
+            assert_eq!((card.dot, card.lead), (Dot::Working, 0), "{name}");
+        }
+    }
+
     /// What a `done` came to is a fact, which its caller logs by whatever its answer says: one
     /// refused for a call still under way is in the activity log with why, the one that ends the
     /// task is there too, and one with nothing under way is no error and isn't logged.
@@ -13674,7 +13773,7 @@ mod sessions {
         ] {
             hello(&agents, agent, posing, cx);
             let name = agents.read_with(cx, |agents, _| agents.agent_name(agent).to_string());
-            assert_eq!(name, "ilo CLI", "{posing} passed");
+            assert_eq!(name, Client::Command.name(), "{posing} passed");
         }
         hello(&agents, agent, "Researcher", cx);
         command(1, "read_page", json!({ "tab": 20 }), cx);

@@ -75,7 +75,8 @@ pub struct Shown {
     pub pin: Option<bool>,
     /// Whether the thing has a change Put back takes back.
     pub put_back: bool,
-    /// The window's accent, which the pin is tinted with while the thing stays on screen.
+    /// The window's accent as it's worn on a dark fill, which the pin is tinted with while the
+    /// thing stays on screen.
     pub accent: Hsla,
 }
 

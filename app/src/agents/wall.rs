@@ -1044,7 +1044,8 @@ mod tests {
         );
     }
 
-    /// The folder panel is the one place a folder is granted, so no other source file makes one.
+    /// The system's panel is the one way a folder is granted, from the composer's plus, so no other
+    /// source file makes one.
     #[test]
     fn only_the_folder_panel_grants_a_folder() {
         let made = ["Granted", "::picked("].concat();
@@ -1062,9 +1063,8 @@ mod tests {
                 }
             }
         }
-        // This file's tests alone: no surface grants one until the composer's `+` brings the
-        // system's panel back (#4140).
+        // The composer's plus, and this file's tests.
         makers.sort();
-        assert_eq!(makers, ["wall.rs"]);
+        assert_eq!(makers, ["command_bar.rs", "wall.rs"]);
     }
 }

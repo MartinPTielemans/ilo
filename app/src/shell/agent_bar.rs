@@ -236,7 +236,7 @@ pub(super) fn stop_keys() -> String {
 }
 
 /// The bar's title on a page the user took over, which its row at the sidebar's foot ends in too.
-pub(super) const DRIVING: &str = "You're driving";
+pub(super) const DRIVING: &str = crate::agents::task::DRIVING;
 
 /// What the bar says, its title and the line under it, and the tab it's about.
 pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {

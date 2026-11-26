@@ -62,6 +62,7 @@ pub(super) fn card() -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -1920,6 +1921,10 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tab: 1,
             limit: HelpersLimit::Kind,
         },
+        // A kept log's line, as it stored one of the above.
+        IloKind::Kept {
+            words: super::words::stored(&IloKind::EndedLeft, "Claude").into(),
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1947,7 +1952,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::KeepsNothing
             | IloKind::NoProfile
             | IloKind::NoSpace
-            | IloKind::Helpers { .. } => {}
+            | IloKind::Helpers { .. }
+            | IloKind::Kept { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
         let verb = VERBS.iter().any(|verb| own.split(' ').next() == Some(verb));
@@ -3694,6 +3700,70 @@ fn said_words_between_steps_are_in_the_texts_ink() {
     }
 }
 
+/// A failed line draws no colour that isn't the text's or text-2's, in either look: its words,
+/// its why and its glyph are the inks of the same line had it gone through, at rest and under the
+/// pointer, and each is the text's ink at some strength. The find bar's red is the find bar's.
+#[test]
+fn a_failed_line_wears_no_red() {
+    use super::TraceLine;
+    use crate::palette::{Palette, Tone};
+    use crate::tokens::shell::conversation::TRACE_NOTE;
+    let step = || {
+        let why = "There's no element e7 on the page.";
+        let mut line = TraceLine::new(Fold::Step(1), "Couldn't click “Pay”".into(), why.into());
+        line.glyph = Some("icons/x.svg");
+        line
+    };
+    // One that opens to why, one that doesn't, and a turn that couldn't start.
+    let opens = || TraceLine {
+        chevron: Some(0.),
+        ..step()
+    };
+    let unstarted = || TraceLine::new(Fold::Trace(0), "Couldn't start".into(), "".into());
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let ink = gpui::Hsla::from(palette.ink);
+        let lines: [&dyn Fn() -> TraceLine; 3] = [&step, &opens, &unstarted];
+        for line in lines {
+            let failed = TraceLine {
+                failed: true,
+                ..line()
+            };
+            let inks = failed.inks(&palette);
+            assert_eq!(
+                inks,
+                line().inks(&palette),
+                "{tone:?}: a failed line's own ink"
+            );
+            assert_eq!(
+                inks.note,
+                palette.gray(TRACE_NOTE),
+                "{tone:?}: why in text-2"
+            );
+            let drawn = [
+                Some(inks.words),
+                Some(inks.note),
+                Some(inks.glyph),
+                inks.pointed,
+            ];
+            for colour in drawn.into_iter().flatten() {
+                let opaque = gpui::Hsla { a: ink.a, ..colour };
+                assert_eq!(opaque, ink, "{tone:?}: a colour that isn't the text's");
+            }
+        }
+        assert!(
+            (TraceLine {
+                failed: true,
+                ..opens()
+            })
+            .inks(&palette)
+            .pointed
+            .is_some(),
+            "{tone:?}: under the pointer it lights as any line that opens"
+        );
+    }
+}
+
 /// The user's message wraps inside the panel's column beside a page, never wider than it, so none
 /// of it leaves the panel; the stage's measure wouldn't fit there.
 #[test]
@@ -4049,6 +4119,50 @@ fn row_cases() -> Vec<RowCaseShown> {
             )
         },
     ]
+}
+
+/// An outside app's panel has its card's line under the title, from the kind of its connection
+/// alone, and no reply field; a task's panel never has it, whatever either is named. However long
+/// the name, or made of the product's own state words, the line is one line where it was and the
+/// page row and Stop are as they were.
+#[gpui::test]
+fn an_outside_apps_panel_has_its_line_under_the_title(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::FROM_LINE;
+    let named = |name: &str| {
+        let (session, talk) = session_panel();
+        let session = Card {
+            name: name.into(),
+            ..session
+        };
+        let talk = Conversation {
+            name: name.into(),
+            ..talk
+        };
+        (session, talk)
+    };
+    let (session, talk) = named("Claude Code");
+    let (_, _, view, cx) = standing_with(session, talk, cx);
+    let line = view.read_with(cx, |view, _| view.from_drawn.get());
+    let line = line.expect("an outside app's line");
+    assert_eq!(line.size.height, px(FROM_LINE));
+    assert_eq!(view.read_with(cx, |view, _| view.reply_drawn.get()), None);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    let long = "Claude Code ".repeat(17);
+    for name in [long.as_str(), "Needs you", "Done · 13:31", "Working", ""] {
+        let (session, talk) = named(name);
+        let (_, _, view, cx) = standing_with(session, talk, cx);
+        let drawn = view.read_with(cx, |view, _| view.from_drawn.get());
+        assert_eq!(drawn, Some(line), "{name:?}");
+        let theirs = view.read_with(cx, |view, _| view.page_row_for(30, None));
+        assert_eq!(theirs, row, "{name:?}");
+    }
+    // A task's panel has none, even named as an app.
+    let task = Card {
+        name: "Claude Code".into(),
+        ..card()
+    };
+    let (_, _, view, cx) = standing_with(task, conversation(3), cx);
+    assert_eq!(view.read_with(cx, |view, _| view.from_drawn.get()), None);
 }
 
 /// An outside app's session, standing on tab 30: its card, with no composer, and its step lines.

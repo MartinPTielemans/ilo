@@ -31,6 +31,7 @@ use super::runner::Cli;
 use super::tier::Tier;
 
 pub mod cards;
+pub mod log;
 pub mod unkept;
 
 use cards::CardId;

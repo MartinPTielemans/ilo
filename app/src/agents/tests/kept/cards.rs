@@ -59,6 +59,16 @@ fn card(run: &Run, agent: &str, cx: &mut TestAppContext) -> cards::Card {
     cards::read(&root(run), &card_id(run, agent, cx))
 }
 
+/// The task's kept log as its card folder holds it, once what was asked of it is done.
+fn kept_log(
+    run: &Run,
+    agent: &str,
+    cx: &mut TestAppContext,
+) -> Option<Vec<crate::agents::kept::log::Record>> {
+    cx.run_until_parked();
+    cards::read_log(&root(run), &card_id(run, agent, cx))
+}
+
 fn size(card: &cards::Card) -> Option<(u32, u32)> {
     (card.picture.as_ref()).map(|picture| (picture.width, picture.height))
 }
@@ -147,7 +157,10 @@ fn a_card_goes_with_its_task_and_remove_all_leaves_none(cx: &mut TestAppContext)
     let elsewhere = card_id(&run, &elsewhere, cx);
     cx.run_until_parked();
     let card_folder = |id: &CardId| root(&run).join(id.as_str());
-    assert!(made.iter().all(|(_, id)| card_folder(id).exists()));
+    assert!(
+        made.iter()
+            .all(|(_, id)| card_folder(id).join("log").exists())
+    );
     assert!(card_folder(&elsewhere).exists());
 
     let index = || std::fs::read_to_string(run.profile.join(kept::FOLDER).join("index.json"));
@@ -222,7 +235,13 @@ fn a_deleted_threads_card_goes_when_the_thread_goes_for_good(cx: &mut TestAppCon
         let id = card_id(&run, &agent, cx);
         cx.run_until_parked();
         // So a write at the Delete shows.
-        cards::write(&root(&run), &id, Some("As it was."), &cards::Picture::Leave);
+        cards::write(
+            &root(&run),
+            &id,
+            Some("As it was."),
+            &cards::Picture::Leave,
+            None,
+        );
         (run.agents).update(cx, |agents, cx| {
             _ = agents.task_action(&agent, TaskAction::Dismiss, cx);
             _ = agents.task_action(&agent, TaskAction::Delete, cx);
@@ -261,6 +280,7 @@ fn the_launch_takes_a_card_no_kept_task_holds(cx: &mut TestAppContext) {
         &stray,
         Some("Left behind."),
         &cards::Picture::Remove,
+        None,
     );
     (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
 
@@ -307,16 +327,16 @@ fn a_picture_is_kept_only_while_an_agent_could_have_had_it(cx: &mut TestAppConte
     new_document("https://www.example.com/seats", cx);
     assert!(keeps(cx));
 
-    // The core answers each act with the page's tree: a field anything typed in may show, and
-    // one whose name says it's a secret.
+    // The core answers each act with the page's tree: a field anything typed in may show, as the
+    // core says it's no secret and wasn't filled for the user, and one whose name says it's one.
     let answered = |cx: &mut TestAppContext| {
         let tree = json!({ "nodes": [
             { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Seats" },
               "childIds": ["2", "3"] },
             { "nodeId": "2", "role": { "value": "textbox" }, "name": { "value": "Coach" },
-              "backendDOMNodeId": 31 },
+              "backendDOMNodeId": 31, "secret": false, "autofilled": false },
             { "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Passcode" },
-              "backendDOMNodeId": 41 },
+              "backendDOMNodeId": 41, "secret": false, "autofilled": false },
         ]});
         let request = run.browser.pages.borrow().last().unwrap().1;
         (run.agents).update(cx, |agents, cx| {
@@ -358,4 +378,80 @@ fn a_picture_is_kept_only_while_an_agent_could_have_had_it(cx: &mut TestAppConte
 
     (run.agents).update(cx, |agents, cx| _ = agents.fence("example.com", cx));
     assert!(!keeps(cx));
+}
+
+/// A kept task's Done writes its log beside its line: the user's message first, the stretch's
+/// head, the page it worked on and the answer with the time it finished, in the card's folder
+/// alone. Remove All takes it with the card.
+#[gpui::test]
+fn a_done_kept_task_keeps_its_log_and_remove_all_takes_it(cx: &mut TestAppContext) {
+    use crate::agents::kept::log::Record;
+    let run = Run::new("card-log", cx);
+    let (agent, _) = at_work(&run, 1, cx);
+    let result = json!({ "result": "Two seats at 9:05, car 4." });
+    _ = call(&run.agents, &agent, "finish", result, cx);
+    cx.run_until_parked();
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx).expect("a log");
+    assert!(matches!(log.first(), Some(Record::You(_))), "{log:?}");
+    assert!(
+        log.iter()
+            .any(|record| matches!(record, Record::Fold { .. })),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|record| matches!(record, Record::Page(_))),
+        "{log:?}"
+    );
+    let answer = log.iter().find_map(|record| match record {
+        Record::Answer { text, at } => Some((text.clone(), at.clone())),
+        _ => None,
+    });
+    let (text, at) = answer.expect("the answer");
+    assert!(text.contains("car 4") && !at.is_empty(), "{text} at {at}");
+    for (path, text) in run.files() {
+        if !path.starts_with(root(&run)) {
+            assert!(!text.contains("car 4"), "{}", path.display());
+        }
+    }
+    let file = root(&run)
+        .join(card_id(&run, &agent, cx).as_str())
+        .join("log");
+    assert!(file.exists());
+    (run.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    run.purged(cx);
+    assert!(!file.exists());
+}
+
+/// A page the agent was kept from, a site the user put off limits, keeps its site alone in the
+/// log, never its title, and a step on it the product's own words for its kind.
+#[gpui::test]
+fn a_page_off_limits_keeps_its_site_alone_in_the_log(cx: &mut TestAppContext) {
+    use crate::agents::kept::log::Record;
+    let run = Run::new("card-log-fenced", cx);
+    let (agent, tab) = at_work(&run, 1, cx);
+    let title = (run.agents).read_with(cx, |agents, cx| agents.browser.tab(tab, cx).title);
+    (run.agents).update(cx, |agents, cx| agents.fence("www.example.com", cx));
+    run.finish(&agent, cx);
+    let log = kept_log(&run, &agent, cx).expect("a log");
+    let pages: Vec<&String> = (log.iter())
+        .filter_map(|record| match record {
+            Record::Page(page) => Some(page),
+            _ => None,
+        })
+        .collect();
+    assert!(!pages.is_empty(), "{log:?}");
+    for page in pages {
+        assert!(
+            page.ends_with("example.com") && !page.contains(' '),
+            "{page}"
+        );
+        assert!(title.is_empty() || **page != *title, "{page}");
+    }
+    for record in &log {
+        if let Record::Step { words, came, .. } = record {
+            assert!(!words.contains("example"), "{words}");
+            assert!(came.is_empty(), "{came}");
+        }
+    }
 }
