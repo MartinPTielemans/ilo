@@ -47,6 +47,7 @@ use crate::{
     tooltip::{Anchor, Tip},
 };
 
+#[cfg(test)]
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
@@ -76,7 +77,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
+use crate::palette::{FIELD_PLATE, Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
 use crate::tokens::shell::library::COLUMN_WIDTH;
 pub(super) use crate::tokens::shell::library::LIBRARY_BACK_INSET;
 use crate::tokens::shell::library::LIBRARY_PLATE;
@@ -131,19 +132,20 @@ use crate::tokens::shell::{
     FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
 };
 
-#[cfg(test)]
-use crate::tokens::shell::library::FILTER_X;
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
 use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
 use crate::tokens::shell::library::SEARCH_RADIUS;
+use crate::tokens::shell::library::SEARCH_RIGHT;
 use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_TOP;
-use crate::tokens::shell::library::SEARCH_WIDTH;
 use crate::tokens::shell::library::SEARCH_X;
-use crate::tokens::shell::library::{FILTER_GAP, FILTER_PAD, FILTER_WIDTH};
+use crate::tokens::shell::library::{
+    FILTER_CHEVRON, FILTER_CHEVRON_GAP, FILTER_GAP, FILTER_PAD_LEFT, FILTER_PAD_RIGHT,
+};
 
+use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
 use crate::tokens::shell::library::ARCHIVED_FAVICON_X;
@@ -159,11 +161,21 @@ use crate::tokens::shell::library::HEADING_TOP;
 use crate::tokens::shell::library::HEADING_X;
 use crate::tokens::shell::library::MEDIA_GAP;
 use crate::tokens::shell::library::MEDIA_RADIUS;
-/// Media's tiles a row, and each one's side, as the rows' width holds them.
+use crate::tokens::shell::library::PAGE_LEAST;
+/// Media's tiles a row.
 const MEDIA_COLUMNS: usize = 3;
-const MEDIA_TILE: f32 =
-    (ARCHIVE_WIDTH - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
-        / MEDIA_COLUMNS as f32;
+
+/// Each of Media's tiles' side, as a list `list` wide holds them.
+const fn media_tile(list: f32) -> f32 {
+    (list - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
+        / MEDIA_COLUMNS as f32
+}
+
+/// How wide the list beside the column is in a window `window` wide: as drawn, unless the page
+/// would keep less than page-least beside the Library, when it gives way down to its least.
+pub(super) fn list_width(window: f32) -> f32 {
+    (window - PAGE_LEAST - COLUMN_WIDTH).clamp(ARCHIVE_LEAST, ARCHIVE_WIDTH)
+}
 /// The file's own icon in a tile without a picture of it.
 const MEDIA_ICON: f32 = 32.;
 /// Set in the preview ids of captures, which downloads' ids never reach.
@@ -183,15 +195,9 @@ use crate::tokens::shell::library::PROGRESS_HEIGHT;
 use crate::tokens::shell::library::PROGRESS_TRACK;
 use crate::tokens::text;
 
-/// The headings, by how long ago a tab was archived: the starts of `Browser::day_starts`, then
-/// before them.
-const HEADINGS: [&str; 5] = [
-    "Today",
-    "Yesterday",
-    "Earlier This Week",
-    "Last Week",
-    "Older",
-];
+/// The headings of today and yesterday, by the starts of `Browser::day_starts`; a day before them
+/// is headed by its date (`Item::Day`), as drawn.
+const HEADINGS: [&str; 2] = ["Today", "Yesterday"];
 
 /// A tab in the archive, as the browser reports it.
 #[derive(Clone)]
@@ -550,7 +556,11 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     // Headings, Clear and a past page's sites take no ring, so none takes its place.
     let rows = |items: &[Item]| -> Vec<Item> {
         let rings = |each: &&Item| {
-            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+            *each == item
+                || !matches!(
+                    each,
+                    Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_)
+                )
         };
         items.iter().filter(rings).copied().collect()
     };
@@ -567,6 +577,8 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
 #[derive(Clone, Copy, PartialEq)]
 enum Item {
     Heading(&'static str),
+    /// A day before yesterday's heading, its date on the clock here: "Sunday 22 November".
+    Day(chrono::NaiveDate),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
     /// The visited page at this index of History's pages.
@@ -591,6 +603,11 @@ enum Item {
     Download(usize),
     /// A row of Media's tiles, from its left.
     Media([Option<Medium>; MEDIA_COLUMNS]),
+}
+
+/// A day's heading before yesterday, as drawn: its weekday, then its date, "Sunday 22 November".
+fn day_heading(day: chrono::NaiveDate) -> String {
+    day.format("%A %-d %B").to_string()
 }
 
 /// A tile of the Library's Media.
@@ -773,8 +790,13 @@ impl Shell {
     pub(super) fn section_width(&self, section: Section) -> f32 {
         match section {
             Section::Spaces => spaces_width(self.spaces.len(), f32::from(self.viewport.width)),
-            _ => LIBRARY_WIDTH,
+            _ => COLUMN_WIDTH + self.list_width(),
         }
+    }
+
+    /// How wide the list beside the column is in this window.
+    pub(super) fn list_width(&self) -> f32 {
+        list_width(f32::from(self.viewport.width))
     }
 
     /// How wide the Library is: its section's, and on its way to another's after a click on it, or
@@ -1054,13 +1076,13 @@ impl Shell {
         }
         self.section = section;
         let placeholder = match section {
-            Section::Media => "Search Media…",
-            Section::Downloads => "Search Downloads…",
+            Section::Media => "Search media",
+            Section::Downloads => "Search downloads",
             Section::Spaces => "",
-            Section::Archive => "Search History…",
-            Section::Agents => "Search Agents…",
-            Section::Boosts => "Search Boosts…",
-            Section::Boards => "Search Boards…",
+            Section::Archive => "Search history",
+            Section::Agents => "Search threads",
+            Section::Boosts => "Search boosts",
+            Section::Boards => "Search boards",
         };
         // Its colours are the panel's to give as it draws, since the field outlives a change of
         // the window's look.
@@ -1379,10 +1401,13 @@ impl Shell {
         }
         let mut heading = None;
         for (item, time) in found {
-            let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
+            let day = match starts.iter().position(|&start| time >= start) {
+                Some(day @ (0 | 1)) => Item::Heading(HEADINGS[day]),
+                _ => history_list::day(time).map_or(Item::Heading(""), Item::Day),
+            };
             if self.section != Section::Boosts && heading != Some(day) {
                 heading = Some(day);
-                items.push(Item::Heading(HEADINGS[day]));
+                items.push(day);
             }
             // A tile goes into the row before it, under the same heading, while it has room.
             if let (Item::Media([Some(medium), ..]), Some(Item::Media(row))) =
@@ -1943,7 +1968,7 @@ impl Shell {
             .pl(px(SEARCH_TEXT_X))
             .pr(px(12.))
             .rounded(px(SEARCH_RADIUS))
-            .bg(self.palette.plate(LIBRARY_PLATE))
+            .bg(self.palette.plate(FIELD_PLATE))
             .block_mouse_except_scroll()
             // The page may have the keyboard.
             .on_mouse_down(
@@ -1974,21 +1999,18 @@ impl Shell {
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
         let filter = filtered.then(|| {
-            let label = match self.archive_only() {
-                Only::All => "Filter",
-                only => only.label(),
-            };
-            // At least Arc's width, growing from its end to fit what it filters to.
+            // What it filters to, `All` included, as drawn.
+            let label = self.archive_only().label();
             self.stop(div().id("library-filter"), label.into())
                 .flex_none()
-                .min_w(px(FILTER_WIDTH))
-                .px(px(FILTER_PAD))
+                .pl(px(FILTER_PAD_LEFT))
+                .pr(px(FILTER_PAD_RIGHT))
                 .h(px(SEARCH_HEIGHT))
                 .flex()
                 .items_center()
-                .justify_center()
+                .gap(px(FILTER_CHEVRON_GAP))
                 .rounded(px(SEARCH_RADIUS))
-                .bg(self.palette.plate(LIBRARY_PLATE))
+                .bg(self.palette.plate(FIELD_PLATE))
                 .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
                 .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
@@ -1998,6 +2020,13 @@ impl Shell {
                     shell.archive_filter_menu(event.position(), cx)
                 }))
                 .child(label)
+                .child(
+                    svg()
+                        .path("icons/chevron-down.svg")
+                        .flex_none()
+                        .size(px(FILTER_CHEVRON))
+                        .text_color(placeholder),
+                )
         });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
@@ -2074,6 +2103,7 @@ impl Shell {
             .opacity(Shell::library_opacity(sidebar_opacity))
             .child(column);
         let panel = self.with_stops(panel, cx);
+        let list = self.list_width();
         let panel = match spaces {
             true => panel.child(self.space_cards(cx)),
             false => panel
@@ -2082,7 +2112,7 @@ impl Shell {
                         .absolute()
                         .left(px(list_x(COLUMN_WIDTH + SEARCH_X)))
                         .top(px(SEARCH_TOP))
-                        .w(px(SEARCH_WIDTH))
+                        .w(px(list - SEARCH_X - SEARCH_RIGHT))
                         .flex()
                         .gap(px(FILTER_GAP))
                         .child(field)
@@ -2094,7 +2124,7 @@ impl Shell {
                         .left(px(list_x(COLUMN_WIDTH)))
                         .top(px(ARCHIVE_TOP))
                         .bottom_0()
-                        .w(px(ARCHIVE_WIDTH))
+                        .w(px(list))
                         .child(archive),
                 )
                 .child(self.download_press_listeners(cx)),
@@ -2672,25 +2702,27 @@ impl Shell {
         else {
             return div().into_any_element();
         };
+        let heading = |heading: SharedString| {
+            div()
+                .pt(px(HEADING_TOP))
+                .pb(px(HEADING_BOTTOM))
+                .pl(px(HEADING_X))
+                .child(
+                    div()
+                        .h(px(HEADING_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .text_size(px(text::SMALL))
+                        .line_height(px(HEADING_HEIGHT))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.palette.gray(SECONDARY))
+                        .child(heading),
+                )
+                .into_any_element()
+        };
         let tab = match *item {
-            Item::Heading(heading) => {
-                return div()
-                    .pt(px(HEADING_TOP))
-                    .pb(px(HEADING_BOTTOM))
-                    .pl(px(HEADING_X))
-                    .child(
-                        div()
-                            .h(px(HEADING_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .text_size(px(text::SMALL))
-                            .line_height(px(HEADING_HEIGHT))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.palette.gray(SECONDARY))
-                            .child(heading),
-                    )
-                    .into_any_element();
-            }
+            Item::Heading(name) => return heading(name.into()),
+            Item::Day(day) => return heading(day_heading(day).into()),
             Item::Tab(tab) => tab,
             Item::Visit(page) => return self.visited_item(page, cx),
             Item::Task(task) => return self.archived_task_item(task, cx),
@@ -3646,7 +3678,7 @@ impl Shell {
             .map(|tile| self.library_row(tile, line, column, MEDIA_RADIUS))
             .relative()
             .flex_none()
-            .size(px(MEDIA_TILE))
+            .size(px(media_tile(self.list_width())))
             .flex()
             .items_center()
             .justify_center()
@@ -3701,7 +3733,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         if !self.media_videos.contains_key(&id) {
-            let side = (MEDIA_TILE * window.scale_factor()).ceil() as u32;
+            let side = (media_tile(self.list_width()) * window.scale_factor()).ceil() as u32;
             if !self.browser.open_video(id, path, side, cx) {
                 return None;
             }
@@ -4548,12 +4580,13 @@ mod task_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
-        COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
-        FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
-        LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP,
-        SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, download_menu_items,
-        downloads_progress, library_band, panel_at_rest, past_end, plus_x, receded_opacity,
+        ARCHIVE_LEAST, ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived,
+        CARD_WIDTH, COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice,
+        DownloadState, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT,
+        HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST,
+        SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space,
+        bar_drawn, card_x, day_heading, download_menu_items, downloads_progress, history_list,
+        library_band, list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity,
         spaces_width,
     };
     use std::rc::Rc;
@@ -4585,6 +4618,44 @@ mod tests {
             peeked: Vec::new(),
             live_rooms: Default::default(),
             placed: Vec::new(),
+        }
+    }
+
+    /// Media's tiles in the list as drawn, at the tests' window's width.
+    const MEDIA_TILE: f32 = media_tile(ARCHIVE_WIDTH);
+
+    /// The list is as drawn in a wide window and gives way, so the page keeps page-least beside
+    /// the Library, down to its least, from where the page takes what's left; the column is the
+    /// same at every width (the lead, 26 Nov).
+    #[gpui::test]
+    fn the_list_gives_way_in_a_narrow_window_and_the_column_never(cx: &mut TestAppContext) {
+        let reaches_least = COLUMN_WIDTH + ARCHIVE_LEAST + PAGE_LEAST;
+        assert_eq!(list_width(reaches_least + 400.), ARCHIVE_WIDTH);
+        assert_eq!(list_width(reaches_least + 20.), ARCHIVE_LEAST + 20.);
+        assert_eq!(list_width(reaches_least), ARCHIVE_LEAST);
+        assert_eq!(list_width(640.), ARCHIVE_LEAST);
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        for width in [
+            640.,
+            reaches_least,
+            reaches_least + 20.,
+            reaches_least + 400.,
+        ] {
+            let (library, list) = shell.update(cx, |shell, _| {
+                shell.viewport = gpui::size(px(width), px(800.));
+                (shell.section_width(Section::Archive), shell.list_width())
+            });
+            assert_eq!(
+                library - list,
+                COLUMN_WIDTH,
+                "the column in a window {width} wide"
+            );
+            assert!(
+                library >= COLUMN_WIDTH + ARCHIVE_LEAST,
+                "a window {width} wide"
+            );
         }
     }
 
@@ -4835,6 +4906,14 @@ mod tests {
         }
     }
 
+    /// Past yesterday a day is headed by its weekday and date, as drawn (LB4), not by how long ago.
+    #[test]
+    fn a_day_before_yesterday_is_headed_by_its_date() {
+        let day = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+        assert_eq!(day_heading(day(11, 22)), "Sunday 22 November");
+        assert_eq!(day_heading(day(3, 1)), "Sunday 1 March");
+    }
+
     /// Downloads' row counts the files coming in, and none held as harmful or stopped.
     #[gpui::test]
     fn the_downloads_row_counts_what_runs(cx: &mut TestAppContext) {
@@ -4890,7 +4969,10 @@ mod tests {
         });
         cx.run_until_parked();
         let filter = point(
-            px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
+            px(COLUMN_WIDTH + ARCHIVE_WIDTH
+                - SEARCH_RIGHT
+                - FILTER_PAD_RIGHT
+                - FILTER_CHEVRON / 2.),
             px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
         );
         let click = |cx: &mut gpui::VisualTestContext| {
@@ -5006,7 +5088,7 @@ mod tests {
                     Item::Heading("Today"),
                     Item::Media([Some(download(1)), Some(capture(0)), Some(download(2))]),
                     Item::Media([Some(capture(1)), None, None]),
-                    Item::Heading("Older"),
+                    Item::Day(history_list::day(-1.).unwrap()),
                     Item::Media([Some(capture(2)), None, None]),
                 ]
         );

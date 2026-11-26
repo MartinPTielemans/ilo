@@ -560,10 +560,11 @@ send key w cmd
 expect "^browser: window closed $little\$" "the reopened Little ilo window didn't come to the front: ⌘W didn't close it"
 send window 1
 
-# The Library's History then has a Filter button, whose Little ilo lists only its tabs.
+# The Library's History then has a Filter button, whose Little ilo lists only its tabs. Its
+# chevron is at the Library's right, 644, less 16, 10 and half its 10, and the field's middle.
 send key l cmd shift
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
-post click 372 28
+post click 613 26
 expect "^browser: menu shown $(cased 'All (checked), Closed Tabs, Little Window, Visited')\$" \
   "a click on the archive's Filter didn't show its menu"
 send choose "$(cased 'Little Window')"

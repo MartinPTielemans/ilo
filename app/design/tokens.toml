@@ -2306,8 +2306,10 @@ key-reach = 4.0
 
 [shell.library]
 # Where the card's left edge goes while the Library is open: the Library's right edge, which is
-# this for Downloads and Archived Tabs and `spaces_width` for Spaces.
-library-width = 533.0
+# this for every section but Spaces, which takes `spaces_width`. As drawn, 644: the 228 column and a
+# 416 list beside it, with no line between them (the lead, 25 Nov), the list narrower in a narrow
+# window (archive-least).
+library-width = 644.0
 # The Library's colours are alphas of the palette's ink (palette.rs), plates in Paper's terms.
 # The column of sections, as wide as the sidebar it takes (the drawing's 228), with no fill or edge
 # of its own, as drawn: its rows sit on the window as the sidebar's do.
@@ -2394,13 +2396,12 @@ plus-after = 37.0
 # Ours: a tab dragged over another Space's card rings it in that card's accent, this wide, inside
 # its edge (Arc's isn't recorded).
 card-drop-ring = 2.0
-# The search field, on the window buttons' row over the list, 4 in from the column's edge as Arc's
-# is. It runs 289, to 11 short of the Library's edge, but while the archive holds a Little ilo tab,
-# when Arc's Filter button, 73 wide and 220 in from the column's edge, takes its end and the field
-# stops 8 before it (ours).
-search-x = 4.0
-search-top = 10.0
-search-width = 289.0
+# The search field, as drawn: the list's padding is 8 over it and to its left and 16 to its right,
+# and it fills what that leaves, but while there's something to filter, when the Filter takes its
+# end and the field stops 8 before it.
+search-x = 8.0
+search-top = 8.0
+search-right = 16.0
 search-height = 36.0
 search-radius = 12.0
 # Inside it, as drawn: the magnifier 14 square, 12 in, and the text 8 after it.
@@ -2408,15 +2409,23 @@ search-glyph = 14.0
 search-glyph-x = 12.0
 search-text-x = 34.0
 search-placeholder = 0.56
-filter-x = 220.0
-filter-width = 73.0
 filter-gap = 8.0
-# History's Filter button is at least Arc's width, and grows from its end to fit what it filters
-# to with this much either side of its label.
-filter-pad = 12.0
-# The archive's list, beside the column.
+# The Filter, as drawn: what it filters to, then a chevron 10 square, 6 after it, 12 in on the left
+# and 10 on the right, so it grows from its end to fit its choice.
+filter-pad-left = 12.0
+filter-pad-right = 10.0
+filter-chevron = 10.0
+filter-chevron-gap = 6.0
+# The list, beside the column: the library's width less the column's.
 archive-top = 56.0
-archive-width = 304.0
+archive-width = 416.0
+# In a narrow window the list gives way, down to this, so the page keeps page-least beside the
+# Library; the column never does, so the Library is never under 532 (the lead, 26 Nov). The
+# window has no least width today.
+archive-least = 304.0
+# What the page keeps beside the Library before the list gives way. Proposed: [shell.task-area]
+# page-least's 320, the least a page lays out in usably.
+page-least = 320.0
 # A day's heading is a row of 36, as drawn, after rows as at the list's top: its small semibold
 # line, 14, at the row's foot, 8 over the rows under it.
 heading-x = 12.0
