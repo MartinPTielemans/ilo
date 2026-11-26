@@ -54,7 +54,7 @@ struct Recorder {
     /// Now, in milliseconds since 1970.
     now: f64,
     /// The level and model the composer last started a thread with in the profile.
-    last: RefCell<(Tier, Option<(SharedString, String)>)>,
+    last: RefCell<Opens>,
 }
 
 impl Recorder {
@@ -277,7 +277,7 @@ impl Host for Recorder {
         self.record("at rest".into());
     }
 
-    fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
+    fn composer_last(&self, _: &App) -> Opens {
         self.last.borrow().clone()
     }
 
@@ -3846,6 +3846,47 @@ fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppConte
     assert_eq!(bar.calls(), ["task claude plan the week"]);
 }
 
+/// The composer opens on the effort Settings' `A new thread starts with` set, checked on its menu
+/// and gone with the start; a pick on the menu holds for the thread alone and comes back to no
+/// memory, as the host keeps only what Settings set.
+#[gpui::test]
+fn the_composer_opens_on_settings_effort(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.host.last.borrow_mut().effort = Some("high");
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said().as_deref(), Some("High"));
+    let (rows, _) = bar.effort_menu().unwrap();
+    assert_eq!(
+        rows,
+        ["Default", "Low", "Medium", "✓ High", "Extra high", "Max"]
+    );
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week effort high"]);
+}
+
+/// Settings' Effort opens the composer's effort menu, row for row; none for a program that takes
+/// no effort.
+#[test]
+fn settings_effort_is_the_composers_effort_menu() {
+    let levels = Cli::Claude.efforts();
+    let (picks, items) = effort_choices(levels, Some("max"));
+    assert_eq!(picks.len(), levels.len() + 1);
+    assert_eq!(picks[0], None);
+    assert_eq!(items[0].title.as_ref(), EFFORT_DEFAULT);
+    let checked: Vec<_> = (picks.iter().zip(&items))
+        .filter(|(_, item)| item.checked)
+        .map(|(pick, _)| *pick)
+        .collect();
+    assert_eq!(checked, [Some("max")]);
+    assert!(
+        effort_choices(Cli::Codex.efforts(), Some("max"))
+            .0
+            .is_empty()
+    );
+}
+
 /// The floor: every row on the effort menu gives the program a level from its own list, each a
 /// different one, and Default gives it none.
 #[gpui::test]
@@ -3899,7 +3940,11 @@ fn a_level_with_no_word_is_the_programs_own_capitalised() {
 fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     let host = Recorder {
         agents: RefCell::new(agents(&[("claude", None), ("codex", None)])),
-        last: RefCell::new((Tier::Look, Some(("claude".into(), "sonnet".into())))),
+        last: RefCell::new(Opens {
+            tier: Tier::Look,
+            model: Some(("claude".into(), "sonnet".into())),
+            effort: None,
+        }),
         ..Recorder::default()
     };
     let mut bar = Bar::open(cx, Vec::new(), host);
@@ -5289,4 +5334,63 @@ fn the_open_is_timed_as_its_drawn_frame_comes_on_screen(cx: &mut TestAppContext)
         wakes,
         "timing the first frame asked for a frame"
     );
+}
+
+/// What a menu says, row by row, for comparing two menus: each row's title, its marks and where
+/// it leads.
+fn said(items: &[MenuEntry]) -> Vec<(String, bool, bool, bool, bool)> {
+    (items.iter())
+        .map(|item| {
+            let title = item.title.to_string();
+            (title, item.checked, item.enabled, item.header, item.out)
+        })
+        .collect()
+}
+
+/// Settings' Access opens the composer's level menu, the same rows but Full access, which is
+/// never where a thread starts; each row still picks its own level.
+#[test]
+fn settings_access_is_the_composers_level_menu() {
+    for current in [Tier::Look, Tier::default()] {
+        let (all, composer) = level_choices(current, true);
+        let (offered, settings) = level_choices(current, false);
+        assert!(!offered.contains(&Tier::Full));
+        let full = all.iter().position(|&tier| tier == Tier::Full).unwrap();
+        let mut expected = said(&composer);
+        expected.remove(full);
+        assert_eq!(said(&settings), expected);
+        for (at, tier) in offered.iter().enumerate() {
+            assert_eq!(settings[at].title.as_ref(), tier.label());
+        }
+    }
+}
+
+/// Settings' Model opens the composer's model menu, the same rows, checks and Sign In, but the
+/// way to Settings it's already in; and both check the model a thread starts on.
+#[test]
+fn settings_model_is_the_composers_model_menu() {
+    let mut offered = agents(&[("claude", None), ("codex", None)]).unwrap();
+    offered.signed_out = vec![("gemini".into(), "Gemini".into())];
+    let picked: (SharedString, String) = ("claude".into(), "sonnet".into());
+    for picked in [None, Some(&picked)] {
+        let (composer, composer_picks) = model_choices(&offered, picked, true);
+        let (settings, settings_picks) = model_choices(&offered, picked, false);
+        let kept = settings.len();
+        assert_eq!(said(&settings), said(&composer[..kept]));
+        assert_eq!(settings_picks, composer_picks[..kept]);
+        assert_eq!(
+            composer_picks[kept..],
+            [ModelPick::Nothing, ModelPick::Settings]
+        );
+        assert!(settings_picks.contains(&ModelPick::SignIn("gemini".into())));
+        let checked: Vec<&ModelPick> = (settings.iter().zip(&settings_picks))
+            .filter(|(item, _)| item.checked)
+            .map(|(_, pick)| pick)
+            .collect();
+        let starts = match picked {
+            Some(_) => ModelPick::Model("claude".into(), "sonnet".into()),
+            None => ModelPick::Model("claude".into(), "haiku".into()),
+        };
+        assert_eq!(checked, [&starts]);
+    }
 }

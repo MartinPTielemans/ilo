@@ -1181,9 +1181,11 @@ impl Agents {
                 let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
                 Some((cli, model.get(1)?.as_str()?.to_string()))
             });
+            let effort = (last.get("effort").and_then(Value::as_str)).and_then(task::known_effort);
             let last = task::Last {
                 tier: tier.unwrap_or_default(),
                 model,
+                effort,
             };
             Some((profile.clone(), last))
         }))
@@ -5482,7 +5484,7 @@ impl Agents {
                 let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
                 (
                     profile.clone(),
-                    json!({ "level": last.tier.id(), "model": model }),
+                    json!({ "level": last.tier.id(), "model": model, "effort": last.effort }),
                 )
             })
             .collect();
