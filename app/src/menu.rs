@@ -1464,7 +1464,7 @@ pub fn show(request: Request, cx: &mut App) {
         let search = (request.items.iter().any(|item| item.field)).then(|| {
             let palette = request.look.palette();
             let colors = text_input::Colors {
-                caret: rgba(palette.label).into(),
+                caret: Some(rgba(palette.label).into()),
                 ..text_input::Colors::placeholder(rgba(palette.secondary))
             };
             let placeholder = (request.items.iter().find(|item| item.field))

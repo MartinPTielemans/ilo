@@ -1530,7 +1530,7 @@ impl Account {
         let dot = if trouble.is_some() {
             red
         } else {
-            self.look.accent
+            self.look.primary
         };
         let mut text = vec![];
         if let Some(trouble) = trouble {
