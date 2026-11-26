@@ -8120,11 +8120,13 @@ mod tasks {
     }
 
     /// The four waits on the user: the task's own hand-off of page 31, a sign-in its load of page
-    /// 30 met, its ask for page 30 back and its question. Gives the wait's call, unanswered.
+    /// 30 met, its ask for page 30 back and its question, as `agent` calls for the thread `task`.
+    /// Gives the wait's call, unanswered.
     fn waits_on_user(
         agents: &Entity<Agents>,
         browser: &Made,
         agent: &str,
+        task: &str,
         wait: &str,
         cx: &mut TestAppContext,
     ) -> mpsc::Receiver<ToolResult> {
@@ -8145,7 +8147,7 @@ mod tasks {
             }
             "ask_for_tab" => {
                 agents.update(cx, |agents, cx| {
-                    agents.task_action(agent, TaskAction::TakeOver(30), cx)
+                    agents.task_action(task, TaskAction::TakeOver(30), cx)
                 });
                 let reason = json!({ "reason": "To go on", "tab": 30 });
                 begun(agents, agent, "ask_for_tab", reason, cx)
@@ -8166,7 +8168,7 @@ mod tasks {
         for refused in [false, true] {
             for wait in ["hand_off", "sign-in", "ask_for_tab", "ask"] {
                 let (agents, browser, agent) = at_work_past(refused, cx);
-                let _waits = waits_on_user(&agents, &browser, &agent, wait, cx);
+                let _waits = waits_on_user(&agents, &browser, &agent, &agent, wait, cx);
                 let (live, title, running) = stretch_head(&agents, &agent, cx);
                 assert!(
                     matches!(live, task::Live::Handed | task::Live::Asked),
@@ -8208,7 +8210,7 @@ mod tasks {
                     begun(&agents, &agent, "snapshot", json!({ "tab": other }), cx)
                 };
                 let before = step_first.then(|| looks(cx));
-                let _waits = waits_on_user(&agents, &browser, &agent, wait, cx);
+                let _waits = waits_on_user(&agents, &browser, &agent, &agent, wait, cx);
                 let _after = before.is_none().then(|| looks(cx));
                 let case = format!("{wait}, step first {step_first}, refused before {refused}");
                 let (live, title, running) = stretch_head(&agents, &agent, cx);
@@ -8218,6 +8220,60 @@ mod tasks {
                 );
                 assert_eq!((title.as_str(), running), ("Working", true), "{case}");
                 assert_eq!(moving(&agents, &agent, cx), ["snapshot"], "{case}");
+            }
+        }
+    }
+
+    /// One road for both kinds of agent: an outside app's thread, whose conversation is its steps
+    /// one by one, holds still at each of its waits, and with a step under way in another of its
+    /// pages that step alone moves, whichever of the two began first.
+    #[gpui::test]
+    fn an_outside_apps_thread_moves_through_a_wait_by_its_other_pages_step_alone(
+        cx: &mut TestAppContext,
+    ) {
+        for wait in ["hand_off", "sign-in", "ask_for_tab"] {
+            // No step in the other page, one begun before the wait, one begun after.
+            for step_first in [None, Some(true), Some(false)] {
+                let (agents, browser, _configs) = connected(cx);
+                // Page 30 it opened; page 31 is in its Space as one it opened before is.
+                let opened = json!({ "url": "shop.example" });
+                let page = Some(shop_tree());
+                traced(
+                    &agents,
+                    &browser,
+                    "claude-code",
+                    "open_tab",
+                    opened,
+                    page,
+                    cx,
+                );
+                (browser.tabs.borrow_mut()).push((31, 2, "Sign in", "https://example.com/login"));
+                let key = session_key(&agents, "claude-code", cx);
+                let other = if wait == "hand_off" { 30 } else { 31 };
+                let looks = |cx: &mut TestAppContext| {
+                    let page = json!({ "tab": other });
+                    begun(&agents, "claude-code", "snapshot", page, cx)
+                };
+                let before = (step_first == Some(true)).then(|| looks(cx));
+                let _waits = waits_on_user(&agents, &browser, "claude-code", &key, wait, cx);
+                let _after = (step_first == Some(false)).then(|| looks(cx));
+                let case = format!("{wait}, step first {step_first:?}");
+                let talk =
+                    agents.read_with(cx, |agents, cx| agents.conversation(&key, cx).unwrap());
+                assert!(
+                    matches!(talk.live, task::Live::Handed | task::Live::Asked),
+                    "{case}: {:?}",
+                    talk.live
+                );
+                assert!(
+                    (talk.lines.iter()).all(|line| !matches!(line, task::Line::Trace(_))),
+                    "{case}: a stretch in an outside app's conversation"
+                );
+                let under_way: &[&str] = match step_first {
+                    Some(_) => &["snapshot"],
+                    None => &[],
+                };
+                assert_eq!(moving(&agents, &key, cx), under_way, "{case}");
             }
         }
     }
