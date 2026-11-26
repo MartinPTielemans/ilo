@@ -3231,13 +3231,14 @@ page-word = 0.4
 page-word-working = 0.8
 page-dot = 5.0
 page-dot-gap = 5.0
-# The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
-# the task works, at this alpha, and goes to the middle, grown, while it asks, both in the title's
-# ink then; done, the ring shrinks away for a tick, in the state line's ink; stopped, the dot goes
-# and the ring shrinks, in the ink at `stopped`. Signal is the working mark only.
+# The glyph: a box at the favicon's column, a ring round a dot at the ring's top, at this alpha,
+# that goes to the middle, grown, while the task asks, both in the title's ink; done, the ring
+# shrinks away for a tick, in the state line's ink; stopped, the dot goes and the ring shrinks, in
+# the ink at `stopped`. A task at work draws the card's ring ([shell.task-card]) instead, held at
+# the top where it rests; no mark is green.
 # The rings are drawn at these values, under the floor text keeps (palette), as they're marks
-# beside a status that says the same in words. On the selected plate's fill, which Signal stands
-# out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
+# beside a status that says the same in words. On the selected plate's fill the ring is as much
+# brighter as `ring-working-selected` is than `ring-working`:
 # a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from the
 # sidebar's own ground, over a black backdrop and a white one.
 glyph = 18.0
