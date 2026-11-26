@@ -800,7 +800,7 @@ settings_drew() {
 # Settings, just shown with no page named, then on General: it opens on Overview (S1), so a click
 # on the toolbar's General shows it, as everyday_section clicks its section. $1 is the row's
 # failure message for the show.
-settings_general() {
+settings_on_general() {
   expect '^browser: settings shown Overview$' "$1"
   settings_drew Overview
   send clickkey $(drawn "toolbar General")

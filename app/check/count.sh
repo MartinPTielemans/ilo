@@ -121,7 +121,7 @@ leave_onboarding() {
 # Shows Settings › Privacy, captured to $out/$1.
 privacy() {
   send menu Settings…
-  settings_general "Settings… didn't show Settings"
+  settings_on_general "Settings… didn't show Settings"
   settings_drew General
   send clickkey $(drawn "toolbar Privacy")
   expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"

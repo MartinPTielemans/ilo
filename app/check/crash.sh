@@ -182,7 +182,7 @@ send click $page_point
 # preview's switch has them.
 if [ "$(uname)" != Darwin ] || [ "$active" = 1 ]; then
   send key , cmd
-  settings_general "⌘, didn't show Settings"
+  settings_on_general "⌘, didn't show Settings"
   settings_drew General
   send clickkey $(drawn "toolbar Privacy")
   expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
