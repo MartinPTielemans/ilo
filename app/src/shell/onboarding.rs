@@ -2007,6 +2007,7 @@ impl Shell {
             let rows = shown.iter().map(|(cli, shown)| {
                 let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
                 first_run_row(&look, *cli, shown, a11y, card::check_disc(inks), act)
+                    .children(self.place(step, cli.id()))
             });
             Some(group(&look, rows))
         });
@@ -2297,16 +2298,15 @@ fn card_words(
     shown: crate::agents::sign_in::Shown,
     learned: bool,
 ) -> crate::agents::sign_in::Shown {
-    use crate::agents::{runner::Cli, sign_in::Offer};
+    use crate::agents::sign_in::Offer;
     let offer = match learned {
         true => shown.offer,
         false => Offer::SignIn,
     };
-    let line = match (offer, cli) {
-        // Claude's sign-in is in the computer's browser, ChatGPT's in a window here.
-        (Offer::Cancel, Cli::Claude) => "Finish in the browser that opened.".into(),
-        (Offer::Cancel, Cli::Codex) => "Finish in the window that opened.".into(),
-        (Offer::TryAgain, _) => "Sign-in didn't finish.".into(),
+    let line = match offer {
+        // The wait's own line, which Settings › Models says too (FR19).
+        Offer::Cancel => shown.line,
+        Offer::TryAgain => "Sign-in didn't finish.".into(),
         _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
     };
     crate::agents::sign_in::Shown { line, offer }
