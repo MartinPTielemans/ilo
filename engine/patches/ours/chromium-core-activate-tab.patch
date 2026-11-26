@@ -1,6 +1,7 @@
 Lets the core show a tab that asks to be shown (//browser_core/hooks.h), as Picture in Picture's
 way back to its tab does. Chrome makes it its Browser's active tab, which the core's windows don't
-follow, since a window shows its Space's tabs and not its Browser's strip.
+follow, since a window shows its Space's tabs and not its Browser's strip. The core says whether
+the window is then activated: an agent's tab, which never takes the user's focus, leaves it as it is.
 
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
@@ -8,20 +9,21 @@ follow, since a window shows its Space's tabs and not its Browser's strip.
                                           content::WebContents* source,
                                           const GURL& url) = nullptr;
  
-+// browser_core: a tab asking to be shown is shown in the core's window that holds it, in its Space
-+// (//browser_core/hooks.h).
-+void (*g_browser_core_activate_contents)(content::WebContents* contents) =
++// browser_core: a tab asking to be shown is shown in the core's window that holds it, in its Space,
++// which says whether its window is activated (//browser_core/hooks.h).
++bool (*g_browser_core_activate_contents)(content::WebContents* contents) =
 +    nullptr;
 +
  namespace {
  
  const extensions::Extension* GetExtensionForOrigin(
-@@ -756,6 +761,9 @@
+@@ -756,6 +761,10 @@
      return;
    }
    browser_->GetTabStripModel()->ActivateTabAt(index);
-+  if (g_browser_core_activate_contents) {
-+    g_browser_core_activate_contents(contents);
++  if (g_browser_core_activate_contents &&
++      !g_browser_core_activate_contents(contents)) {
++    return;
 +  }
    window_->Activate();
  }

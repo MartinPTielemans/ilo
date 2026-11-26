@@ -370,8 +370,9 @@ extern void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry)
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: |contents|
 // asked to be the tab shown, as Picture in Picture's way back to its tab, a page's window.focus()
 // and a click on its notification (chromium-core-notification-click.patch) do, once Chrome has made
-// it its Browser's active tab, before it activates the window.
-extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
+// it its Browser's active tab, before it activates the window. Returns whether Chrome goes on to
+// activate the window: an agent's tab, which never takes the user's focus, leaves it as it is.
+extern bool (*g_browser_core_activate_contents)(content::WebContents* contents);
 
 // chrome/browser/ui/select_file_policy/chrome_select_file_policy.cc: whether the page in
 // |contents| may open a file dialog, a file input's (kind 1) or a File System Access picker

@@ -927,26 +927,28 @@ views::Widget* Window::TabDialog(content::WebContents* contents) {
 }
 
 // static
-void Window::ActivateContents(content::WebContents* contents) {
+bool Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
   // A tile is watched, never used: its page's focus() doesn't bring its tab to a window.
   if (tiles::Holds(tab)) {
     fprintf(stderr, "browser: tile %llu refused focus (page)\n",
             static_cast<unsigned long long>(tab));
-    return;
+    return false;
   }
-  // Nor does the page of an agent's tab no window shows, which never had a tile: its focus() would
-  // take the user's window to the agent's Space.
-  if (IsAgentTab(contents) && !Showing(tab)) {
+  // Nor an agent's tab the user doesn't hold, shown in a window or not: it never takes the user's
+  // focus, so it isn't selected, its Space isn't shown and its window isn't made key. A tab the
+  // user holds is theirs, and comes forward as any other.
+  if (IsAgentTab(contents)) {
     fprintf(stderr, "browser: agent's tab %llu refused focus (page)\n",
             static_cast<unsigned long long>(tab));
-    return;
+    return false;
   }
   // A tab the window shows already stays as it is: a notification's click brings its tab forward,
   // and the page's own window.focus() in its click handler then asks again (#685).
   if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {
     window->Select(tab);
   }
+  return true;
 }
 
 // static
@@ -3895,7 +3897,13 @@ void Window::FocusPage() {
     devtools->SetInitialFocus();
     return;
   }
-  if (std::exchange(page_had_keyboard_, false) || platform::KeyboardForPage(widget_.get())) {
+  const bool had = std::exchange(page_had_keyboard_, false);
+  // Never an agent's tab the user doesn't hold, whose page never takes the user's keyboard (#3164),
+  // as its window becomes key too.
+  if (IsAgentTab(shown_.get())) {
+    return;
+  }
+  if (had || platform::KeyboardForPage(widget_.get())) {
     Tab::FocusPage(shown_.get());
   }
 }
