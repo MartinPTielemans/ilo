@@ -10,6 +10,7 @@ use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
 use crate::agents::tier::Tier;
+use crate::product::PRODUCT;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
 use crate::tokens::shell::task_card::{FROM_LINE, GAP};
@@ -249,15 +250,15 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     let said = "I found three flights and booked the cheapest";
     let mut done = card(1, Dot::Done);
     done.status = said.into();
-    assert_eq!(state_line(&done).as_ref(), "Claude · Done");
+    assert_eq!(state_line(&done), format!("{PRODUCT} · Done"));
     let mut working = card(2, Dot::Working);
     working.status = "Step 3 · Opening tap.pt".into();
-    assert_eq!(state_line(&working).as_ref(), "Claude · Working");
+    assert_eq!(state_line(&working), format!("{PRODUCT} · Working"));
     working.status = "Working · 3 helpers".into();
     working.fuller = true;
     assert_eq!(
-        state_line(&working).as_ref(),
-        "Claude · Working · 3 helpers"
+        state_line(&working),
+        format!("{PRODUCT} · Working · 3 helpers")
     );
     working.tier = Tier::Full;
     assert_eq!(
@@ -269,21 +270,21 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
     asks.status = "Which would you rather visit?".into();
-    assert_eq!(state_line(&asks).as_ref(), "Claude · Needs you");
+    assert_eq!(state_line(&asks), format!("{PRODUCT} · Needs you"));
     // An ended task says which of the three it is, from its card's word.
     let mut ended = card(4, Dot::Ended);
     ended.status = "Stopped after 6 steps".into();
     ended.fuller = true;
     assert_eq!(
-        state_line(&ended).as_ref(),
-        "Claude · Stopped after 6 steps"
+        state_line(&ended),
+        format!("{PRODUCT} · Stopped after 6 steps")
     );
     ended.word = Word::Interrupted;
     ended.status = "Claude Code quit".into();
     ended.fuller = false;
-    assert_eq!(state_line(&ended).as_ref(), "Claude · Interrupted");
+    assert_eq!(state_line(&ended), format!("{PRODUCT} · Interrupted"));
     ended.word = Word::AtLimit;
-    assert_eq!(state_line(&ended).as_ref(), "Claude · At limit");
+    assert_eq!(state_line(&ended), format!("{PRODUCT} · At limit"));
     // A session's receipt is ilo's line, with its time.
     let mut session = card(5, Dot::Done);
     session.replies = false;
@@ -318,8 +319,11 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
 #[test]
 fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
     let label = Tier::Full.label();
+    // Only an outside app's session is named by its client; a task of the product's own is named
+    // by the product.
     let mut posing = card(1, Dot::Ended);
     posing.name = label.into();
+    posing.replies = false;
     let mut full = card(2, Dot::Ended);
     full.tier = Tier::Full;
     assert_eq!(state_line(&posing), state_line(&full));
@@ -405,16 +409,17 @@ fn an_outside_apps_line_comes_from_its_connection_alone() {
 #[test]
 fn a_cards_line_says_its_status_only_where_its_maker_said_so() {
     let posing = [
-        (Dot::Working, "Working · Opening tap.pt", "Claude · Working"),
-        (Dot::Ended, "Stopped by a page", "Claude · Stopped"),
-        (Dot::Done, "Done · 3 flights found", "Claude · Done"),
+        (Dot::Working, "Working · Opening tap.pt", "Working"),
+        (Dot::Ended, "Stopped by a page", "Stopped"),
+        (Dot::Done, "Done · 3 flights found", "Done"),
     ];
-    for (dot, status, line) in posing {
-        for replies in [true, false] {
+    for (dot, status, word) in posing {
+        // A task of the product's own is named by the product, a session by its client.
+        for (replies, name) in [(true, PRODUCT), (false, "Claude")] {
             let mut card = card(1, dot);
             card.status = status.into();
             card.replies = replies;
-            assert_eq!(state_line(&card).as_ref(), line, "{status:?}");
+            assert_eq!(state_line(&card), format!("{name} · {word}"), "{status:?}");
         }
     }
     // And where it did, the line is the status whatever it begins with.
@@ -599,8 +604,8 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
     );
     // Seen, it's a line, and says none of it.
     assert_eq!(
-        second_line(&done(1, short), Form::DoneLine, "").as_ref(),
-        "Claude · Done"
+        second_line(&done(1, short), Form::DoneLine, ""),
+        format!("{PRODUCT} · Done")
     );
     draw(&shell, cx);
 }
@@ -638,8 +643,8 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         "Done · 10:42"
     );
     assert_eq!(
-        spoken(&done(posing), Form::DoneLine, "").as_ref(),
-        "Claude · Done"
+        spoken(&done(posing), Form::DoneLine, ""),
+        format!("{PRODUCT} · Done")
     );
     let waits = card(2, Dot::Waiting);
     assert_eq!(

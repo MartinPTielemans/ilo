@@ -93,7 +93,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         agent: "task-1".into(),
         name: "Claude".into(),
         title: "Flight to Lisbon".into(),
-        about: "Claude · Haiku · Working".into(),
+        about: format!("{PRODUCT} · Haiku · Working").into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
         lines: vec![Line::Trace(Trace {

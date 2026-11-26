@@ -363,7 +363,7 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     assert_eq!(archived.len(), 1);
     let (past, title, about) = archived[0].clone();
     assert_eq!(title, "Lisbon seats");
-    assert!(about.starts_with("Claude · Done "), "{about}");
+    assert!(about.starts_with(&format!("{PRODUCT} · Done ")), "{about}");
     assert_eq!(listed(&next, cx), archived);
     // All there is of it: no ask, page, message or step, no Space, no run, and one line, where
     // its messages would begin, that says where they are.
@@ -638,7 +638,11 @@ fn a_past_task_whose_conversation_went_stays_as_it_ended(cx: &mut TestAppContext
 
     assert!(matches!(next.state(&past, cx), State::Done { .. }));
     let talk = next.talk(&past, cx);
-    assert!(talk.about.starts_with("Claude · Done"), "{}", talk.about);
+    assert!(
+        talk.about.starts_with(&format!("{PRODUCT} · Done")),
+        "{}",
+        talk.about
+    );
     assert_eq!(next.ilo_lines(&past, cx), [IloKind::Gone]);
     assert_eq!(
         talk.lines.len(),
@@ -678,7 +682,7 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].1, "Untitled thread");
-    assert!(archived[0].2.starts_with("Claude · Done "));
+    assert!(archived[0].2.starts_with(&format!("{PRODUCT} · Done ")));
     // Out of the Archive and back, it has no more of a title than it had.
     act(&next, &archived[0].0, TaskAction::Delete, cx);
     act(&next, &archived[0].0, TaskAction::Undelete, cx);
@@ -753,7 +757,10 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
         ("Done", "Done"),
     ] {
         let about = about(title);
-        assert!(about.starts_with(&format!("Claude · {word} ")), "{about}");
+        assert!(
+            about.starts_with(&format!("{PRODUCT} · {word} ")),
+            "{about}"
+        );
     }
     let limit = (archived.iter().find(|task| task.1 == "Limit").unwrap())
         .0
@@ -877,7 +884,10 @@ fn a_task_at_work_when_the_browser_went_comes_back_interrupted(cx: &mut TestAppC
     assert_eq!(archived.len(), 1);
     let (past, title, about) = archived[0].clone();
     assert_eq!(title, "Lisbon seats");
-    assert!(about.starts_with("Claude · Interrupted "), "{about}");
+    assert!(
+        about.starts_with(&format!("{PRODUCT} · Interrupted ")),
+        "{about}"
+    );
     assert_eq!(listed(&next, cx), archived);
     assert_eq!(next.ilo_lines(&past, cx), [IloKind::KeptHere]);
     assert!(next.browser.made.borrow().is_empty());
@@ -947,7 +957,7 @@ fn a_task_taken_up_and_cut_off_comes_back_interrupted(cx: &mut TestAppContext) {
     assert_eq!(archived.len(), 2);
     for (_, title, about) in &archived {
         assert!(
-            about.starts_with("Claude · Interrupted "),
+            about.starts_with(&format!("{PRODUCT} · Interrupted ")),
             "{title}: {about}"
         );
     }
