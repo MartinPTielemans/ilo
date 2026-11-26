@@ -319,7 +319,7 @@ rm -f "$saved" "$profile_dir/Account"
 serve
 printf '%s' '<title>agent</title>' > "$out/site/agent.html"
 agent_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$agent_token" \
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$agent_token" "$product" \
   > "$profile_dir/Agents"
 chmod 600 "$profile_dir/Agents"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
@@ -636,7 +636,7 @@ expect '^browser: agent mcp-client stopped Request at Work on pages: localhost$'
   "the agent's change wasn't refused at Work on pages"
 stopped=$(agent_line) || fail "the browser didn't answer the agent's refused change"
 case "$stopped" in
-  *"ilo stopped this: "*) ;;
+  *"$product stopped this: "*) ;;
   *) fail "the agent's change at Work on pages answered: $stopped" ;;
 esac
 says "$at" "Needs you" "NVDA didn't say the agent's task needs the user as ilo refused its change"
