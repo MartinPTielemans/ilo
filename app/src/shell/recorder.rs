@@ -90,6 +90,9 @@ pub(crate) struct Recorder {
     pub(super) grows_first_run: Cell<bool>,
     /// How many times it was asked whether it grows first run's window.
     pub(super) asked_to_grow: Cell<u32>,
+    /// What each frame of a grown exit said of the browser window and the card's glass, kept
+    /// apart so what the host was told reads as before.
+    pub(super) revealed: RefCell<Vec<(f32, f32)>>,
     /// What first run's end does where the Mac's host draws the browser window before showing it,
     /// for a test to draw the shell's window as the host would.
     pub(super) first_run_end: RefCell<Option<FirstRunEnd>>,
@@ -2170,6 +2173,10 @@ impl Browser for Recorder {
         // Counted, not recorded, so what the host was told reads as before.
         self.asked_to_grow.set(self.asked_to_grow.get() + 1);
         self.grows_first_run.get()
+    }
+
+    fn reveal_first_run(&self, window: f32, glass: f32) {
+        self.revealed.borrow_mut().push((window, glass));
     }
 
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
