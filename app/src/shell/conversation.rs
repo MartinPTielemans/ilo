@@ -34,6 +34,7 @@ use super::{
 };
 use crate::agents::Status;
 use crate::agents::files::words as files_words;
+use crate::agents::kept::cards::Plate;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
@@ -581,8 +582,18 @@ impl Shell {
             .extend(gone.into_iter().map(|(.., picture)| picture.image()));
     }
 
-    /// The plates' pictures of cards that no longer picture that page, or are gone, go.
-    pub(super) fn keep_plates(&mut self) {
+    /// The plates' pictures of cards that no longer picture that page, or are gone, go; and so does
+    /// a kept card's picture, read back after a quit, that no card of `was`'s successors holds now
+    /// (Remove, Remove All, a reply), from this window's atlas if it drew it.
+    pub(super) fn keep_plates(&mut self, was: &[Card]) {
+        let held = |plate: &&Plate| {
+            (self.task_cards.iter()).any(|card| card.kept_picture.as_ref() == Some(*plate))
+        };
+        let gone: Vec<_> = (was.iter().filter_map(|card| card.kept_picture.as_ref()))
+            .filter(|plate| !held(plate))
+            .map(|plate| plate.image.clone())
+            .collect();
+        self.stale_pictures.extend(gone);
         let cards = &self.task_cards;
         let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
             .into_iter()

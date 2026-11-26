@@ -538,8 +538,8 @@ impl Shell {
                 }
             }
         }
-        self.task_cards = cards;
-        self.keep_plates();
+        let before = std::mem::replace(&mut self.task_cards, cards);
+        self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {
             let telling = self
