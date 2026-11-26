@@ -23,6 +23,7 @@ use gpui::{Role, accesskit::Live as Telling};
 
 use self::markdown::{Block, Inline};
 use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
+use super::knot::{self, Knot};
 use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
@@ -58,6 +59,9 @@ use crate::tokens::shell::conversation::ilo::{
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::panel;
+use crate::tokens::shell::conversation::sign::{
+    ABOVE as SIGN_ABOVE, RIGHT as SIGN_RIGHT, SIZE as SIGN_SIZE,
+};
 use crate::tokens::shell::conversation::{
     ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
     BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
@@ -267,6 +271,12 @@ pub struct TalkView {
     /// as it lands, and the view.
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The sign over the composer, and since when it has said what it says.
+    sign: knot::Timed,
+    /// The sign and the gap in its cord as it was drawn last, and where, and where the composer
+    /// was, for a test.
+    sign_drawn: Rc<Cell<Option<(Knot, Option<(f32, f32)>, Bounds<Pixels>)>>>,
+    composer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where an outside app's line was drawn last in the panel's head, for a test.
     from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -500,6 +510,9 @@ impl Shell {
                     made: Instant::now(),
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
+                    sign: Default::default(),
+                    sign_drawn: Rc::default(),
+                    composer_drawn: Rc::default(),
                     from_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
@@ -2946,6 +2959,51 @@ impl TalkView {
         )
     }
 
+    /// What stands in the reply field's place, with the sign over its right corner while the
+    /// thread works or waits on the user. The sign takes no press: it is drawn over the lines'
+    /// foot, which keep theirs.
+    fn composer(
+        &self,
+        look: &Look,
+        gap: Option<(f32, f32)>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
+        let mark = knot::knot(SIGN_SIZE, &look.palette, gap);
+        let (drawn, composer) = (self.sign_drawn.clone(), self.composer_drawn.clone());
+        div()
+            .relative()
+            .child(self.reply(look, cx))
+            .child(
+                canvas(
+                    move |bounds, _, _| composer.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .children(sign.map(|sign| {
+                div()
+                    .absolute()
+                    .right(px(SIGN_RIGHT))
+                    .top(px(-(SIGN_SIZE + SIGN_ABOVE)))
+                    .child(mark)
+                    .child(
+                        canvas(
+                            move |bounds, _, _| drawn.set(Some((sign, gap, bounds))),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+            }))
+            .into_any_element()
+    }
+
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
@@ -4627,6 +4685,8 @@ impl Render for TalkView {
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         self.reply_drawn.set(None);
+        self.sign_drawn.set(None);
+        self.composer_drawn.set(None);
         self.speaker_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
@@ -4636,9 +4696,17 @@ impl Render for TalkView {
         // and the shimmer, which moves while a step is under way and never while one waits on the
         // user, on the loading dots' clock, as each frame draws the whole window again (#1700).
         let shimmers = self.moving(still);
+        // The sign moves from when it came to say what it says, only while it's drawn in a window
+        // the system shows and motion isn't reduced, on the shimmer's clock: no frame is asked for
+        // it otherwise.
+        let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
+        let composed = self.replies || !look.standing;
+        let gap = (self.sign).gap(sign, now, composed && knot::moves(window, cx));
         if !self.folding.is_empty() || busy {
             window.request_animation_frame();
-        } else if shimmers && let Some(shell) = self.shell.upgrade() {
+        } else if (shimmers || gap.is_some())
+            && let Some(shell) = self.shell.upgrade()
+        {
             shell.read(cx).breath.keep();
             cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
@@ -4745,7 +4813,7 @@ impl Render for TalkView {
             // beside its page: its user talks to it in its own app.
             .children(
                 (self.replies || !standing)
-                    .then(|| shut(foot(on_column(self.reply(&look, cx).into_any_element())))),
+                    .then(|| shut(foot(on_column(self.composer(&look, gap, cx))))),
             );
         let rail = (pages && !across && !standing).then(|| {
             div()

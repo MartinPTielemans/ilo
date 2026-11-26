@@ -65,93 +65,8 @@ profile_dir="$PWD/$perf_dir/profile"
 mkdir -p "$profile_dir"
 # The CPU beside each tab-switch figure, which compares only with one from the same model (#3418).
 on_cpu=$(runner_cpu)
-cat > "$out/site/perf.html" << 'HTML'
-<!doctype html><meta charset=utf-8><title>loading</title>
-<style>
-body { font: 14px/1.4 sans-serif; margin: 16px }
-.box { display: inline-block; width: 72px; height: 40px; margin: 4px; border-radius: 6px }
-</style>
-<h1>ilo perf page</h1><p id=clock></p><div id=boxes></div><div id=text></div>
-<script>
-const id = location.search.slice(1);
-for (let i = 0; i < 60; i++) {
-  const box = document.createElement("div");
-  box.className = "box";
-  box.style.background = `hsl(${i * 6} 60% 60%)`;
-  boxes.append(box);
-}
-for (let i = 0; i < 120; i++) {
-  const p = document.createElement("p");
-  p.textContent = `Paragraph ${i}: the quick brown fox jumps over the lazy dog, again and again.`;
-  text.append(p);
-}
-setInterval(() => clock.textContent = new Date().toLocaleTimeString(), 1000);
-// Unix ms as the shell's clock reads it: Date.now() is the system's clock now, where timeOrigin's is
-// the one the renderer took at its start, which a VM's clock drifts from, by 70 ms in 10 minutes.
-const at = (t) => Math.round(Date.now() - performance.now() + t);
-new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.name == "first-contentful-paint") {
-      document.title = `${id} fcp ${at(entry.startTime)}`;
-      performance.mark(document.title);
-    }
-  }
-}).observe({ type: "paint", buffered: true });
-// Each stamp is also a mark, which a trace with blink.user_timing has on its own clock, to pair the
-// trace's events with the run's Unix ms.
-const stamped = (n) => requestAnimationFrame(() => requestAnimationFrame(() => {
-  document.title = `${id} shown ${n} ${Date.now()}`;
-  performance.mark(document.title);
-}));
-let shown = 0;
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState == "visible") {
-    stamped(++shown);
-  }
-});
-// A page loaded again in its tab as it's shown, as a tab without its page gets it back, has no
-// visibilitychange, so it's stamped shown 0. A new tab's page, which perf times to its paint, isn't.
-if (document.visibilityState == "visible" && performance.getEntriesByType("navigation")[0]?.type != "navigate") {
-  stamped(0);
-}
-</script>
-HTML
-page="${site}perf.html"
+perf_page
 
-# Sets $stamp to Unix time in ms. Bash 5 has it in EPOCHREALTIME, which Git Bash's is, as a process
-# start there takes tens of ms; Linux's sh is dash, so date, and the Mac's bash 3.2 and BSD date have
-# neither, so Perl.
-if [ -n "${EPOCHREALTIME:-}" ]; then
-  perf_clock=bash
-elif [ "$(uname)" = Darwin ]; then
-  perf_clock=perl
-else
-  perf_clock=date
-fi
-perf_stamp() {
-  case $perf_clock in
-    bash)
-      stamp=$EPOCHREALTIME
-      stamp_us=${stamp#*[.,]}
-      stamp="${stamp%[.,]*}${stamp_us%???}"
-      ;;
-    perl) stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000') ;;
-    *) stamp=$(date +%s%3N) ;;
-  esac
-}
-# Sorts the numbers on standard input, one a line, and says their median, range and count, each
-# number as $1 formats it.
-perf_stats() {
-  sort -n | awk -v f="$1" '{ v[NR] = $1 } END {
-    if (!NR) { print "no samples"; exit }
-    m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
-    printf "median " f " (" f "–" f ", n=%d)", m, v[1], v[NR], NR }'
-}
-# Says row $1, labelled $2, measured as $3, against its target $4, and keeps it for the summary.
-perf_row() {
-  echo "perf: $2: $3; target $4"
-  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
-}
 # The CRLSet, Google's list of revoked certificates, comes from the component updater a minute or
 # more after a profile's first launch, and from then on the browser keeps it parsed, about 27 MiB
 # for the set of 2026-11 (#2317). So each browser's warm launch, not measured, checks for updates
@@ -189,19 +104,6 @@ crlset_await() {
   done
   echo "perf: $4 CRLSet $(crlset_in "$1" "$2") arrived $(($(date +%s) - $3)) s into its first launch"
 }
-# Snapshots what the browser's processes use, or those of $snap_procs, as $1.
-perf_snap() {
-  # shellcheck disable=SC2086 # kinds, or nothing
-  python3 -I check/usage.py snap "${snap_procs:-$procs}" "$perf_dir/$1.json" ${2:-} ||
-    fail "the browser's usage didn't read"
-}
-# Waits until $1, in Unix seconds, checking the app is still there.
-perf_until() {
-  while [ "$(date +%s)" -lt "$1" ]; do
-    kill -0 "$pid" 2> /dev/null || gone
-    sleep 1
-  done
-}
 # The memory now, in $memory: "MiB processes", and by kind of process in $kinds; whether the
 # browser had its CRLSet in, which $crlset_log and $crlset_dir say, in $settled.
 perf_memory() {
@@ -214,20 +116,6 @@ perf_memory() {
   else
     settled="; not settled: $crlset_who CRLSet never arrived"
   fi
-}
-# Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
-perf_idle() {
-  files=
-  for n in 0 1 2 3 4 5 6; do
-    [ "$n" = 0 ] || perf_until $(($(date +%s) + 10))
-    perf_snap "$1-$n"
-    files="$files $perf_dir/$1-$n.json"
-  done
-  # shellcheck disable=SC2086 # the files, a word each
-  python3 -I check/usage.py idle $files > "$perf_dir/$1.txt"
-  cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
-  wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
-  cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
 }
 # The Unix ms page $1 said it first painted, in the log since step $2 (all of it with none).
 perf_painted() {
@@ -384,10 +272,15 @@ exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
 
-# Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint in the file $2.
+# Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint in the file $2, and the
+# bar's own ms from ⌘T to its first frame on screen and to its first frame drawn in $2-bar and
+# $2-drawn, as the app logged them for this ⌘T and no other.
 perf_open() {
   send key t cmd
+  bar_step=$step
   expect '^browser: command bar shown$' "⌘T didn't open the command bar for $1"
+  # The ⌘T gate's number: an open without it measured nothing.
+  expect '^browser: command bar first frame in ' "the command bar for $1 logged no first frame"
   send type "$page?$1"
   perf_stamp
   typed=$stamp
@@ -395,6 +288,17 @@ perf_open() {
   expect_late "^browser: title [0-9]* $1 fcp " "$1 didn't paint in its new tab"
   echo $(($(perf_painted "$1" "$step") - typed)) >> "$perf_dir/$2"
   loaded=$(date +%s)
+  # Every line of each kind the ⌘T step logged, so a count above one an open shows a reopen that
+  # logged early, or twice.
+  sed -n "/^browser: drive $bar_step: /,/^browser: drive $((bar_step + 1)): /p" "$log" \
+    > "$perf_dir/bar-open"
+  sed -n 's/^browser: command bar first frame in \([0-9.]*\) ms$/\1/p' "$perf_dir/bar-open" >> "$perf_dir/$2-bar"
+  sed -n 's/^browser: command bar frame drawn in \([0-9.]*\) ms$/\1/p' "$perf_dir/bar-open" >> "$perf_dir/$2-drawn"
+}
+# Says the ms in the file $1 as their median and range, then every one of them in the order taken,
+# and how many opens ($2) they came from.
+perf_every() {
+  echo "$(perf_stats '%.1f' < "$1") ms over $2 opens; each: $(tr '\n' ' ' < "$1" | sed 's/ $//')"
 }
 # 16 switches by ⌘1–⌘8 at 20 tabs, keeping the ms from the key to the page shown in the file $1,
 # to the core's report in $1-core and each key's Unix ms in $1-keys, and a line a switch in $1-rows
@@ -435,13 +339,17 @@ perf_session() {
     "Ardia 298 MB, Chrome 370 MB (gate: ≤ Chrome)"
   perf_idle idle-1
   perf_row idle-cpu-1 "Idle CPU, 1 tab" "$cpu" "Ardia 0.16 %, Chrome 0.2 %"
-  perf_row idle-wakeups-1 "Idle wakeups, 1 tab" "$wakeups /s" "Ardia 5.27 /s, Chrome 6.77 /s"
+  perf_row idle-wakeups-1 "Idle wakeups, 1 tab" \
+    "$wakeups /s ($wake_kinds over the minute)" "Ardia 5.27 /s, Chrome 6.77 /s"
   perf_until $((started + 120))
   perf_idle settled-1
   perf_row settled-cpu-1 "Idle CPU, 1 tab, settled" "$cpu" "Ardia 0.05 %"
-  perf_row settled-wakeups-1 "Idle wakeups, 1 tab, settled" "$wakeups /s" "Ardia 3.11 /s"
+  perf_row settled-wakeups-1 "Idle wakeups, 1 tab, settled" \
+    "$wakeups /s ($wake_kinds over the minute)" "Ardia 3.11 /s"
 
   : > "$perf_dir/newtab"
+  : > "$perf_dir/newtab-bar"
+  : > "$perf_dir/newtab-drawn"
   for n in 2 3 4 5 6 7 8 9 10; do
     perf_open "p$n" newtab
   done
@@ -458,14 +366,19 @@ perf_session() {
     "Ardia 1082 MB, Chrome 919 MB (gate: ≤ Chrome)"
   perf_row newtab "New tab, ↩ in ⌘T's bar to page painted" \
     "$(perf_stats '%.0f' < "$perf_dir/newtab") ms" "Ardia 54.9 ms, Chrome 54.3 ms (gate: ≤ Chrome)"
+  perf_row newtab-bar "⌘T to its bar's first frame on screen, every open" \
+    "$(perf_every "$perf_dir/newtab-bar" "$(wc -l < "$perf_dir/newtab" | tr -d ' ')")" "none of its own"
+  perf_row newtab-drawn "⌘T to its bar's first frame drawn, every open" \
+    "$(perf_every "$perf_dir/newtab-drawn" "$(wc -l < "$perf_dir/newtab" | tr -d ' ')")" "none of its own"
   perf_idle idle-20
   perf_row idle-cpu-20 "Idle CPU, 20 tabs" "$cpu" "Ardia 0.45 %, Chrome 0.62 % (gate: ≤ Chrome)"
-  perf_row idle-wakeups-20 "Idle wakeups, 20 tabs" "$wakeups /s" \
+  perf_row idle-wakeups-20 "Idle wakeups, 20 tabs" "$wakeups /s ($wake_kinds over the minute)" \
     "Ardia 13.56 /s, Chrome 30.86 /s (gate: ≤ Chrome)"
   perf_until $((loaded + 120))
   perf_idle settled-20
   perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu" "Ardia 0.31 %"
-  perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
+  perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" \
+    "$wakeups /s ($wake_kinds over the minute)" "Ardia 11.82 /s"
 
   perf_switches switch
   perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms on $on_cpu" \
@@ -629,6 +542,8 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   send click $page_point
   [ "$active" = 1 ] || fail "Browser wasn't the active app for the traced switches"
   : > "$perf_dir/traced-newtab"
+  : > "$perf_dir/traced-newtab-bar"
+  : > "$perf_dir/traced-newtab-drawn"
   # The first 3 new tabs, traced on their own into perf/trace-ilo-newtab.json, for where a new
   # tab's ms go (#2383).
   perf_traced_opens() {
@@ -662,12 +577,12 @@ fi
 # shows them through the tab strip, as ⌘1–⌘8 do; ilo's are timed from ↩ in ⌘T's bar and from the
 # key. A profile of its own, launched once first, as ilo's was.
 # CHECK_CHROME names another, such as Chrome for Testing on the owner's Mac, whose own Chrome a run
-# never launches or quits: off CI, there's none without it.
-chrome_id=com.google.Chrome
+# never launches or quits: off CI, there's none without it, and a Google Chrome it names is refused.
+# Each launch's PID is kept in perf/chrome-pids, and Chrome is quit by it, never by its bundle id,
+# which would reach every Chrome of that id on the machine.
 if [ -n "${CHECK_CHROME:-}" ]; then
   chrome=$CHECK_CHROME
   chrome_procs=${chrome%/MacOS/*}
-  [ "$(uname)" != Darwin ] || chrome_id=$(defaults read "$chrome_procs/Info" CFBundleIdentifier)
   [ "$(uname)" = Darwin ] || chrome_procs=$chrome
 elif [ -z "${CI:-}" ]; then
   chrome=none
@@ -694,7 +609,8 @@ if [ "$(uname)" = Darwin ] && [ "$chrome" != none ]; then
 fi
 # Launches Chrome on page $1, with the arguments after, and check/cdp.py on the DevTools port it
 # picks, which logs its pages' titles to $log, as the app's log has its own, and takes commands on
-# fd 5. Sets $pid and $launched, the Unix ms just before, or says Chrome didn't stay.
+# fd 5. Sets $pid and $chrome_pid, its PID, which perf/chrome-pids keeps too, and $launched, the
+# Unix ms just before, or says Chrome didn't stay.
 chrome_launch() {
   chrome_url="$page?$1"
   shift
@@ -709,6 +625,8 @@ chrome_launch() {
     $([ -z "$chrome_at" ] || echo "--window-position=${chrome_at% *},${chrome_at#* }" \
       --window-size=1280,800) "$@" "$chrome_url" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
   pid=$!
+  chrome_pid=$pid
+  echo "$pid" >> "$perf_dir/chrome-pids"
   # Its port, then the browser's path, with no newline after, once DevTools listens, which a
   # runner's first launch of it, from a cold disk, took 15.5 s to (#2385).
   tries=0
@@ -803,17 +721,16 @@ chrome_switches() {
     [ -z "${3:-}" ] || [ "$i" -gt 8 ] || sleep 1
   done
 }
-# Quits Chrome as quit_app does the app, then ends what's left of it after $1 s, or 20.
+# Quits the last launch's Chrome by its PID, as Chrome quits on SIGINT, then ends what's left of it
+# after $1 s, or 20.
 chrome_quit() {
   # cdp.py ends as its commands do, and as Chrome closes its socket.
   exec 5>&-
   if windows; then
     # Without /F, taskkill asks its windows to close, as their close button does.
-    taskkill //PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
-  elif [ "$(uname)" = Darwin ]; then
-    osascript -e "tell application id \"$chrome_id\" to quit" || true
+    taskkill //PID "$(cat "/proc/$chrome_pid/winpid")" > /dev/null 2>&1 || true
   else
-    kill -INT "$pid" 2> /dev/null || true
+    kill -INT "$chrome_pid" 2> /dev/null || true
   fi
   for _ in $(seq $((${1:-20} * 2))); do
     perf_snap chrome-left
@@ -842,6 +759,10 @@ elif [ ! -x "$chrome" ]; then
   else
     echo "skip: perf's Chrome. Off CI, CHECK_CHROME names the one to run, as the owner's own never is."
   fi
+elif [ -z "${CI:-}" ] && [ "$(uname)" = Darwin ] && [ "$(defaults read "$chrome_procs/Info" \
+  CFBundleIdentifier 2> /dev/null)" = com.google.Chrome ]; then
+  echo "skip: perf's Chrome. CHECK_CHROME names a Google Chrome, which a run off CI never" \
+    "launches; name a copy of its own, such as Chrome for Testing."
 else
   snap_procs=$chrome_procs
   : > "$perf_dir/chrome.log"
@@ -905,11 +826,13 @@ print(int((time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(time.CLO
     echo "titles off" >&5
     perf_idle chrome-idle-1
     perf_row chrome-idle-cpu-1 "Chrome here, idle CPU, 1 tab" "$cpu" "ilo's"
-    perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" "$wakeups /s" "ilo's"
+    perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" \
+      "$wakeups /s ($wake_kinds over the minute)" "ilo's"
     perf_until $((started + 120))
     perf_idle chrome-settled-1
     perf_row chrome-settled-cpu-1 "Chrome here, idle CPU, 1 tab, settled" "$cpu" "ilo's"
-    perf_row chrome-settled-wakeups-1 "Chrome here, idle wakeups, 1 tab, settled" "$wakeups /s" "ilo's"
+    perf_row chrome-settled-wakeups-1 "Chrome here, idle wakeups, 1 tab, settled" \
+      "$wakeups /s ($wake_kinds over the minute)" "ilo's"
     echo titles >&5
     # A couple of seconds apart, as before Chrome's new tabs were timed.
     : > "$perf_dir/chrome-newtab"
@@ -934,11 +857,13 @@ print(int((time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(time.CLO
     echo "titles off" >&5
     perf_idle chrome-idle-20
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
-    perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
+    perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" \
+      "$wakeups /s ($wake_kinds over the minute)" "ilo's, the gate"
     perf_until $((loaded + 120))
     perf_idle chrome-settled-20
     perf_row chrome-settled-cpu-20 "Chrome here, idle CPU, 20 tabs, settled" "$cpu" "ilo's"
-    perf_row chrome-settled-wakeups-20 "Chrome here, idle wakeups, 20 tabs, settled" "$wakeups /s" "ilo's"
+    perf_row chrome-settled-wakeups-20 "Chrome here, idle wakeups, 20 tabs, settled" \
+      "$wakeups /s ($wake_kinds over the minute)" "ilo's"
     echo titles >&5
     chrome_switches c chrome-switch
     perf_row chrome-switch "Chrome here, tab switch, cdp.py's stamp to page shown" \
