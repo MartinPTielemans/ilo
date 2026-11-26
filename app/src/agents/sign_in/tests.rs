@@ -373,10 +373,7 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     let out = row(codex, Ready::SignedOut, Some("Plus"), Row::Idle);
     assert_eq!(out, says("Not signed in", Offer::SignIn));
     let signing = row(codex, Ready::SignedOut, None, Row::SigningIn);
-    assert_eq!(
-        signing,
-        says("Finish in the page that opened", Offer::Cancel)
-    );
+    assert_eq!(signing, says(super::CHATGPT_WAITING, Offer::Cancel));
     let signed = row(codex, Ready::SignedIn, Some("Plus"), Row::Idle);
     assert_eq!(signed, says("Signed in · Plus plan", Offer::SignedIn));
     let claude = row(Cli::Claude, Ready::SignedIn, None, Row::Idle);

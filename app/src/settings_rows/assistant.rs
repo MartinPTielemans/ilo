@@ -8,8 +8,6 @@ pub const SIGN_IN: &str = "Sign In";
 pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
 /// ChatGPT's row's line, signed in.
 const CHATGPT_SIGNED_IN: &str = "Your ChatGPT plan";
-/// The row's line while its sign-in is under way.
-const UNDER_WAY: &str = "Sign in on the page that opened";
 
 /// The row's line before it's signed in, its program here or not: whose plan it works on.
 fn on_plan(cli: crate::agents::runner::Cli) -> String {
@@ -123,7 +121,6 @@ pub fn assistant_row(
     // The table's words where it has them; its others as the assistant's state says them.
     let line: SharedString = match shown.offer {
         Offer::Get | Offer::SignIn => on_plan(cli).into(),
-        Offer::Cancel => UNDER_WAY.into(),
         // ChatGPT's signed in says whose plan, not the program it runs through (M2).
         Offer::SignedIn if matches!(cli, crate::agents::runner::Cli::Codex) => {
             CHATGPT_SIGNED_IN.into()
@@ -193,7 +190,19 @@ pub fn first_run_row(
             more(look, cli, a11y, div(), act.clone()).into_any_element(),
         ],
     };
-    let line = lined(look).child(SharedString::from(shown.line.clone()));
+    // One line in every state (FR19), so the row is never taller in one than another: each
+    // state's words are written to fit the card's column, and one that doesn't is cut where it's
+    // drawn but read whole.
+    let words = SharedString::from(shown.line.clone());
+    let said = div()
+        .id(("assistant-line", index))
+        .truncate()
+        .child(words.clone());
+    let said = match a11y {
+        true => said.role(Role::Label).aria_label(words),
+        false => said,
+    };
+    let line = lined(look).child(said);
     wrapping(
         look,
         cli.glyph(),

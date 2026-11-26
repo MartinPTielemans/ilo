@@ -2680,14 +2680,114 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
     }
     assert_eq!(
         card(Cli::Claude, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the browser that opened.", Offer::Cancel),
+        said("Finish in your browser.", Offer::Cancel),
         "Claude's sign-in is in the computer's browser"
     );
     assert_eq!(
         card(Cli::Codex, Ready::SignedOut, None, Row::SigningIn, true),
-        said("Finish in the window that opened.", Offer::Cancel),
+        said("Finish in the new window.", Offer::Cancel),
         "ChatGPT's is in a window here"
     );
+}
+
+/// A row on the card is as tall in each of its states (FR19), as each state's line is one line in
+/// the card's column: its maker's plan with Sign In, the wait with the ring and Cancel, signed in
+/// with the disc and ⋯, and a sign-in that didn't finish.
+#[gpui::test]
+fn an_assistants_row_is_as_tall_in_each_state(cx: &mut TestAppContext) {
+    use crate::agents::ready::Ready;
+    use crate::agents::sign_in::{Row, shown};
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let states = [
+        ("at the start", Ready::SignedOut, None, Row::Idle),
+        ("waiting", Ready::SignedOut, None, Row::SigningIn),
+        ("signed in", Ready::SignedIn, Some("Plus"), Row::Idle),
+        ("failed", Ready::SignedOut, None, Row::Failed(None)),
+    ];
+    for cli in Cli::ALL {
+        let mut heights = Vec::new();
+        for (state, ready, plan, row) in &states {
+            let rows = vec![(cli, shown(cli, *ready, *plan, row))];
+            shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+            settle(&shell, cx);
+            let drawn = placed(cli.id(), cx)
+                .unwrap_or_else(|| panic!("{cli:?}'s row wasn't drawn {state}"));
+            heights.push((*state, f32::from(drawn.size.height)));
+        }
+        let first = heights[0].1;
+        assert!(
+            heights
+                .iter()
+                .all(|&(_, height)| (height - first).abs() < 0.5),
+            "{cli:?}'s row changes height between its states: {heights:?}"
+        );
+    }
+}
+
+/// A line too long for the card's column is cut where it's drawn, the row keeping its height, and
+/// read whole by an assistive app; each maker's own waiting line is read whole too.
+#[gpui::test]
+fn a_cut_line_keeps_the_rows_height_and_is_read_whole(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    let show = |shell: &Entity<Shell>, cx: &mut VisualTestContext, line: &str, offer| {
+        let rows = vec![(
+            Cli::Claude,
+            Shown {
+                line: line.into(),
+                offer,
+            },
+        )];
+        shell.update(cx, |shell, cx| shell.onboarding_show_assistants(rows, cx));
+        settle(shell, cx);
+        placed("claude", cx)
+            .expect("Claude's row is drawn")
+            .size
+            .height
+    };
+    let rest = show(&shell, cx, "", Offer::SignIn);
+    let long = "Finish signing in to your Claude plan in the browser window that opened just now.";
+    assert_eq!(
+        show(&shell, cx, long, Offer::Cancel),
+        rest,
+        "the cut row's height"
+    );
+    let read = |cx: &mut VisualTestContext| {
+        let said = read(cx).into_iter();
+        let labels = said.filter(|(role, ..)| *role == Role::Label);
+        labels.map(|(_, name, _)| name).collect::<Vec<_>>()
+    };
+    let said = read(cx);
+    assert!(
+        said.iter().any(|name| name == long),
+        "the whole line in {said:?}"
+    );
+
+    let rows = Cli::ALL.map(|cli| {
+        let waiting = crate::agents::sign_in::Row::SigningIn;
+        let ready = crate::agents::ready::Ready::SignedOut;
+        (
+            cli,
+            crate::agents::sign_in::shown(cli, ready, None, &waiting),
+        )
+    });
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_show_assistants(rows.to_vec(), cx)
+    });
+    settle(&shell, cx);
+    let said = read(cx);
+    for line in [
+        crate::agents::sign_in::CLAUDE_WAITING,
+        crate::agents::sign_in::CHATGPT_WAITING,
+    ] {
+        assert!(said.iter().any(|name| name == line), "{line} in {said:?}");
+    }
 }
 
 /// A signed-in row on the card has the check disc and its ⋯, not Settings' mark, and the foot's
