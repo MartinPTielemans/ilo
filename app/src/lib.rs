@@ -207,6 +207,7 @@ pub mod palette;
 pub mod passwords;
 pub mod recent;
 pub mod safe_start;
+pub mod saved_read_row;
 pub mod saved_reads;
 pub mod settings_card;
 pub mod settings_column;

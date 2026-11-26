@@ -1137,6 +1137,11 @@ word-gap = 6.0
 # the rest.
 status-dot = 7.0
 status-dot-gap = 6.0
+# Ours (#3822): a saved read that needs a sign-in says so in this amber, its dot too, in light and
+# in dark: a state the user can fix, between the detail's grey and the destructive red. Light is
+# the lightest amber of the mocks' hue that reads at 4.5:1 on a group (saved_read_row.rs).
+warning-light = 0x9860_00ff
+warning-dark = 0xe0a4_3aff
 word-space = 4.0
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
@@ -2113,6 +2118,20 @@ number-gap = 6.0
 see-top = 10.0
 # The corners of the keyboard's ring around "See the whole request", which is a link's words.
 see-ring = 4.0
+# A read an agent proposes (#3822): who asks, then what at the body size `ask-top` under it; the
+# read `read-top` below on a plate of the ink at `read-plate`, its corners `read-radius`, a
+# control's as the whole request's plates are, `read-inset` inside it across and `read-inset-y`
+# down; its name after the read's glyph, `read-glyph` wide and `read-glyph-gap` before it; its
+# column heads, where it's read from and its sample's values each `read-line-top` below.
+ask-top = 1.0
+read-top = 8.0
+read-plate = 0.06
+read-radius = 6.0
+read-inset = 10.0
+read-inset-y = 8.0
+read-glyph = 12.0
+read-glyph-gap = 6.0
+read-line-top = 5.0
 # The whole request beside the card (#3548), over the page: `whole-width` wide, its sections
 # `whole-section` apart, each `whole-gap` under its label, its line under its title `whole-lead`
 # below it, the cookies' note `whole-note` below the headers, and kept `whole-inside` inside the

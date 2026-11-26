@@ -440,6 +440,9 @@ fn the_server_answers_what_needs_no_browser() {
             "sort_tabs_by_site",
             "title",
             "done",
+            "propose_read",
+            "use_read",
+            "list_reads",
         ]
     );
     assert_eq!(list["id"], "a");

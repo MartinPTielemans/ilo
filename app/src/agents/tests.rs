@@ -65,6 +65,11 @@ struct Made {
     chosen: RefCell<Vec<(u64, u64)>>,
     dropped: RefCell<Vec<u64>>,
     no_dialog: std::cell::Cell<bool>,
+    /// Each Space's profile, where it isn't 1.
+    space_profiles: RefCell<HashMap<u64, u64>>,
+    /// Each profile's saved reads file, and the profiles with no folder, as a private window's.
+    reads_files: RefCell<HashMap<u64, String>>,
+    no_folder: RefCell<HashSet<u64>>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
 }
@@ -401,6 +406,39 @@ impl Browser for Made {
         self.saved_reads
             .borrow_mut()
             .push((profile, read, url.into(), max_bytes, timeout_ms));
+    }
+
+    fn space_profile(&self, space: u64) -> u64 {
+        match space {
+            0 => 0,
+            space => self
+                .space_profiles
+                .borrow()
+                .get(&space)
+                .copied()
+                .unwrap_or(1),
+        }
+    }
+
+    fn saved_reads(&self, profile: u64) -> Option<String> {
+        if profile == 0 || self.no_folder.borrow().contains(&profile) {
+            return None;
+        }
+        Some(
+            self.reads_files
+                .borrow()
+                .get(&profile)
+                .cloned()
+                .unwrap_or_default(),
+        )
+    }
+
+    fn set_saved_reads(&self, profile: u64, text: &str) {
+        assert!(
+            !self.no_folder.borrow().contains(&profile),
+            "kept a file with no folder"
+        );
+        self.reads_files.borrow_mut().insert(profile, text.into());
     }
 }
 
@@ -5386,6 +5424,9 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "sort_tabs_by_site",
             "title",
             "done",
+            "propose_read",
+            "use_read",
+            "list_reads",
         ]
     );
 
@@ -5433,6 +5474,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("list_split", tab(json!({}))),
         ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
+        ("list_reads", json!({})),
+        ("use_read", json!({ "name": "prices" })),
         ("done", json!({})),
     ];
     for (tool, arguments) in calls {
@@ -10222,6 +10265,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod reads;
 mod uploads;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the

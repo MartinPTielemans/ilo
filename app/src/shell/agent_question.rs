@@ -25,8 +25,9 @@ use crate::palette::Tone;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::permission::{
-    BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, NUMBER_GAP,
-    SEE_RING, SEE_TOP,
+    ASK_TOP, BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER,
+    NUMBER_GAP, READ_GLYPH, READ_GLYPH_GAP, READ_INSET, READ_INSET_Y, READ_LINE_TOP, READ_PLATE,
+    READ_RADIUS, READ_TOP, SEE_RING, SEE_TOP,
 };
 use crate::tokens::text;
 
@@ -34,6 +35,27 @@ use crate::tokens::text;
 /// request" and its buttons, with its padding, at the sidebar's least width. The changes scroll in
 /// what's left, so those stay in view.
 const AROUND_CHANGES: f32 = 190.;
+
+/// The most a saved read's card has around its sample rows: its head, the read's name and column
+/// heads, "{n} more rows", where it's read from, the sample's values, why it asks and its buttons,
+/// with its padding, at the sidebar's least width: 333 measured with a short site's name, and a
+/// line more for one that wraps. The rows that fit in what's left show, so those stay in view and
+/// the card never scrolls.
+const AROUND_READ: f32 = 350.;
+
+/// A sample row's height on a read's card: one line, as a cell never wraps.
+const SAMPLE_ROW: f32 = FACTS_LINE + CHANGE_ALONE_TOP;
+
+/// How many of a proposal's `rows` sample rows its card shows in `room`: all that fit of the first
+/// SAMPLE_ROWS, and when some don't, one fewer for the "{n} more rows" line, but at least one.
+pub(super) fn samples_shown(room: f32, rows: usize) -> usize {
+    let rows = rows.min(crate::agents::reads::SAMPLE_ROWS);
+    let fit = (room / SAMPLE_ROW).floor().max(0.) as usize;
+    match fit >= rows {
+        true => rows,
+        false => fit.saturating_sub(1).clamp(1.min(rows), rows),
+    }
+}
 
 /// A change's sentence on a card of several, marked as the agent's as the one change's head marks
 /// it: "Claude: “Close item 1.”", with the mark's range, which is drawn in the detail.
@@ -164,6 +186,9 @@ impl Shell {
         };
         if !question.changes.is_empty() {
             return Some(self.request_card(question, cx));
+        }
+        if let Some(read) = &question.read {
+            return Some(self.read_card(question, read, cx));
         }
         self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
@@ -440,6 +465,156 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The card of a read an agent proposes to save (#3822): what it reads as the read gave it, the
+    /// read's name over its column heads and the first rows of the read the browser made, then
+    /// where it's read from, the sample's values, why it asks, and Don't Save or Save Read. A cell
+    /// is one line cut where its column ends, so nothing a site wrote moves what follows it.
+    fn read_card(
+        &self,
+        question: &Question,
+        read: &crate::agents::reads::Proposal,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        self.agent_request_see_drawn.set(None);
+        let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
+        let (detail, ink) = (self.palette.on_overlay(DETAIL), self.palette.text(TITLE));
+        let a11y = self.a11y;
+        let agent = request::plain(&question.agent);
+        let small = |line: gpui::Div| line.text_size(px(text::SMALL)).line_height(px(FACTS_LINE));
+        let cell = |words: String| div().flex_1().min_w_0().truncate().child(words);
+        let line = |cells: Vec<String>| {
+            div()
+                .flex()
+                .gap(px(NUMBER_GAP))
+                .children(cells.into_iter().map(cell))
+        };
+        let (top, _) = self.plate_at();
+        let room = f32::from(self.viewport.height) - top - PLATE_INSET - AROUND_READ;
+        let shown = samples_shown(room, read.rows.len());
+        let more = read.rows.len().min(crate::agents::reads::SAMPLE_ROWS) - shown;
+        let heads: Vec<String> = (read.read.columns.iter())
+            .map(|column| crate::saved_reads::text(&column.name, crate::agents::task::TITLE_KEPT))
+            .collect();
+        let rows = (read.rows.iter().take(shown).enumerate()).map(|(at, row)| {
+            let cells: Vec<String> = (row.0.iter())
+                .map(|value| crate::saved_reads::text(value, crate::saved_reads::VALUE_KEPT))
+                .collect();
+            let spoken = (heads.iter().zip(&cells))
+                .map(|(head, value)| format!("{head}: {value}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            small(line(cells))
+                .id(("agent-read-row", at))
+                .mt(px(CHANGE_ALONE_TOP))
+                .text_color(ink)
+                .when(a11y, |row| row.role(Role::Row).aria_label(spoken))
+        });
+        let site = read.site();
+        let below = |words: String| {
+            small(div().mt(px(READ_LINE_TOP)))
+                .text_color(detail)
+                .child(crate::address_wrap::text(&words))
+        };
+        let from = format!("Read by {} from {site}", env!("APP_NAME"));
+        let block = div()
+            .id("agent-read")
+            .mt(px(READ_TOP))
+            .px(px(READ_INSET))
+            .py(px(READ_INSET_Y))
+            .rounded(px(READ_RADIUS))
+            .bg(self.palette.plate(READ_PLATE))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(READ_GLYPH_GAP))
+                    .child(
+                        gpui::svg()
+                            .path("icons/database.svg")
+                            .flex_none()
+                            .size(px(READ_GLYPH))
+                            .text_color(detail),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(ink)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(crate::saved_reads::text(
+                                &read.read.name,
+                                crate::agents::task::TITLE_KEPT,
+                            )),
+                    ),
+            )
+            .child(
+                small(line(heads.clone()))
+                    .mt(px(READ_LINE_TOP))
+                    .text_color(detail)
+                    .font_weight(FontWeight::MEDIUM),
+            )
+            .children(rows)
+            .children((more > 0).then(|| {
+                below(match more {
+                    1 => "1 more row".to_string(),
+                    n => format!("{n} more rows"),
+                })
+            }))
+            .child(below(from))
+            .children(read.sample_line().map(below))
+            .when(a11y, |block| {
+                block.role(Role::Group).aria_label(read.heard())
+            });
+        let buttons = buttons(question).into_iter().map(|button| {
+            card_button_as(&self.palette, button.id, button.label, button.look)
+                .when(a11y, |control| {
+                    crate::settings_rows::named_button(control, button.label)
+                })
+                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
+                    Does::Answer(answer) => shell.answer_agent(answer, cx),
+                    _ => {}
+                }))
+        });
+        let close = card_close(&self.palette, "agent-question-close")
+            .when(a11y, |close| {
+                crate::settings_rows::named_button(close, "Close")
+            })
+            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
+        let named = format!("{agent} asks to {}", question.what);
+        self.plate("agent-question")
+            .child(listener)
+            .when(a11y, |card| {
+                card.role(Role::AlertDialog).aria_label(named.clone())
+            })
+            .child(
+                small(div())
+                    .pr(px(BESIDE_CLOSE))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(detail)
+                    .child(format!("{agent} asks")),
+            )
+            .child(
+                div()
+                    .mt(px(ASK_TOP))
+                    .pr(px(BESIDE_CLOSE))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(ink)
+                    .child(crate::address_wrap::text(&question.what)),
+            )
+            .child(block)
+            .child(div().mt(px(SEE_TOP)).text_color(detail).child(READ_WHY))
+            .child(
+                div()
+                    .mt(px(BUTTONS_TOP))
+                    .flex()
+                    .gap(px(BUTTON_GAP))
+                    .children(buttons),
+            )
+            .child(close)
+            .into_any_element()
+    }
+
     /// Shows the agent's request whole, beside its card, with the keyboard; Escape there gives it
     /// back to "See the whole request".
     pub(super) fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -492,6 +667,10 @@ impl Shell {
         cx.notify();
     }
 }
+
+/// Why a read's card asks: what saving it lets agents do, and the way back.
+const READ_WHY: &str =
+    "Connected agents can read it anytime without a tab. Remove it in Settings › Agents.";
 
 /// What a card's button does.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -568,6 +747,21 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
                 "Show Tab",
                 Look::Primary,
                 Does::Show(tab),
+            ),
+        ],
+        // Saving a read asks each time, in its own words.
+        None if question.read.is_some() => vec![
+            button(
+                "agent-question-deny",
+                "Don't Save",
+                Look::Quiet,
+                Does::Answer(Answer::Dismiss),
+            ),
+            button(
+                "agent-question-allow",
+                "Save Read",
+                Look::Primary,
+                Does::Answer(Answer::Once),
             ),
         ],
         // A site the user fenced asks every time it's on (#3724): Never stays, and an Always
@@ -1495,6 +1689,255 @@ mod tests {
         assert!(
             left + agent_request::WIDTH <= card_left,
             "with the sidebar on the right it opened at {left}, over the card at {card_left}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use std::rc::Rc;
+
+    use gpui::{TestAppContext, px, size};
+    use serde_json::json;
+
+    use super::{AROUND_READ, SAMPLE_ROW, samples_shown};
+    use crate::agents::{Question, reads::Proposal};
+    use crate::saved_reads::Row;
+    use crate::shell::{Folders, Shell, recorder::Recorder};
+    use crate::tokens::shell::PLATE_INSET;
+
+    fn row(cells: [&str; 3]) -> Row {
+        Row(cells.iter().map(|cell| cell.to_string()).collect())
+    }
+
+    fn proposal(first: &str) -> Question {
+        let columns: Vec<serde_json::Value> = ["Name", "City", "Height (m)"]
+            .iter()
+            .map(|name| json!({ "name": name, "type": "text", "from": name }))
+            .collect();
+        let arguments = json!({
+            "name": "city buildings", "kind": "table", "url": "/reads/table", "columns": columns,
+        });
+        let rows = vec![
+            row([first, "Dubai", "828"]),
+            row(["Merdeka 118", "Kuala Lumpur", "679"]),
+            row(["Shanghai Tower", "Shanghai", "632"]),
+            row(["Abraj Al-Bait", "Mecca", "601"]),
+        ];
+        Question {
+            id: 7,
+            agent: "Claude Code".into(),
+            from: "claude-code".into(),
+            what: "save a read of reads.test".into(),
+            site: "reads.test".into(),
+            each_time: true,
+            read: Some(Rc::new(Proposal::of(
+                &arguments,
+                "https://reads.test",
+                rows,
+            ))),
+            ..Question::default()
+        }
+    }
+
+    fn window(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, &mut gpui::VisualTestContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        shell.update(cx, |shell, cx| {
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
+            shell.set_spaces(vec![space], cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            shell.set_space(1, cx);
+            shell.set_selected(10, cx);
+        });
+        (shell, cx)
+    }
+
+    fn card(
+        shell: &gpui::Entity<Shell>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        card.expect("the card wasn't drawn")
+    }
+
+    /// What a screen reader hears of the card, in its order: each node with a role it names.
+    fn heard(cx: &mut gpui::VisualTestContext) -> Vec<String> {
+        use gpui::accesskit::{NodeId, Role};
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let nodes: std::collections::HashMap<NodeId, gpui::accesskit::Node> =
+            tree.nodes.into_iter().collect();
+        let (alert, _) = (nodes.iter())
+            .find(|(_, node)| node.role() == Role::AlertDialog)
+            .expect("the card isn't an alert");
+        let mut heard = Vec::new();
+        let mut next = vec![*alert];
+        while let Some(id) = next.pop() {
+            let node = &nodes[&id];
+            if let (Role::AlertDialog | Role::Group | Role::Row | Role::Button, Some(label)) =
+                (node.role(), node.label())
+            {
+                heard.push(format!("{:?} {label}", node.role()));
+            }
+            next.extend(node.children().iter().rev().copied());
+        }
+        heard
+    }
+
+    /// The rows that fit show, and when some don't, the "more rows" line takes one's place, but
+    /// one row always shows.
+    #[test]
+    fn a_short_card_shows_the_rows_that_fit_and_one_at_least() {
+        assert_eq!(samples_shown(10. * SAMPLE_ROW, 5), 3);
+        assert_eq!(samples_shown(3. * SAMPLE_ROW, 3), 3);
+        assert_eq!(samples_shown(2.5 * SAMPLE_ROW, 3), 1);
+        assert_eq!(samples_shown(0., 3), 1);
+        assert_eq!(samples_shown(-40., 2), 1);
+        assert_eq!(samples_shown(0., 0), 0);
+    }
+
+    /// Lib test 3: a cell with a line break, a right-to-left override, markup-looking text and 300
+    /// characters draws as one line cut at its column, so the card, and its buttons at its foot,
+    /// are where a plain cell leaves them.
+    #[gpui::test]
+    fn a_hostile_cell_is_one_line_and_moves_nothing(cx: &mut TestAppContext) {
+        let (shell, cx) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(proposal("Burj Khalifa")), cx)
+        });
+        cx.run_until_parked();
+        let plain = card(&shell, cx);
+        let hostile = format!(
+            "Burj\nKhalifa \u{202e}evil</div><b>Save</b> {}",
+            "x".repeat(300)
+        );
+        shell.update(cx, |shell, cx| {
+            let mut question = proposal(&hostile);
+            question.id = 8;
+            shell.set_agent_question(Some(question), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(card(&shell, cx), plain, "the hostile cell moved the card");
+    }
+
+    /// Lib test 4: in a short window one sample row shows with "2 more rows", and the buttons at
+    /// the card's foot are inside the window; at full height three rows show.
+    #[gpui::test]
+    fn a_short_window_keeps_one_row_and_the_buttons(cx: &mut TestAppContext) {
+        use gpui::accesskit::Role;
+        let (shell, cx) = window(cx);
+        cx.simulate_a11y_activation();
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(proposal("Burj Khalifa")), cx)
+        });
+        cx.run_until_parked();
+        let rows = |cx: &mut gpui::VisualTestContext| {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            (tree.nodes.iter())
+                .filter(|(_, node)| node.role() == Role::Row)
+                .count()
+        };
+        assert_eq!(rows(cx), 3);
+        let top = shell.read_with(cx, |shell, _| shell.plate_at().0);
+        let short = top + PLATE_INSET + AROUND_READ + 2.5 * SAMPLE_ROW;
+        cx.simulate_resize(size(px(1100.), px(short)));
+        cx.run_until_parked();
+        assert_eq!(rows(cx), 1);
+        let drawn = card(&shell, cx);
+        assert!(
+            drawn.bottom() <= px(short),
+            "the card's buttons end at {:?}, past the window's {short}",
+            drawn.bottom()
+        );
+    }
+
+    /// In a window too short for the card to end above the sidebar's foot, its buttons are over
+    /// the foot's controls and take the click: Save Read over the + answers it, and no menu opens.
+    /// Answered, the card goes and the + takes the same click again.
+    #[gpui::test]
+    fn the_buttons_are_over_the_foot_in_a_short_window(cx: &mut TestAppContext) {
+        use crate::tokens::shell::permission::{BUTTON_HEIGHT, PADDING};
+        use gpui::{Modifiers, point};
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            // Two Spaces, so the foot has its +, at its right, where Save Read is.
+            let space =
+                |id: u64, name: &str| (id, name.into(), None, 0, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1, "Space 1"), space(2, "Space 2")], cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            shell.set_space(1, cx);
+            shell.set_selected(10, cx);
+            shell.set_agent_question(Some(proposal("Burj Khalifa")), cx)
+        });
+        let top = shell.read_with(cx, |shell, _| shell.plate_at().0);
+        // As short as the card gets, so its foot reaches the window's.
+        cx.simulate_resize(size(px(1100.), px(top + PLATE_INSET + AROUND_READ)));
+        cx.run_until_parked();
+        host.take();
+        let drawn = card(&shell, cx);
+        let save = point(
+            drawn.right() - px(PADDING + 6.),
+            drawn.bottom() - px(PADDING + BUTTON_HEIGHT / 2.),
+        );
+        cx.simulate_click(save, Modifiers::none());
+        cx.run_until_parked();
+        let asked = host.take();
+        assert!(
+            asked
+                .iter()
+                .any(|call| call.contains("answer agent 7 Once")),
+            "a click on Save Read at {save:?} didn't save the read; the host was asked: {asked:?}"
+        );
+        assert!(
+            host.menus.borrow().is_empty(),
+            "the click on Save Read also opened a menu: {:?}",
+            host.menus.borrow()
+        );
+        // Answered, the card goes, and the foot's + under where it was takes the same click.
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        cx.simulate_click(save, Modifiers::none());
+        cx.run_until_parked();
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert!(
+            menu.iter().any(|(title, _)| title == "New Space…"),
+            "with the card answered, a click at {save:?} didn't open the +'s menu; menus: {menu:?}"
+        );
+    }
+
+    /// Lib test 5: the card is an alert named by its head, the read block a group named by the
+    /// read's name and columns, each sample row a row read cell by cell under its column, and
+    /// each button named by its words.
+    #[gpui::test]
+    fn readers_hear_the_read_as_the_card_shows_it(cx: &mut TestAppContext) {
+        let (shell, cx) = window(cx);
+        cx.simulate_a11y_activation();
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(proposal("Burj Khalifa")), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            heard(cx),
+            [
+                "AlertDialog Claude Code asks to save a read of reads.test",
+                "Group city buildings, 3 columns: Name, City, Height (m)",
+                "Row Name: Burj Khalifa, City: Dubai, Height (m): 828",
+                "Row Name: Merdeka 118, City: Kuala Lumpur, Height (m): 679",
+                "Row Name: Shanghai Tower, City: Shanghai, Height (m): 632",
+                "Button Don't Save",
+                "Button Save Read",
+                "Button Close",
+            ]
         );
     }
 }

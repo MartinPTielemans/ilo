@@ -5122,6 +5122,7 @@ impl Shell {
             .leaving_form
             .as_ref()
             .filter(|(form, _)| form.space == self.space);
+        let mut agent_question = None;
         let sidebar = match (self.paged_form(), self.form(), leaving) {
             // Paged, the form goes as a page does, and the URL field and the favorites go with the
             // Space beside's page, as its rows do.
@@ -5179,8 +5180,6 @@ impl Shell {
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.task_foot(cx))
-                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
-                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
@@ -5188,6 +5187,11 @@ impl Shell {
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx));
+                // Unseen while the form leaves, as the page under it is.
+                agent_question = leaving
+                    .is_none()
+                    .then(|| self.agent_question_card(cx))
+                    .flatten();
                 let form = leaving.map(|(form, left)| {
                     self.space_form(form, Some(left.elapsed().as_secs_f32()), cx)
                 });
@@ -5202,6 +5206,9 @@ impl Shell {
             .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.menu_control.then(|| self.menu_button(cx)))
+            // Over the tasks' plates, which a tall request's card reaches past (#3548), and over
+            // the foot's controls, which a short window brings its buttons down to.
+            .children(agent_question)
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))

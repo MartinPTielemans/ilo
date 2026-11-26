@@ -23,6 +23,7 @@ mod held;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
+pub mod reads;
 pub mod ready;
 pub mod request;
 pub mod runner;
@@ -186,6 +187,9 @@ pub struct Question {
     /// The page's file field the agent asks the user to choose a file for (upload), whose card
     /// chooses one or doesn't allow it.
     pub file: Option<FileAsk>,
+    /// The read an agent proposed to save (propose_read), with the rows it gave, which its card
+    /// shows. Shared, as `changes` is.
+    pub read: Option<Rc<reads::Proposal>>,
     /// Whether it asks on a site the user fenced (fence.rs), so its card has Never and Allow
     /// Once, and no Always.
     pub fenced: bool,
@@ -223,6 +227,10 @@ impl PartialEq for Question {
             && (self.each_time, self.file, self.fenced)
                 == (other.each_time, other.file, other.fenced)
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
+            && match (&self.read, &other.read) {
+                (Some(read), Some(other)) => Rc::ptr_eq(read, other),
+                (read, other) => read.is_none() && other.is_none(),
+            }
     }
 }
 
@@ -379,6 +387,13 @@ pub trait Browser {
     /// to `max_bytes` of its body after up to `timeout_ms`. Its answer comes to
     /// `Agents::read_done` with `read`.
     fn read(&self, profile: u64, read: u64, url: &str, max_bytes: usize, timeout_ms: i64);
+    /// The profile `space` is in (bc_space_profile), or 0.
+    fn space_profile(&self, space: u64) -> u64;
+    /// `profile`'s saved reads file, "" for none, or None for a profile with no folder, as a
+    /// private window's (crate::saved_reads::store).
+    fn saved_reads(&self, profile: u64) -> Option<String>;
+    /// Keeps `text` as `profile`'s saved reads file; "" leaves none.
+    fn set_saved_reads(&self, profile: u64, text: &str);
 }
 
 /// What waits on a saved read's answer (Agents::read).
@@ -877,6 +892,8 @@ pub struct Agents {
     sending: HashMap<u64, Sending>,
     /// What waits on each saved read under way, by read.
     saved_reading: HashMap<u64, ReadDone>,
+    /// The profiles' saved reads, and the uses waiting on them.
+    reads: reads::Reads,
     /// Each tab's refs, from its outlines.
     refs: HashMap<u64, page::Refs>,
     /// Each tab's latest outline, and the last one an agent had, which its next answer gives the
@@ -1084,6 +1101,7 @@ impl Agents {
             choosing: HashMap::new(),
             sending: HashMap::new(),
             saved_reading: HashMap::new(),
+            reads: reads::Reads::default(),
             refs: HashMap::new(),
             outlines: HashMap::new(),
             had: HashMap::new(),
@@ -2224,6 +2242,14 @@ impl Agents {
                     (false, false) => self.ask_first(act, host, CHANGES_ASK, cx),
                 }
             }
+            // Only an agent that connects saves and uses reads, as Settings › Agents says.
+            "propose_read" if !is_task(&agent) => {
+                self.propose_read(&agent, connection, id, &arguments, reply, cx)
+            }
+            "use_read" if !is_task(&agent) => {
+                self.use_read(&agent, connection, &arguments, reply, cx)
+            }
+            "list_reads" if !is_task(&agent) => self.list_reads(&agent, connection, reply, cx),
             "title" => self.name_task(&agent, connection, id, &arguments, at, reply, cx),
             "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
@@ -3662,9 +3688,17 @@ impl Agents {
         let Some(at) = (self.asking.iter()).position(|asking| asking.question.id == id) else {
             return;
         };
-        let Asking { site, act, .. } = self.asking.remove(at);
+        let Asking {
+            site,
+            act,
+            question,
+            ..
+        } = self.asking.remove(at);
         log!("browser: agent {} asked {id} with no answer", act.agent);
-        self.refuse(act, &site, Refused::new(NO_ANSWER), cx);
+        match act.action {
+            "propose_read" => self.answer_read(act, question, false, false, cx),
+            _ => self.refuse(act, &site, Refused::new(NO_ANSWER), cx),
+        }
         self.asked(cx);
     }
 
@@ -3725,6 +3759,12 @@ impl Agents {
             self.save();
         }
         match answer {
+            Answer::Once | Answer::Always if act.action == "propose_read" => {
+                self.answer_read(act, question, true, true, cx)
+            }
+            Answer::Never | Answer::Dismiss if act.action == "propose_read" => {
+                self.answer_read(act, question, false, true, cx)
+            }
             Answer::Once | Answer::Always if act.action == "request" => self.send(act, true, cx),
             Answer::Once | Answer::Always => self.run(act, cx),
             Answer::Never | Answer::Dismiss => {
@@ -3958,6 +3998,7 @@ impl Agents {
         }
         self.describing
             .retain(|_, act| !theirs(&act.agent, act.connection));
+        self.forget_reads(agent, connection);
         self.downloading
             .retain(|_, downloading| !theirs(&downloading.agent, downloading.connection));
         self.acting

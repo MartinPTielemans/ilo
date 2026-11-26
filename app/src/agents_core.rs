@@ -387,6 +387,18 @@ impl Browser for Core {
         };
         unsafe { bc::bc_profile_read(profile, read, url.as_ptr(), max_bytes, timeout_ms) };
     }
+
+    fn space_profile(&self, space: u64) -> u64 {
+        unsafe { bc::bc_space_profile(space) }
+    }
+
+    fn saved_reads(&self, profile: u64) -> Option<String> {
+        bar_picks_host::saved_reads(profile)
+    }
+
+    fn set_saved_reads(&self, profile: u64, text: &str) {
+        bar_picks_host::set_saved_reads(profile, text);
+    }
 }
 
 /// The core's answer to a saved read (bc_profile_read), for what waits on it.

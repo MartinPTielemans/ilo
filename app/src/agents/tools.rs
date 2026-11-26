@@ -102,7 +102,11 @@ pub fn list(agent: &str) -> Value {
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
             // from outside pins. It names its session as a task names itself (#3690), and says
             // when its task is done (#3652).
-            false => tools.extend(pin_tools().into_iter().chain([title_tool(), done_tool()])),
+            false => tools.extend(
+                (pin_tools().into_iter())
+                    .chain([title_tool(), done_tool()])
+                    .chain(read_tools()),
+            ),
         }
     }
     tools
@@ -114,6 +118,69 @@ pub fn names(agent: &str) -> Vec<String> {
     (list.as_array().into_iter().flatten())
         .filter_map(|tool| Some(tool.get("name")?.as_str()?.to_string()))
         .collect()
+}
+
+/// Saved reads (#3822): an agent that connects proposes a read of its tab's site, which the user
+/// saves from its card, then reads it with no tab. A ⌘T task doesn't: its work ends with it.
+fn read_tools() -> Vec<Value> {
+    let name = json!({ "type": "string", "maxLength": crate::saved_reads::definition::NAME_MOST, "description": "The read's name, in a few plain words, as the user sees it, such as \"crate downloads\"." });
+    vec![
+        json!({
+            "name": "propose_read",
+            "title": "Propose a saved read",
+            "description": "Propose a read of the site your tab is on, for the user to save, so agents can read it again later without a tab: the site's own JSON (kind json) or a table on its page (kind table), as rows of the columns you name. The browser reads it once with your sample values and shows the user its first rows on your card; this waits for their answer. A read is only ever of your tab's site: url is a path on it, with {name} where a parameter's value goes, in a path segment or a query value. Each parameter is an integer (min, max), one_of (values) or text (a pattern of letters, digits, - _ ~ \\. classes, \\d, groups, | and counts). Proposing a saved read's name again with other fields asks the user to change it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": name,
+                    "kind": { "type": "string", "enum": ["json", "table"] },
+                    "url": { "type": "string", "description": "A path on the tab's site, such as /api/v1/crates/{crate}/downloads." },
+                    "params": { "type": "object", "description": "Each parameter by name: {\"type\": \"integer\", \"min\": 1, \"max\": 100}, {\"type\": \"one_of\", \"values\": [...]} or {\"type\": \"text\", \"pattern\": \"[a-z0-9-]{1,64}\"}." },
+                    "sample": { "type": "object", "description": "A value for each parameter, which the browser reads with to show the user." },
+                    "rows": { "type": "string", "description": "For json: the path to the answer's list of rows, such as data.items; none for the answer itself." },
+                    "columns": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string" },
+                                "type": { "type": "string", "enum": ["text", "number", "address"] },
+                                "from": { "type": "string", "description": "For json, the field's path in a row; for table, its header's words." },
+                            },
+                            "required": ["name", "type", "from"],
+                        },
+                    },
+                    "least_rows": { "type": "integer", "minimum": 1 },
+                    "sign_in": { "type": "string", "description": "The path of the site's sign-in page, such as /login, if it has one." },
+                    "tab": tab_schema(),
+                },
+                "required": ["name", "kind", "url", "columns"],
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": true },
+        }),
+        json!({
+            "name": "use_read",
+            "title": "Use a saved read",
+            "description": "Read a read the user saved, by its name, with a value for each of its parameters, without a tab, signed in as the user is on its site. Answers with its rows, or why not: needs_sign_in, broken, paused or not_found. Uses of one read go one at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": name,
+                    "params": { "type": "object", "description": "A value for each of the read's parameters, as list_reads gives them." },
+                },
+                "required": ["name"],
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": true },
+        }),
+        json!({
+            "name": "list_reads",
+            "title": "List saved reads",
+            "description": "The reads the user saved: each its name, site, columns, parameters and state (ready, needs_sign_in, broken or paused).",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
+        }),
+    ]
 }
 
 /// Pinning and sorting, as the user does in the sidebar: an agent pins its own tabs, unpins or
@@ -838,6 +905,13 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             let to = format!("{} to {}", target("a request"), site("its site"));
             ("Sending", "Sent", "Couldn't send", to)
         }
+        // Saved reads (#3822): the read's name is the agent's, in quotes, as a title is (#3690).
+        "use_read" | "propose_read" | "list_reads" | "save_read" | "change_read"
+        | "remove_read" | "decline_read" | "unanswered_read" | "read_not_found"
+        | "read_needs_sign_in" | "read_broken" | "read_unreachable" | "read_paused"
+        | "read_not_allowed" => {
+            return read_title(did, tense);
+        }
         "scroll" => {
             let to = match (did.target.as_str(), did.text.as_str()) {
                 ("up" | "down" | "", _) => format!("{} on {}", target("down"), site("the page")),
@@ -968,6 +1042,53 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
     }
 }
 
+/// A saved read's step or log row, its name quoted as the agent's word: "Used saved read
+/// “crate downloads”", "Saved a read of crates.io".
+fn read_title(did: &Did, tense: Tense) -> String {
+    let name = || page::curly(&did.target, crate::saved_reads::definition::NAME_MOST);
+    let site = || match did.site.is_empty() {
+        true => "its site".to_string(),
+        false => did.site.clone(),
+    };
+    match (did.tool.as_str(), tense) {
+        ("use_read", Tense::Now) => format!("Using saved read {}", name()),
+        ("use_read", Tense::Done) => format!("Used saved read {}", name()),
+        ("use_read", Tense::Failed) => format!("Couldn't use saved read {}", name()),
+        ("propose_read", Tense::Now) => format!("Asking you to save a read of {}", site()),
+        ("propose_read", Tense::Done) => format!("Asked you to save a read of {}", site()),
+        ("propose_read", Tense::Failed) => format!("Can't save a read of {}", site()),
+        ("list_reads", _) => "Listed saved reads".to_string(),
+        ("save_read", _) => format!("Saved a read of {}", site()),
+        ("change_read", _) => format!("Changed a read of {}", site()),
+        ("remove_read", _) => format!("Removed a read of {}", site()),
+        ("decline_read", _) => format!("You didn't save \"{}\"", did.target),
+        ("unanswered_read", _) => format!("Not answered: \"{}\"", did.target),
+        ("read_not_found", _) => format!("No saved read named \"{}\"", did.target),
+        ("read_needs_sign_in", _) => format!("Needs a sign-in on {}", site()),
+        ("read_broken", _) => format!("Broken: {}", did.target),
+        ("read_unreachable", _) => format!("Couldn't reach {}", site()),
+        ("read_paused", _) => format!("Paused: {}", did.target),
+        ("read_not_allowed", _) => format!("Can't save a read of {}", site()),
+        _ => String::new(),
+    }
+}
+
+/// What a saved read's log row says under its title, or None for another's: the read's name, or
+/// its site where the title names the read.
+pub fn read_detail(action: &str, site: &str, target: &str) -> Option<String> {
+    let detail = match action {
+        "save_read" => format!("{target} · you said Save Read"),
+        "change_read" => target.to_string(),
+        "remove_read" => format!("{target} · by you"),
+        "use_read" | "read_broken" | "decline_read" | "unanswered_read" => site.to_string(),
+        "read_needs_sign_in" | "read_unreachable" => target.to_string(),
+        "read_paused" => format!("{site} is on {}", super::fence::HEADING),
+        "read_not_allowed" => format!("On your {} list", super::fence::HEADING),
+        _ => return None,
+    };
+    Some(detail).filter(|detail| !detail.is_empty())
+}
+
 /// A step's glyph, by its tool, from the shell's one family.
 pub fn step_glyph(tool: &str) -> &'static str {
     match tool {
@@ -979,6 +1100,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
         "request" => "icons/arrow-left-right.svg",
+        "use_read" | "propose_read" | "list_reads" => "icons/text-align-start.svg",
         "wait" => "icons/clock.svg",
         "check" => "icons/text-search.svg",
         "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
@@ -1045,6 +1167,20 @@ pub fn describe(action: &str) -> &'static str {
         "scroll" => "Scrolled",
         "screenshot" => "Took a screenshot",
         "request" => "Sent a request",
+        "propose_read" => "Asked you to save a read",
+        "use_read" => "Used a saved read",
+        "list_reads" => "Listed saved reads",
+        "save_read" => "You saved a read",
+        "change_read" => "You changed a read",
+        "remove_read" => "You removed a read",
+        "decline_read" => "You didn't save a read",
+        "unanswered_read" => "Request to save a read went unanswered",
+        "read_not_found" => "Asked for a read that isn't saved",
+        "read_needs_sign_in" => "Needed a sign-in for a read",
+        "read_broken" => "Couldn't use a broken read",
+        "read_unreachable" => "Couldn't reach a read's site",
+        "read_paused" => "Couldn't use a paused read",
+        "read_not_allowed" => "Couldn't save a read",
         "connected" => "Connected",
         "disconnected" => "Disconnected",
         "released" => "Let go of the tab",

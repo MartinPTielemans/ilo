@@ -21,6 +21,7 @@
 # "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
 # its fields for nothing, which comes after autofill hears of it, as both go the frame's way to the
 # browser in turn. /headed is a script with the headers its query names.
+# /reads/ holds reads.sh's pages, four of them answered by the server's code, which says how.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -480,10 +481,14 @@ Promise.all([document.fonts.ready, ...[...document.images].map(image => image.de
 # The server logs each GET as "GET <engine> <host><path> cookie <cookies sorted, or none>", the
 # engine named by the user agent as the engine page does.
 python3 -I -u -c '
-import base64, functools, http.server, os, socketserver, sys, time, urllib.parse
+import base64, functools, http.server, os, socketserver, sys, threading, time, urllib.parse
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     sent = 0
+    # The saved reads of /reads/slow.json under way, and the most there were at once.
+    reading = 0
+    most = 0
+    lock = threading.Lock()
     # Chrome takes an extension only with its type.
     extensions_map = {
         **http.server.SimpleHTTPRequestHandler.extensions_map,
@@ -598,6 +603,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        # For reads.sh: private.json is a 401 without the cookie reads=1, as a site signed out
+        # answers. gone.json sends the browser to the sign-in page, and away.json to another site.
+        # slow.json takes a second and logs the most of its requests there were at once.
+        if path == "/reads/private.json" and "reads=1" not in cookies:
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in ("/reads/gone.json", "/reads/away.json"):
+            self.send_response(302)
+            self.send_header("Location", "/reads/login" if path == "/reads/gone.json" else
+                             "http://away.localhost:%d/reads/items.json" % self.server.server_address[1])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/reads/slow.json":
+            with Handler.lock:
+                Handler.reading += 1
+                Handler.most = max(Handler.most, Handler.reading)
+            time.sleep(1)
+            with Handler.lock:
+                Handler.reading -= 1
+                sys.stdout.write("READS most %d\n" % Handler.most)
         if self.path != "/slow.bin":
             return super().do_GET()
         self.send_response(200)

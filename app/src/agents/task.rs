@@ -2506,6 +2506,12 @@ impl Agents {
             }
             "press_key" => did.target = string("key"),
             "request" => did.target = super::request::described(arguments),
+            // A saved read is of its own site, with no tab: its step names the read.
+            "use_read" => {
+                did.target = string("name");
+                (did.site, did.page, did.tab) = (String::new(), String::new(), None);
+            }
+            "list_reads" => (did.site, did.page, did.tab) = (String::new(), String::new(), None),
             "scroll" => {
                 did.target = match &element {
                     Some(element) => named(element),
