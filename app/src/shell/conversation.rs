@@ -3761,8 +3761,6 @@ impl TraceLine {
         }
     }
 
-    /// Whether what came of it sits at the column's right edge, its words filling the line: a
-    /// step's line, never a fold's head, a page's line, one of ilo's or a line read as one string.
     /// Its colours. Each is the text's ink at one strength or another, and a failed line's are
     /// any other's, a cross for its glyph and why at its end: never red, at rest or under the
     /// pointer.
@@ -3793,6 +3791,8 @@ impl TraceLine {
         }
     }
 
+    /// Whether what came of it sits at the column's right edge, its words filling the line: a
+    /// step's line, never a fold's head, a page's line, one of ilo's or a line read as one string.
     fn note_at_right(&self) -> bool {
         self.mark.is_none() && self.head.is_none() && self.page.is_none() && !self.joined
     }
