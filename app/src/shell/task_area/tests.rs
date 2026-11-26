@@ -13,7 +13,7 @@ use gpui::{
     div, point, px, size,
 };
 
-use super::{PICTURE_WAIT, Zoom, agent_page_size, fitted, pushed, split, watched};
+use super::{PICTURE_WAIT, Zoom, pushed, split, watched};
 use crate::agents::Status;
 use crate::shell::{
     Command, Folders, Page, PagePicture, Shell, live_tiles::LiveTiles, recorder::Recorder,
@@ -2081,11 +2081,11 @@ fn at_work(held: Vec<(u64, SharedString)>) -> Vec<Status> {
     }]
 }
 
-/// Where the watched tile goes now: whole in the watched page's place, at the page's own shape.
+/// Where the watched tile goes now: the watched page's place.
 fn tile_place(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Bounds<Pixels> {
     shell.read_with(cx, |shell, _| {
         let (card, _) = shell.page_frame(shell.viewport);
-        fitted(watched(shell.page_part(card)))
+        watched(shell.page_part(card))
     })
 }
 
@@ -2111,8 +2111,8 @@ fn page_untouched(asked: &[String]) {
 }
 
 /// Watched where the core shows tiles, the agent's page is its tile grown to the area (#3788): out
-/// of its picture to whole in the area, at its own shape and never past its own size, top-aligned
-/// and centred across. The window never shows its tab, so the page keeps its size and place.
+/// of its picture to the page's part of the card, the size the page was made at (#4355). The
+/// window never shows its tab, so the page keeps its size and place.
 #[gpui::test]
 fn a_watched_page_is_its_tile_grown_to_the_area(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -2130,13 +2130,12 @@ fn a_watched_page_is_its_tile_grown_to_the_area(cx: &mut TestAppContext) {
         "{asked:?}"
     );
     page_untouched(&asked);
-    let own = agent_page_size();
     let (card, _) = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport));
-    let area = shell.read_with(cx, |shell, _| watched(shell.page_part(card)));
-    assert!(place.size.width <= own.width && place.size.height <= area.size.height);
-    assert!((place.size.width / place.size.height - own.width / own.height).abs() < 0.001);
-    assert_eq!(place.top(), area.top());
-    assert_eq!(place.center().x, area.center().x);
+    assert_eq!(place, split(card).0);
+    assert!(
+        !asked.iter().any(|line| line.starts_with("agent page size")),
+        "watching told the core another size: {asked:?}"
+    );
 }
 
 /// A window resized while a tile is watched moves the tile alone: the agent's page is never laid
@@ -2163,9 +2162,9 @@ fn a_resize_moves_only_the_tile(cx: &mut TestAppContext) {
     );
 }
 
-/// A page watched in its tile is logged where the tile is, once it's in place, not as all of its
-/// part: a check presses the middle of the place it reads, which the tile takes. On its way out of
-/// its picture it's logged nowhere, as each frame moves it.
+/// A page watched in its tile is logged where the tile is, once it's in place, all of its part as
+/// the page is that size (#4355): a check presses the middle of the place it reads, which the tile
+/// takes. On its way out of its picture it's logged nowhere, as each frame moves it.
 #[gpui::test]
 fn a_page_in_its_tile_is_logged_where_the_tile_is_once_in_place(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -2173,11 +2172,6 @@ fn a_page_in_its_tile_is_logged_where_the_tile_is_once_in_place(cx: &mut TestApp
     cx.simulate_resize(size(px(1000.), px(640.)));
     draw(&shell, cx);
     let place = tile_place(&shell, cx);
-    let part = shell.read_with(cx, |shell, _| {
-        let (card, _) = shell.page_frame(shell.viewport);
-        watched(shell.page_part(card))
-    });
-    assert_ne!(place, part, "the tile fills its part here");
     let logged =
         |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.task_page_at.get());
     assert_eq!(logged(cx), Some(place));
@@ -2523,30 +2517,6 @@ fn find_zoom_and_print_do_nothing_on_a_tile(cx: &mut TestAppContext) {
     assert_eq!(host.take(), Vec::<String>::new());
 }
 
-/// The app's own size for an agent's page is the core's (core/window.cc, kAgentPageSize), from the
-/// same window size (window_opening.rs, WINDOW_SIZE).
-#[test]
-fn an_agent_pages_size_is_the_cores() {
-    let read = |path: &str| {
-        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
-            .unwrap()
-    };
-    let numbers = |text: &str, after: &str| -> Vec<f32> {
-        let from = text.find(after).unwrap_or_else(|| panic!("no {after}")) + after.len();
-        let inside = &text[from..from + text[from..].find(')').unwrap()];
-        let inside = inside.trim_start_matches('(');
-        (inside
-            .split(',')
-            .map(|n| n.trim().trim_end_matches('.').parse().unwrap()))
-        .collect()
-    };
-    let core = numbers(&read("../core/window.cc"), "kAgentPageSize(");
-    let own = agent_page_size();
-    assert_eq!(core, [f32::from(own.width), f32::from(own.height)]);
-    let window = numbers(&read("src/window_opening.rs"), "WINDOW_SIZE: (f64, f64) = ");
-    assert_eq!(window, [super::DEFAULT_WINDOW.0, super::DEFAULT_WINDOW.1]);
-}
-
 /// The task's view stands where a page stands (#4205): with the sidebar hidden, ⌥ alone brings it
 /// out over the view and sends it away again, the pointer moving along the window's edge brings
 /// it out, and ⌘S docks it, the view staying up throughout. With the conversation alone and with
@@ -2769,4 +2739,58 @@ fn a_web_link_from_a_threads_page_opens_in_the_users_space(cx: &mut TestAppConte
             "standing {standing}: the thread's pages changed"
         );
     }
+}
+
+/// The size the shell tells the core a thread's page has watched here, from `calls`.
+fn agent_page_sizes(calls: &[String]) -> Vec<String> {
+    (calls.iter())
+        .filter_map(|call| call.strip_prefix("agent page size "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The core makes an agent's page at the size the shell told it a watch gives, before any watch,
+/// so watching lays the page out at the size it already has and tells the core nothing new
+/// (#4355). The window's next size is told once, for the next page made.
+#[gpui::test]
+fn an_agents_page_is_made_at_the_size_a_watch_gives_it(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let card = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0);
+    let stage = split(card).0.size;
+    let said =
+        |size: gpui::Size<Pixels>| format!("{}x{}", f32::from(size.width), f32::from(size.height));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.agent_page_sized),
+        Some(stage),
+        "the core wasn't told the stage's size before any watch"
+    );
+
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    let (_, laid) = frames(&shell, cx);
+    assert_eq!(
+        laid.size, stage,
+        "the page watched isn't at the size it was made at"
+    );
+    assert_eq!(
+        agent_page_sizes(&host.take()),
+        Vec::<String>::new(),
+        "watching told the core another size"
+    );
+
+    cx.simulate_resize(size(px(1300.), px(820.)));
+    draw(&shell, cx);
+    let card = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0);
+    assert_eq!(
+        agent_page_sizes(&host.take()),
+        [said(split(card).0.size)],
+        "the window's new size wasn't told once"
+    );
 }

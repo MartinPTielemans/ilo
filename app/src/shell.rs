@@ -1798,6 +1798,8 @@ pub struct Shell {
     /// The window's device pixels in a point, kept from render as `viewport` is.
     scale: f32,
     page_laid: Option<(Bounds<Pixels>, f32)>,
+    /// The size the core was last told a thread's page watched here has (`lay_out_page`).
+    agent_page_sized: Option<Size<Pixels>>,
     /// Whether the core was told the page's frame is moving (`page_motion`).
     page_moving_told: bool,
     /// While the command bar is open for a pane beside the tab shown, that tab. The pages shown
@@ -2355,6 +2357,7 @@ impl Shell {
             viewport: Size::default(),
             scale: 1.,
             page_laid: None,
+            agent_page_sized: None,
             page_moving_told: false,
             adding_pane: None,
             split_pending: None,
@@ -2908,6 +2911,11 @@ impl Shell {
 
     /// Lays the page out at `page_frame`, unless it's there already or held.
     fn lay_out_page(&mut self, cx: &mut Context<Self>) {
+        let watch = task_area::watch_size(self.page_frame(self.viewport).0);
+        if self.agent_page_sized != Some(watch) {
+            self.agent_page_sized = Some(watch);
+            self.browser.set_agent_page_size(watch, cx);
+        }
         let Some(frame) = self.window_page_frame(self.viewport) else {
             return;
         };

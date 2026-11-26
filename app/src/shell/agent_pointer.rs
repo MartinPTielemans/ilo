@@ -13,7 +13,7 @@ use gpui::{
     prelude::*, px, rgb, size, svg,
 };
 
-use super::{Shell, panes::pane_frames, task_area::agent_page_size};
+use super::{Shell, panes::pane_frames};
 use crate::tokens::shell::agent_pointer::{
     LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, LIGHT_ON_PRIMARY, LIGHT_PRIMARY, ON_PRIMARY, POINTER,
     PRIMARY, RING, RING_OUTSET, RING_RADIUS, TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE,
@@ -123,14 +123,10 @@ impl Shell {
     }
 
     /// The pane `tab`'s page is in, in the window, and how much smaller the page is drawn there:
-    /// a page watched in its tile is drawn at the tile's own factor, its page its own size.
+    /// none, as a page watched in its tile is the tile's size (#4355).
     fn pane_of(&self, tab: u64) -> Option<(Bounds<Pixels>, f32)> {
         if let Some((watched, place)) = self.task_page_place() {
-            let scale = match self.watch_tile_shown() == Some(tab) {
-                true => place.size.width / agent_page_size().width,
-                false => 1.,
-            };
-            return (watched == tab).then_some((place, scale));
+            return (watched == tab).then_some((place, 1.));
         }
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
