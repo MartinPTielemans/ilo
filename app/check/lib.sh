@@ -1653,3 +1653,126 @@ other_app_closes() {
   other_app=
   other_app_token=
 }
+# The perf runs' own measures, which perf, perf-native and perf-threads share.
+# Writes the perf runs' page in the check's site, and sets $page to it. Its page is Ardia's: 60
+# boxes, 120 paragraphs and a clock each second, which puts in its title when it first painted
+# ("<id> fcp <ms>") and, each time it's shown, two frames after it became visible
+# ("<id> shown <n> <ms>"), both in Unix ms.
+perf_page() {
+  cat > "$out/site/perf.html" << 'HTML'
+<!doctype html><meta charset=utf-8><title>loading</title>
+<style>
+body { font: 14px/1.4 sans-serif; margin: 16px }
+.box { display: inline-block; width: 72px; height: 40px; margin: 4px; border-radius: 6px }
+</style>
+<h1>ilo perf page</h1><p id=clock></p><div id=boxes></div><div id=text></div>
+<script>
+const id = location.search.slice(1);
+for (let i = 0; i < 60; i++) {
+  const box = document.createElement("div");
+  box.className = "box";
+  box.style.background = `hsl(${i * 6} 60% 60%)`;
+  boxes.append(box);
+}
+for (let i = 0; i < 120; i++) {
+  const p = document.createElement("p");
+  p.textContent = `Paragraph ${i}: the quick brown fox jumps over the lazy dog, again and again.`;
+  text.append(p);
+}
+setInterval(() => clock.textContent = new Date().toLocaleTimeString(), 1000);
+// Unix ms as the shell's clock reads it: Date.now() is the system's clock now, where timeOrigin's is
+// the one the renderer took at its start, which a VM's clock drifts from, by 70 ms in 10 minutes.
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (entry.name == "first-contentful-paint") {
+      document.title = `${id} fcp ${at(entry.startTime)}`;
+      performance.mark(document.title);
+    }
+  }
+}).observe({ type: "paint", buffered: true });
+// Each stamp is also a mark, which a trace with blink.user_timing has on its own clock, to pair the
+// trace's events with the run's Unix ms.
+const stamped = (n) => requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.title = `${id} shown ${n} ${Date.now()}`;
+  performance.mark(document.title);
+}));
+let shown = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState == "visible") {
+    stamped(++shown);
+  }
+});
+// A page loaded again in its tab as it's shown, as a tab without its page gets it back, has no
+// visibilitychange, so it's stamped shown 0. A new tab's page, which perf times to its paint, isn't.
+if (document.visibilityState == "visible" && performance.getEntriesByType("navigation")[0]?.type != "navigate") {
+  stamped(0);
+}
+</script>
+HTML
+  page="${site}perf.html"
+}
+# Sets $stamp to Unix time in ms. Bash 5 has it in EPOCHREALTIME, which Git Bash's is, as a process
+# start there takes tens of ms; Linux's sh is dash, so date, and the Mac's bash 3.2 and BSD date have
+# neither, so Perl.
+if [ -n "${EPOCHREALTIME:-}" ]; then
+  perf_clock=bash
+elif [ "$(uname)" = Darwin ]; then
+  perf_clock=perl
+else
+  perf_clock=date
+fi
+perf_stamp() {
+  case $perf_clock in
+    bash)
+      stamp=$EPOCHREALTIME
+      stamp_us=${stamp#*[.,]}
+      stamp="${stamp%[.,]*}${stamp_us%???}"
+      ;;
+    perl) stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000') ;;
+    *) stamp=$(date +%s%3N) ;;
+  esac
+}
+# Sorts the numbers on standard input, one a line, and says their median, range and count, each
+# number as $1 formats it.
+perf_stats() {
+  sort -n | awk -v f="$1" '{ v[NR] = $1 } END {
+    if (!NR) { print "no samples"; exit }
+    m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+    printf "median " f " (" f "–" f ", n=%d)", m, v[1], v[NR], NR }'
+}
+# Says row $1, labelled $2, measured as $3, against its target $4, and keeps it for the summary.
+perf_row() {
+  echo "perf: $2: $3; target $4"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
+}
+# Snapshots what the browser's processes use, or those of $snap_procs, as $1.
+perf_snap() {
+  # shellcheck disable=SC2086 # kinds, or nothing
+  python3 -I check/usage.py snap "${snap_procs:-$procs}" "$perf_dir/$1.json" ${2:-} ||
+    fail "the browser's usage didn't read"
+}
+# Waits until $1, in Unix seconds, checking the app is still there.
+perf_until() {
+  while [ "$(date +%s)" -lt "$1" ]; do
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+}
+# Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats,
+# and $wake_kinds to the minute's wakeups a second by kind of process.
+perf_idle() {
+  files=
+  for n in 0 1 2 3 4 5 6; do
+    [ "$n" = 0 ] || perf_until $(($(date +%s) + 10))
+    perf_snap "$1-$n"
+    files="$files $perf_dir/$1-$n.json"
+  done
+  # shellcheck disable=SC2086 # the files, a word each
+  python3 -I check/usage.py idle $files > "$perf_dir/$1.txt"
+  cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
+  wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
+  cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
+  # Which processes wake, as the CPU's kinds say which spend it.
+  wake_kinds=$(python3 -I check/usage.py wake-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json")
+}
