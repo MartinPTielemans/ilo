@@ -1,7 +1,7 @@
 //! Your first Space (first-run-v9 §6): its name's field and the theme panel's own parts, set out as
 //! the fifth mock has them, editing the first Space. The window shows each change at once and keeps
-//! it as the pointer lets go, as the panel does, so a quit resumes with it; Next keeps the name, and
-//! the look the step came with if nothing was changed.
+//! it as the pointer lets go, as the panel does, so a quit resumes with it; Next keeps the name. A
+//! Space with no look shows the mock's while the step does, and nothing of it is kept unless picked.
 
 use std::rc::Rc;
 
@@ -40,8 +40,10 @@ pub(in crate::shell) struct SpaceEditor {
     pub(super) picker: Entity<ThemePicker>,
     /// The sheet it was made on, which it follows as the card turns light or dark.
     light: bool,
-    /// The Space had no look, so the one it came with is the mock's, kept by Next.
+    /// The Space had no look, so the one it shows is the mock's, kept by nothing.
     started: bool,
+    /// The user picked something, which the panel's road kept as it was made.
+    picked: bool,
 }
 
 /// The panel's requests, which in the card it has none of: it has no window, and no trackpad's
@@ -54,7 +56,7 @@ impl theme_picker::Host for InCard {
     fn detent(&self) {}
 }
 
-/// The look a Space with none comes to the step with: the mock's palette, Intensity and Grain.
+/// The look a Space with none shows at the step: the mock's palette, Intensity and Grain.
 fn started_look() -> Option<Theme> {
     let [palette, intensity, _, grain] = t::SPACE_START;
     let made = theme_picker::palette_theme(palette as usize, None)?;
@@ -74,6 +76,11 @@ impl Shell {
             if editor.light != light {
                 editor.light = light;
                 (editor.picker).update(cx, |picker, cx| picker.retone(tone, cx));
+            }
+            // Back at the step after leaving it untouched, the window shows the mock's look again.
+            let (space, unpicked) = (editor.space, editor.started && !editor.picked);
+            if unpicked && self.theme_preview.is_none_or(|(each, _)| each != space) {
+                self.space_show_started(space, cx);
             }
             return;
         }
@@ -98,18 +105,41 @@ impl Shell {
         let Some(rest) = self.onboarding.as_ref().map(|o| o.focus.clone()) else {
             return;
         };
+        // The panel calls these from inside an update of the Shell's own (the step's keys, the
+        // preview's pick), so each acts once that update has returned, as the import does.
         let shell = cx.weak_entity();
         let changed: Changed = Rc::new(move |theme, done, cx| {
-            (shell.update(cx, |shell, cx| shell.theme_changed(space, theme, done, cx))).ok();
+            let shell = shell.clone();
+            cx.defer(move |cx| {
+                (shell.update(cx, |shell, cx| {
+                    shell.space_picked(done);
+                    shell.theme_changed(space, theme, done, cx)
+                }))
+                .ok();
+            });
         });
         let (glassed, cleared) = (cx.weak_entity(), cx.weak_entity());
         let also = Also {
             transparency: glass,
             glassed: Rc::new(move |value, done, cx| {
-                (glassed.update(cx, |shell, cx| shell.glass_changed(space, value, done, cx))).ok();
+                let glassed = glassed.clone();
+                cx.defer(move |cx| {
+                    (glassed.update(cx, |shell, cx| {
+                        shell.space_picked(done);
+                        shell.glass_changed(space, value, done, cx)
+                    }))
+                    .ok();
+                });
             }),
             cleared: Rc::new(move |cx| {
-                (cleared.update(cx, |shell, cx| shell.remove_space_theme(space, cx))).ok();
+                let cleared = cleared.clone();
+                cx.defer(move |cx| {
+                    (cleared.update(cx, |shell, cx| {
+                        shell.space_picked(true);
+                        shell.remove_space_theme(space, cx)
+                    }))
+                    .ok();
+                });
             }),
         };
         let picker = theme_picker::inline(
@@ -132,10 +162,9 @@ impl Shell {
         // The name shows with the caret at its end, nothing selected, as the keyboard rests on Next.
         let caret = name_text.len();
         name.update(cx, |input, cx| input.set_text(name_text, caret, window, cx));
-        // The mock's look shows on the window as the step comes; Next keeps it.
-        if let Some(theme) = theme.filter(|_| started) {
-            self.theme_changed(space, theme, false, cx);
-            self.glass_changed(space, glass, false, cx);
+        // The mock's look shows on the window as the step comes; only a pick keeps anything.
+        if started {
+            self.space_show_started(space, cx);
         }
         // The window draws again as the editor's parts change.
         cx.observe(&picker, |_, _, cx| cx.notify()).detach();
@@ -146,6 +175,7 @@ impl Shell {
                 picker,
                 light,
                 started,
+                picked: false,
             });
         }
     }
@@ -192,29 +222,53 @@ impl Shell {
     }
 
     /// Next: the name typed, cut to the field's most, the Space's if it's changed, an empty one
-    /// being Home; and the look the step came with, kept, if nothing was changed.
+    /// being Home. The look was kept as it was picked; one only shown goes with the step.
     pub(super) fn space_keep(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = self.onboarding.as_ref().and_then(|o| o.space.as_ref()) else {
             return;
         };
-        let (space, started) = (editor.space, editor.started);
+        let space = editor.space;
         let typed = editor.name.read(cx).committed();
         let typed: String = typed.trim().chars().take(t::SPACE_NAME as usize).collect();
         let name = if typed.is_empty() { HOME.into() } else { typed };
-        let shown = editor.picker.read(cx).editing().map(|(_, theme)| theme);
-        let glass = editor.picker.read(cx).glass();
         let kept = self.spaces.iter().find(|each| each.id == space);
         if kept.is_some_and(|kept| kept.name != name) {
             log!("browser: onboarding space named");
             self.browser.rename_space(space, &name, cx);
         }
-        if started {
-            if let Some(Some(theme)) = shown {
-                self.theme_changed(space, theme, true, cx);
-            }
-            if let Some(glass) = glass {
-                self.glass_changed(space, glass, true, cx);
-            }
+        self.space_leave(cx);
+    }
+
+    /// The step is left, by Next or Back: a look only shown, never picked, goes from the window.
+    pub(super) fn space_leave(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.onboarding.as_ref().and_then(|o| o.space.as_ref()) else {
+            return;
+        };
+        if !editor.started || editor.picked {
+            return;
+        }
+        let space = editor.space;
+        if self.theme_preview.is_some_and(|(each, _)| each == space) {
+            self.theme_preview = None;
+        }
+        if self.glass_preview.is_some_and(|(each, _)| each == space) {
+            self.glass_preview = None;
+        }
+        cx.notify();
+    }
+
+    /// Shows the mock's look on `space`'s window, keeping none of it.
+    fn space_show_started(&mut self, space: u64, cx: &mut Context<Self>) {
+        if let Some(theme) = started_look() {
+            self.theme_changed(space, theme, false, cx);
+        }
+        self.glass_changed(space, t::SPACE_START[2], false, cx);
+    }
+
+    /// The panel set something: once the user is done, a pick, which the panel's road has kept.
+    fn space_picked(&mut self, done: bool) {
+        if let Some(editor) = self.onboarding.as_mut().and_then(|o| o.space.as_mut()) {
+            editor.picked |= done;
         }
     }
 

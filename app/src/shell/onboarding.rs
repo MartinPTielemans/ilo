@@ -745,6 +745,12 @@ impl Shell {
         if step == Step::Favorites {
             return;
         }
+        if step == Step::Space {
+            self.space_leave(cx);
+        }
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
         // Signed in since, the Welcome has nothing to ask.
         if signed_in {
             (onboarding.steps).retain(|&each| each != Step::Account || each == step);
@@ -826,6 +832,11 @@ impl Shell {
             // Import brings the kinds on; with none on it's dimmed, and ↩ does nothing (v9 §5).
             Step::Import => {
                 log!("browser: onboarding import button via {how}");
+                // Stalled, the step's button is Try Again.
+                if (self.bring_view()).is_some_and(|view| view.read(cx).bring_stalled()) {
+                    self.bring_try_again(cx);
+                    return cx.notify();
+                }
                 let ready = (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
                 if ready {
                     self.bring_import(cx);

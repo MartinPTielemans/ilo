@@ -490,14 +490,21 @@ fn type_name(name: &str, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// Your first Space comes with the fifth mock's look on the window, kept by Next, and the field
-/// holding Home; the arrows go along the palettes, each kept as it's picked, as the theme panel
-/// keeps a pick; Next names the Space.
+/// Your first Space comes with the fifth mock's look on the window, kept by nothing, and the
+/// field holding Home; the arrows go along the palettes, each kept as it's picked, as the theme
+/// panel keeps a pick, ← to none taking the colours away; Next names the Space.
 #[gpui::test]
 fn the_space_step_is_the_theme_panels_parts_for_the_first_space(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     started(&shell, cx);
     on_to(&shell, cx, Step::Space);
+    // Just the Browser, on the way, turned threads off.
+    host.take();
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.theme_preview.is_some()),
+        "the mock's look shows on the window"
+    );
     assert_eq!(
         space_shown(&shell, cx),
         (Some(t::SPACE_START[0] as usize), "Home".into()),
@@ -516,6 +523,11 @@ fn the_space_step_is_the_theme_panels_parts_for_the_first_space(cx: &mut TestApp
     );
     cx.simulate_keystrokes("left left left");
     assert_eq!(space_shown(&shell, cx).0, Some(0), "← stops at None");
+    let calls = host.take();
+    assert!(
+        calls.iter().any(|call| call.starts_with("space color 1 ")),
+        "← to none took the colours away, as the panel's first palette does: {calls:?}"
+    );
     cx.simulate_keystrokes("right");
     host.take_edits();
     cx.simulate_keystrokes("enter");
@@ -528,17 +540,33 @@ fn the_space_step_is_the_theme_panels_parts_for_the_first_space(cx: &mut TestApp
     assert_eq!(step(&shell, cx), Some(Step::Done));
 }
 
-/// The look the step comes with is kept only by Next: Back leaves the Space as it was.
+/// The look the step comes with is only shown: Back or Next with nothing picked leaves the
+/// Space's look as it was, kept and on the window.
 #[gpui::test]
-fn back_from_the_space_step_keeps_no_look(cx: &mut TestAppContext) {
-    let (shell, cx, host) = first_window(cx);
-    started(&shell, cx);
-    on_to(&shell, cx, Step::Space);
-    host.take();
-    click("back", cx);
-    settle(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-    assert!(settings_set(host.take()).is_empty());
+fn leaving_the_space_step_untouched_keeps_no_look(cx: &mut TestAppContext) {
+    for how in ["back", "next"] {
+        let (shell, cx, host) = first_window(cx);
+        started(&shell, cx);
+        on_to(&shell, cx, Step::Space);
+        host.take();
+        match how {
+            "back" => click("back", cx),
+            _ => cx.simulate_keystrokes("enter"),
+        }
+        settle(&shell, cx);
+        let to = if how == "back" {
+            Step::Import
+        } else {
+            Step::Done
+        };
+        assert_eq!(step(&shell, cx), Some(to), "{how}");
+        assert_eq!(settings_set(host.take()), Vec::<String>::new(), "{how}");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.theme_preview.is_none()
+                && shell.glass_preview.is_none()),
+            "{how}: the window shows the Space's own look again"
+        );
+    }
 }
 
 /// An empty name is Home, and one longer than the field keeps is cut to it.
@@ -1033,11 +1061,7 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
     // The last settle has played the end's fade, and the card has gone.
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), None, "Start Browsing ended the card");
-    // Your first Space has no way past but Next, which keeps the look it shows (v9 §6).
-    let set: Vec<String> = (settings_set(host.take()).into_iter())
-        .filter(|call| !call.starts_with("space color 1 ") && !call.starts_with("space theme 1 "))
-        .collect();
-    assert_eq!(set, Vec::<String>::new());
+    assert_eq!(settings_set(host.take()), Vec::<String>::new());
 }
 
 /// ⌘Q at a step sets nothing turned there: the tidy bar, Help improve. They're set only as their
@@ -2203,7 +2227,9 @@ fn an_import_draws_each_kind_in_and_goes_on_once_all_are_here(cx: &mut TestAppCo
         cx,
         all_here.saturating_duration_since(now).as_secs_f32() + 0.01,
     );
-    assert_eq!(dialog_line(cx), Some(Some("All here.".into())));
+    let bring = brought(&view, cx);
+    let line = shell.read_with(cx, |shell, _| shell.bring_words(Some(&bring)));
+    assert_eq!(line.as_deref(), Some("All here."));
     assert_eq!(
         step(&shell, cx),
         Some(Step::Import),
@@ -2225,7 +2251,9 @@ fn esc_or_cancel_stops_an_import_back_at_its_kinds(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     for how in ["escape", "cancel", "stalled"] {
         let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-        click("chip 0", cx);
+        // The last kind left out, the Spaces still on, so the import waits on them.
+        let last = chips(&view, cx).last().map(|chip| chip.kind).unwrap();
+        view.update(cx, |view, cx| view.toggle_kind(last, cx));
         let picked = chips(&view, cx);
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
@@ -2247,6 +2275,50 @@ fn esc_or_cancel_stops_an_import_back_at_its_kinds(cx: &mut TestAppContext) {
             "{how}: back at the kinds as picked"
         );
     }
+}
+
+/// A profile that hasn't opened stops the knot's lap and says so in the view's own words where
+/// the kinds were, with Try Again, which a click or ↩ presses; Cancel still stops it.
+#[gpui::test]
+fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    waited(cx, crate::import::STALL.as_secs_f32());
+    let said = view.read_with(cx, |view, _| view.guide().title);
+    assert_eq!(said, "Work hasn't opened.");
+    let Bringing::Running { stalled, .. } = brought(&view, cx).state else {
+        panic!("still running");
+    };
+    assert_eq!(
+        stalled.as_deref(),
+        Some("Work hasn't opened."),
+        "the view's sentence"
+    );
+    assert!(!asks_for_frames(&shell, cx), "the knot stopped its lap");
+    assert!(
+        read(cx).contains(&(Role::Button, "Try Again".into(), None)),
+        "Try Again, for a screen reader too"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "Here it comes.",
+        "↩ tried again"
+    );
+    waited(cx, crate::import::STALL.as_secs_f32());
+    click("try-again", cx);
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "Here it comes.",
+        "and so did a click"
+    );
+    assert!(placed("cancel", cx).is_some(), "Cancel still stops it");
+    assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
 /// The browsers found are a row, the one used last first; a click on another reads it, and it
@@ -2271,6 +2343,7 @@ fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
     assert_eq!(names, ["Chrome", "Firefox"]);
     assert_eq!(bring.picked, Some(0));
     click("browser 1", cx);
+    cx.run_until_parked();
     let bring = brought(&view, cx);
     assert_eq!(bring.picked, Some(1), "the click picked Firefox");
     assert!(matches!(bring.state, Bringing::Kinds(_)), "and read it");
