@@ -12,8 +12,8 @@
 namespace browser_core::sync_sign_in {
 namespace {
 
-const GURL kServer("https://sync.example.org/");
-const GURL kRedirect("https://sync.example.org/signed-in");
+constexpr char kServer[] = "https://sync.example.org/";
+constexpr char kRedirect[] = "https://sync.example.org/signed-in";
 
 std::map<std::string, std::string> Query(const GURL& url) {
   std::map<std::string, std::string> query;
@@ -25,14 +25,14 @@ std::map<std::string, std::string> Query(const GURL& url) {
 }
 
 bool Offers(std::string_view json) {
-  std::optional<base::DictValue> discovery = base::JSONReader::ReadDict(json);
+  std::optional<base::DictValue> discovery = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
   EXPECT_TRUE(discovery) << json;
   return discovery && OffersGoogle(*discovery);
 }
 
 TEST(SyncSignInTest, TheSignInGoesToTheServersAuthorizeForTheBrowser) {
-  const GURL url = AuthorizeUrl(kServer, kRedirect, "state-1", "challenge-1", false);
-  EXPECT_EQ(url.DeprecatedGetOriginAsURL(), kServer);
+  const GURL url = AuthorizeUrl(GURL(kServer), GURL(kRedirect), "state-1", "challenge-1", false);
+  EXPECT_EQ(url.DeprecatedGetOriginAsURL(), GURL(kServer));
   EXPECT_EQ(url.path(), "/authorize");
   EXPECT_EQ(Query(url), (std::map<std::string, std::string>{
                             {"response_type", "code"},
@@ -47,9 +47,9 @@ TEST(SyncSignInTest, TheSignInGoesToTheServersAuthorizeForTheBrowser) {
 
 TEST(SyncSignInTest, AGoogleSignInIsTheSameSignInStraightOnToGoogle) {
   std::map<std::string, std::string> plain =
-      Query(AuthorizeUrl(kServer, kRedirect, "state-1", "challenge-1", false));
+      Query(AuthorizeUrl(GURL(kServer), GURL(kRedirect), "state-1", "challenge-1", false));
   std::map<std::string, std::string> google =
-      Query(AuthorizeUrl(kServer, kRedirect, "state-1", "challenge-1", true));
+      Query(AuthorizeUrl(GURL(kServer), GURL(kRedirect), "state-1", "challenge-1", true));
   EXPECT_EQ(google["provider"], "google");
   google.erase("provider");
   EXPECT_EQ(google, plain);
