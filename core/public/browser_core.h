@@ -2392,6 +2392,10 @@ BC_EXPORT size_t bc_profile_search_engines(bc_id profile, char* engines, size_t 
 // Copies the keyword of the profile's default search engine, which the command bar searches with in
 // its Spaces, into |keyword| as bc_space_name does.
 BC_EXPORT size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t capacity);
+// As bc_search_url with no keyword, the URL of a search for |text| with the profile's default
+// search engine, for a profile no window may show, as a task's hidden Space's. Returns 0 if it has
+// none.
+BC_EXPORT size_t bc_profile_search_url(bc_id profile, const char* text, char* url, size_t capacity);
 // Makes the engine of |keyword|, one of bc_profile_search_engines, the profile's default, and
 // returns whether it did.
 BC_EXPORT bool bc_profile_set_search_engine(bc_id profile, const char* keyword);
