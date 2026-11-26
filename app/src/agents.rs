@@ -1207,7 +1207,6 @@ impl Agents {
         }))
         .collect();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -1838,7 +1837,12 @@ impl Agents {
         }
     }
 
-    fn call(&mut self, call: Call, cx: &mut Context<Self>) {
+    fn call(&mut self, mut call: Call, cx: &mut Context<Self>) {
+        // The assistant's word on its step goes out of the call before anything reads it, and
+        // only to its step in the trace. Only the product's own threads, a helper's calls among
+        // them, may say one: anyone else's is dropped unread.
+        let noted = is_task(&call.agent) && tools::NOTED.contains(&call.tool.as_str());
+        let says = tools::take_note(noted, &mut call.arguments);
         // A token's agent is always one the user connected, or a task of theirs.
         if !self.may_call(&call.agent) {
             _ = call
@@ -1888,7 +1892,7 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
-        self.trace_call(&call, cx);
+        self.trace_call(&call, says, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
         self.live.insert(call.agent.clone());
@@ -2266,17 +2270,12 @@ impl Agents {
             "done" if !is_task(&agent) => {
                 let said = self.said_done(&agent, id, cx);
                 match &said {
-                    Ok(text) if text.starts_with("Your task") => {
-                        self.note(&agent, connection, "done", "", "")
-                    }
-                    Err(why) => self.note(&agent, connection, "done", "", why),
-                    Ok(_) => {}
+                    task::SaidDone::Ended => self.note(&agent, connection, "done", "", ""),
+                    task::SaidDone::UnderWay(why) => self.note(&agent, connection, "done", "", why),
+                    task::SaidDone::NoTask => {}
                 }
                 cx.notify();
-                _ = reply.send(match said {
-                    Ok(text) => ToolResult::text(text),
-                    Err(why) => ToolResult::error(why),
-                });
+                _ = reply.send(said.answer());
             }
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
@@ -2563,11 +2562,36 @@ impl Agents {
         }
     }
 
+    /// Whether `agent_name` is the kind's name because the app gave none of its own, or gave one
+    /// treated as none: a fact `hello` keeps, never read from the name's words.
+    pub fn nameless(&self, agent: &str) -> bool {
+        if self.task(agent).is_some() {
+            return false;
+        }
+        let session = (self.tasks.tasks.iter()).find(|task| {
+            task.state == task::State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        let connection = match session {
+            Some(task) => task.session.as_ref().map(|session| session.connection),
+            None => (self.tasks.names.keys())
+                .filter(|(each, _)| each == agent)
+                .map(|(_, on)| *on)
+                .max(),
+        };
+        self.nameless_on(agent, connection)
+    }
+
     /// Starts the run's next step, which answers it through `advance`.
     fn next_step(&mut self, mut run: Run, cx: &mut Context<Self>) {
-        let Some(step) = run.steps.pop_front() else {
+        let Some(mut step) = run.steps.pop_front() else {
             return;
         };
+        // Each step's word goes out of it before anything reads it, and only to its trace line,
+        // where its action may carry one outside a run too.
+        let action = (step.get("action").and_then(Value::as_str)).unwrap_or_default();
+        let noted = is_task(&run.agent) && tools::NOTED.contains(&action);
+        let says = tools::take_note(noted, &mut step);
         // A step took the tab to a fenced site: the run stops there, saying nothing of its page.
         if let Some(site) = self.came_to(run.tab, cx) {
             let stopped = fence::run_stopped(run.done.len() + 1, run.tab, &site);
@@ -2582,7 +2606,15 @@ impl Agents {
             .to_string();
         let (reply, answer) = mpsc::channel();
         run.step = answer;
-        self.trace_step(&run.agent, run.connection, run.call, run.tab, &step, cx);
+        self.trace_step(
+            &run.agent,
+            run.connection,
+            run.call,
+            run.tab,
+            &step,
+            says,
+            cx,
+        );
         if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
@@ -5506,7 +5538,6 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
-            "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({

@@ -31,8 +31,8 @@
 # right-click in its field shows the field's menu, with Paste and Go. Site Search Settings opens
 # Chromium's search engines page, where a site search added for the run's own server and made the
 # default is the one Settings' Search engine shows chosen, until it picks DuckDuckGo back. A new
-# profile's onboarding opens on DuckDuckGo and its Search engine lists Google last, whose pick asks
-# Google's hosts, the run's own server here, for the search alone, and which stays gone once
+# profile, through its onboarding, opens on DuckDuckGo and its Search engine lists Google last,
+# whose pick asks Google's hosts, the run's own server here, for the search alone, and which stays gone once
 # Chromium's page deletes it. The command bar's tests, in src/command_bar/tests.rs, have the rest of its keys and what the menu's
 # items do. A tab's menu walks by its keys past lines and dimmed items, selects by typing, opens a
 # submenu by → and by the pointer, which crosses a row on its way there without taking it, picks
@@ -127,8 +127,13 @@ expect "^browser: page $a audible 1 muted 1\$" "the muted tab's sound didn't sho
 ../tools/window-screenshot.sh "$pid" "$out/muted.png" || fail "no window to capture"
 send key x
 expect "^browser: page $a audible 0 muted 1\$" "the tab's sound didn't stop"
-# The speaker is after the favicon, at the title's x, 43.
-send click 52 $(row 0 | cut -d' ' -f2)
+# The speaker sits at the line's end, before the row's button, which the pointer on the row brings
+# and which moves it, so it's clicked where its line says once the pointer rests on its row.
+await "^browser: speaker $a at " || fail "the muted tab's row logged no speaker"
+speaker_y=$(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f6)
+send move $(row 0 | cut -d' ' -f1) $speaker_y
+expect "^browser: speaker $a at " "the pointer on the muted tab's row didn't move its speaker"
+send click $(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f5-)
 expect '^browser: command toggle-mute via sidebar$' "a click on the speaker didn't reach the UI"
 expect "^browser: page $a audible 0 muted 0\$" "a click on the speaker didn't unmute the tab"
 open_from_bar example.com
@@ -2220,42 +2225,12 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
     --disable-component-update < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
-  await '^browser: onboarding step intro settled$' || fail "Google: the new profile's first launch didn't play the onboarding"
-  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
-  case " $steps " in
-    *" search-engine "*) ;;
-    *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
-  esac
-  # The welcome waits for Return, and each step after for the key that left the one before, as
-  # count.sh does.
-  send key return
-  expect '^browser: onboarding left intro via return$' "Google: Return didn't go on from the welcome"
-  for each in $steps; do
-    [ "$each" = intro ] && continue
-    if [ "$step" = 0 ]; then
-      await "^browser: onboarding step $each settled\$" || fail "Google: the $each step didn't come"
-    else
-      expect "^browser: onboarding step $each settled\$" "Google: the $each step didn't come"
-    fi
-    if [ "$each" = search-engine ]; then
-      ../tools/window-screenshot.sh "$pid" "$out/search-engine-step-google.png" || fail "no window to capture"
-      send key return
-      expect '^browser: onboarding left search-engine via return$' "Google: Return didn't leave the search engine step"
-      # Return sets the engine picked unless it's the default, so a line here is a step that
-      # opened on another, such as Google.
-      none_since '^browser: profile [0-9]* searches with ' ||
-        fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
-    elif [ "$each" = keys ]; then
-      # The keys' step, the last, has no Skip: its Return is the way in.
-      send key return
-      expect '^browser: onboarding left keys via return$' "Google: Return didn't leave the keys' step"
-    else
-      # Skip, as Esc is Back.
-      skip_step "$each"
-      expect "^browser: onboarding left $each via skip\$" "Google: Skip didn't leave the $each step"
-    fi
-  done
-  expect '^browser: onboarding done$' "Google: the flow didn't end after its last step"
+  await '^browser: onboarding started$' || fail "Google: the new profile's first launch didn't play the onboarding"
+  # Through each step the way that takes nothing it offers, as count.sh goes; the card asks no
+  # engine, so none is set before Settings' list is read.
+  walk_steps "" "Google: "
+  ! grep -q '^browser: profile [0-9]* searches with ' "$log" ||
+    fail "Google: the onboarding set an engine: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
   expect '^browser: command bar shown$' "Google: the command bar didn't come up after the flow"
   send key escape
   expect '^browser: command bar hidden$' "Google: escape didn't close the command bar"
@@ -2394,7 +2369,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
   requests=$(grep '^google: ' "$out/google-tls.log" || true)
   [ "$requests" = "google: GET https://www.google.com/search?q=pelicans" ] ||
     fail "Google: its hosts were asked for more than the search, or not for it: $(printf '%s' "$requests" | tr '\n' ';')"
-  echo "ok: Google's search engine, on a new profile: the first launch's step opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-step-google.png, $out/search-engine-google.png, $out/search-engine-google-delete.png"
+  echo "ok: Google's search engine, on a new profile: the first launch, through its onboarding, opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-google.png, $out/search-engine-google-delete.png"
 fi
 # Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
 # site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows

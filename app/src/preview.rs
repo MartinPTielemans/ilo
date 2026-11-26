@@ -14,7 +14,7 @@ use std::{
 use browser::account::{self, Account};
 use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
-    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+    Card as TaskCard, Conversation, Dot, Line, OnPage, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
@@ -2054,6 +2054,16 @@ impl Browser for Fake {
         true
     }
 
+    // A made-up account, signed out, so the onboarding opens on its Welcome; elsewhere none, as
+    // the other states show a build that names no sync server.
+    fn account_host(&self) -> Option<Rc<dyn browser::account::Host>> {
+        let onboarding = states::var_os("PREVIEW_ONBOARDING").is_some()
+            || states::var_os("PREVIEW_ONBOARDING_STEP").is_some();
+        let account: Rc<dyn browser::account::Host> =
+            Rc::new(states::account::PreviewAccount { dialog: None });
+        onboarding.then_some(account)
+    }
+
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false
@@ -2930,8 +2940,8 @@ fn main() {
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
                     // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
-                    // PREVIEW_ONBOARDING_STEP=transparency, or a step's number from 1, opens it at
-                    // that step.
+                    // PREVIEW_ONBOARDING_STEP=<a step's number, 1 to 7 or 3b> opens it at that
+                    // step.
                     let onboarding_step = states::var("PREVIEW_ONBOARDING_STEP").ok();
                     let onboarding = states::var("PREVIEW_ONBOARDING")
                         .ok()
@@ -3227,12 +3237,7 @@ fn main() {
                             let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| {
-                                        if states::var_os("PREVIEW_TASK").is_some() {
-                                            shell.set_talk_beside(true, cx);
-                                        }
-                                        shell.show_task(agent.into(), cx)
-                                    })
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
@@ -3274,8 +3279,8 @@ fn main() {
                     if welcome {
                         shell.set_welcome(cx);
                     }
-                    // =dark:opt-ins opens it at that step, and =dark:opt-ins:on turns the
-                    // daily count's switch on there.
+                    // =dark:7 opens it at that step, and =dark:7:on turns Help improve on
+                    // there.
                     if let Some(given) = &onboarding {
                         let mut parts = given.split(':');
                         let appearance = parts.next();
@@ -3293,7 +3298,7 @@ fn main() {
                             let (rows, marked) = rows;
                             shell.onboarding_show_assistants(rows, marked, cx);
                         }
-                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_swatch(index, cx);

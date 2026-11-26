@@ -336,11 +336,7 @@ impl Shell {
             // state, which outlives the release of a press that selected its row.
             .when(
                 self.pressed(row) && !selected && dragging != Some(slot) && !folder,
-                |plate| {
-                    plate
-                        .bg(self.palette.shown(0.))
-                        .shadow(self.palette.shown_shadow(1.))
-                },
+                |plate| plate.bg(self.palette.shown(0.)),
             )
             .when(row == Row::NewTab && !selected, |plate| {
                 // GPUI keeps an element's pressed state only once a listener gives it a hitbox.
@@ -443,9 +439,8 @@ impl Shell {
     pub(super) fn page_fill(&self, tab: u64) -> Option<Rgba> {
         let shown = tab == self.selected && self.shown_has_plate();
         let color = self.tab_background(tab).filter(|_| shown)?;
-        let beside = self.card_left() > 0. && self.card_left() == self.width();
         let own = self.panes(tab).len() == 1 && !self.page(tab).developer_mode;
-        (beside && own).then(|| gpui::rgb(color))
+        (self.joins_page_area() && own).then(|| gpui::rgb(color))
     }
 
     /// The inks of `tab`'s line or tile: the window's, or on its page's own colour the ink that
@@ -460,9 +455,6 @@ impl Shell {
     /// The open tab's line in `page`, its page's own colour, at `opacity`: from its plate's place,
     /// `depth` folders in, to the sidebar's edge and into the page.
     fn line_join(&self, page: Rgba, depth: usize, opacity: f32) -> Div {
-        let on = self.palette.on_fill(page);
-        // A dark page's shape is told from a dark window by a line of light round it.
-        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
         let (left, right) = match self.right {
             true => (0., PLATE_INSET),
             false => (PLATE_INSET + depth as f32 * FOLDER_INDENT, 0.),
@@ -474,7 +466,27 @@ impl Shell {
             .bottom(px(inset))
             .left(px(left))
             .right(px(right))
-            .child(join(Hsla::from(page).opacity(opacity), outline, self.right))
+            .child(self.joined(page, opacity))
+    }
+
+    /// A line of the sidebar in `page`, at `opacity`, as one shape with the page area beside it
+    /// (join.rs): the open tab's line in its page's colour, and a thread's card in its stage's.
+    pub(super) fn joined(&self, page: Rgba, opacity: f32) -> impl IntoElement + use<> {
+        let on = self.palette.on_fill(page);
+        // A dark page's shape is told from a dark window by a line of light round it.
+        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
+        join(
+            Hsla::from(page).opacity(opacity),
+            outline,
+            self.right,
+            PLATE_RADIUS,
+        )
+    }
+
+    /// Whether the page area starts at the sidebar's edge, where a line of it can join what the
+    /// area shows: the sidebar docked and settled beside it.
+    pub(super) fn joins_page_area(&self) -> bool {
+        self.card_left() > 0. && self.card_left() == self.width()
     }
 
     /// Whether `row` is a tab's that's pressed and not yet let go.

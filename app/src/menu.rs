@@ -30,9 +30,10 @@ use crate::{
 
 pub use crate::tokens::menu::*;
 
-/// The panel's colour, 0xRRGGBBAA: what floats over a dark or a light window (#4090).
-pub const DARK_FILL: u32 = (crate::tokens::palette::OVERLAY_DARK << 8) | 0xff;
-pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
+/// The panel's colour, 0xRRGGBBAA, opaque: what floats over a dark or a light window, where the
+/// host has no material under it (#4090).
+pub const DARK_FILL: u32 = crate::tokens::floating::FILL | 0xff;
+pub const LIGHT_FILL: u32 = crate::tokens::floating::LIGHT_FILL | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
@@ -50,7 +51,7 @@ pub struct Palette {
 
 const DARK: Palette = Palette {
     fill: DARK_FILL,
-    rim: DARK_RIM,
+    rim: crate::tokens::floating::RIM,
     label: DARK_LABEL,
     secondary: DARK_SECONDARY,
     line: DARK_LINE,
@@ -60,7 +61,7 @@ const DARK: Palette = Palette {
 
 const LIGHT: Palette = Palette {
     fill: LIGHT_FILL,
-    rim: LIGHT_RIM,
+    rim: crate::tokens::floating::LIGHT_RIM,
     label: LIGHT_LABEL,
     secondary: LIGHT_SECONDARY,
     line: LIGHT_LINE,
@@ -206,7 +207,7 @@ pub fn glass<E: Styled + ParentElement + gpui::prelude::FluentBuilder>(
         inset: true,
     };
     let mut shadows = match shadowed {
-        true => crate::elevation::menu_shadow(light),
+        true => crate::elevation::menu_shadow(),
         false => Vec::new(),
     };
     shadows.push(match light {
@@ -280,6 +281,13 @@ pub enum Closed {
     /// With a press outside it, its keys, a shortcut or another menu taking its place.
     Otherwise,
 }
+
+/// What a row that stays does each time it's chosen (`MenuEntry::stays`), answering whether it
+/// shows its check now.
+pub type Stays = Rc<dyn Fn(&mut App) -> bool>;
+
+/// The log's line for a pick that left the menu open (`MenuEntry::stays`).
+const STAYED: &str = "browser: menu picked a row that stays";
 
 /// How a menu closed, with `Otherwise`'s ways told apart, for the line the log has of it (#2873).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -491,11 +499,17 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
     point(px(x), px(y))
 }
 
+/// Whether `entry` asks its level for the checks' column: checked, or a row that stays, which may
+/// be at any pick, so its title never moves under the pointer.
+fn marked(entry: &MenuEntry) -> bool {
+    entry.checked || entry.stays.is_some()
+}
+
 /// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
 /// so a control can open it with its foot where it wants.
 pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
     let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
-    let choices = top.clone().any(|entry| entry.checked);
+    let choices = top.clone().any(marked);
     let rows: f32 = top.map(|entry| row_height(entry, choices)).sum();
     PADDING + rows + PADDING
 }
@@ -536,7 +550,7 @@ fn lay_out_wide(
             .filter(|&at| entries[at].parent == parent && !entries[at].alternate)
             .collect();
         let checks =
-            items.iter().any(|&item| entries[item].checked) || (choices && parent.is_none());
+            items.iter().any(|&item| marked(&entries[item])) || (choices && parent.is_none());
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
         for &item in &items {
@@ -1555,7 +1569,7 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
             .and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
-            menu.close(Closing::Chose(item), cx);
+            menu.pick(item, cx);
         }
     });
     chosen
@@ -1656,10 +1670,54 @@ impl ContextMenu {
         cx.notify();
     }
 
+    /// Chooses `item`, which closes the menu with it chosen. A row that stays (`MenuEntry::stays`)
+    /// closes nothing: it does what it does once the update is over, as an answer is given, and
+    /// the menu is left as it was, the row highlighted.
+    fn pick(&mut self, item: usize, cx: &mut Context<Self>) {
+        let stays = self.shown.as_ref().and_then(|shown| {
+            let held = as_held(&shown.tracking.entries, item, shown.alt);
+            Some((held, shown.tracking.entries[held].stays.clone()?))
+        });
+        let Some((held, stays)) = stays else {
+            return self.close(Closing::Chose(item), cx);
+        };
+        // For check.sh to wait on. It names no item, as the closing's line doesn't (#2873).
+        log!("{STAYED}");
+        let menu = cx.weak_entity();
+        cx.defer(move |cx| {
+            let checked = stays(cx);
+            menu.update(cx, |menu, cx| menu.stayed(held, &stays, checked, cx))
+                .ok();
+        });
+        cx.notify();
+    }
+
+    /// The row at `item` did what `stays` does and shows its check if `checked`, where the menu
+    /// still shows that row: what it did may have closed the menu or put another in its place.
+    fn stayed(&mut self, item: usize, stays: &Stays, checked: bool, cx: &mut Context<Self>) {
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
+        let same = |entry: &&mut MenuEntry| {
+            (entry.stays.as_ref()).is_some_and(|each| Rc::ptr_eq(each, stays))
+        };
+        let Some(entry) = shown.tracking.entries.get_mut(item).filter(same) else {
+            return;
+        };
+        entry.checked = checked;
+        // A search's rows are some of those asked for, which the next narrowing lays out again.
+        let asked =
+            (shown.search.as_mut()).and_then(|search| search.all.get_mut(*search.left.get(item)?));
+        if let Some(asked) = asked {
+            asked.checked = checked;
+        }
+        cx.notify();
+    }
+
     fn outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Stay => cx.notify(),
-            Outcome::Pick(item) => self.close(Closing::Chose(item), cx),
+            Outcome::Pick(item) => self.pick(item, cx),
             Outcome::Escape => self.close(Closing::Escape, cx),
             Outcome::ReleasedOutside => self.close(Closing::ReleasedOutside, cx),
         }

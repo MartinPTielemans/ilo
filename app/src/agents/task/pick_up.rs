@@ -66,7 +66,7 @@ impl Agents {
         let Some(task) = self.task(agent) else {
             return;
         };
-        let kept = self.tasks.kept.of(agent).is_some() && !self.tasks.kept.off;
+        let kept = self.tasks.kept.of(agent).is_some();
         if !kept || last_tab(task, &self.pages(task, cx)) != Some(tab) {
             return;
         }
@@ -77,14 +77,14 @@ impl Agents {
     /// `agent`'s kept task is Done: its card's line and its last page's picture go to its card's
     /// folder, written off the UI's thread, the picture only if the last one its conversation took
     /// of that page could have been given to an agent, and the page still could be now. Nothing
-    /// with the switch off, nor for a task with no row, as one deleted from the Archive: its card
-    /// stays as it was while ⌘Z can bring it back, and goes when it goes for good. A failed write
-    /// leaves the card as it was and says nothing.
+    /// for a task with no row, as one deleted from the Archive: its card stays as it was while ⌘Z
+    /// can bring it back, and goes when it goes for good. A failed write leaves the card as it was
+    /// and says nothing.
     fn keep_card(&mut self, agent: &str, cx: &mut Context<Self>) {
         let (Some(root), Some(task)) = (self.cards_root(), self.task(agent)) else {
             return;
         };
-        if self.tasks.kept.off || !self.tasks.kept.listed().any(|listed| listed == agent) {
+        if !self.tasks.kept.listed().any(|listed| listed == agent) {
             return;
         }
         let Some(card) = (self.tasks.kept.of(agent)).map(|record| record.card.clone()) else {
@@ -123,22 +123,6 @@ impl Agents {
         self.tasks.card_jobs.ask(job, cx.background_executor());
     }
 
-    /// Settings › Agents' Keep finished tasks so you can reply.
-    pub fn keeps_tasks(&self) -> bool {
-        !self.tasks.kept.off
-    }
-
-    /// The switch. Off, a new task's run keeps nothing; what's kept stays until it's removed,
-    /// which Settings offers as it's turned off.
-    pub fn set_keeps_tasks(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on != self.tasks.kept.off {
-            return;
-        }
-        self.tasks.kept.off = !on;
-        self.save();
-        cx.notify();
-    }
-
     /// How many finished tasks ilo holds a conversation's id for, and how many of them the last
     /// try couldn't remove.
     pub fn kept_tasks(&self) -> (usize, usize) {
@@ -157,7 +141,7 @@ impl Agents {
         let keep = match self.tasks.kept.of(agent) {
             Some(record) if record.gone || walled => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, self.keeps_tasks(), walled),
+            None => kept::decide(cli, walled),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -322,8 +306,8 @@ impl Agents {
     /// that its assistant still has them, and over a reply that took a task up at another access
     /// or after a quit (`pick_up`), the access it came back at. Then, last, the line that stands in
     /// the reply field's place once a task is done, stopped, or failed as its conversation went,
-    /// and can't take a reply: its assistant keeps none, didn't keep this one as the switch was
-    /// off, or no longer has it. One that ended in this run with its conversation kept has no
+    /// and can't take a reply: its assistant keeps none, didn't keep this one as it has files, or
+    /// no longer has it. One that ended in this run with its conversation kept has no
     /// line: its messages are there, over its reply field. An outside agent's session has none.
     pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
@@ -387,9 +371,9 @@ impl Agents {
                 match kept::keeps(cli) {
                     Keeps::Never => IloKind::KeepsNothing,
                     // Remove All took it from under the task.
-                    Keeps::WhenWanted if self.tasks.kept.had(&task.agent) => IloKind::Gone,
-                    // The task started while Settings' switch was off.
-                    Keeps::WhenWanted => IloKind::NotKept,
+                    Keeps::Always if self.tasks.kept.had(&task.agent) => IloKind::Gone,
+                    // The task has files, so its assistant kept none (wall.rs).
+                    Keeps::Always => IloKind::NotKept,
                 },
             )),
         }

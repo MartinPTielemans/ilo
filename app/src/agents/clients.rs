@@ -62,7 +62,7 @@ impl Client {
         match self {
             Client::ClaudeCode => "Claude Code",
             Client::Codex => "Codex",
-            Client::Other => "MCP client",
+            Client::Other => "Another app",
             Client::Command => concat!("The ", env!("PRODUCT_NAME"), " command"),
         }
     }

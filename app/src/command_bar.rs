@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod calculator;
+pub mod choices;
 
 actions!(
     command_bar,
@@ -110,10 +111,8 @@ use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
-    CHOICES_GAP, CHOICES_HEIGHT, CHOICES_LEFT, CHOICES_MENU_DROP, CHOICES_RIGHT, CHOICES_UNDER,
-    FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT, FOOT_TEXT, MODEL_GAP, MODEL_LEFT,
-    MODEL_MARK, START_ARROW, START_SIZE, START_SPACE, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_HEIGHT,
-    TRIGGER_LINE, TRIGGER_TEXT, TRIGGER_X,
+    CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
+    FOOT_TEXT,
 };
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
@@ -298,14 +297,6 @@ fn heading(title: SharedString) -> MenuEntry {
     }
 }
 
-/// Records where the element it's put in is drawn, for a menu to hang from it.
-fn drawn_at(at: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
-    let at = at.clone();
-    canvas(move |bounds, _, _| at.set(Some(bounds)), |_, _, _, _| {})
-        .absolute()
-        .size_full()
-}
-
 /// A pick on the composer's model menu.
 #[derive(Clone, Debug)]
 enum ModelPick {
@@ -326,7 +317,6 @@ const SEARCH_MODELS: &str = "Search models";
 /// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
 /// `{assistant}'s default`.
 const DEFAULT_ROW: &str = "Default";
-const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
@@ -1043,8 +1033,11 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        // Its colours are the bar's to give each time it draws.
-        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
+        // Its colours are the bar's to give each time it draws. At rest the field takes the
+        // keyboard by itself as the last page leaves, so ⌘Z there is for what the user did.
+        TextInput::new(PLACEHOLDER_TEXT, cx)
+            .paste_and_go()
+            .passes_undo(surface == Surface::InPlace)
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
@@ -2084,6 +2077,17 @@ impl CommandBar {
     /// Lists the rows for `text` in the input from the start: the Space's tabs for none, else the
     /// core's suggestions once they come, and none until then.
     fn ask_for(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.keep_asked(text, window, cx);
+        if !self.asked.is_empty() {
+            self.answers_here(window, cx);
+            let site = self.site.as_ref().map(|site| site.keyword.as_str());
+            self.host.suggest(site, &self.asked, false);
+        }
+    }
+
+    /// Takes `text` as what's typed, the rows the tabs with nothing typed and none otherwise,
+    /// asking the core nothing for it.
+    fn keep_asked(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         self.asked = text;
         self.asked_at = Instant::now();
         self.complete = false;
@@ -2094,11 +2098,6 @@ impl CommandBar {
             Vec::new()
         };
         self.set_rows(String::new(), rows, window, cx);
-        if !self.asked.is_empty() {
-            self.answers_here(window, cx);
-            let site = self.site.as_ref().map(|site| site.keyword.as_str());
-            self.host.suggest(site, &self.asked, false);
-        }
     }
 
     /// What the core was last asked for, as its suggestions name it: what was typed, after the
@@ -2377,15 +2376,16 @@ impl CommandBar {
         Some(next_model(picked, agent))
     }
 
-    /// Leaves the ask, if the bar is in one: what was typed stays, and its suggestions come again.
-    /// Returns whether it was in one.
+    /// Leaves the ask, if the bar is in one: what was typed stays, and nothing is asked for it
+    /// until the user's next edit, so words written for an assistant don't go to the search
+    /// provider for going back. Returns whether it was in one.
     fn leave_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.end_ask(cx) {
             return false;
         }
         log!("browser: command bar leaves the ask");
         let text = self.input.read(cx).text().to_string();
-        self.ask_for(text, window, cx);
+        self.keep_asked(text, window, cx);
         true
     }
 
@@ -2514,15 +2514,7 @@ impl CommandBar {
     /// thread and is offered next time; Full access is never offered again by itself.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
-        let current = ask.tier;
-        let mut items: Vec<MenuEntry> = (Tier::ALL.into_iter())
-            .map(|tier| MenuEntry {
-                checked: tier == current,
-                ..MenuEntry::named(tier.label(), true)
-            })
-            .collect();
-        items.push(MenuEntry::line());
-        items.push(MenuEntry::named(NEVER_GETS, false));
+        let items = choices::level_entries(ask.tier);
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
@@ -3803,43 +3795,12 @@ impl CommandBar {
         )
     }
 
-    /// The composer's row of choices: the level, the model and, for an assistant whose program
-    /// takes one, the effort, each opening its menu under it, then Start, which starts the thread as ↩ does and does nothing with no words.
+    /// The composer's row of choices (choices.rs): the level, the model and, for an assistant whose
+    /// program takes one, the effort, each opening its menu under it, then Start, which starts the
+    /// thread as ↩ does and does nothing with no words.
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let palette = palette::current(cx);
-        let (text, dim) = (palette.on_overlay(TITLE), palette.on_overlay(DIM));
         let tier = self.ask.as_ref().map(|ask| ask.tier).unwrap_or_default();
-        let words = |said: SharedString, color: Hsla| {
-            div()
-                .flex_none()
-                .text_size(px(TRIGGER_TEXT))
-                .line_height(px(TRIGGER_LINE))
-                .text_color(color)
-                .child(said)
-        };
-        let open = self.menu_open;
-        let trigger = |id: &'static str, at: &Rc<Cell<Option<Bounds<Pixels>>>>| {
-            div()
-                .id(id)
-                .relative()
-                .h(px(TRIGGER_HEIGHT))
-                .flex_none()
-                .flex()
-                .items_center()
-                .rounded(px(CHIP_RADIUS))
-                // A trigger has no fill at rest, only while its menu is open.
-                .when(open == Some(id), |shown| shown.bg(palette.plate(CHIP)))
-                .child(drawn_at(at))
-        };
-        let level = trigger(LEVEL, &self.level_at)
-            .when(self.a11y, |level| {
-                level.role(Role::Button).aria_label(tier.label())
-            })
-            .px(px(TRIGGER_X))
-            .gap(px(TRIGGER_GAP))
-            .on_click(cx.listener(|bar, _, window, cx| bar.level_menu(window, cx)))
-            .child(words(tier.label().into(), text))
-            .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, text));
         let (mark, said) = match self.composer_assistant() {
             Some(agent) => {
                 let model = self.composer_model().unwrap_or_default();
@@ -3847,64 +3808,55 @@ impl CommandBar {
             }
             None => (None, SIGN_IN.to_string()),
         };
-        let model = trigger(MODEL, &self.model_at)
-            .when(self.a11y, |model| {
-                model.role(Role::Button).aria_label(said.clone())
-            })
-            .pl(px(MODEL_LEFT))
-            .pr(px(TRIGGER_X))
-            .gap(px(MODEL_GAP))
-            .on_click(cx.listener(|bar, _, window, cx| bar.model_menu(window, cx)))
-            .children(mark.map(|mark| glyph(mark, MODEL_MARK, text)))
-            .child(words(said.into(), text))
-            .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, dim));
-        // The bar has one dim ink, which its foot's words (text-3) and the model's chevron
-        // (text-2) both wear, so the trigger wears it before a pick and after.
-        let effort = self.effort_words().map(|said| {
-            trigger(EFFORT, &self.effort_at)
-                .when(self.a11y, |effort| {
-                    effort.role(Role::Button).aria_label(said.clone())
-                })
-                .px(px(TRIGGER_X))
-                .gap(px(TRIGGER_GAP))
-                .on_click(cx.listener(|bar, _, window, cx| bar.effort_menu(window, cx)))
-                .child(words(said, dim))
-                .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, dim))
-        });
         let ready = !self.input.read(cx).text().trim().is_empty();
-        let (fill, arrow) = match ready {
-            true => (palette.accent.into(), palette.accent_label.into()),
-            false => (palette.plate(CHIP), dim),
+        let level = choices::Trigger {
+            id: LEVEL,
+            at: self.level_at.clone(),
+            click: Some(Box::new(
+                cx.listener(|bar, _, window, cx| bar.level_menu(window, cx)),
+            )),
         };
-        let start = div()
-            .id("composer-start")
-            .when(self.a11y, |start| {
-                start.role(Role::Button).aria_label(NEW_THREAD)
-            })
-            .size(px(START_SIZE))
-            .ml(px(START_SPACE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .bg(fill)
-            .on_click(cx.listener(|bar, _, window, cx| bar.run_ask(By::Pointer, window, cx)))
-            .child(glyph("icons/arrow-up.svg", START_ARROW, arrow));
-        div()
-            .h(px(CHOICES_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pb(px(CHOICES_UNDER))
-            .pl(px(CHOICES_LEFT))
-            .pr(px(CHOICES_RIGHT))
-            .gap(px(CHOICES_GAP))
-            .child(level)
-            .child(div().flex_1())
-            .child(model)
-            .children(effort)
-            .child(start)
+        let model = choices::Trigger {
+            id: MODEL,
+            at: self.model_at.clone(),
+            click: Some(Box::new(
+                cx.listener(|bar, _, window, cx| bar.model_menu(window, cx)),
+            )),
+        };
+        let effort = self.effort_words().map(|said| {
+            let effort = choices::Trigger {
+                id: EFFORT,
+                at: self.effort_at.clone(),
+                click: Some(Box::new(
+                    cx.listener(|bar, _, window, cx| bar.effort_menu(window, cx)),
+                )),
+            };
+            (said, effort)
+        });
+        let start = cx.listener(|bar, _, window, cx| bar.run_ask(By::Pointer, window, cx));
+        choices::row(choices::Row {
+            form: choices::Form::BAR,
+            inks: choices::Inks {
+                text: palette.on_overlay(TITLE),
+                dim: palette.on_overlay(DIM),
+                plate: palette.plate(CHIP),
+                primary: palette.accent.into(),
+                on_primary: palette.accent_label.into(),
+            },
+            a11y: self.a11y,
+            level: (tier, level),
+            model: Some((mark, said.into(), model)),
+            effort,
+            held: Vec::new(),
+            open: self.menu_open,
+            round: (
+                "composer-start",
+                NEW_THREAD.into(),
+                choices::Round::Go { ready },
+                Box::new(start),
+            ),
+            round_at: None,
+        })
     }
 
     /// The composer's foot: ⇥ and Back to Search, which a click does too, then what ↩ does.
@@ -4296,10 +4248,30 @@ impl CommandBar {
         self.ask.is_some()
     }
 
+    /// The assistant the composer would start its thread on, by id.
+    #[cfg(test)]
+    pub fn composer_agent(&self) -> Option<SharedString> {
+        self.composer_assistant().map(|agent| agent.id.clone())
+    }
+
+    /// Its field.
+    #[cfg(test)]
+    pub fn field(&self) -> Entity<TextInput> {
+        self.input.clone()
+    }
+
     /// What its field says with nothing typed.
     #[cfg(test)]
     pub fn placeholder(&self, cx: &App) -> SharedString {
         self.input.read(cx).placeholder().clone()
+    }
+
+    /// The resting bar's page is another empty Space's now. A composer open in the Space before
+    /// doesn't carry over, since that Space may be another profile's, whose remembered level is
+    /// its own: the bar is search again with the words kept, as ⌘T's keeps them on a change of
+    /// Space, and the level and model picked go with the composer.
+    pub fn space_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_ask(window, cx);
     }
 
     /// What the browser knows of the agents changed, as after it learned which are ready: a

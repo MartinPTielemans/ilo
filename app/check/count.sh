@@ -1,13 +1,14 @@
 # check.sh runs this at 620.
 # The daily usage count (#1977) goes once a UTC day to the endpoint the build names, and nowhere
 # else, against an endpoint of the run's own, check/count-server.py, as only the prod build names
-# ilo's. It's off until the user turns it on (#2978), in onboarding's last step, as they leave it,
-# or in Settings › Privacy. Each case has a profile of its own, which a launch finds new or not:
+# ilo's. It's off until the user turns it on (#2978), with Help improve, the switch at onboarding's
+# last step (7) that crash reports share, as they leave the step, or in Settings › Privacy. Each
+# case has a profile of its own, which a launch finds new or not:
 # 1. a new profile's launch sends nothing;
 # 2. onboarding left with its switch untouched, or turned on and off again, sends nothing;
-# 3. onboarding's switch turned on sends nothing while the step shows, and one count as Continue
-#    leaves it, flagged first, weekly and monthly, which holds exactly what the step and Settings ›
-#    Privacy say, without a cookie; the date the copy keeps is then today's;
+# 3. onboarding's switch turned on sends nothing while the step shows, and one count as Start
+#    Browsing leaves it, flagged first, weekly and monthly, which holds exactly what the step and
+#    Settings › Privacy say, without a cookie; the date the copy keeps is then today's;
 # 4. a profile from before the ask, which kept a count's date and no yes, sends nothing.
 # Then, on the yes profile:
 # - Send a Daily Usage Count turned off in Settings › Privacy drops the yes, and the next launch
@@ -23,7 +24,7 @@
 count_dir="$PWD/$out/count"
 rm -rf "$count_dir"
 mkdir -p "$count_dir/no-browsers"
-# The onboarding's import finds no browser in this home, so its step doesn't come.
+# The onboarding's import finds no browser in this home, so its step (3) doesn't come.
 import_home="$count_dir/no-browsers"
 ! windows || import_home=$(cygpath -w "$import_home")
 # As crash's collector, which cleanup stops if the run fails.
@@ -65,7 +66,7 @@ use_profile() {
 }
 # Launches the app on the run's profile, logging to $out/count-$1.log, with $2 as its endpoint, or
 # none, and waits for its page; or, with $3 "onboarding", gives it no page, so a new profile plays
-# the onboarding, and waits for its intro.
+# the onboarding, and waits for it to start.
 launch_count() {
   log="$out/count-$1.log"
   step=0
@@ -89,52 +90,28 @@ launch_count() {
   if [ -z "$onboarding" ]; then
     await_load
   else
-    await '^browser: onboarding step intro settled$' ||
+    await '^browser: onboarding started$' ||
       fail "$1: a new profile's first launch with no page didn't play the onboarding"
   fi
 }
-# Skip through the onboarding's steps to the opt-ins, before the keys, where the count's switch is.
-to_opt_ins() {
-  local steps each
-  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
-  case " $steps" in
-    *" opt-ins keys") ;;
-    *) fail "the onboarding's steps were '$steps', with the opt-ins not just before the keys" ;;
-  esac
-  # The welcome settled at launch and waits for Return, and each step after for the key that left
-  # the one before.
-  send key return
-  expect '^browser: onboarding left intro via return$' "Return didn't go on from the onboarding's welcome"
-  for each in $steps; do
-    [ "$each" = intro ] && continue
-    if [ "$step" = 0 ]; then
-      await "^browser: onboarding step $each settled\$" ||
-        fail "the onboarding's $each step didn't come after the intro"
-    else
-      expect "^browser: onboarding step $each settled\$" "the onboarding's $each step didn't come"
-    fi
-    [ "$each" = opt-ins ] && break
-    skip_step "$each"
-    expect "^browser: onboarding left $each via skip\$" "Skip didn't leave the $each step"
-  done
-  expect '^browser: onboarding daily-count at ' \
-    "the opt-ins step didn't draw the count's switch, though the build names an endpoint"
+# Goes through the onboarding's steps, taking nothing they offer, to the last, step 7,
+# where Help improve's switch is.
+to_done() {
+  walk_steps 7 "$1: "
+  expect '^browser: onboarding help-improve at ' \
+    "$1: the last step didn't draw Help improve's switch, though the build names an endpoint"
 }
-# Clicks the count's switch, where the app says it's drawn, which turns it $1, on or off.
+# Clicks Help improve's switch, where the app last said its knob is, and waits for the knob to end
+# its slide, so the next click or capture finds it where it rests.
 turn_count() {
-  send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f5-6)
-  expect "^browser: onboarding daily-count $1\$" "a click on the count's switch didn't turn it $1"
+  send click $(grep '^browser: onboarding help-improve at ' "$log" | tail -1 | cut -d' ' -f5-6)
+  expect '^browser: onboarding switch slid$' "a click on Help improve's switch didn't turn it"
 }
-# Leaves the opt-ins with $1, skip or the return key, and the keys after them with Return, which
-# ends the onboarding.
+# Leaves the last step with Return, Start Browsing, which ends the onboarding.
 leave_onboarding() {
-  case $1 in
-    skip) skip_step opt-ins ;;
-    *) send key "$1" ;;
-  esac
-  expect '^browser: onboarding step keys settled$' "$1 at the opt-ins step didn't go on to the keys"
   send key return
-  expect '^browser: onboarding done$' "Return at the keys' step didn't end the onboarding"
+  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
+  expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
   # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
   # open behind the browser's window with a click meant for it landing in the sidebar.
   expect '^browser: command bar shown$' "the onboarding didn't end with the command bar"
@@ -211,51 +188,48 @@ quit
 [ "$(counts)" = 0 ] || fail "a new profile's launch sent $(counts) counts, not none"
 [ ! -e "$last_file" ] || fail "a new profile's launch kept a count's date, though it sent none"
 
-# 2. Onboarding skipped with the switch untouched, or left with it turned on and off again, sends
-# nothing.
+# 2. Onboarding left with the switch untouched, or turned on and off again, sends nothing.
 use_profile skipped
 launch_count skipped "$endpoint/v1/daily" onboarding
-to_opt_ins
+to_done skipped
 ../tools/window-screenshot.sh "$pid" "$out/count-onboarding-off.png" || fail "no window to capture"
-leave_onboarding skip
-held_off "onboarding skipped"
-grep -q '^browser: onboarding daily-count set ' "$log" && fail "skipping the step set the count"
+leave_onboarding
+held_off "onboarding left with the switch untouched"
+grep -q '^browser: daily count switch ' "$log" && fail "leaving the switch untouched set the count"
 exec 3>&-
 quit
 use_profile again-off
 launch_count again-off "$endpoint/v1/daily" onboarding
-to_opt_ins
-turn_count on
-turn_count off
-leave_onboarding return
+to_done again-off
+turn_count
+turn_count
+leave_onboarding
 held_off "onboarding's switch turned on and off again"
-grep -q '^browser: onboarding daily-count set ' "$log" &&
+grep -q '^browser: daily count switch ' "$log" &&
   fail "the switch turned on and off again set the count"
 exec 3>&-
 quit
 [ "$(counts)" = 0 ] || fail "onboarding left with the count off sent $(counts) counts"
 
-# 3. Onboarding's switch turned on sends nothing while the step shows, and one count as Continue
-# leaves it, flagged first, weekly and monthly.
+# 3. Onboarding's switch turned on sends nothing while the step shows, and one count as Start
+# Browsing leaves it, flagged first, weekly and monthly.
 use_profile yes
 launch_count yes "$endpoint/v1/daily" onboarding
-to_opt_ins
-turn_count on
+to_done yes
+turn_count
 ../tools/window-screenshot.sh "$pid" "$out/count-onboarding-on.png" || fail "no window to capture"
 [ ! -e "$yes_file" ] || fail "the switch turned on kept a yes while the step showed"
 grep -q '^browser: daily count switch ' "$log" && fail "the switch turned on set the count at once"
-leave_onboarding return
-# Both come as Return leaves the step, before the onboarding's end, so before the Esc that closed
+leave_onboarding
+# It comes as Return leaves the step, before the onboarding's end, so before the Esc that closed
 # the command bar after it.
-grep -q '^browser: onboarding daily-count set on$' "$log" ||
-  fail "Continue with the switch on didn't set the count"
 grep -q '^browser: daily count switch on$' "$log" ||
-  fail "Continue with the switch on didn't reach the count"
+  fail "Start Browsing with the switch on didn't reach the count"
 await '^browser: daily count sending first true weekly true monthly true$' ||
-  fail "Continue with the switch on didn't send a count flagged first, weekly and monthly"
-await '^browser: daily count sent$' || fail "the endpoint didn't take the count after Continue"
-[ -e "$yes_file" ] || fail "Continue with the switch on kept no yes, $yes_file"
-[ "$(counts)" = 1 ] || fail "Continue with the switch on sent $(counts) counts, not one"
+  fail "Start Browsing with the switch on didn't send a count flagged first, weekly and monthly"
+await '^browser: daily count sent$' || fail "the endpoint didn't take the count after Start Browsing"
+[ -e "$yes_file" ] || fail "Start Browsing with the switch on kept no yes, $yes_file"
+[ "$(counts)" = 1 ] || fail "Start Browsing with the switch on sent $(counts) counts, not one"
 check_count 1 true true true
 first_count=$why
 [ "$(cat "$last_file" 2>/dev/null)" = "$(utc_day 0)" ] ||
@@ -344,9 +318,9 @@ quit
 grep -q '^browser: daily count sending' "$log" && fail "the dev build sent a count"
 kill "$collector" 2>/dev/null || true
 collector=
-echo "ok: a new profile sent no count, nor did onboarding skipped or left with its switch turned" \
+echo "ok: a new profile sent no count, nor did onboarding left with its switch untouched or turned" \
   "on and off again, nor a profile from before the ask that had sent counts. Onboarding's switch" \
-  "turned on sent nothing while the step showed, and one count as Continue left it, flagged" \
+  "turned on sent nothing while the step showed, and one count as Start Browsing left it, flagged" \
   "first, weekly and monthly, without a cookie: $first_count. Turned off in Settings › Privacy," \
   "the next launch sent none though one was due, and turned back on it sent the day's, weekly" \
   "$weekly and monthly $monthly. One the endpoint refused kept yesterday's date, and the next" \

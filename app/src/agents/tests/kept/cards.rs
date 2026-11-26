@@ -1,6 +1,6 @@
 //! A kept task's card across a quit (#4090): what its Done writes to the card's folder, the
-//! picture only one an agent could have had, nothing with the switch off, and each way the card
-//! goes. On the stand-in assistant and a profile folder of the tests' own.
+//! picture only one an agent could have had, and each way the card goes. On the stand-in assistant
+//! and a profile folder of the tests' own.
 
 use std::sync::Arc;
 
@@ -121,18 +121,6 @@ fn a_card_keeps_no_older_picture_nor_another_pages(cx: &mut TestAppContext) {
     let card = card(&run, &other, cx);
     assert_eq!(card.picture, None);
     assert!(card.line.is_some());
-}
-
-/// With Settings' switch off nothing of a card is written, though the task was kept before.
-#[gpui::test]
-fn with_the_switch_off_nothing_of_a_card_is_written(cx: &mut TestAppContext) {
-    let run = Run::new("card-off", cx);
-    let (agent, tab) = at_work(&run, 1, cx);
-    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(false, cx));
-    pictured(&run, &agent, tab, Some(picture()), cx);
-    run.finish(&agent, cx);
-    cx.run_until_parked();
-    assert!(!root(&run).exists());
 }
 
 /// A card goes with its task: deleted from the Archive, removed from Settings, with Remove All

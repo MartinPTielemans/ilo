@@ -241,13 +241,10 @@ impl Level {
     }
 }
 
-/// A menu's glass (#4090): a popover with two shadows of its own, close and wide, fainter in the
-/// `light` look, under the levels' outline.
-pub fn menu_shadow(light: bool) -> Vec<BoxShadow> {
-    let (contact, wide) = match light {
-        true => (t::LIGHT_MENU_CONTACT, t::LIGHT_MENU_SHADOW),
-        false => (t::MENU_CONTACT, t::MENU_SHADOW),
-    };
+/// What floats' shadows (#4090), wide and close, the same in both looks, under the levels' outline:
+/// a menu's glass, the downloads plate's.
+pub fn menu_shadow() -> Vec<BoxShadow> {
+    use crate::tokens::floating as f;
     let shadow = |color: u32, y: f32, blur: f32| BoxShadow {
         color: rgba(color).into(),
         offset: point(px(0.), px(y)),
@@ -256,16 +253,17 @@ pub fn menu_shadow(light: bool) -> Vec<BoxShadow> {
         inset: false,
     };
     vec![
-        shadow(wide, t::MENU_SHADOW_Y, t::MENU_SHADOW_BLUR),
-        shadow(contact, t::MENU_CONTACT_Y, t::MENU_CONTACT_BLUR),
+        shadow(f::SHADOW, f::SHADOW_Y, f::SHADOW_BLUR),
+        shadow(f::CONTACT, f::CONTACT_Y, f::CONTACT_BLUR),
         shadow(t::OUTLINE, 0., t::OUTLINE_BLUR),
     ]
 }
 
 /// How much room a menu's window leaves round its panels for `menu_shadow`, in either look.
 pub fn menu_reach() -> Reach {
-    let wide = reach_of(t::MENU_SHADOW, t::MENU_SHADOW_Y, t::MENU_SHADOW_BLUR);
-    let contact = reach_of(t::MENU_CONTACT, t::MENU_CONTACT_Y, t::MENU_CONTACT_BLUR);
+    use crate::tokens::floating as f;
+    let wide = reach_of(f::SHADOW, f::SHADOW_Y, f::SHADOW_BLUR);
+    let contact = reach_of(f::CONTACT, f::CONTACT_Y, f::CONTACT_BLUR);
     Reach {
         above: wide.above.max(contact.above),
         below: wide.below.max(contact.below),

@@ -432,7 +432,7 @@ impl gpui::Render for PicturesPage {
                     ),
                     feature(
                         "icons/cable.svg",
-                        "MCP client",
+                        "Another app",
                         "Any MCP client",
                         vec![button("connect-other", "Connect")],
                     ),
