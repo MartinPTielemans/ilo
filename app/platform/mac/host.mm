@@ -2144,6 +2144,9 @@ void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
 
+// Whether the window first run held is on, in the place of first run's (host_close_first_run).
+static bool g_took_first_runs_place;
+
 void host_show_window_behind(void* ui_view, void* above_ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
@@ -2157,6 +2160,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   // window ordered in: first run's card has just grown to that frame, or faded where it stood.
   if (browser->held) {
     window.animationBehavior = NSWindowAnimationBehaviorNone;
+    g_took_first_runs_place = true;
   }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
@@ -6393,6 +6397,12 @@ void host_show_first_run(void) {
 }
 
 void host_close_first_run(void) {
+  // With the window it held on in its place, it goes whole on this turn, with none of AppKit's
+  // fade for a window ordered out: what fades behind that window shows through its material.
+  if (g_took_first_runs_place) {
+    g_took_first_runs_place = false;
+    g_first_run.animationBehavior = NSWindowAnimationBehaviorNone;
+  }
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;

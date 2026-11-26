@@ -2392,11 +2392,14 @@ impl Browser for Engine {
     }
 
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        // The browser window first, then first run's off on the same turn, as the launch window
+        // gives way: taken off first, it would still be leaving behind the browser window, and
+        // show through its material.
+        show_window_held_for_first_run();
         unsafe { platform::host_close_first_run() };
         window
             .update(cx, |_, window, _| window.remove_window())
             .ok();
-        show_window_held_for_first_run();
     }
 
     fn new_private_window(&self, cx: &mut App) {

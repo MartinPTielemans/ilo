@@ -179,35 +179,42 @@ fn a_cross_fades_last_frame_draws_no_card(cx: &mut TestAppContext) {
     assert_eq!(plates().last(), Some(&None));
 }
 
-/// As the card grows, the host's glass is given the shape of the frame before: it reaches the
-/// screen a frame ahead of the card the UI draws with it, so it's never outside the fill. On the
-/// frame the exit ends on too.
+/// As the card grows, the host's glass is given each frame's own shape and the card is drawn in
+/// the shape its glass had on the frame before, centred in its window: the glass reaches the
+/// screen a frame after the card the UI draws with it, so a frame behind it the fill and the
+/// glass grow together. The frame the exit ends on draws the grown card whole, its glass told
+/// the same.
 #[gpui::test]
-fn the_glass_takes_the_shape_of_the_frame_before(cx: &mut TestAppContext) {
+fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
     pressed_and_grown(&shell, cx, &host);
-    for _ in 0..3 {
+    for _ in 0..5 {
         later(&shell, cx, x::GROW / 8.);
     }
     later(&shell, cx, x::GROW);
     assert_eq!(step(&shell, cx), None, "the exit ended");
     let drawn = DRAWN.with_borrow(|drawn| drawn.clone());
+    let frames: Vec<_> = drawn
+        .iter()
+        .map(|each| each.unwrap_or_else(|| panic!("the card on every frame: {drawn:?}")))
+        .collect();
+    let (ending, running) = frames.split_last().unwrap();
     let mut grew = 0;
-    for pair in drawn.windows(2) {
-        let [
-            Some(((_, _, w, h, radius), ..)),
-            Some(((_, _, now, ..), _, glass)),
-        ] = pair
-        else {
-            panic!("the card on every frame: {drawn:?}");
-        };
-        assert_eq!(*glass, (*w, *h, *radius), "the card of the frame before");
-        grew += usize::from(now > w);
+    for pair in running.windows(2) {
+        let (_, _, before) = pair[0];
+        let ((x, y, w, h, radius), _, glass) = pair[1];
+        assert_eq!((w, h, radius), before, "its glass's shape a frame before");
+        if glass.0 > before.0 {
+            grew += 1;
+            let centred = ((GROWN.0 - w) / 2., (GROWN.1 - h) / 2.);
+            assert_eq!((x, y), centred, "centred in its window");
+        }
     }
-    assert!(grew >= 4, "the card grew frame by frame: {drawn:?}");
-    // And that's what the host was told, the last of it too.
-    let glass = drawn.last().copied().flatten().map(|(.., glass)| glass);
-    assert_eq!(shapes(&host.take()).last().copied(), glass);
+    assert!(grew >= 4, "the glass grew frame by frame: {drawn:?}");
+    // The frame it ends on is the grown card and its glass the same, the last the host was told.
+    let ((_, _, w, h, radius), _, glass) = *ending;
+    assert_eq!(glass, (w, h, radius));
+    assert_eq!(shapes(&host.take()).last().copied(), Some(glass));
 }
 
 /// The step's knot fades with the card's words and the plate grows plain: the exit draws no knot

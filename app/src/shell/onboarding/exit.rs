@@ -57,18 +57,13 @@ impl Onboarding {
     pub(super) fn grown(&self, still: bool) -> bool {
         !still && self.grows == Some(true)
     }
+}
 
-    /// The shape the host's glass takes for a card drawn as `drawn` on this frame. The glass is
-    /// the system's and reaches the screen a frame before the card the UI draws with it, so while
-    /// the exit grows the card the host is given the shape of the frame before, and the glass is
-    /// never ahead of the fill. On the frame it ends on too.
-    pub(super) fn glass_shape(&mut self, drawn: (f32, f32, f32)) -> (f32, f32, f32) {
-        let before = self.drawn.replace(drawn);
-        match self.ending {
-            Some(_) => before.unwrap_or(drawn),
-            None => drawn,
-        }
-    }
+/// The plate of a card drawn in `shape`, its width, height and radius, centred in a window `size`
+/// across: the exit's card in the shape its glass was given on the frame before.
+pub(super) fn behind(shape: (f32, f32, f32), size: (f32, f32)) -> Plate {
+    let (w, h, radius) = shape;
+    ((size.0 - w) / 2., (size.1 - h) / 2., w, h, radius)
 }
 
 /// The exit's frame `at` seconds in, in a window `size` across on this frame, as the host may

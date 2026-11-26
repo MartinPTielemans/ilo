@@ -794,7 +794,9 @@ bool host_grow_first_run(void);
 // the only window on screen.
 void host_show_first_run(void);
 
-// Takes first run's window off screen for good, before the UI closes it.
+// Takes first run's window off screen for good, before the UI closes it. Called once the window it
+// held is on (host_show_window), it goes at once, without the system's motion for a window ordered
+// out, so nothing of it is behind that window.
 void host_close_first_run(void);
 
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
