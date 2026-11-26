@@ -539,6 +539,33 @@ fn a_helpers_lines_are_never_the_tasks_finding(cx: &mut TestAppContext) {
     assert_eq!(card(&run, cx).finding, "Two seats at 9:05, car 4.");
 }
 
+/// A card's maker says where its status is its state's word in the fuller form, which its line
+/// then says in the word's place: the helpers' line and how far a stopped task got are, a step of
+/// the task's own isn't.
+#[gpui::test]
+fn a_card_says_where_its_status_is_its_words_fuller_form(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("fuller", cx);
+    pages(&run, 1);
+    outline(&run, &agent, PAGES[0].0, cx);
+    let step = card(&run, cx);
+    assert_eq!(
+        (step.dot, step.fuller),
+        (Dot::Working, false),
+        "{}",
+        step.status
+    );
+    begun(&run, &agent, "toolu_a", cx);
+    let helpers = card(&run, cx);
+    assert_eq!(helpers.status, live(&run, &agent, cx).line());
+    assert!(helpers.fuller, "the helpers' line isn't the word's form");
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::Stop, cx)
+    });
+    let stopped = card(&run, cx);
+    assert_eq!(stopped.dot, Dot::Ended);
+    assert!(stopped.fuller, "{}", stopped.status);
+}
+
 /// A helper is counted and shown from its start: before it has done anything its line stands,
 /// under way, with the name its task gave it, and the live line and the card count it. The page
 /// it opens is its own, never a step of the task's nor a group of them, and has its own step on

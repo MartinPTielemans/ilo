@@ -8,7 +8,7 @@
 //! and sessions live as long as the browser runs: their Spaces go when a task is dropped, at quit, and at the next launch for
 //! any a crash left.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -629,6 +629,10 @@ pub struct Card {
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
+    /// Whether `status` is `word` in the fuller form ilo has for it, which its card's line says in
+    /// the word's place: how far a stopped task got, a session's receipt, the helpers at work.
+    /// Set where the status is made, so no place reads it off the words.
+    pub fuller: bool,
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
@@ -757,6 +761,31 @@ impl Word {
         match self {
             Self::AtLimit => format!("{name} at limit").into(),
             word => word.after_name().into(),
+        }
+    }
+}
+
+/// What an agent's `done` came to: the fact its caller logs by, never its answer's words.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum SaidDone {
+    /// Its session under way ended.
+    Ended,
+    /// It had none under way, which is no error and nothing to log.
+    NoTask,
+    /// Another call of its own is still under way, which the refusal names.
+    UnderWay(String),
+}
+
+impl SaidDone {
+    /// What the agent is answered.
+    pub(super) fn answer(self) -> super::ToolResult {
+        match self {
+            Self::Ended => super::ToolResult::text(
+                "Your task is done: its card says so. Pages of yours still open stay in your \
+                Space for the user to open from it. Your next call starts a new task.",
+            ),
+            Self::NoTask => super::ToolResult::text("No task of yours is under way."),
+            Self::UnderWay(why) => super::ToolResult::error(why),
         }
     }
 }
@@ -942,6 +971,9 @@ pub struct Tasks {
     /// The name each outside agent gave on each of its connections (`session_connection`), by its
     /// id and the connection, for that connection's session's card.
     pub(super) names: HashMap<(String, u64), SharedString>,
+    /// Of those, the connections of an outside app that gave no name, or one treated as none, so
+    /// theirs is its kind's (`hello`).
+    pub(super) nameless: HashSet<(String, u64)>,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
     /// Whether ⌘T's ask has shown in this run, which learns again once.
@@ -1385,17 +1417,25 @@ impl Agents {
     pub fn card(&self, task: &Task, cx: &App) -> Card {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
-        let (status, dot) = match (&task.state, &question) {
+        // With each status, whether it's its state's word in the fuller form (`Card::fuller`).
+        let (status, dot, fuller) = match (&task.state, &question) {
             (State::Working | State::Asking { .. }, Some(question)) => {
-                (needs_you(question), Dot::Waiting)
+                (needs_you(question), Dot::Waiting, false)
             }
             // A refusal the user hasn't settled says where it stopped, as its line says why.
-            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => {
-                (format!("{STOPPED_AT} {}", stop.at).into(), Dot::Waiting)
+            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => (
+                format!("{STOPPED_AT} {}", stop.at).into(),
+                Dot::Waiting,
+                false,
+            ),
+            (State::Working, None) => {
+                let (status, helpers) = working(task);
+                (status, Dot::Working, helpers)
             }
-            (State::Working, None) => (working(task), Dot::Working),
-            (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
-            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
+            (State::Asking { question, .. }, None) if asks => {
+                (question.clone(), Dot::Waiting, false)
+            }
+            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting, false),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -1403,7 +1443,7 @@ impl Agents {
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (receipt(session, &at).into(), Dot::Done)
+                (receipt(session, &at).into(), Dot::Done, true)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -1414,10 +1454,13 @@ impl Agents {
             ) => (
                 summary.clone().unwrap_or_else(|| first_words(result)),
                 Dot::Done,
+                false,
             ),
-            (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
-            (State::Stopped, _) => (stopped(task), Dot::Ended),
-            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
+            (State::Limit { resets }, _) => {
+                (limit_words(&task.name, resets).into(), Dot::Ended, false)
+            }
+            (State::Stopped, _) => (stopped(task), Dot::Ended, true),
+            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended, false),
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
@@ -1446,6 +1489,7 @@ impl Agents {
             replies: task.session.is_none(),
             title: task.title.clone(),
             status,
+            fuller,
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
@@ -3293,18 +3337,23 @@ impl Agents {
             task.state == State::Working
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
         });
-        let name = match Client::from_id(agent) {
+        let (name, nameless) = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
                 if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
             {
-                given
+                (given, false)
             }
-            Some(known) => known.name().to_string(),
+            Some(known) => (known.name().to_string(), known == Client::Other),
             None => return,
         };
         let name = page::clip(&name, 60).into();
-        self.tasks.names.insert((agent.into(), connection), name);
+        let key = (agent.to_string(), connection);
+        match nameless {
+            true => self.tasks.nameless.insert(key.clone()),
+            false => self.tasks.nameless.remove(&key),
+        };
+        self.tasks.names.insert(key, name);
     }
 
     /// The client's `connection` closed: its name goes, but for the client's last, which shows
@@ -3312,7 +3361,9 @@ impl Agents {
     pub(super) fn goodbye(&mut self, agent: &str, connection: u64) {
         let others = (self.tasks.names.keys()).any(|(each, on)| each == agent && *on != connection);
         if others {
-            self.tasks.names.remove(&(agent.into(), connection));
+            let key = (agent.to_string(), connection);
+            self.tasks.names.remove(&key);
+            self.tasks.nameless.remove(&key);
         }
     }
 
@@ -3322,6 +3373,17 @@ impl Agents {
             .filter(|((each, _), _)| each == agent)
             .max_by_key(|((_, connection), _)| *connection)
             .map(|(_, name)| name.clone())
+    }
+
+    /// Whether the name `agent` shows on `connection`, or where that connection gave none, is its
+    /// kind's because it gave no name of its own: an outside app's that gave none, or one treated
+    /// as none.
+    pub(super) fn nameless_on(&self, agent: &str, connection: Option<u64>) -> bool {
+        let key = connection.map(|on| (agent.to_string(), on));
+        match key.filter(|key| self.tasks.names.contains_key(key)) {
+            Some(key) => self.tasks.nameless.contains(&key),
+            None => Client::from_id(agent) == Some(Client::Other),
+        }
     }
 
     /// The connection whose session's card has `tab` among its pages, of `agent`'s, for what its
@@ -3729,19 +3791,14 @@ impl Agents {
     /// `agent`'s call `call` said its task is done (#3652): its session under way is, unless
     /// another call of its own is still under way, such as one waiting on the user, which it
     /// names. A done never leaves a question behind.
-    pub(super) fn said_done(
-        &mut self,
-        agent: &str,
-        call: u64,
-        cx: &mut Context<Self>,
-    ) -> Result<String, String> {
+    pub(super) fn said_done(&mut self, agent: &str, call: u64, cx: &mut Context<Self>) -> SaidDone {
         let live = (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
                 && (task.session.as_ref())
                     .is_some_and(|session| session.agent == agent && session.calls.contains(&call))
         });
         let Some(task) = live else {
-            return Ok("No task of yours is under way.".into());
+            return SaidDone::NoTask;
         };
         let session = task.session.as_ref().expect("a session, as found");
         let under_way = (session.calls.iter()).filter(|each| **each != call).min();
@@ -3752,17 +3809,13 @@ impl Agents {
                 Some(tab) => format!(" on tab {tab}"),
                 None => String::new(),
             };
-            return Err(format!(
+            return SaidDone::UnderWay(format!(
                 "Your {tool}{on} is still under way: call done once it's answered."
             ));
         }
         let key = task.agent.clone();
         self.session_done(&key, cx);
-        Ok(
-            "Your task is done: its card says so. Pages of yours still open stay in your Space \
-            for the user to open from it. Your next call starts a new task."
-                .into(),
-        )
+        SaidDone::Ended
     }
 
     /// From now, the session ends once QUIET passes without a call, if none of its pages is
@@ -4344,9 +4397,10 @@ fn plain_text(text: &str) -> String {
     plain.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A result's first words for its card's line: its first line of text, or "Finished" with none.
+/// A result's first words for its card's line: its first line of text, or its state's word alone
+/// with none, which no card draws a second time.
 fn first_words(result: &str) -> SharedString {
-    first_line(result).unwrap_or_else(|| "Finished".into())
+    first_line(result).unwrap_or_else(|| Word::Done.after_name().into())
 }
 
 /// A result's first line of text, without the marks that make it a heading, a list's item or
@@ -4543,19 +4597,20 @@ fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
 /// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
-/// step comes, never on a clock.
-fn working(task: &Task) -> SharedString {
+/// step comes, never on a clock. With it, whether it's the helpers' line, the word Working in its
+/// fuller form (`Card::fuller`).
+fn working(task: &Task) -> (SharedString, bool) {
     // With helpers at work, the conversation's live line, in its own words: their steps come in
     // turn, and a card that said each would flicker between them.
     let helpers = helpers_under_way(task);
     if helpers > 0 {
         let (title, counted) = summary(None, (helpers, Counted::Helpers));
-        return format!("{title} · {counted}").into();
+        return (format!("{title} · {counted}").into(), true);
     }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
     // name, then what it's doing, whose room the step count would take (#3690).
-    match (taken.first(), &task.session) {
+    let step: SharedString = match (taken.first(), &task.session) {
         (Some(step), Some(_)) => format!(
             "{} · {}",
             task.name,
@@ -4570,7 +4625,8 @@ fn working(task: &Task) -> SharedString {
         .into(),
         (None, Some(_)) => format!("{} · no steps yet", task.name).into(),
         (None, None) => "Thinking · no steps yet".into(),
-    }
+    };
+    (step, false)
 }
 
 /// How many helpers the stretch under way of a working task has, which its conversation's live
@@ -5491,12 +5547,14 @@ fn names_a_client(name: &str) -> bool {
         })
 }
 
-/// Whether a client's name would pass for the browser's own words: one with the app's name as a
-/// word, or that calls itself the browser. "Browser Use" is an agent's.
+/// Whether a client's name would pass for the browser's own words: one with the app's name or the
+/// product's, as the user reads it, as a word, or that calls itself the browser. "Browser Use" is
+/// an agent's.
 fn names_the_browser(name: &str) -> bool {
     let read = reads_as(name);
-    let app = reads_as(env!("APP_NAME"));
-    read.split(' ').any(|word| word == app)
+    let names = [env!("APP_NAME"), crate::product::PRODUCT].map(reads_as);
+    read.split(' ')
+        .any(|word| names.iter().any(|name| word == name))
         || ["the browser", "your browser", "this browser", "web browser"]
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))

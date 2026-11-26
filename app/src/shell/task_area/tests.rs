@@ -1248,6 +1248,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1852,6 +1853,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     };

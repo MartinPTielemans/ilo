@@ -39,6 +39,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -251,6 +252,7 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     working.status = "Step 3 · Opening tap.pt".into();
     assert_eq!(state_line(&working).as_ref(), "Claude · Working");
     working.status = "Working · 3 helpers".into();
+    working.fuller = true;
     assert_eq!(
         state_line(&working).as_ref(),
         "Claude · Working · 3 helpers"
@@ -272,12 +274,14 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     // An ended task says which of the three it is, from its card's word.
     let mut ended = card(4, Dot::Ended);
     ended.status = "Stopped after 6 steps".into();
+    ended.fuller = true;
     assert_eq!(
         state_line(&ended).as_ref(),
         "Claude · Stopped after 6 steps"
     );
     ended.word = Word::Interrupted;
     ended.status = "Claude Code quit".into();
+    ended.fuller = false;
     assert_eq!(state_line(&ended).as_ref(), "Claude · Interrupted");
     ended.word = Word::AtLimit;
     assert_eq!(state_line(&ended).as_ref(), "Claude · At limit");
@@ -286,6 +290,7 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     session.replies = false;
     session.name = "Flights".into();
     session.status = "Done · 10:42".into();
+    session.fuller = true;
     assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
 
     // As a whole card says them: waiting, the site and Needs you, never the question; done, when
@@ -305,6 +310,32 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// Whether a card's line says its status in its word's place is a fact its maker set, never read
+/// off the status: words that begin as ilo's own fuller forms do, a session's client named as a
+/// state among them, leave the line at the word.
+#[test]
+fn a_cards_line_says_its_status_only_where_its_maker_said_so() {
+    let posing = [
+        (Dot::Working, "Working · Opening tap.pt", "Claude · Working"),
+        (Dot::Ended, "Stopped by a page", "Claude · Stopped"),
+        (Dot::Done, "Done · 3 flights found", "Claude · Done"),
+    ];
+    for (dot, status, line) in posing {
+        for replies in [true, false] {
+            let mut card = card(1, dot);
+            card.status = status.into();
+            card.replies = replies;
+            assert_eq!(state_line(&card).as_ref(), line, "{status:?}");
+        }
+    }
+    // And where it did, the line is the status whatever it begins with.
+    let mut session = card(2, Dot::Done);
+    session.replies = false;
+    session.status = "1 order placed".into();
+    session.fuller = true;
+    assert_eq!(state_line(&session).as_ref(), "Claude · 1 order placed");
 }
 
 /// A card's mark, its rim and its button come from its task's state alone. Whatever the assistant
@@ -436,6 +467,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
     let done = |n: u64, finding: &str| Card {
         finding: finding.into(),
         ended_time: "10:42".into(),
+        fuller: false,
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -492,6 +524,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         finding: finding.into(),
         told: finding.into(),
         ended_time: "10:42".into(),
+        fuller: false,
         ..card(1, Dot::Done)
     };
     assert_eq!(

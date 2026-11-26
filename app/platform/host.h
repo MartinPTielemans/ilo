@@ -763,10 +763,16 @@ void host_show_settings(void);
 // Hides the Settings window, which keeps its place for the next host_show_settings.
 void host_hide_settings(void);
 
-// Makes the window of |first_run_view| first run's window: a window of its own that can't be
-// resized or zoomed, with the system's window buttons, whose close the view answers (Skip Setup).
-// It starts hidden.
+// Makes the window of |first_run_view| first run's window: a window of its own, the card's size,
+// that can't be resized, with no title bar, window buttons or frame of the system's, as the card
+// is the window. It starts hidden.
 void host_add_first_run(void* first_run_view);
+
+// Shapes first run's window as its card is now: |width| by |height| points centred in it, with
+// corners of |radius|. The system's blur, where the window has it, and its shadow are behind that
+// shape alone. The UI calls it on the entry's frames as the card grows and once as the entry ends,
+// never after, so nothing keeps it alive. A host that can't shape a window does nothing.
+void host_set_first_run_frame(double width, double height, double radius);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
 // screen the browser window opens on, and takes the launch window down: until first run ends it's

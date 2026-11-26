@@ -417,7 +417,7 @@ listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
 agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
 # Its Space is the agent's alone, which no window lists (#1080), and list_tabs alone starts no card.
-await_log "^browser: task space $agent MCP client\$" "the window didn't keep the agent's Space apart"
+await_log "^browser: task space $agent Another app\$" "the window didn't keep the agent's Space apart"
 grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
 grep -q '^browser: session ' "$log" && fail "list_tabs alone started the client's card"
 case "$listed" in

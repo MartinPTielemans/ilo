@@ -247,6 +247,8 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        // Its ended task is the stopped one, whose status is how far it got.
+        fuller: dot == Dot::Ended,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -268,6 +270,8 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             replies: false,
             title: "Claude Code".into(),
             status: status.into(),
+            // Done, its status is its receipt.
+            fuller: dot == Dot::Done,
             dot,
             word: Word::for_dot(dot),
             pages: Vec::new(),
@@ -292,7 +296,10 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
         }
-        (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
+        (Some(count), false) => {
+            cards[0].status = helper_trace(count, false).line();
+            cards[0].fuller = true;
+        }
         (None, _) => {}
     }
     if bench_yours() {
@@ -301,6 +308,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             browser::agents::task::NEEDS_YOU
         )
         .into();
+        cards[0].fuller = false;
         cards[0].dot = Dot::Waiting;
     }
     // Each helper's page has its own step, which the strip under it and its tile say.
@@ -318,6 +326,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
     if let Some(name) = bench_ended() {
         cards[0].name = name.into();
         cards[0].status = "Two seats in row 12 are in your basket".into();
+        cards[0].fuller = false;
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
     }
@@ -329,12 +338,14 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
                 browser::agents::task::NEEDS_YOU
             )
             .into();
+            cards[0].fuller = false;
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
             cards.truncate(1);
         }
         Some("interrupted") => {
             cards[0].status = "Claude Code isn't signed in.".into();
+            cards[0].fuller = false;
             cards[0].dot = Dot::Ended;
             cards[0].word = Word::Interrupted;
             cards[0].fix = Some((
