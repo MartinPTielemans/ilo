@@ -64,6 +64,12 @@ The most common defect is a change that works on the path you tested and is miss
 - For UI, the proof is the running app. Launch it, wait for the event that marks the milestone (a check that needs a fixed sleep to pass is wrong), capture the window with `tools/window-screenshot.sh`, and look at the image before saying it works. The owner is often away from the Mac, so your capture is the proof they get.
 - Test behavior and relations, not wiring, pixels or copy; spec values come from tokens.
 
+## Session hygiene
+
+- **One issue, one scoped session.** Start from a clean worktree on `origin/main`, keep changes to the issue in front of you, and start a fresh session for unrelated follow-ups instead of reusing one long thread across multiple PRs.
+- **Iterate lean.** Use `cargo test --profile fast --lib` and targeted `./check.sh <subset>` while working, and full release checks once before merging. Prefer built-in file read and search tools over repetitive shell loops.
+- **Keep captures small.** Resize or crop screenshots before inspecting them (`sips -Z 1000` or crop to the changed area), read each capture once, and hand bulk screenshot sweeps to a fresh subagent that reports back in text.
+
 ## Commits and pull requests
 
 - Commit only when asked, with `git commit -s`. The `Signed-off-by` line is the owner's [DCO](CONTRIBUTING.md#sign-off) certification.
