@@ -52,8 +52,9 @@ pub const COPIED_NOTE: &str = "Copied. The clipboard forgets them in a minute an
 pub(crate) const REFUSED_WORDS: &str = "These aren't 24 recovery words. Check each one.";
 /// A new device that isn't asking the others to add it, with nothing gone wrong.
 pub(crate) const ASK_ANOTHER: &str = "Ask a device already signed in to add this one.";
-/// While the sign-in window is open.
-pub(crate) const FINISH_SIGN_IN: &str = "Finish in the window that opened.";
+/// While the sign-in window is open: ChatGPT's own line, as both wait in a window the browser
+/// opens, so the account and the assistant say it alike (FR19).
+pub(crate) const FINISH_SIGN_IN: &str = crate::agents::sign_in::CHATGPT_WAITING;
 /// The metadata that has GPUI's Linux clipboard offer a copy with KDE's password manager hint,
 /// which Klipper and the clipboard managers that follow it don't record (patches/
 /// gpui-linux-embedded.patch).

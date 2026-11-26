@@ -1287,3 +1287,11 @@ fn since_reads_as_the_line_puts_it() {
     assert_eq!(since_when(today - 80. * hour, days), "for 4 days");
     assert_eq!(since_when(0., days), "");
 }
+
+/// Settings › Sync and first run's card say one line while the account's sign-in window is up, and
+/// it's ChatGPT's, whose sign-in also waits in a window the browser opens (FR19). The line is drawn
+/// as plain text, which an assistive app's tree doesn't hold, so the test holds the line they read.
+#[test]
+fn the_sign_in_wait_says_the_assistants_line() {
+    assert_eq!(FINISH_SIGN_IN, crate::agents::sign_in::CHATGPT_WAITING);
+}
