@@ -589,7 +589,7 @@ void WriteToAgentPage(base::WeakPtr<Profile> profile,
       profile->GetDefaultStoragePartition(), newer, {},
       base::BindOnce(
           [](const std::string& site, size_t kept, base::OnceClosure done, size_t cookies, size_t) {
-            // check.sh reads this line. Counts only: never a name or a value.
+            // Counts only: never a cookie name or value.
             fprintf(stderr,
                     "browser: copied %zu cookies for %s into an agent's page, %zu newer there "
                     "kept\n",
