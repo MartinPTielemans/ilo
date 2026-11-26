@@ -813,6 +813,9 @@ typedef struct bc_sync_state {
   // While signed in, the address Google signs in to the account with, once bc_sync_read_google has
   // read it, else "". The server keeps only Google's id for it, and names the account's address.
   const char* google_email;
+  // While signed in, the last bc_sync_remove_google failed: it didn't reach the server, or the
+  // server refused it. Until the next bc_sync_read_google or bc_sync_remove_google.
+  bool google_remove_failed;
 } bc_sync_state;
 
 // What bc_sync_choose turns on or off.
@@ -4472,7 +4475,9 @@ BC_EXPORT void bc_sync_remove_device(const char* id);
 BC_EXPORT void bc_sync_read_google(void);
 
 // Stops Google signing in to the account, while signed in. The mailed code still does, and so does
-// Google again once the user has entered one. Then sync_changed, google_email "".
+// Google again once the user has entered one. Then sync_changed, google_email "", or
+// google_remove_failed if it didn't reach the server or the server refused it. Removed already
+// (by another device) counts as removed.
 BC_EXPORT void bc_sync_remove_google(void);
 
 // Reads how sync is keeping up with the server into |activity|, with BC_SYNC_ON, else zero. Read

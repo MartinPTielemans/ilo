@@ -29,4 +29,8 @@ bool OffersGoogle(const base::DictValue& discovery) {
   return discovery.FindBool("ilo_google").value_or(false);
 }
 
+bool GoogleRemoved(int status) {
+  return status == 204 || status == 404;
+}
+
 }  // namespace browser_core::sync_sign_in

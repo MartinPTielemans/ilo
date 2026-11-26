@@ -27,6 +27,11 @@ GURL AuthorizeUrl(const GURL& server,
 // its ilo_google, true and nothing else.
 bool OffersGoogle(const base::DictValue& discovery);
 
+// Whether the server's |status| for DELETE /api/identities/google means Google no longer signs in
+// to the account: removed, or removed already, by another device. Any other answer, or none (0),
+// leaves it.
+bool GoogleRemoved(int status);
+
 }  // namespace browser_core::sync_sign_in
 
 #endif  // BROWSER_CORE_SYNC_SIGN_IN_H_

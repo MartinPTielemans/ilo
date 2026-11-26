@@ -74,5 +74,18 @@ TEST(SyncSignInTest, OnlyAServerThatSaysSoOffersGoogle) {
   EXPECT_FALSE(Offers(R"({"ilo_google": null})"));
 }
 
+TEST(SyncSignInTest, OnlyTheServerSayingSoRemovesGoogle) {
+  EXPECT_TRUE(GoogleRemoved(204));
+  // Another device removed it first.
+  EXPECT_TRUE(GoogleRemoved(404));
+  // No answer: the network, or the server's gone.
+  EXPECT_FALSE(GoogleRemoved(0));
+  EXPECT_FALSE(GoogleRemoved(200));
+  EXPECT_FALSE(GoogleRemoved(401));
+  EXPECT_FALSE(GoogleRemoved(403));
+  EXPECT_FALSE(GoogleRemoved(500));
+  EXPECT_FALSE(GoogleRemoved(503));
+}
+
 }  // namespace
 }  // namespace browser_core::sync_sign_in

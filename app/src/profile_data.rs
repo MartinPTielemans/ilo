@@ -210,6 +210,7 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
         extensions: state.extensions,
         google: state.google,
         google_email: core_text(state.google_email),
+        google_remove_failed: state.google_remove_failed,
     };
     if CX.with_borrow(Option::is_none) {
         SYNC_STATE.set(Some(state));

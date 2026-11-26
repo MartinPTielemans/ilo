@@ -162,7 +162,7 @@ at=$(drawn_after "sync remove-google" "$on") ||
 removed=
 if [ "$(uname)" = Linux ]; then
   post clickkey $at
-  expect '^browser: dialog shown Stop signing in with Google?$' "Remove… didn't ask first"
+  expect '^browser: dialog shown Remove Google sign-in?$' "Remove… didn't ask first"
   expect '^browser: dialog settled$' "Settings' dialog didn't settle"
   expect '^browser: dialog confirm at ' "Remove's question didn't say where its button is"
   send clickkey $(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)

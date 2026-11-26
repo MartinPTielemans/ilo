@@ -1385,11 +1385,11 @@ fn the_google_row_lists_once_and_asks_before_removing(cx: &mut TestAppContext) {
 
     tab.set(linked.clone());
     assert!(tab.drawn("remove-google"));
-    assert!(spoken_names(&mut tab).contains(&"Remove Google Sign-In…".into()));
+    assert!(spoken_names(&mut tab).contains(&"Remove Google sign-in".into()));
     assert!(!tab.host.take().contains(&"read google".into()), "once");
 
     tab.click("remove-google");
-    assert_eq!(tab.host.take(), ["ask Stop signing in with Google? Remove"]);
+    assert_eq!(tab.host.take(), ["ask Remove Google sign-in? Remove"]);
     tab.confirm();
     assert_eq!(tab.host.take(), ["remove google"]);
     tab.set(google(Status::On));
@@ -1400,6 +1400,42 @@ fn the_google_row_lists_once_and_asks_before_removing(cx: &mut TestAppContext) {
     tab.host.take();
     tab.set(google(Status::On));
     assert!(tab.host.take().contains(&"read google".into()));
+}
+
+/// A Remove that didn't reach the server or that it refused says so on the row, which stays,
+/// until the next read or Remove takes it back.
+#[gpui::test]
+fn a_google_remove_that_failed_says_so_on_its_row(cx: &mut TestAppContext) {
+    let linked = State {
+        google_email: "ada@example.org".into(),
+        ..google(Status::On)
+    };
+    let line =
+        |tab: &mut Shown| (tab.account).read_with(tab.cx, |account, _| account.google_line());
+    let mut tab = shown(linked.clone(), cx);
+    assert_eq!(line(&mut tab), None, "linked, the row has no line");
+
+    tab.click("remove-google");
+    tab.confirm();
+    tab.set(State {
+        google_remove_failed: true,
+        ..linked.clone()
+    });
+    assert_eq!(line(&mut tab), Some(GOOGLE_REMOVE_FAILED));
+    assert!(
+        tab.drawn("remove-google"),
+        "the link is still there to remove"
+    );
+
+    tab.host.take();
+    tab.click("remove-google");
+    tab.confirm();
+    assert_eq!(
+        tab.host.take(),
+        ["ask Remove Google sign-in? Remove", "remove google"]
+    );
+    tab.set(linked);
+    assert_eq!(line(&mut tab), None, "Remove again takes it back");
 }
 
 /// A server that doesn't offer Google is never asked of it, and draws no row whatever it lists.

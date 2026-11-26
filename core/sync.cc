@@ -882,8 +882,8 @@ class Account : public syncer::SyncServiceObserver,
 
   // The Google sign-in linked to the account (protocol.md, /api/identities), and removing it: the
   // mailed code still signs in.
-  void ReadGoogle() { AskIdentities("GET", "/api/identities", false); }
-  void RemoveGoogle() { AskIdentities("DELETE", "/api/identities/google", false); }
+  void ReadGoogle() { AskGoogle("GET", "/api/identities"); }
+  void RemoveGoogle() { AskGoogle("DELETE", "/api/identities/google"); }
 
   void ReadActivity(bc_sync_activity* activity) const {
     *activity = {};
@@ -1054,6 +1054,7 @@ class Account : public syncer::SyncServiceObserver,
     const std::string code = request_ ? request_->pairing.code() : std::string();
     const std::string email = SignedIn() ? email_ : std::string();
     const std::string google_email = SignedIn() ? google_email_ : std::string();
+    const bool google_remove_failed = SignedIn() && google_remove_failed_;
     const std::array<std::string, 4> now = {trimmed, email, code, google_email};
     const int status = Status();
     const bool on = status == BC_SYNC_ON;
@@ -1064,6 +1065,7 @@ class Account : public syncer::SyncServiceObserver,
     ReadActivity(&activity);
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
         now == notified_strings_ && chosen == notified_chosen_ && google == notified_google_ &&
+        google_remove_failed == notified_google_remove_failed_ &&
         SameActivity(activity, notified_activity_)) {
       return;
     }
@@ -1074,6 +1076,7 @@ class Account : public syncer::SyncServiceObserver,
     notified_strings_ = now;
     notified_chosen_ = chosen;
     notified_google_ = google;
+    notified_google_remove_failed_ = google_remove_failed;
     if (!Host().sync_changed) {
       return;
     }
@@ -1086,7 +1089,8 @@ class Account : public syncer::SyncServiceObserver,
                            .settings = chosen[0],
                            .extensions = chosen[1],
                            .google = google,
-                           .google_email = google_email.c_str()};
+                           .google_email = google_email.c_str(),
+                           .google_remove_failed = google_remove_failed};
     Host().sync_changed(Host().context, &state);
   }
 
@@ -1506,6 +1510,7 @@ class Account : public syncer::SyncServiceObserver,
     SetSecret(std::nullopt);
     email_.clear();
     google_email_.clear();
+    google_remove_failed_ = false;
     account_.clear();
     device_.clear();
     // The server signs this device out as it deletes the account, which the relay or a refresh
@@ -2038,6 +2043,20 @@ class Account : public syncer::SyncServiceObserver,
     Host().sync_devices_changed(Host().context, listed.data(), listed.size());
   }
 
+  // A read, or Remove again, takes back the last Remove's failure.
+  void AskGoogle(const std::string& method, const std::string& path) {
+    if (google_remove_failed_) {
+      google_remove_failed_ = false;
+      Notify();
+    }
+    AskIdentities(method, path, false);
+  }
+
+  void GoogleRemoveFailed() {
+    google_remove_failed_ = true;
+    Notify();
+  }
+
   void AskIdentities(const std::string& method, const std::string& path, bool again) {
     if (!SignedIn()) {
       return;
@@ -2045,7 +2064,14 @@ class Account : public syncer::SyncServiceObserver,
     WithToken(base::BindOnce(
         [](base::WeakPtr<Account> account, int generation, std::string method, std::string path,
            bool again, const std::string& token) {
-          if (!account || generation != account->generation_ || token.empty()) {
+          if (!account || generation != account->generation_) {
+            return;
+          }
+          // No token, so no answer: a Remove says it didn't happen.
+          if (token.empty()) {
+            if (method == "DELETE") {
+              account->GoogleRemoveFailed();
+            }
             return;
           }
           account->Fetch(method, account->Server().Resolve(path), token, std::string(),
@@ -2071,9 +2097,11 @@ class Account : public syncer::SyncServiceObserver,
       return;
     }
     if (method == "DELETE") {
-      // Removed, or another device had removed it (404): the list says so either way.
-      if (status == 204 || status == 404) {
+      // Removed, or another device had: the list says so either way.
+      if (sync_sign_in::GoogleRemoved(status)) {
         ReadGoogle();
+      } else {
+        GoogleRemoveFailed();
       }
       return;
     }
@@ -2105,6 +2133,8 @@ class Account : public syncer::SyncServiceObserver,
   std::string email_;
   // The address Google signs in to the account with, as the server last listed it, or none.
   std::string google_email_;
+  // The last Remove of it didn't happen: bc_sync_state.google_remove_failed.
+  bool google_remove_failed_ = false;
   std::string account_;
   std::string device_;
   std::string device_name_;
@@ -2155,6 +2185,7 @@ class Account : public syncer::SyncServiceObserver,
   std::array<std::string, 4> notified_strings_;
   std::array<bool, 2> notified_chosen_ = {};
   bool notified_google_ = false;
+  bool notified_google_remove_failed_ = false;
   bc_sync_activity notified_activity_ = {};
   // The cycles' troubles, the changes the server refused in the cycle under way, and the commit
   // request whose response is yet to come.

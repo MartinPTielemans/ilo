@@ -22,7 +22,7 @@ use gpui::{
 
 use crate::dialog::{Question, Return, Tone};
 use crate::settings_rows::{
-    Look, SLIDE, button, detailed_row, end, frame, group, named_button, ring, stop_switch,
+    Look, SLIDE, button, detailed_row, end, frame, group, named_button, ring, row, stop_switch,
     text as row_text,
 };
 use crate::text_input::TextInput;
@@ -59,6 +59,11 @@ pub(crate) const FINISH_SIGN_IN: &str = crate::agents::sign_in::CHATGPT_WAITING;
 pub(crate) const GOOGLE: &str = "Continue with Google";
 /// The form's line once a Google sign-in comes back without finishing (v9 §3).
 pub(crate) const GOOGLE_UNFINISHED: &str = "Google sign-in didn't finish.";
+/// Signed in, the row of the account's Google sign-in, with no line: the address is the account's,
+/// shown above it.
+const GOOGLE_ROW: &str = "Google sign-in";
+/// That row's line once its Remove didn't reach the server or the server refused it.
+pub(crate) const GOOGLE_REMOVE_FAILED: &str = "Couldn't remove Google sign-in. Try again.";
 /// The metadata that has GPUI's Linux clipboard offer a copy with KDE's password manager hint,
 /// which Klipper and the clipboard managers that follow it don't record (patches/
 /// gpui-linux-embedded.patch).
@@ -108,6 +113,8 @@ pub struct State {
     pub google: bool,
     /// The address the account's Google sign-in was linked with, as last listed, else "".
     pub google_email: SharedString,
+    /// The last Remove of the Google sign-in didn't happen, until it's read or removed again.
+    pub google_remove_failed: bool,
 }
 
 /// What else a device can choose to sync, besides the Spaces, bookmarks and passwords it always
@@ -704,15 +711,22 @@ impl Account {
         self.google_unfinished && self.state.problem.is_none()
     }
 
+    /// The Google sign-in row's line: none, unless its Remove failed.
+    pub(crate) fn google_line(&self) -> Option<&'static str> {
+        self.state
+            .google_remove_failed
+            .then_some(GOOGLE_REMOVE_FAILED)
+    }
+
     /// Stops signing in with Google, once the user confirms; the account's mailed code then links
     /// it again.
     fn remove_google(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let host = self.host.clone();
         self.host.confirm(
-            "Stop signing in with Google?".into(),
+            "Remove Google sign-in?".into(),
             format!(
-                "You'll sign in with a code sent to {}. To use Google again, sign in with it and \
-                 enter that code.",
+                "You'll sign in with a code sent to {} instead. To use Google sign-in again, \
+                 enter a code once.",
                 self.state.google_email
             ),
             "Remove",
@@ -1402,16 +1416,14 @@ impl Account {
             let remove = self.button_said(
                 "remove-google",
                 "Remove…",
-                "Remove Google Sign-In…",
+                "Remove Google sign-in",
                 cx,
                 |account, window, cx| account.remove_google(window, cx),
             );
-            detailed_row(
-                look,
-                "Google",
-                format!("Signs in as {}", self.state.google_email),
-                Some(remove.into_any_element()),
-            )
+            match self.google_line() {
+                Some(line) => detailed_row(look, GOOGLE_ROW, line, Some(remove.into_any_element())),
+                None => row(GOOGLE_ROW, remove.into_any_element()),
+            }
         });
 
         let removable: Vec<_> = (self.devices.iter().flatten())
