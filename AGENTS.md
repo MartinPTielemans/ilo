@@ -11,7 +11,7 @@ An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) 
 
 ## A note on taste
 
-Ambitious ideas, simple systems, software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising. Channel both "measure twice, cut once" and "yagni". Fight scope creep. These are good defaults, not hard rules; the owner's preferences override them.
+Ambitious ideas, simple systems, obvious software. Don't keep complexity just because it exists or add machinery to look impressive. Find the real constraint and ship the smallest unsurprising model ("measure twice, cut once" + YAGNI; fight scope creep). Owner preferences override defaults.
 
 ## Glossary
 
@@ -59,32 +59,25 @@ The most common defect is a change that works on the path you tested and is miss
 
 ## Verifying
 
-- `cargo test --profile fast --lib` in `app/` runs the UI's tests without the engine (`--release` before a push). A test drives a GPUI view as the user does, on a host recording what it asks of the core, so logic the UI decides, such as the command bar's keys, is tested there, and `check.sh` keeps what needs the engine: pages, focus, windows, the core's answers.
-- Name the exact checks you ran. For the app that's `./build.sh && ./check.sh`, naming the runs if not all, then a look at the captures.
-- For UI, the proof is the running app. Launch it, wait for the event that marks the milestone (a check that needs a fixed sleep to pass is wrong), capture the window with `tools/window-screenshot.sh`, and look at the image before saying it works. The owner is often away from the Mac, so your capture is the proof they get.
+- `cargo test --profile fast --lib` in `app/` runs UI tests without the engine (`--release` before a push). Tests drive GPUI views against a host recording core calls, while `check.sh` covers what needs the engine: pages, focus, windows, and core answers. Prefer built-in file read/search tools over repetitive shell loops.
+- Name the exact checks you ran (`./build.sh && ./check.sh`, naming runs if not all), then inspect captures.
+- For UI, prove it in the running app: wait for the milestone event (never a fixed sleep), capture with `tools/window-screenshot.sh`, resize or crop (`sips -Z 1000`) before inspecting, and read each capture once (delegate bulk visual sweeps to a fresh subagent returning text).
 - Test behavior and relations, not wiring, pixels or copy; spec values come from tokens.
-
-## Session hygiene
-
-- **One issue, one scoped session.** Start from a clean worktree on `origin/main`, keep changes to the issue in front of you, and start a fresh session for unrelated follow-ups instead of reusing one long thread across multiple PRs.
-- **Iterate lean.** Use `cargo test --profile fast --lib` and targeted `./check.sh <subset>` while working, and full release checks once before merging. Prefer built-in file read and search tools over repetitive shell loops.
-- **Keep captures small.** Resize or crop screenshots before inspecting them (`sips -Z 1000` or crop to the changed area), read each capture once, and hand bulk screenshot sweeps to a fresh subagent that reports back in text.
 
 ## Commits and pull requests
 
-- Commit only when asked, with `git commit -s`. The `Signed-off-by` line is the owner's [DCO](CONTRIBUTING.md#sign-off) certification.
-- Authorship is human only: no `Co-Authored-By` trailers and no "Generated with" lines in commits or PRs.
-- Conventional commit titles in plain language, describing the outcome: `fix(app): the sidebar recedes under the Library as Arc's does`.
-- Code copied from another project keeps its license header and names its source and upstream commit. [CONTRIBUTING.md](CONTRIBUTING.md) has the rules.
-- Never open a PR unless asked. One request is one PR. The PR body follows `.github/pull_request_template.md`.
-- UI changes need before-and-after images, and motion needs a short video, uploaded to GitHub. Never commit PR-only assets.
+- Commit only when asked, with `git commit -s` (owner's [DCO](CONTRIBUTING.md#sign-off)). Human authorship only: no `Co-Authored-By` or "Generated with" lines in commits or PRs.
+- Plain conventional titles describing the outcome: `fix(app): the sidebar recedes under the Library as Arc's does`.
+- Copied code keeps its license header, source, and upstream commit ([CONTRIBUTING.md](CONTRIBUTING.md)).
+- Never open a PR unless asked. One issue is one scoped worktree session from `origin/main` and one PR — start fresh for unrelated follow-ups instead of reusing one thread across PRs. Follow `.github/pull_request_template.md`.
+- UI changes need before/after images, and motion a short video, uploaded to GitHub; never commit PR-only assets.
 
 ## Documentation
 
-- Most changes need no doc change; agents can read the code.
-- Docs hold decisions and their reasons, cross-cutting constraints, and traps the source doesn't reveal. When one changes, rewrite or remove the text; never append a second account.
-- Decisions in `docs/decisions.md` are settled. Reopen one only with the owner, and with the evidence its "revisit if" names. Electron as the product, WebKit or Gecko as the desktop's engine, and closed source are off the table.
-- Working notes, research dumps and scratch files stay out of the repo. The roadmap is the plan; a merged PR is the implementation record.
+- Most changes need no doc update; agents read the code.
+- Docs hold decisions and reasons, cross-cutting constraints, and non-obvious traps; rewrite or remove when changed, never append a second account.
+- Decisions in `docs/decisions.md` are settled; reopen only with the owner and the evidence its "revisit if" names. Electron, WebKit/Gecko on desktop, and closed source are off the table.
+- Keep working notes, research dumps, and scratch files out of the repo. The roadmap is the plan; merged PRs are the record.
 
 ## Where code lives
 
