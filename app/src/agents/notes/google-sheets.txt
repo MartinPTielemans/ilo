@@ -1,0 +1,11 @@
+source: https://support.google.com/docs/answer/181110
+checked: 2026-11-27
+holds: keys
+---
+Keys beat clicks
+On a Mac: ⌘+/ lists every key and Option+/ finds any menu command by its name. Ctrl+G goes to a range. Ctrl+Space selects the column and Shift+Space the row. ⌘+D fills down and ⌘+R right. ⌘+; puts in today's date and ⌘+Shift+; the time. ⌘+Shift+V pastes values alone. Ctrl+~ shows every formula. With rows selected, ⌘+Option+= adds as many above and ⌘+Option+- deletes them. Shift+Fn+F11 adds a sheet, and Option+Down and Option+Up move to the next sheet and the one before, Option+Right and Option+Left on a MacBook.
+Elsewhere Ctrl stands for ⌘ and Alt for Option, but find and replace is Ctrl+H, where a Mac has ⌘+Shift+H, and a new sheet is Shift+F11.
+
+Know before you start
+In Portugal, Italy, Germany and Spain the date is Ctrl+Shift+D and the time Ctrl+Shift+H.
+Some keys differ on keyboards set to other languages.

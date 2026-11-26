@@ -1,0 +1,11 @@
+source: https://www.linkedin.com/help/linkedin/answer/a524335
+source: https://www.linkedin.com/help/linkedin/answer/a523136
+source: https://www.linkedin.com/help/linkedin/answer/a564264
+landmark: https://www.linkedin.com/help/linkedin/answer/a524335 | Boolean
+checked: 2026-11-27
+holds: addresses, search words, where things are
+---
+Go straight there
+/messaging/ holds the user's messages.
+Search's results have a tab a kind at the top: People, Jobs, Posts, Companies, Groups, Events and more. Once one is picked, All filters at the upper right narrows it further.
+Search takes AND, OR and NOT in capitals, quotes for a phrase and parentheses to group, such as VP NOT (assistant OR SVP). It takes no brackets, braces or wildcards, and + and - may not work.

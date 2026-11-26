@@ -1,0 +1,9 @@
+source: https://stackoverflow.com/help/searching
+landmark: https://stackoverflow.com/help/searching | isaccepted
+checked: 2026-11-27
+holds: search words
+---
+Go straight there
+Search takes [tag] for a tag and -[tag] to leave one out, quotes for a phrase, title:WORDS, body:"WORDS", code:"WORDS" and user:me, or a user's number. A minus leaves a word out and a * in a word stands for any letters.
+score:3 finds posts scored 3 or more, answers:..0 questions without an answer, and views:500..1000 a range. created:2026 and lastactive:3m.. take dates, in UTC. isaccepted:yes finds accepted answers, hasaccepted:no questions without one, isanswered:no questions with no answer scored above 0, and closed:yes closed questions.
+in:saves finds what the user saved.

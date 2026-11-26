@@ -1,0 +1,10 @@
+source: https://support.airtable.com/docs/airtable-keyboard-shortcuts
+checked: 2026-11-27
+holds: keys
+---
+Keys beat clicks
+⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key, and Ctrl stands for ⌘ in the rest. ⌘+K switches to another base and ⌘+J to another table. ⌘+F finds in the view, and ⌘+Shift+F opens its filters.
+Space expands the record selected, and Esc goes back to the table. Enter or F2 edits the cell. Shift+Enter adds a record under it. Shift and the arrows select cells, and ⌘+Shift and the arrows select to the table's edge.
+
+Know before you start
+With the cursor in a cell or a field, ⌘+F may search that instead: click the grid first.

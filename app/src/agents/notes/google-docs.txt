@@ -1,0 +1,12 @@
+source: https://support.google.com/docs/answer/179738
+checked: 2026-11-27
+holds: keys
+---
+Keys beat clicks
+On a Mac: ⌘+/ lists every key. Option+/ finds any menu command by its name, faster than opening menus. ⌘+F finds and ⌘+Shift+H finds and replaces. ⌘+Option+1 to 6 make a heading and ⌘+Option+0 plain text again. ⌘+K adds a link and ⌘+Option+M a comment. Holding Ctrl+⌘, n then h moves to the next heading, and p then h to the one before. ⌘+Shift+C counts words. ⌘+Option+Shift+H opens the version history.
+⌘+Option+Shift+X switches to suggesting, and ⌘+Option+Shift+Z back to editing.
+Elsewhere Ctrl stands for ⌘ and Alt for Option, but find and replace is Ctrl+H and the heading moves hold Ctrl+Alt.
+
+Know before you start
+Where the user asked for suggestions rather than changes, switch to suggesting before typing.
+Some keys differ on keyboards set to other languages.

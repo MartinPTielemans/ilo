@@ -1,11 +1,18 @@
+source: https://docs.github.com/en/get-started/accessibility/keyboard-shortcuts
+source: https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests
+source: https://docs.github.com/en/subscriptions-and-notifications/how-tos/viewing-and-triaging-notifications/managing-notifications-from-your-inbox
+landmark: https://github.com/rust-lang/rust | Issues; Pull requests; Actions
+checked: 2026-11-27
+holds: addresses, search words, keys
+---
 Go straight there
-/notifications is the user's inbox. Its filter box takes is:unread, is:saved, is:done and repo:owner/name.
-/search?q=WORDS&type=issues searches issues and pull requests everywhere. Narrow q with is:pr or is:issue, is:open, is:merged, author:@me, user-review-requested:@me, involves:NAME and repo:owner/name, with + between them.
+/notifications is the user's inbox. Its filter box takes is:unread, is:read, is:saved, is:done and repo:owner/name.
+/search?q=WORDS&type=Issues searches issues and pull requests everywhere. Narrow q with is:pr or is:issue, is:open or is:closed, is:merged, author:NAME, user-review-requested:@me, involves:NAME, label:NAME and repo:owner/name, with + between them. Any of them that takes a user's name takes @me for the user.
 
 Keys beat clicks
-On any page: ? lists the page's keys, / puts the cursor in search, g n opens notifications.
+On any page: ? lists the page's keys, s or / puts the cursor in search, g n opens notifications.
 In a repository: g c opens Code, g i Issues, g p Pull requests, g a Actions.
-In code: t finds a file by name, l jumps to a line, w switches branch, b opens blame, and y turns the address into a permanent one, for a line you'll quote.
+In code: t finds a file by name, l jumps to a line, w switches branch or tag, b opens blame, and y turns the address into a permanent one, for a line you'll quote.
 In a pull request's Files changed: t filters the changed files.
 
 Know before you start

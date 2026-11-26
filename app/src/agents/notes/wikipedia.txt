@@ -1,0 +1,16 @@
+source: https://en.wikipedia.org/wiki/Help:Searching
+source: https://en.wikipedia.org/wiki/Help:Keyboard_shortcuts
+landmark: https://en.wikipedia.org/wiki/Help:Searching | intitle
+landmark: https://en.wikipedia.org/wiki/Help:Keyboard_shortcuts | Random article
+checked: 2026-11-27
+holds: addresses, search words, keys
+---
+Go straight there
+The search box opens the page whose title it matches exactly. A ~ anywhere in its words, or /w/index.php?title=Special:Search&search=WORDS&fulltext=Search, lists results instead.
+Search takes intitle:WORDS, incategory:NAME with _ for each space, insource:WORDS for the page's source, hastemplate:NAME, linksto:PAGE, and prefix: as its last part. Quotes find a phrase, a minus or a ! leaves a word out, * and \? are wildcards, and a ~ after a word also finds spellings near it.
+
+Keys beat clicks
+Access keys, held with Ctrl+Option on a Mac and Alt+Shift elsewhere: f the search box, x a random article, h the history, t the talk page and z the Main Page.
+
+Know before you start
+In the editor, s publishes the edit for everyone at once, so press it only when the user asked.

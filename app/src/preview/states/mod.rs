@@ -81,7 +81,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_SIDEBAR_POSITION", values: "left, right", shows: "Settings › Appearance's sidebar position" },
     State { name: "PREVIEW_SIDEBAR_RIGHT", values: "1", shows: "the sidebar on the window's right" },
     State { name: "PREVIEW_SITE_CONTROLS", values: "1", shows: "Site Controls of the tab shown, over a made-up site" },
-    State { name: "PREVIEW_SITE_NOTES", values: "open, closed", shows: "Settings › Agents' Site notes" },
+    State { name: "PREVIEW_SITE_NOTES", values: "open, closed", shows: "Settings › Agents' Skills" },
     State { name: "PREVIEW_SIZE", values: "<width>x<height>", shows: "the window at that size" },
     State { name: "PREVIEW_SPACE_ICONS", values: "1", shows: "the Spaces with glyphs, for the footer's icons" },
     State { name: "PREVIEW_SPACES", values: "<count>", shows: "that many Spaces" },

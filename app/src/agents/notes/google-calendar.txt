@@ -1,0 +1,11 @@
+source: https://support.google.com/calendar/answer/37034
+checked: 2026-11-27
+holds: keys
+---
+Keys beat clicks
+? lists every key and / puts the cursor in search.
+1 or d shows a day, 2 or w a week, 3 or m a month, 4 or x the custom view and 5 or a the agenda. t goes to today, j or n to the next stretch, and g to a date you type.
+c makes an event, e opens the one selected, Backspace or Delete deletes it and Esc goes back to the grid. z undoes, r refreshes and s opens the settings.
+
+Know before you start
+Those keys work only while Enable keyboard shortcuts is checked in Calendar's settings. If a key does nothing, click instead, and leave the setting as it is.
