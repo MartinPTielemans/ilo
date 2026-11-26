@@ -16,7 +16,7 @@ use gpui::{
     Entity, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, list, point, prelude::*, px, relative, rgba, svg,
+    canvas, div, img, list, point, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -148,7 +148,6 @@ use crate::tokens::shell::library::{
 };
 
 use super::recent_downloads::{come, progress, tile_glyph};
-use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::palette::{LIGHT_SHOWN, SHOWN};
 use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
@@ -361,6 +360,22 @@ const SHOW: &str = match super::OFF_THE_MAC {
 
 /// A closed tab's button under the pointer, in its time's place, as drawn.
 const REOPEN: &str = "Reopen";
+
+/// A Library row's end button's fill at rest, under the pointer and pressed.
+fn end_fills(palette: &Palette) -> [Hsla; 3] {
+    [
+        palette.plate(BUTTON_PLATE),
+        palette.ground_plate(Ground::Library, STATE_HOVERED),
+        palette.ground_plate(Ground::Library, STATE_PRESSED),
+    ]
+}
+
+/// The ink of every word and glyph on a Library row's end button, a held file's Delete's too:
+/// the menus' red reads at 4.5 only on a menu's fill, and on the window nothing is red. Delete's
+/// menu item keeps the red.
+fn end_ink(palette: &Palette) -> Hsla {
+    palette.text(UNSELECTED_TITLE)
+}
 
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
@@ -2800,16 +2815,12 @@ impl Shell {
             .is_some_and(|library| library.history.pointed == Some(Pointed::Closed(id)));
         let mut end = match pointed {
             true => vec![
-                (self.end_word(
-                    ("archived-reopen", id),
-                    REOPEN,
-                    self.palette.text(UNSELECTED_TITLE),
-                ))
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.restore_archived(id, cx)
-                }))
-                .into_any_element(),
+                (self.end_word(("archived-reopen", id), REOPEN))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.restore_archived(id, cx)
+                    }))
+                    .into_any_element(),
             ],
             false => vec![
                 self.history_end_words(
@@ -4184,24 +4195,23 @@ impl Shell {
             .items_center()
             .justify_center()
             .rounded(px(DOWNLOAD_BUTTON_RADIUS))
-            .bg(self.palette.plate(BUTTON_PLATE))
-            .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
+            .map(|button| {
+                let [rest, hovered, pressed] = end_fills(&self.palette);
+                button
+                    .bg(rest)
+                    .hover(move |style| style.bg(hovered))
+                    .active(move |style| style.bg(pressed))
+            })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     }
 
-    /// An `end_button` with its `label` in words, 10 either side, medium, 12, in `color`.
-    fn end_word(
-        &self,
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        color: Hsla,
-    ) -> Stateful<Div> {
+    /// An `end_button` with its `label` in words, 10 either side, medium, 12, in `end_ink`.
+    fn end_word(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
         self.end_button(id, label)
             .px(px(DOWNLOAD_BUTTON_PAD))
             .text_size(px(DOWNLOAD_BUTTON_TEXT))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(color)
+            .text_color(end_ink(&self.palette))
             .child(label)
     }
 
@@ -4217,16 +4227,14 @@ impl Shell {
         filed: bool,
         cx: &mut Context<Self>,
     ) -> Vec<Stateful<Div>> {
-        let ink = self.palette.text(UNSELECTED_TITLE);
+        let ink = end_ink(&self.palette);
         let button = |name: &'static str, label: &'static str| self.end_button((name, id), label);
         let glyph = |name, label, path: &'static str, size: f32| {
             button(name, label)
                 .w(px(DOWNLOAD_BUTTON))
                 .child(svg().path(path).size(px(size)).text_color(ink))
         };
-        let word = |name: &'static str, label: &'static str, color: Hsla| {
-            self.end_word((name, id), label, color)
-        };
+        let word = |name: &'static str, label: &'static str| self.end_word((name, id), label);
         let act = |action| {
             cx.listener(move |shell: &mut Shell, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -4245,16 +4253,10 @@ impl Shell {
         }));
         let pointed = self.download_pointed == Some(id);
         match state {
-            _ if held => {
-                let delete = self
-                    .palette
-                    .toned(rgba(DARK_DESTRUCTIVE), rgba(LIGHT_DESTRUCTIVE));
-                vec![
-                    word("download-keep", "Keep", ink).on_click(act(DownloadAction::Keep)),
-                    word("download-delete", "Delete", delete.into())
-                        .on_click(act(DownloadAction::Remove)),
-                ]
-            }
+            _ if held => vec![
+                word("download-keep", "Keep").on_click(act(DownloadAction::Keep)),
+                word("download-delete", "Delete").on_click(act(DownloadAction::Remove)),
+            ],
             DownloadState::Running => vec![
                 glyph(
                     "download-pause",
@@ -4779,8 +4781,8 @@ mod tests {
         FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
         LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST, SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP,
         SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, day_heading,
-        download_menu_items, downloads_progress, history_list, library_band, list_width,
-        media_tile, panel_at_rest, past_end, plus_x, receded_opacity, spaces_width,
+        download_menu_items, downloads_progress, end_fills, end_ink, history_list, library_band,
+        list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity, spaces_width,
     };
     use std::rc::Rc;
 
@@ -5812,6 +5814,57 @@ mod tests {
             assert!(!trashes(state, true));
         }
         assert!(!trashes(Done, true));
+    }
+
+    /// A held file's Delete is red only in its menu. On its button it's in the ink Keep is in,
+    /// which reads better there than the menus' red would at every level, in both looks, at
+    /// rest, under the pointer and pressed, over a black and a white backdrop; the red reads
+    /// under 4.5 on each.
+    #[test]
+    fn a_held_file_s_delete_is_red_only_in_its_menu() {
+        use crate::palette::{Palette, Tone, contrast, over, set_transparency};
+        use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+        use crate::transparency::Transparency;
+        let menu = download_menu_items(&download(DownloadState::Done, true), true);
+        let delete = menu
+            .iter()
+            .find(|(entry, _)| entry.title.as_ref() == "Delete");
+        assert!(delete.is_some_and(|(entry, _)| entry.destructive));
+        for level in Transparency::ALL {
+            set_transparency(level);
+            for tone in [Tone::Dark, Tone::Light] {
+                let palette = Palette::of(None, tone);
+                let mut window = Vec::new();
+                for foot in 0..=4 {
+                    for far in 0..=4 {
+                        window.extend(palette.window_at(foot as f32 / 4., far as f32 / 4.));
+                    }
+                }
+                let red = gpui::Rgba::from(
+                    palette.toned(gpui::rgba(DARK_DESTRUCTIVE), gpui::rgba(LIGHT_DESTRUCTIVE)),
+                );
+                let ink = gpui::Rgba::from(end_ink(&palette));
+                for (state, fill) in ["at rest", "under the pointer", "pressed"]
+                    .into_iter()
+                    .zip(end_fills(&palette))
+                {
+                    let fill = gpui::Rgba::from(fill);
+                    let worst = |word: gpui::Rgba| {
+                        (window.iter())
+                            .map(|&at| over(at, fill, fill.a))
+                            .map(|under| contrast(over(under, word, word.a), under))
+                            .fold(f32::MAX, f32::min)
+                    };
+                    let (ink, red) = (worst(ink), worst(red));
+                    assert!(
+                        red < 4.5 && ink > red,
+                        "{level:?}, {tone:?}, {state}: Delete's ink reads {ink:.2}:1 on its \
+                         button and the menus' red {red:.2}:1"
+                    );
+                }
+            }
+        }
+        set_transparency(Transparency::Standard);
     }
 
     fn running(received: i64, total: i64) -> Download {
