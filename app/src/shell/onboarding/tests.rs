@@ -19,9 +19,8 @@ use crate::agents::sign_in::{Offer, Shown};
 use crate::import::ImportEvent;
 use crate::settings_rows::spoken::{press, stops};
 use crate::shell::{Broom, Folders, Shell, commands::Command, recorder::Recorder};
-use crate::theme::Theme;
-use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::card as t;
+use crate::tokens::theme_panel::PALETTE_NAMES;
 use crate::transparency;
 
 const DAY: f64 = 24. * 3600.;
@@ -466,58 +465,198 @@ fn the_card_has_no_close(cx: &mut TestAppContext) {
 #[gpui::test]
 fn back_goes_to_the_step_before_and_keeps_picks(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
-    let picked = |shell: &Entity<Shell>, cx: &VisualTestContext| card(shell, cx, |o| o.picked);
     started(&shell, cx);
     assert!(placed("back", cx).is_none(), "the first step has no Back");
     on_to(&shell, cx, Step::Space);
     cx.simulate_keystrokes("right right");
-    assert_eq!(picked(&shell, cx), Some(1));
+    type_name("Lisbon", &shell, cx);
+    assert_eq!(space_shown(&shell, cx), (Some(3), "Lisbon".into()));
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Done));
     cx.simulate_keystrokes("secondary-[");
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Space), "⌘[ went back");
-    assert_eq!(picked(&shell, cx), Some(1), "the pick stays");
+    assert_eq!(
+        space_shown(&shell, cx),
+        (Some(3), "Lisbon".into()),
+        "the palette and the name stay"
+    );
     click("back", cx);
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import), "Back went back");
 }
 
-/// The arrows go along the swatches, each showing on the window at once, and ↩ gives the first
-/// Space the one picked, as the theme picker's swatch does.
+/// The palette the Space step's editor shows chosen, and its name's field's text.
+fn space_shown(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<usize>, String) {
+    shell.read_with(cx, |shell, cx| {
+        let editor = (shell.onboarding.as_ref())
+            .and_then(|onboarding| onboarding.space.as_ref())
+            .expect("the Space step's editor");
+        (
+            editor.picker.read(cx).palette_shown(),
+            editor.name.read(cx).text().to_string(),
+        )
+    })
+}
+
+/// Puts `name` in the Space step's name field, as typing over its text does.
+fn type_name(name: &str, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    use gpui::EntityInputHandler as _;
+    let field = shell.read_with(cx, |shell, _| {
+        let editor = (shell.onboarding.as_ref()).and_then(|onboarding| onboarding.space.as_ref());
+        editor.expect("the Space step's editor").name.clone()
+    });
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            let all = field.text().encode_utf16().count();
+            field.replace_text_in_range(Some(0..all), name, window, cx)
+        })
+    });
+    cx.run_until_parked();
+}
+
+/// Your first Space comes with the fifth mock's look on the window, kept by nothing, and the
+/// field holding Home; the arrows go along the palettes, each kept as it's picked, as the theme
+/// panel keeps a pick, ← to none taking the colours away; Next names the Space.
 #[gpui::test]
-fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
+fn the_space_step_is_the_theme_panels_parts_for_the_first_space(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     started(&shell, cx);
     on_to(&shell, cx, Step::Space);
-    assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        None,
-        "none is picked for the user"
+    // Just the Browser, on the way, turned threads off.
+    host.take();
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.theme_preview.is_some()),
+        "the mock's look shows on the window"
     );
-    cx.simulate_keystrokes("left");
     assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        Some(SWATCHES.len() - 1),
-        "← starts at the last"
+        space_shown(&shell, cx),
+        (Some(t::SPACE_START[0] as usize), "Home".into()),
+        "the mock's palette, and Home"
+    );
+    assert!(
+        settings_set(host.take()).is_empty(),
+        "shown on the window, kept by nothing yet"
     );
     cx.simulate_keystrokes("right");
-    assert_eq!(
-        card(&shell, cx, |o| o.picked),
-        Some(SWATCHES.len() - 1),
-        "it stops at the end"
-    );
-    cx.simulate_keystrokes("left left");
-    host.take();
-    cx.simulate_keystrokes("enter");
+    assert_eq!(space_shown(&shell, cx).0, Some(2));
     let calls = host.take();
-    let theme = Theme::of_color(SWATCHES[SWATCHES.len() - 3]).to_text();
     assert!(
-        calls.contains(&format!("space theme 1 {theme}")),
-        "{calls:?}"
+        calls.iter().any(|call| call.starts_with("space color 1 ")),
+        "the pick is kept as it's made: {calls:?}"
+    );
+    cx.simulate_keystrokes("left left left");
+    assert_eq!(space_shown(&shell, cx).0, Some(0), "← stops at None");
+    let calls = host.take();
+    assert!(
+        calls.iter().any(|call| call.starts_with("space color 1 ")),
+        "← to none took the colours away, as the panel's first palette does: {calls:?}"
+    );
+    cx.simulate_keystrokes("right");
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    let edits = host.take_edits();
+    assert!(
+        edits.contains(&"rename space 1 Home".to_string()),
+        "{edits:?}"
     );
     assert_eq!(step(&shell, cx), Some(Step::Done));
+}
+
+/// The look the step comes with is only shown: Back or Next with nothing picked leaves the
+/// Space's look as it was, kept and on the window.
+#[gpui::test]
+fn leaving_the_space_step_untouched_keeps_no_look(cx: &mut TestAppContext) {
+    for how in ["back", "next"] {
+        let (shell, cx, host) = first_window(cx);
+        started(&shell, cx);
+        on_to(&shell, cx, Step::Space);
+        host.take();
+        match how {
+            "back" => click("back", cx),
+            _ => cx.simulate_keystrokes("enter"),
+        }
+        settle(&shell, cx);
+        let to = if how == "back" {
+            Step::Import
+        } else {
+            Step::Done
+        };
+        assert_eq!(step(&shell, cx), Some(to), "{how}");
+        assert_eq!(settings_set(host.take()), Vec::<String>::new(), "{how}");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.theme_preview.is_none()
+                && shell.glass_preview.is_none()),
+            "{how}: the window shows the Space's own look again"
+        );
+    }
+}
+
+/// An empty name is Home, and one longer than the field keeps is cut to it.
+#[gpui::test]
+fn the_space_steps_name_is_home_when_empty_and_cut_to_the_fields_most(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    type_name("   ", &shell, cx);
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    assert!(
+        host.take_edits()
+            .contains(&"rename space 1 Home".to_string())
+    );
+    cx.simulate_keystrokes("secondary-[");
+    settle(&shell, cx);
+    let long = "Lisbon trip, the long one";
+    type_name(long, &shell, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    let most: String = long.chars().take(t::SPACE_NAME as usize).collect();
+    assert!(
+        host.take_edits()
+            .contains(&format!("rename space 1 {most}")),
+        "cut to {most:?}"
+    );
+}
+
+/// ↩ that commits an input method's composition (Japanese) in the Space's name is the method's:
+/// it doesn't pass the step, and the name waits for Next.
+#[gpui::test]
+fn return_ending_a_composition_in_the_spaces_name_passes_no_step(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    let field = shell.read_with(cx, |shell, _| {
+        let editor = (shell.onboarding.as_ref()).and_then(|onboarding| onboarding.space.as_ref());
+        editor.expect("the Space step's editor").name.clone()
+    });
+    cx.update(|window, cx| {
+        window.focus(&field.focus_handle(cx), cx);
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "いえ", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    host.take_edits();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Space),
+        "↩ was the composition's"
+    );
+    assert!(
+        !host
+            .take_edits()
+            .iter()
+            .any(|call| call.starts_with("rename space")),
+        "the name waits for Next"
+    );
 }
 
 /// The Welcome: ↩ is Continue, which signs in, and the step waits while it does; signed in, the
@@ -669,6 +808,73 @@ fn the_tidy_bar_sets_its_time_as_next_goes_on(cx: &mut TestAppContext) {
         assert_ne!(step(&shell, cx), Some(Step::Tidy), "{leave} left the step");
         let said: Vec<String> = set.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "{keys} then {leave}");
+    }
+}
+
+/// No blank plane is ever shown: a split step whose picture isn't in draws no plane, its column
+/// centred in the card as Bring your stuff's is, in either look.
+#[gpui::test]
+fn a_step_without_its_picture_draws_no_plane(cx: &mut TestAppContext) {
+    for light in [false, true] {
+        let (shell, cx, host) = first_window(cx);
+        host.threads.set(Some(true));
+        host.archive_after.set(Some(DAY / 2.));
+        started(&shell, cx);
+        shell.update(cx, |shell, cx| {
+            shell.onboarding.as_mut().unwrap().light = Some(light);
+            cx.notify();
+        });
+        for to in [Step::Assistant, Step::Space, Step::Tidy] {
+            on_to(&shell, cx, to);
+            assert!(!to.split(), "{to:?}'s picture isn't in");
+            assert_eq!(placed("plane", cx), None, "{to:?}, light {light}: no plane");
+            let column = placed("column", cx).expect("the column is drawn");
+            assert!(
+                (f32::from(column.center().x) - t::WIDTH / 2.).abs() < 0.5,
+                "{to:?}, light {light}: the column is centred, at {column:?}"
+            );
+        }
+    }
+}
+
+/// How strong `ink` reads on the card's sheet, as a share of the text's own ink: each drawn over
+/// the opaque sheet, how far it stands from it.
+fn strength(ink: gpui::Rgba, inks: super::card::Inks) -> f32 {
+    let sheet = inks.fill(false);
+    let over = |ink: gpui::Rgba| {
+        [ink.r, ink.g, ink.b]
+            .into_iter()
+            .zip([sheet.r, sheet.g, sheet.b])
+            .map(|(ink_, sheet)| (ink_ * ink.a + sheet * (1. - ink.a) - sheet).abs())
+            .fold(0., f32::max)
+    };
+    over(ink) / over(inks.text(1.))
+}
+
+/// No text on a first-run card reads under text-3 unless its control is off: a row's second line
+/// is text-2 on the switches' rows as on the card's own, in Dark and in Light.
+#[gpui::test]
+fn no_text_on_the_card_reads_under_text_3(_: &mut TestAppContext) {
+    for light in [false, true] {
+        let inks = super::card::Inks::of(light);
+        let look = super::switch_look(inks);
+        for (what, ink) in [
+            ("a row's name", look.ink),
+            ("a row's second line", look.detail),
+            ("the card's second ink", inks.text_2()),
+            ("the card's third ink", inks.text(t::TEXT_3)),
+        ] {
+            assert!(
+                strength(ink, inks) >= t::TEXT_3 - 0.01,
+                "{what}, light {light}: reads at {}",
+                strength(ink, inks)
+            );
+        }
+        assert_eq!(
+            look.detail,
+            inks.text_2(),
+            "light {light}: text-2, one of the three"
+        );
     }
 }
 
@@ -948,8 +1154,9 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
     assert_eq!(settings_set(host.take()), Vec::<String>::new());
 }
 
-/// ⌘Q at a step sets nothing turned or picked there: the colour, the tidy bar, Help improve.
-/// They're set only as their step is left.
+/// ⌘Q at a step sets nothing turned there: the tidy bar, Help improve. They're set only as their
+/// step is left. The Space's look is kept as it's picked, as the theme panel keeps it, so a quit
+/// there resumes with it.
 #[gpui::test]
 fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
     for at in [Step::Space, Step::Tidy, Step::Done] {
@@ -965,9 +1172,12 @@ fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
             Step::Tidy => cx.simulate_keystrokes("right"),
             _ => shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx)),
         }
+        let picked = settings_set(host.take());
         shell.update(cx, |shell, cx| shell.run(Command::Quit, "keys", cx));
         cx.run_until_parked();
         assert_eq!(settings_set(host.take()), Vec::<String>::new(), "{at:?}");
+        let kept = picked.iter().any(|call| call.starts_with("space color 1 "));
+        assert_eq!(kept, at == Step::Space, "{at:?}: {picked:?}");
         assert_eq!(
             step(&shell, cx),
             Some(at),
@@ -1069,14 +1279,14 @@ fn each_step_rests_where_the_design_says(cx: &mut TestAppContext) {
     click("just-the-browser", cx);
     settle(&shell, cx);
     on_to(&shell, cx, Step::Space);
-    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Color".into())));
+    assert_eq!(
+        keyed(cx),
+        button("Next"),
+        "the Space's parts are the pointer's and the arrows'"
+    );
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Tidy),
-        "↩ on the colours went on"
-    );
+    assert_eq!(step(&shell, cx), Some(Step::Tidy), "↩ on Next went on");
     assert_eq!(keyed(cx).map(|(role, _)| role), Some(Role::Slider));
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
@@ -1115,12 +1325,38 @@ fn import_view(shell: &Entity<Shell>, cx: &VisualTestContext) -> Entity<crate::i
         .expect("the import view")
 }
 
-/// The import step is the import view Settings shows: an import begun stays on its step, one whose
-/// Spaces are in holds a moment on them and goes on while the rest runs, and its Done goes on. The
-/// view outlives the card, so an import under way goes on, and Help › Welcome shows the same one.
+/// What the card draws of the import view.
+fn brought(
+    view: &Entity<crate::import::ImportView>,
+    cx: &mut VisualTestContext,
+) -> crate::import::Bring {
+    view.update(cx, |view, _| view.card_state(0))
+}
+
+/// The chips the card draws, as picked or as an import brings them.
+fn chips(
+    view: &Entity<crate::import::ImportView>,
+    cx: &mut VisualTestContext,
+) -> Vec<crate::import::Chip> {
+    use crate::import::Bringing;
+    match brought(view, cx).state {
+        Bringing::Kinds(chips) | Bringing::Running { chips, .. } => chips,
+        state => panic!("no chips: {state:?}"),
+    }
+}
+
+/// An import from the card gets all the way: its Spaces in, then its history and addresses.
+fn brought_in(browser: &crate::import::tests::Browser, cx: &mut VisualTestContext) {
+    cx.update(|_, cx| browser.load(cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    cx.run_until_parked();
+}
+
+/// The import step's view outlives the card, so an import under way goes on, and Help › Welcome
+/// shows the same one.
 #[gpui::test]
-fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
+fn the_import_step_keeps_its_view(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import));
@@ -1129,26 +1365,6 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
         !shown.read_with(cx, |view, _| view.is_empty()),
         "it found the made-up Arc"
     );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "not before its Spaces are in"
-    );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Placed));
-    waited(cx, IMPORT_HOLD * 0.9);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it holds on the Spaces"
-    );
-    waited(cx, IMPORT_HOLD * 0.2);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Space),
-        "then goes on, offering no favorites"
-    );
-
     shell.update(cx, |shell, _| shell.onboarding = None);
     started(&shell, cx);
     assert_eq!(
@@ -1156,52 +1372,54 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
         shown.entity_id(),
         "played again, the same view"
     );
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Done));
-    assert_eq!(step(&shell, cx), Some(Step::Space), "its Done goes on");
 }
 
 /// An import that has read brings in the favorites, the sites its history visited most, each
 /// ticked: the button adds those still ticked, Skip none, and there's no going back over the import.
+/// With none ticked, Next alone goes on.
 #[gpui::test]
 fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext) {
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
+    use crate::import::tests::Browser;
     let tab = |url: &str| crate::import::found::Tab {
         url: url.into(),
         name: String::new(),
     };
-    for leave in ["enter", "skip"] {
-        let (shell, cx, _) = first_window(cx);
-        started(&shell, cx);
-        let shown = import_view(&shell, cx);
+    for leave in ["enter", "skip", "none"] {
+        let browser = Rc::new(Browser::new(None));
+        let (shell, cx, view) = importing_from(browser.clone(), cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        brought_in(&browser, cx);
         let offered = vec![
             tab("https://example.com/"),
             tab("https://news.example.org/"),
         ];
-        shown.update(cx, |view, _| view.offer(offered));
-        shown.update(cx, |_, cx| {
-            cx.emit(ImportEvent::Started);
-            cx.emit(ImportEvent::Placed);
-        });
-        waited(cx, IMPORT_HOLD);
+        view.update(cx, |view, _| view.offer(offered));
+        waited(cx, 10.);
         settle(&shell, cx);
-        assert_eq!(step(&shell, cx), Some(Step::Favorites));
+        assert_eq!(step(&shell, cx), Some(Step::Favorites), "{leave}");
         assert!(
             placed("back", cx).is_none(),
             "no going back over the import"
         );
         assert!(placed("skip", cx).is_some(), "Skip, as some are ticked");
-        shown.update(cx, |view, cx| {
-            view.toggle_favorite("https://example.com/", cx)
-        });
+        assert!(placed("tile 1", cx).is_some() && placed("tile 2", cx).is_none());
+        click("tile 0", cx);
         let ticked = shell.read_with(cx, |shell, cx| shell.favorites_ticked(cx).len());
-        assert_eq!(ticked, 1);
+        assert_eq!(ticked, 1, "the click left one out");
         match leave {
             "skip" => click("skip", cx),
+            "none" => {
+                click("tile 1", cx);
+                assert!(placed("skip", cx).is_none(), "none ticked, no Skip");
+                assert!(read(cx).contains(&(Role::Button, "Next".into(), None)));
+                cx.simulate_keystrokes("enter");
+            }
             key => cx.simulate_keystrokes(key),
         }
         assert_eq!(step(&shell, cx), Some(Step::Space), "{leave}");
         if leave == "enter" {
-            let left = shown.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
+            let left = view.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
             assert_eq!(left, Some(0), "the button took the offer");
         }
     }
@@ -1339,12 +1557,17 @@ fn no_line_names_a_pick(cx: &mut TestAppContext) {
         ours.iter().any(|line| *line == "browser: onboarding done"),
         "{ours:?}"
     );
-    let picked = Theme::of_color(SWATCHES[2]).to_text();
     let words = [
         "hours", "days", "Never", "on", "off", "true", "false", "Standard",
     ];
+    assert!(
+        !(lines.iter()).any(|line| line.starts_with("browser: theme picker")),
+        "the Space's editor says nothing of its picks"
+    );
     for line in ours {
-        assert!(!line.contains(picked.as_str()), "{line:?} names {picked:?}");
+        for name in PALETTE_NAMES {
+            assert!(!line.contains(name), "{line:?} names {name:?}");
+        }
         for word in line.split_whitespace() {
             assert!(!words.contains(&word), "{line:?} names {word:?}");
         }
@@ -1694,38 +1917,32 @@ fn a_quit_while_the_account_waits_resumes_at_the_welcome(cx: &mut TestAppContext
     );
 }
 
-/// A colour picked shows on the window at once, as the theme picker's does, and only Next keeps
-/// it: Esc and Back set nothing of it.
+/// The look the Space step shows is on the window at once, as the theme panel's is: the mock's
+/// as it comes, and each palette as it's picked.
 #[gpui::test]
-fn a_colour_picked_shows_at_once_and_only_next_keeps_it(cx: &mut TestAppContext) {
-    let (shell, cx, host) = first_window(cx);
+fn the_space_steps_look_shows_on_the_window_at_once(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
     let shown = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| {
             shell.theme_of(1).map(|theme| theme.main_color())
         })
     };
-    for leave in ["escape", "back", "enter"] {
-        started(&shell, cx);
-        on_to(&shell, cx, Step::Space);
-        host.take();
-        cx.simulate_keystrokes("right");
-        assert_eq!(
-            shown(&shell, cx),
-            Some(SWATCHES[0]),
-            "{leave}: shown at once"
-        );
-        assert!(
-            !host.take().iter().any(|call| call.contains("space color")),
-            "{leave}: nothing kept while it shows"
-        );
-        match leave {
-            "back" => click("back", cx),
-            key => cx.simulate_keystrokes(key),
-        }
-        let kept = host.take().iter().any(|call| call.contains("space color"));
-        assert_eq!(kept, leave == "enter", "{leave}");
-        shell.update(cx, |shell, _| shell.onboarding = None);
-    }
+    let main = |index: usize| {
+        crate::theme_picker::palette_theme(index, None).map(|theme| theme.main_color())
+    };
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    assert_eq!(
+        shown(&shell, cx),
+        main(t::SPACE_START[0] as usize),
+        "as it comes"
+    );
+    cx.simulate_keystrokes("right");
+    assert_eq!(
+        shown(&shell, cx),
+        main(t::SPACE_START[0] as usize + 1),
+        "picked"
+    );
 }
 
 /// A screen reader reads each step as a dialog called by its title, its line said after, and each
@@ -1762,46 +1979,39 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
 
     click("not-now", cx);
     settle(&shell, cx);
-    let import = import_view(&shell, cx).read_with(cx, |view, _| view.guide());
+    let (title, line) = Step::Import.message(card(&shell, cx, |o| o.os));
     assert_eq!(
         dialogs(&read(cx)),
-        [import.title.clone()],
+        [title.to_string()],
         "the step it went on to only"
     );
-    assert_eq!(dialog_line(cx), Some(Some(import.line)));
+    assert_eq!(dialog_line(cx), Some(Some(line.to_string())));
 
     on_to(&shell, cx, Step::Space);
     let said = read(cx);
     assert_eq!(dialogs(&said), [Step::Space.message(os).0.to_string()]);
     assert!(button(&said, "Back") && button(&said, "Next"), "{said:?}");
-    assert!(
-        (said.iter()).any(|(role, name, _)| *role == Role::RadioGroup && name == "Color"),
-        "{said:?}"
-    );
-    let colours = |said: &[(Role, String, Option<Toggled>)]| {
-        let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
-        swatches
+    let palettes = |said: &[(Role, String, Option<Toggled>)]| {
+        (said.iter())
+            .filter(|(role, name, _)| {
+                *role == Role::RadioButton && PALETTE_NAMES.contains(&name.as_str())
+            })
             .map(|(_, name, on)| (name.clone(), *on))
             .collect::<Vec<_>>()
     };
-    let unpicked = colours(&said);
-    assert_eq!(unpicked.len(), SWATCHES.len(), "a radio button a colour");
-    assert!(
-        unpicked.iter().all(|(_, on)| *on == Some(Toggled::False)),
-        "none picked yet"
-    );
+    let shown = palettes(&said);
+    assert_eq!(shown.len(), PALETTE_NAMES.len(), "a radio button a palette");
+    let chosen = |shown: &[(String, Option<Toggled>)]| {
+        (shown.iter())
+            .filter(|(_, on)| *on == Some(Toggled::True))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>()
+    };
+    let first = PALETTE_NAMES[t::SPACE_START[0] as usize].to_string();
+    assert_eq!(chosen(&shown), [first], "the mock's palette");
     cx.simulate_keystrokes("right");
-    let picked = colours(&read(cx));
-    assert_eq!(
-        picked[0],
-        (unpicked[0].0.clone(), Some(Toggled::True)),
-        "→ picks the first"
-    );
-    assert!(
-        picked[1..]
-            .iter()
-            .all(|(_, on)| *on == Some(Toggled::False))
-    );
+    let next = PALETTE_NAMES[t::SPACE_START[0] as usize + 1].to_string();
+    assert_eq!(chosen(&palettes(&read(cx))), [next], "→ picks the next");
 
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
@@ -1836,31 +2046,19 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     host.crash_reports.set(Some(false));
     cx.simulate_a11y_activation();
     started(&shell, cx);
-    let guide = import_view(&shell, cx).read_with(cx, |view, _| view.guide());
     assert_eq!(
         keyed(cx),
-        Some((Role::Button, guide.button.expect("the import's button"))),
+        Some((Role::Button, "Import".into())),
         "the import rests on its button"
     );
 
     on_to(&shell, cx, Step::Space);
     assert_eq!(
         keyed(cx),
-        Some((Role::RadioGroup, "Color".into())),
-        "the colours have the keyboard as the step comes"
-    );
-    cx.simulate_keystrokes("right");
-    let first = swatch_name(SWATCHES[0]).to_string();
-    assert_eq!(
-        keyed(cx),
-        Some((Role::RadioButton, first)),
-        "→ picks the first, which it reads"
+        Some((Role::Button, "Next".into())),
+        "the step rests on Next, the arrows going along the palettes"
     );
     // The foot, in its reading order: Back, then the step's button.
-    cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
-    cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Next".into())));
     cx.simulate_keystrokes("shift-tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     host.take();
@@ -1871,7 +2069,7 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         "↩ on Back went back, once"
     );
     let kept = (host.take().iter()).any(|call| call.starts_with("space"));
-    assert!(!kept, "as Back, keeping nothing of the colour");
+    assert!(!kept, "as Back, keeping nothing of the look shown");
 
     // The last step's stops: its row's button, its switch, its main button and Back.
     on_to(&shell, cx, Step::Done);
@@ -2284,50 +2482,46 @@ fn a_way_that_lands_for_one_app_turns_the_outside_switch_on(cx: &mut TestAppCont
     assert!(outside);
 }
 
-/// Safari's files kept from the app need Full Disk Access as Safari is picked: the import step
-/// stays, showing the view's way to System Settings. Once it's given and the user is back, the
-/// view reads Safari and shows its choices, and Import there goes on (#1378, #1673).
+/// Safari's files kept from the app need Full Disk Access as Safari is read: the step stays,
+/// showing the way to System Settings, and Esc leaves it as it is. Once access is given and the
+/// user is back, the card reads Safari and shows its kinds, and Import brings them (#1378, #1673).
 #[cfg(unix)]
 #[gpui::test]
 fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, let_read, safari};
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
     let Some(home) = safari("onboarding-access") else {
         return;
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| view.pick(0, cx));
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess);
+    assert!(
+        read(cx).contains(&(Role::Button, "Open System Settings".into(), None)),
+        "the way to System Settings"
+    );
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it waits for the user"
-    );
-    assert_eq!(
-        view.read_with(cx, |view, _| view.primary()),
-        Some("Open System Settings")
-    );
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess, "and the wait");
 
-    // With access given, coming back reads Safari and shows its choices; Import goes on.
     let_read(&home);
     cx.update(|_, cx| browser.activate(cx));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
+    assert!(matches!(brought(&view, cx).state, Bringing::Kinds(_)));
     assert_eq!(step(&shell, cx), Some(Step::Import), "it waits for Import");
-    view.update(cx, |view, cx| view.import(cx));
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "imported, it went on");
+    assert!(view.read_with(cx, |view, _| view.running()).is_some());
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// The wait for Full Disk Access says Back in its corner, which goes back to the list, and Esc
-/// does nothing there; Skip, beside it, goes on without importing.
+/// Skip, beside the wait for Full Disk Access, goes on without importing.
 #[cfg(unix)]
 #[gpui::test]
 fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, safari};
     let Some(home) = safari("onboarding-access-skip") else {
@@ -2335,96 +2529,186 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser, cx);
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
-    let guide = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(
-        guide.title,
-        format!("Let {} read Safari.", env!("PRODUCT_NAME"))
-    );
-    assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
-    assert_eq!(guide.corner, crate::import::Corner::Back);
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        guide.title,
-        "Esc left the wait as it was"
-    );
-    click("back", cx);
-    cx.run_until_parked();
-    let list = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(list.corner, crate::import::Corner::Skip, "back at the list");
-    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
-
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
+    assert_eq!(brought(&view, cx).state, Bringing::NoAccess);
     click("skip", cx);
     assert_eq!(step(&shell, cx), Some(Step::Space), "Skip went on");
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A passwords file chosen at the import step keeps the step until its end, which offers to delete
-/// the file; Delete File deletes it, and Done goes on (#1379).
+/// The step reads the browser used last as it comes, and shows a chip a kind it has, each on, for
+/// a screen reader too, with Import, Skip and Back. Esc leaves it as it is (v9 §5).
 #[gpui::test]
-fn a_passwords_file_from_onboarding_is_offered_for_deletion(cx: &mut TestAppContext) {
-    use crate::import::Passwords;
-    use crate::import::tests::{Browser, PASSWORDS, home, write};
-    let browser = Rc::new(Browser::new(None));
-    let file = write(
-        home("onboarding-passwords").join("Chrome Passwords.csv"),
-        PASSWORDS,
-    );
-    *browser.passwords_file.borrow_mut() = Some(file.clone());
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| view.choose_passwords(cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "the step stays while it imports"
-    );
-    let passwords = Passwords::Imported {
-        imported: 1,
-        conflicted: 0,
-        skipped: 0,
+fn the_import_step_reads_the_browser_used_last_and_shows_its_kinds(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let bring = brought(&view, cx);
+    assert_eq!(bring.picked, Some(0), "the browser used last");
+    let Bringing::Kinds(kinds) = bring.state else {
+        panic!("its kinds: {:?}", bring.state);
     };
-    cx.update(|_, cx| browser.imported(passwords, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "its end shows on the step"
+    assert!(
+        !kinds.is_empty() && kinds.iter().all(|chip| chip.on && chip.count > 0),
+        "{kinds:?}"
     );
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Done"));
-    assert!(file.exists(), "nothing is deleted unasked");
-    view.update(cx, |view, cx| view.delete_passwords_file(cx));
+    let os = card(&shell, cx, |o| o.os);
+    let (title, line) = Step::Import.message(os);
+    let said = read(cx);
+    assert_eq!(dialogs(&said), [title.to_string()], "read by its title");
+    assert_eq!(dialog_line(cx), Some(Some(line.to_string())));
+    for name in ["Import", "Skip", "Back"] {
+        assert!(
+            said.contains(&(Role::Button, name.into(), None)),
+            "{name}: {said:?}"
+        );
+    }
+    for chip in &kinds {
+        let named = (
+            Role::CheckBox,
+            chip.kind.label().to_string(),
+            Some(Toggled::True),
+        );
+        assert!(said.contains(&named), "{named:?}: {said:?}");
+    }
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert!(!file.exists(), "Delete File deleted it");
-    view.update(cx, |view, cx| view.done(cx));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Space), "Done goes on");
-    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
+    assert_eq!(chips(&view, cx), kinds, "and its kinds");
 }
 
-/// A profile that hasn't opened keeps the step, named in its title, with Try Again as its button,
-/// which ↩ presses; Skip, beside it, skips the step.
+/// A chip clicked leaves its kind out; with none on, Import is dimmed and neither ↩ nor a click
+/// does anything.
+#[gpui::test]
+fn a_chip_leaves_its_kind_out_and_with_none_on_import_does_nothing(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let kinds = chips(&view, cx);
+    click("chip 0", cx);
+    assert!(!chips(&view, cx)[0].on, "the click left it out");
+    for chip in &kinds[1..] {
+        view.update(cx, |view, cx| view.toggle_kind(chip.kind, cx));
+    }
+    assert!(chips(&view, cx).iter().all(|chip| !chip.on));
+    cx.simulate_keystrokes("enter");
+    click("main", cx);
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.running()).is_none(),
+        "nothing to import"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    click("chip 0", cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.running()).is_some());
+}
+
+/// While an import runs neither Back nor Skip shows, and Cancel does until its Spaces are in. The
+/// card names each kind as it's written, says All here. once all are, and goes on after it.
+#[gpui::test]
+fn an_import_draws_each_kind_in_and_goes_on_once_all_are_here(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(matches!(brought(&view, cx).state, Bringing::Running { .. }));
+    assert!(placed("back", cx).is_none() && placed("skip", cx).is_none());
+    assert!(placed("cancel", cx).is_some(), "Cancel, while it can stop");
+    cx.update(|_, cx| browser.load(cx));
+    cx.run_until_parked();
+    assert!(placed("cancel", cx).is_none(), "Spaces in, it can't");
+    cx.update(|_, cx| browser.added(cx));
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Import), "the kinds draw in");
+    let all_here = card(&shell, cx, |o| o.bring.all_here).expect("All here. is timed");
+    let now = cx.executor().now();
+    waited(
+        cx,
+        all_here.saturating_duration_since(now).as_secs_f32() + 0.01,
+    );
+    let bring = brought(&view, cx);
+    let line = shell.read_with(cx, |shell, _| shell.bring_words(Some(&bring)));
+    assert_eq!(line.as_deref(), Some("All here."));
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it holds on All here."
+    );
+    waited(cx, t::BRING_ON);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Space),
+        "then goes on, no favorites"
+    );
+}
+
+/// Esc or Cancel stops an import before its Spaces are in, back at the browser's kinds as they
+/// were picked, keeping the step; a stalled one too, so a profile that never opens can't trap it.
+#[gpui::test]
+fn esc_or_cancel_stops_an_import_back_at_its_kinds(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
+    use crate::import::tests::Browser;
+    for how in ["escape", "cancel", "stalled"] {
+        let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+        // The last kind left out, the Spaces still on, so the import waits on them.
+        let last = chips(&view, cx).last().map(|chip| chip.kind).unwrap();
+        view.update(cx, |view, cx| view.toggle_kind(last, cx));
+        let picked = chips(&view, cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.running()).is_some());
+        match how {
+            "cancel" => click("cancel", cx),
+            "stalled" => {
+                waited(cx, crate::import::STALL.as_secs_f32());
+                assert!(placed("cancel", cx).is_some(), "stalled, it can stop");
+                cx.simulate_keystrokes("escape");
+            }
+            key => cx.simulate_keystrokes(key),
+        }
+        cx.run_until_parked();
+        assert_eq!(step(&shell, cx), Some(Step::Import), "{how}: kept the step");
+        assert_eq!(
+            brought(&view, cx).state,
+            Bringing::Kinds(picked),
+            "{how}: back at the kinds as picked"
+        );
+    }
+}
+
+/// A profile that hasn't opened stops the knot's lap and says the browser is taking too long where
+/// the kinds were, with Try Again, which a click or ↩ presses; Cancel still stops it.
 #[gpui::test]
 fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
-    use crate::import::Corner;
+    use crate::import::Bringing;
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     waited(cx, crate::import::STALL.as_secs_f32());
-    let guide = view.read_with(cx, |view, _| view.guide());
-    assert_eq!(guide.title, "Work hasn't opened.");
-    assert_eq!(guide.button.as_deref(), Some("Try Again"));
-    assert_eq!(guide.corner, Corner::Skip);
+    let bring = brought(&view, cx);
+    assert!(
+        matches!(
+            bring.state,
+            Bringing::Running {
+                stalled: Some(_),
+                ..
+            }
+        ),
+        "still running, stalled"
+    );
+    let name = bring.browsers[bring.picked.unwrap()].0.clone();
+    assert_eq!(
+        super::bring::bring_held(&bring),
+        Some(format!("{name} is taking too long.")),
+        "in the failure's place"
+    );
+    assert!(!asks_for_frames(&shell, cx), "the knot stopped its lap");
     assert!(
         read(cx).contains(&(Role::Button, "Try Again".into(), None)),
-        "it's the step's button"
+        "Try Again, for a screen reader too"
     );
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -2434,79 +2718,76 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
         "↩ tried again"
     );
     waited(cx, crate::import::STALL.as_secs_f32());
-    click("skip", cx);
-    assert_eq!(step(&shell, cx), Some(Step::Space));
+    click("try-again", cx);
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "Here it comes.",
+        "and so did a click"
+    );
+    assert!(placed("cancel", cx).is_some(), "Cancel still stops it");
+    assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
-/// ↓ and ↑ move the list's pick, stopping at its ends, and the button names the browser picked.
+/// The browsers found are a row, the one used last first; a click on another reads it, and it
+/// flies to the slot as the one before goes back.
 #[gpui::test]
-fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
+fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
+    use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
-    use crate::import::tests::{Browser, chrome, firefox_dir};
+    use crate::import::tests::{Browser, chrome, firefox_dir, places_file, used};
     let home = chrome(
         "onboarding-two",
         &[("Default", "Me")],
         std::time::SystemTime::now(),
     );
-    firefox_dir(home.join(".mozilla/firefox"), 60 * 60);
+    let firefox = home.join(".mozilla/firefox");
+    firefox_dir(firefox.clone(), 60 * 60);
+    // A places file as Firefox lays one out, so the read finds its kinds, last used an hour ago.
+    let places = firefox.join("p.default/places.sqlite");
+    drop(places_file(&places));
+    used(&places, 60 * 60);
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
-    let (_, cx, view) = importing_from(browser, cx);
-    let button = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide().button);
-    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
-    cx.simulate_keystrokes("down down");
-    assert_eq!(button(cx).as_deref(), Some("Import from Firefox"));
-    cx.simulate_keystrokes("up");
-    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
+    let (shell, cx, view) = importing_from(browser, cx);
+    let bring = brought(&view, cx);
+    let names: Vec<&str> = (bring.browsers.iter())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(names, ["Chrome", "Firefox"]);
+    assert_eq!(bring.picked, Some(0));
+    click("browser 1", cx);
+    cx.run_until_parked();
+    let bring = brought(&view, cx);
+    assert_eq!(bring.picked, Some(1), "the click picked Firefox");
+    assert!(
+        matches!(bring.state, Bringing::Kinds(_)),
+        "and read it, not {:?}",
+        bring.state
+    );
+    let flight = card(&shell, cx, |o| {
+        o.bring.flight.map(|(from, to, _)| (from, to))
+    });
+    assert_eq!(
+        flight,
+        Some((Some(0), 1)),
+        "Chrome goes back as Firefox flies"
+    );
     std::fs::remove_dir_all(home).unwrap();
 }
 
-/// ↩ at the list imports the browser picked at once, as its Import from … does: once read, the
-/// card goes on by itself while the rest comes in.
-#[gpui::test]
-fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
-    use crate::import::tests::Browser;
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
-    let browser = Rc::new(Browser::new(None));
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    // The step shows the Spaces arriving while Work's profile loads, and holds on them once in.
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it went on before its Spaces were in"
-    );
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "Here it comes."
-    );
-    cx.update(|_, cx| browser.load(cx));
-    cx.run_until_parked();
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Import),
-        "it didn't hold on the Spaces"
-    );
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
-}
-
-/// At the import the keyboard rests on its view's button, and ↩ presses it once: the list's press
-/// imports the browser at once and leaves no button for a second ↩.
+/// At the import the keyboard rests on Import, and ↩ presses it once: the import runs, and leaves
+/// no button for a second ↩.
 #[gpui::test]
 fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
-    let words = guide(cx).button.expect("the list's button");
-    assert_eq!(keyed(cx), Some((Role::Button, words)));
+    assert_eq!(keyed(cx), Some((Role::Button, "Import".into())));
     press("enter", cx);
-    assert_eq!(guide(cx).title, "Here it comes.", "↩ imports it");
-    assert_eq!(
-        guide(cx).button,
-        None,
-        "with nothing left for ↩ to press again"
+    assert!(
+        view.read_with(cx, |view, _| view.running()).is_some(),
+        "↩ imports"
     );
+    assert!(placed("main", cx).is_none(), "nothing left for ↩ to press");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
@@ -2524,7 +2805,6 @@ enum Press {
 fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, chrome};
-    use crate::tokens::shell::onboarding::IMPORT_HOLD;
     let name = match press {
         Press::Return => "onboarding-tabs-return",
         Press::Click => "onboarding-tabs-click",
@@ -2549,8 +2829,9 @@ fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
         ["https://open.example.com/"],
         "the open tab wasn't placed"
     );
-    waited(cx, IMPORT_HOLD);
-    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
+    brought_in(&browser, cx);
+    waited(cx, 10.);
+    assert_ne!(step(&shell, cx), Some(Step::Import), "all here, it went on");
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -2564,72 +2845,20 @@ fn the_button_imports_open_tabs(cx: &mut TestAppContext) {
     imports_open_tabs_on(Press::Click, cx);
 }
 
-/// The import step says what the state its view shows is for, as its title and line and its
-/// button: the list "Bring your stuff" with Import from the browser used last and Skip, a browser's
-/// choices, "What comes from Arc.", with Import and Back. Esc leaves either as it is.
+/// Back leaves the import for the step before, and coming back the kinds are as they were picked.
 #[gpui::test]
-fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
-    use crate::import::Corner;
+fn back_leaves_the_import_keeping_its_picks(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
-    let list = guide(cx);
-    assert_eq!(list.title, "Bring your stuff");
-    assert_eq!(list.button.as_deref(), Some("Import from Arc"));
-    assert_eq!(list.corner, Corner::Skip);
-    let said = read(cx);
-    assert_eq!(dialogs(&said), [list.title.clone()], "read by its title");
-    assert_eq!(dialog_line(cx), Some(Some(list.line.clone())));
-    assert!(said.contains(&(Role::Button, "Import from Arc".into(), None)));
-    assert!(said.contains(&(Role::Button, "Skip".into(), None)));
-
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
+    click("chip 0", cx);
+    let picked = chips(&view, cx);
+    click("back", cx);
+    assert_eq!(step(&shell, cx), Some(Step::Account), "the step before");
+    settle(&shell, cx);
+    click("not-now", cx);
+    settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import));
-    let choose = guide(cx);
-    assert_eq!(choose.title, "What comes from Arc.");
-    assert_eq!(choose.line, "All of it, unless you turn something off.");
-    assert_eq!(choose.button.as_deref(), Some("Import"));
-    assert_eq!(choose.corner, Corner::Back);
-    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
-    let said = read(cx);
-    assert_eq!(dialogs(&said), [choose.title.clone()]);
-    assert_eq!(dialog_line(cx), Some(Some(choose.line.clone())));
-    assert!(said.contains(&(Role::Button, "Import".into(), None)));
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import), "Esc kept the step");
-    assert_eq!(guide(cx).title, choose.title, "and the choices");
-}
-
-/// At the import, Back goes back in its view where its state has somewhere to go back to: from a
-/// browser's choices to the list, keeping the step; from the list, to the step before.
-#[gpui::test]
-fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
-    use crate::import::tests::Browser;
-    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
-    let title = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide().title);
-    view.update(cx, |view, cx| view.pick(0, cx));
-    cx.run_until_parked();
-    assert_eq!(
-        title(cx),
-        "What comes from Arc.",
-        "the browser's choices show"
-    );
-    click("back", cx);
-    cx.run_until_parked();
-    assert_eq!(
-        title(cx),
-        "Bring your stuff",
-        "Back in a browser's choices goes back to the list"
-    );
-    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
-    click("back", cx);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Account),
-        "Back at the list goes to the step before"
-    );
+    assert_eq!(chips(&view, cx), picked, "Back kept the picks");
 }
 
 /// The lines of the assistants' rows as the card draws them.

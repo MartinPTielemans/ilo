@@ -2541,16 +2541,6 @@ shadow-blur = 4.0
 # A new profile's first launch (spec-first-run.md): the Signal green on the import's and the
 # account's own views where the card holds them.
 signal = 0x0e9f55
-# The Space step's swatches, the theme picker's, a step larger than the picker's 24 as the step's
-# one choice. The one picked is ringed in the ink, a gap off it, and each has a hairline edge, so
-# the lightest reads on a light card.
-swatch = 28.0
-swatch-pitch = 40.0
-swatch-ring = 2.0
-swatch-edge = 0.12
-# Seconds the import step holds on its Spaces once they're in, so the user sees them tick, before
-# it goes on by itself (#1673).
-import-hold = 0.6
 
 # First run's card (first-run-v9): one card over the desktop in a window of its own, the size of
 # the window. Dark's values are v9's; Light's are its light column.
@@ -2697,9 +2687,64 @@ tidy-thumb = 0xffffff
 tidy-thumb-shadow = [2.0, 6.0, 0.5]
 # Where the window has a broom, the row that is its control: its top, height and glyph.
 broom = [210.0, 52.0, 14.0]
-# Your first Space, until the theme editor's parts (#4274): the theme picker's swatches in the
-# column, and the transparency picker under them.
-space-gap = 24.0
+# Your first Space (v9 §6), the theme panel's parts as the fifth mock sets them out: the editor's
+# top and its head's height, the name's field; the field's corners, words' size, inset and gap to
+# Auto | Light | Dark, and the most characters it keeps; the pad's gap over it, its height, the gap
+# over the first bar and between bars; the pad's dots, the first's middle and how far the last is
+# across and down; and the look a Space with none comes with: its palette, Intensity, Transparency
+# and Grain.
+space-editor = [72.0, 30.0]
+space-field = [8.0, 13.0, 10.0, 8.0]
+space-name = 16.0
+space-pad = [10.0, 92.0, 8.0, 8.0]
+space-dots = [15.0, 11.0, 270.0, 70.0]
+space-start = [1.0, 0.7, 0.4, 0.3]
+# Bring your stuff (v9 §5). The browsers found: their icons' top, size and cell width, the names'
+# size, line and gap under the icon, how many show before More…, and the ring's alpha the picked
+# cell keeps.
+bring-row = [102.0, 44.0, 72.0]
+bring-name = [11.0, 14.0, 4.0]
+bring-shown = 5.0
+bring-ring = 0.25
+# The slot the picked icon lands in: its left, top and size; its flight there in seconds, back in
+# seconds, the arc's height over the midpoint, and the lift it starts with.
+bring-slot = [118.0, 260.0, 64.0]
+bring-flight = [0.42, 0.3, 80.0, 6.0]
+# The chips: the column's centre x, the centre line's y, a chip's width, height, corners and
+# pitch; the glyph's size, the words' size; a chip left out at this alpha.
+bring-chip = [372.0, 292.0, 172.0, 26.0, 9.0, 30.0]
+bring-chip-text = [12.0, 12.0]
+bring-off = 0.45
+# The knot the strands end in: its centre and size.
+bring-knot = [597.0, 292.0, 70.0]
+# The strands: width; a picked one's ghost and a left-out one's alpha; each written strand draws
+# icon → chip over the first seconds, chip → knot that much later, the kinds at least the third
+# apart; the knot's gap laps in this many seconds while it works and closes in the next; the step
+# goes on this long after All here.
+bring-strand = [2.5, 0.22, 0.12]
+bring-draw = [0.35, 0.3, 0.25]
+bring-lap = [1.3, 0.4]
+bring-on = 0.9
+# The Safari notice: its left and width.
+bring-notice = [214.0, 448.0]
+# An app icon's plate: its corners as a share of its size, the letter standing in for an icon and
+# More…'s glyph at these shares of it; the flying icon's shadow at most this alpha, its drop and
+# blur as shares of its size; a chip's sides and the gap after its glyph as shares of its height.
+bring-plate = [0.22, 0.45, 0.4]
+bring-shadow = [0.25, 0.1, 0.25]
+bring-chip-inset = [0.333333, 0.25]
+# The favourites' tiles: width, height, corners and gap; four in a row; the plate, the name's size
+# and line, and the check disc.
+tile = [76.0, 72.0, 12.0, 8.0]
+tile-row = 4.0
+tile-plate = 28.0
+# The plate's corners as a share of its size.
+tile-plate-corner = 0.25
+tile-name = [11.0, 14.0]
+tile-disc = 16.0
+# MOVE and DRAW, the curves a thing moving and a cord drawing take.
+move = [0.4, 0.0, 0.2, 1.0]
+draw = [0.5, 0.0, 0.2, 1.0]
 # Other apps (v9 §8): two cards side by side, a way in each, centred: their top, width, height,
 # gap and corners, their padding top and side, and how much both grow while the command's line
 # takes two lines. A card's row: its glyph's plate, corners and glyph, the gap after it and the

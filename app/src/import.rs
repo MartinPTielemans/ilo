@@ -20,6 +20,7 @@ pub mod app_icons;
 pub mod arc;
 pub mod ardia;
 mod arrival;
+mod bring;
 pub mod chromium;
 pub mod dia;
 pub mod extensions;
@@ -65,6 +66,7 @@ use crate::tokens::shell::import::{
     KIND_CHIP_TEXT, KINDS_LABEL, KINDS_LABEL_GAP, KINDS_LABEL_LINE, KINDS_TOP,
 };
 use crate::tokens::text;
+pub(crate) use bring::{Bring, Bringing, Chip};
 use found::{Address, Found, FromProfile, Page, Split, Tab};
 use plan::{Add, Counts, Existing, Plan, ProfileRef, SpaceRef, Target};
 use read::{Kind, ReadError};
@@ -646,6 +648,12 @@ pub struct ImportView {
     left_out: Vec<Kind>,
     /// The passwords file the guided list's chip chose, which comes with the browser picked.
     list_passwords: Option<PathBuf>,
+    /// The browser picked whose files couldn't be read, as first run's card says it (bring.rs).
+    unread: Option<usize>,
+    /// The browser and the chips of the import first run's card began, which it draws as it runs.
+    bringing: Option<(usize, Vec<Chip>)>,
+    /// The browsers' icons at the pixels first run's card asked for them at.
+    card_icons: (u32, Vec<Option<std::sync::Arc<gpui::RenderImage>>>),
 }
 
 /// The guided list's chips, each what of a browser it brings: shown where the browser picked has
@@ -725,6 +733,9 @@ impl ImportView {
             came: None,
             left_out: Vec::new(),
             list_passwords: None,
+            unread: None,
+            bringing: None,
+            card_icons: (0, Vec::new()),
         }
     }
 
@@ -885,15 +896,18 @@ impl ImportView {
     /// anything, as elsewhere Esc is the host's, which on the first launch's list skips the step.
     pub fn escape(&mut self, cx: &mut Context<Self>) -> bool {
         match &self.step {
+            // First run's card has no list to go back to: Esc there cancels a wait and nothing
+            // else (first-run-v9 §1).
+            Step::Pick { .. } | Step::NoAccess { .. } if self.guided => false,
+            // The card's Cancel, stalled or not: until its Spaces are in, nothing is written.
+            Step::Running { run, .. } if self.guided && !run.placed => {
+                log!("browser: import escape");
+                self.stop_bringing(cx);
+                true
+            }
             Step::Pick { .. } | Step::NoAccess { .. } => {
                 log!("browser: import escape");
                 self.back(cx);
-                true
-            }
-            // Stalled, the first launch's Esc skips the step, and the import goes on waiting.
-            Step::Running { run, .. } if self.guided && !run.placed && run.stalled.is_none() => {
-                log!("browser: import escape");
-                self.cancel(cx);
                 true
             }
             // Settings' goes back to the page from a stopped import, as Done does.
@@ -1157,6 +1171,7 @@ impl ImportView {
             _ => read::kinds(&self.sources[source]).to_vec(),
         };
         self.crumb = Some(self.sources[source].name());
+        self.unread = None;
         self.step = Step::Pick {
             source,
             picked,
@@ -1223,6 +1238,13 @@ impl ImportView {
                 return self.wait_for_access(source, picked, again, cx);
             }
             Ok(found) => found,
+            // First run's card says so and offers Try Again, the browser still picked.
+            Err(error) if self.guided => {
+                log!("browser: import from {name} failed: {error}");
+                self.unread = Some(source);
+                self.import_when_read = false;
+                return cx.notify();
+            }
             Err(error) => {
                 log!("browser: import from {name} failed: {error}");
                 return self.finish(format!("Couldn't read {name}'s data: {error}."), cx);
@@ -1545,6 +1567,8 @@ impl ImportView {
     /// Brings in what was picked from what the browser's files gave, or once they have, if
     /// they're still being read.
     pub(crate) fn import(&mut self, cx: &mut Context<Self>) {
+        // What the card's chips bring, kept for them to stay as the import runs.
+        self.keep_bringing();
         let Step::Pick {
             source,
             picked,

@@ -1037,3 +1037,62 @@ fn every_swatch_has_its_own_name() {
         ]
     );
 }
+
+#[test]
+fn the_panels_own_form_sets_its_parts_where_they_were() {
+    use crate::tokens::theme_panel as k;
+    // Before the panel's parts took a form, each place was one of these sums of the tokens.
+    let inner = k::WIDTH - 2. * k::PADDING;
+    let palettes_top = k::PADDING + k::HEAD + k::GAP;
+    let pad = (
+        k::PADDING,
+        palettes_top + k::LABEL + k::PALETTES_GAP + k::SLOT + k::GAP,
+    );
+    let bar_top = |index: f32| {
+        pad.1
+            + k::PAD_HEIGHT
+            + k::GAP
+            + index * (k::LABEL + k::BAR_LABEL_GAP + k::THUMB + k::BAR_GAP)
+    };
+    let track_y = |index: f32| bar_top(index) + k::LABEL + k::BAR_LABEL_GAP + k::THUMB / 2.;
+    let note_top = track_y(2.) + k::THUMB / 2. + k::GAP;
+    assert_eq!(PANEL.inner(), inner);
+    assert_eq!(PANEL.inner(), k::PAD_WIDTH);
+    assert_eq!(PANEL.palettes_top(), palettes_top);
+    assert_eq!(PANEL.pad(), pad);
+    for (index, bar) in layout::BARS.into_iter().enumerate() {
+        assert_eq!(PANEL.bar_top(bar), bar_top(index as f32), "{bar:?}");
+        assert_eq!(PANEL.track_y(bar), track_y(index as f32), "{bar:?}");
+    }
+    assert_eq!(
+        PANEL.track(),
+        (k::PADDING + k::LABEL_INSET, inner - 2. * k::LABEL_INSET)
+    );
+    assert_eq!(PANEL.note_top(), note_top);
+    assert_eq!(HEIGHT, note_top + k::LABEL + k::PADDING);
+    // The pad's dots: the grid it always had, and the grain's rows ending at 270 as they did.
+    let [left, top, across, down] = PANEL.dots;
+    assert_eq!((left, top), (k::DOT_LEFT, k::DOT_TOP));
+    assert_eq!((across / k::DOT_PITCH).round() + 1., k::DOTS_ACROSS);
+    assert_eq!((down / k::DOT_PITCH).round() + 1., k::DOTS_DOWN);
+    assert_eq!(PANEL.track().1 - 2., 270.);
+    assert!(PANEL.note);
+}
+
+#[test]
+fn the_panels_pad_keeps_its_own_ink_on_either_sheet() {
+    // The window's panel: the plus and the value field in its own second ink, light or dark.
+    let theme = layout::palette_theme(1, None);
+    for tone in [Tone::Light, Tone::Dark] {
+        let palette = Palette::of(theme.as_ref(), tone);
+        let own = palette.on_overlay(palette.secondary());
+        assert_eq!(pad_ink(&palette, theme.as_ref(), false), own, "{tone:?}");
+    }
+    // Drawn inline on a light sheet, the pad stays dark, so its ink is the dark sheet's.
+    let light = Palette::of(theme.as_ref(), Tone::Light);
+    let dark = Palette::of(theme.as_ref(), Tone::Dark);
+    assert_eq!(
+        pad_ink(&light, theme.as_ref(), true),
+        dark.on_overlay(dark.secondary())
+    );
+}

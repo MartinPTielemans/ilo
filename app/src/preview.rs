@@ -3302,10 +3302,10 @@ fn main() {
                         if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
                             shell.onboarding_show_assistants(rows, cx);
                         }
-                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the Space step.
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth palette at the Space step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
-                            shell.onboarding_pick_swatch(index, cx);
+                            shell.onboarding_pick_palette(index, cx);
                         }
                     }
                     shell

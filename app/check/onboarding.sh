@@ -8,7 +8,7 @@
 # signed in; Bring your stuff (3), which lists the made-up Arc in src/import/fixture (a made-up
 # Chrome on Linux), never the Mac's own browsers, with what comes from it as chips, which a click
 # leaves out and another brings back, and Skip; Your favorites (3b), once an import offers sites;
-# Your first Space (4), whose → picks a swatch; Tidy tabs (5) while the core has the profile's
+# Your first Space (4), whose → picks the next palette; Tidy tabs (5) while the core has the profile's
 # time; Other apps (6) while an agent program is found, whose command switch a launch in a made-up
 # home turns on and off, writing the command's skill there and taking it away; and step 7, always
 # last, whose Help improve the dark pass turns on and off from the keyboard, and whose Start
@@ -178,7 +178,7 @@ exec 3>&-
 quit
 
 # Dark: each step captured, the import's Skip clicked where it says it's drawn, Your first Space's
-# → picking the first swatch, and Esc and ⌘W there leaving the step as it is; Other apps' switch
+# → picking the next palette, and Esc and ⌘W there leaving the step as it is; Other apps' switch
 # turned on and off with clicks, and at the last Help improve's from the keyboard, then ⌘[ back a
 # step and on again to Start Browsing.
 # With the system's animations off the app reduces its motion, read at launch, and follows them
@@ -509,13 +509,13 @@ pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding started$' || fail "favorites: the first launch didn't start the onboarding"
 walk_steps 3 "favorites: "
-# ↩ is the import's own button, which brings in the browser it picked.
+# The step reads the browser used last as it comes, and ↩ imports what its chips have on.
+await '^browser: import pick Chrome$' || fail "favorites: the import step didn't pick the made-up Chrome"
+await '^browser: import read Chrome: ' || fail "favorites: picking Chrome didn't read it"
 send key return
 expect '^browser: onboarding import button via return$' "favorites: ↩ at the import didn't press its button"
-expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
-expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
-expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
-  "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+await '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' ||
+  fail "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
 expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
   "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
 expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"
@@ -531,4 +531,4 @@ expect '^browser: appearance automatic$' \
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking a swatch and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, the command's switch writing its skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
+echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking the next palette and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, the command's switch writing its skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
