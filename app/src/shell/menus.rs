@@ -1946,8 +1946,7 @@ fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntr
         MenuEntry::new("Edit Theme Color…", true),
         Box::new(move |shell, cx| shell.edit_space_theme(space, cx)),
     ));
-    // The way back to no theme, and ilo green, which the picker has none of (ours: Arc's isn't
-    // recorded).
+    // The way back to no theme, which the picker has none of (ours: Arc's isn't recorded).
     if has_theme {
         items.push((
             MenuEntry::new("Remove Theme Color", true),

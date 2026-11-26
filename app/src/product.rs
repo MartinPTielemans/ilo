@@ -1,9 +1,9 @@
 //! The product's name and mark, from this one place, so the next change of either is one commit.
 //! No other string spells the name out: one a user reads takes `PRODUCT`, as `{PRODUCT}` in a
 //! format string or `env!("PRODUCT_NAME")` in a `concat!`, and a test below fails on one that
-//! doesn't. The name itself is in branding/product. Names in code, ids, files, the
-//! data folder and what an assistant is told aren't the product's name as a user reads it, and
-//! keep theirs.
+//! doesn't. The name itself is in branding/product. What an agent is told, the command an agent
+//! types and the name its clients list the server by take it too. Names in code, ids, the data
+//! folder, the bundle and its files keep branding/name.
 
 use gpui::{Styled, Svg, px, svg};
 

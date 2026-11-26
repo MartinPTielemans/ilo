@@ -18,7 +18,7 @@ use std::{
 
 use crate::menu::Closed;
 use crate::shell::MenuEntry;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
+use crate::tokens::palette::NO_THEME_SELECTION;
 use crate::tokens::text_input::PLACEHOLDER;
 use gpui::{
     Action, App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId,
@@ -27,7 +27,7 @@ use gpui::{
     MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style, Subscription,
     TextRun, UTF16Selection, UnderlineStyle, WeakEntity, WeakFocusHandle, Window, WindowId,
     accesskit, actions, div, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*, px,
-    relative, rgb, size,
+    relative, size,
 };
 use unicode_segmentation::*;
 
@@ -339,22 +339,32 @@ pub fn bind_keys_for(keys: Keys, cx: &mut App) {
     ]);
 }
 
-/// What a field draws its placeholder, its caret and its selection in.
+/// What a field draws its placeholder, its caret and its selection in. A caret its owner gives
+/// none is the colour the field's text is drawn in, and a selection that colour, faint.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Colors {
     pub placeholder: Hsla,
-    pub caret: Hsla,
-    pub selection: Hsla,
+    pub caret: Option<Hsla>,
+    pub selection: Option<Hsla>,
 }
 
 impl Default for Colors {
     fn default() -> Self {
         Colors {
             placeholder: hsla(0., 0., 0., PLACEHOLDER),
-            caret: rgb(NO_THEME_ACCENT).into(),
-            selection: Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION),
+            caret: None,
+            selection: None,
         }
     }
+}
+
+/// The caret and the selection a field draws: its owner's, or for either its owner gives none,
+/// the colour its text is drawn in and that colour faint, since text lies on its selection.
+fn own_or_texts(caret: Option<Hsla>, selection: Option<Hsla>, text: Hsla) -> (Hsla, Hsla) {
+    (
+        caret.unwrap_or(text),
+        selection.unwrap_or_else(|| text.opacity(NO_THEME_SELECTION)),
+    )
 }
 
 impl Colors {
@@ -372,8 +382,8 @@ pub struct TextInput {
     content: SharedString,
     placeholder: SharedString,
     placeholder_color: Hsla,
-    caret_color: Hsla,
-    selection_color: Hsla,
+    caret_color: Option<Hsla>,
+    selection_color: Option<Hsla>,
     /// Where its colours come from as it draws, for a field that doesn't get them from its owner
     /// each frame.
     follows: Option<Box<dyn Fn(&App) -> Colors>>,
@@ -550,11 +560,20 @@ impl TextInput {
     /// The placeholder's, caret's and selection's colours from an owner that gives them each time
     /// it draws, before the field does, as the command bar does on its way to every frame.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
+        self.wear(Colors {
+            placeholder,
+            caret: Some(caret),
+            selection: Some(selection),
+        });
+    }
+
+    /// As `set_colors`, from an owner that may give no caret or no selection of its own.
+    pub fn wear(&mut self, colors: Colors) {
         (
             self.placeholder_color,
             self.caret_color,
             self.selection_color,
-        ) = (placeholder, caret, selection);
+        ) = (colors.placeholder, colors.caret, colors.selection);
     }
 
     /// Fades an edge with more text past it over `width` into `ground`, the opaque fill under the
@@ -1603,7 +1622,7 @@ impl Element for TextElement {
                         point(left + cursor_pos, bounds.top()),
                         size(CARET, bounds.bottom() - bounds.top()),
                     ),
-                    input.caret_color,
+                    own_or_texts(input.caret_color, None, style.color).0,
                 )),
             )
         } else {
@@ -1613,7 +1632,7 @@ impl Element for TextElement {
                         point(left + line.x_for_index(selected_range.start), bounds.top()),
                         point(left + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    input.selection_color,
+                    own_or_texts(None, input.selection_color, style.color).1,
                 )),
                 None,
             )
@@ -1715,7 +1734,7 @@ impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Asked each frame, as its owner's look may have changed since the last.
         if let Some(colors) = self.follows.as_ref().map(|colors| colors(cx)) {
-            self.set_colors(colors.placeholder, colors.caret, colors.selection);
+            self.wear(colors);
         }
         div()
             .id("text-input")

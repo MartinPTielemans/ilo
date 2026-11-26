@@ -45,8 +45,8 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
-    LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, FROM_LINE, GAP, GLYPH as CARD_GLYPH,
+    GLYPH_GAP, ICON, LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Look, State};
 use motion::{Curve, Ease};
@@ -120,23 +120,24 @@ fn chip(card: &Card) -> Option<Chip> {
 /// Full access where it has that, and its state, in ilo's words alone. The agent's own words are
 /// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
 /// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
+#[cfg(test)]
 fn state_line(card: &Card) -> SharedString {
+    state(card).0
+}
+
+/// A card's state line and how much of it is its lead, Full access, which is in the title's ink:
+/// all of the level's label on a card at that level, and none of any other card's, whatever its
+/// line begins with.
+fn state(card: &Card) -> (SharedString, usize) {
     let state = match card.fuller {
         true => card.status.as_ref(),
         false => card.word.after_name(),
     };
-    let lead = match card.tier {
-        Tier::Full => Tier::Full.label(),
-        _ => card.name.as_ref(),
+    let (lead, led) = match card.tier {
+        Tier::Full => (Tier::Full.label(), Tier::Full.label().len()),
+        _ => (card.name.as_ref(), 0),
     };
-    format!("{lead} · {state}").into()
-}
-
-/// How much of a state's line is its lead, Full access, which is in the title's ink.
-fn state_lead(line: &str) -> usize {
-    let full = Tier::Full.label();
-    let leads = (line.strip_prefix(full)).is_some_and(|rest| rest.starts_with(" · "));
-    if leads { full.len() } else { 0 }
+    (format!("{lead} · {state}").into(), led)
 }
 
 /// A task's page's word and whether it has the outline, as `Shell::page_mark` says.
@@ -171,7 +172,7 @@ impl PageWord {
             PageWord::Done => "Done",
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
-            PageWord::Paused => "Paused",
+            PageWord::Paused => crate::agents::task::PAUSED,
             PageWord::Stopped => "Stopped",
         }
     }
@@ -232,7 +233,11 @@ fn room(card: &Card, form: Form, lines: usize) -> f32 {
         _ => 0.,
     };
     let third = if third > 0. { GAP + third } else { 0. };
-    2. * PADDING + TITLE_LINE + GAP + second + third + UNDER
+    let from = match card::outside(card) {
+        true => FROM_LINE + GAP,
+        false => 0.,
+    };
+    2. * PADDING + from + TITLE_LINE + GAP + second + third + UNDER
 }
 
 /// How many lines a card's `finding` takes in a list `width` wide, at most FINDING_LINES: what

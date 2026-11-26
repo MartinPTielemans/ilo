@@ -1,6 +1,7 @@
 //! Made-up tasks: their Spaces, cards and conversations.
 
 use crate::*;
+use browser::agents::runner::Cli;
 
 /// The first task's Space, apart from the ids the rest of the preview takes.
 pub(crate) const FIRST_TASK: u64 = 9001;
@@ -157,6 +158,8 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
+            page: None,
+            says: "".into(),
         },
         name: HELPER_NAMES[at].into(),
         tab: Some(sites[at].0),
@@ -176,6 +179,7 @@ fn helper_trace(count: usize, waits: bool) -> Trace {
         key: 10,
         running: true,
         took: None,
+        started: None,
         items: helper_lines(count, waits, true),
     }
 }
@@ -245,6 +249,11 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         ended_time: Default::default(),
         // Its ended task is the stopped one, whose status is how far it got.
         fuller: dot == Dot::Ended,
+        // Its working task's status leads with its step's count.
+        lead: match dot {
+            Dot::Working => status.find(" · ").unwrap_or(0),
+            _ => 0,
+        },
         finding: Default::default(),
         told: Default::default(),
     };
@@ -268,6 +277,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             status: status.into(),
             // Done, its status is its receipt.
             fuller: dot == Dot::Done,
+            lead: 0,
             dot,
             word: Word::for_dot(dot),
             pages: Vec::new(),
@@ -289,12 +299,14 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             let (_, site) = helper_tabs().swap_remove(HELPER_WAITING);
             cards[0].status =
                 format!("{} · Sign in to {site}", browser::agents::task::NEEDS_YOU).into();
+            cards[0].lead = browser::agents::task::NEEDS_YOU.len();
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
         }
         (Some(count), false) => {
             cards[0].status = helper_trace(count, false).line();
             cards[0].fuller = true;
+            cards[0].lead = 0;
         }
         (None, _) => {}
     }
@@ -305,6 +317,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         )
         .into();
         cards[0].fuller = false;
+        cards[0].lead = browser::agents::task::NEEDS_YOU.len();
         cards[0].dot = Dot::Waiting;
     }
     // Each helper's page has its own step, which the strip under it and its tile say.
@@ -323,6 +336,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].name = name.into();
         cards[0].status = "Two seats in row 12 are in your basket".into();
         cards[0].fuller = false;
+        cards[0].lead = 0;
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
     }
@@ -335,6 +349,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             )
             .into();
             cards[0].fuller = false;
+            cards[0].lead = browser::agents::task::NEEDS_YOU.len();
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
             cards.truncate(1);
@@ -342,6 +357,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         Some("interrupted") => {
             cards[0].status = "Claude Code isn't signed in.".into();
             cards[0].fuller = false;
+            cards[0].lead = 0;
             cards[0].dot = Dot::Ended;
             cards[0].word = Word::Interrupted;
             cards[0].fix = Some((
@@ -375,6 +391,7 @@ pub(crate) fn bench_ended() -> Option<&'static str> {
 /// the step under way, on four pages, so it opens on Pages.
 pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     let (title, _, _) = TASKS[0];
+    // Every step is on the tickets page: the first went to it, so it heads the page's line.
     let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
         key,
         glyph,
@@ -387,6 +404,12 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             false => Opens::Nothing,
         },
         under: "".into(),
+        page: Some(OnPage {
+            tab: (key != 0).then_some(FIRST_TASK + 200),
+            site: "tickets.example".into(),
+            went: key == 0,
+        }),
+        says: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -422,6 +445,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            started: None,
             items: items.clone(),
         })],
         tabs: vec![
@@ -437,11 +461,23 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        finished: Vec::new(),
         folder: None,
+        model: Some(model(Cli::Claude, Some("Opus"))),
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
     talk
+}
+
+/// A thread's model as its composer's row says it, the app's way: its CLI's mark and name with
+/// the model's, or its default's row, opening the model's menu where the CLI takes another.
+fn model(cli: Cli, name: Option<&str>) -> (&'static str, SharedString, bool) {
+    let said = match name {
+        Some(name) => format!("{} \u{b7} {name}", cli.name()),
+        None => browser::agents::task::model_default(cli),
+    };
+    (cli.glyph(), said.into(), cli.switches_model())
 }
 
 /// The view of a task that isn't at work says what its group's header does: its title, where it
@@ -478,6 +514,12 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
+            page: Some(OnPage {
+                tab: (key != 0).then_some(pages[0].0),
+                site: site(pages[0].2),
+                went: key == 0,
+            }),
+            says: "".into(),
         })
     };
     let steps = match at {
@@ -491,10 +533,14 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         key: 0,
         running: false,
         took: Some(40),
+        started: None,
         items: steps,
     });
     talk.lines = match card.word {
-        Word::Done => vec![worked, Line::Said(card.status.clone())],
+        Word::Done => {
+            talk.finished = vec![(1, "14:02".into())];
+            vec![worked, Line::Said(card.status.clone())]
+        }
         Word::NeedsYou => vec![
             worked,
             Line::Ilo(IloLine {
@@ -527,6 +573,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             key,
             running: false,
             took: Some(40),
+            started: None,
             items: items.to_vec(),
         })
     };
@@ -535,6 +582,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             key,
             running: true,
             took: None,
+            started: None,
             items: vec![TraceItem::Step(TraceStep {
                 key,
                 glyph: "icons/mouse-pointer-2.svg",
@@ -544,6 +592,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: "".into(),
+                page: None,
+                says: "".into(),
             })],
         })
     };
@@ -680,6 +730,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             let ended = state != "picked-up";
             if state == "codex-ended" {
                 talk.name = "Codex".into();
+                talk.model = Some(model(Cli::Codex, None));
             }
             talk.about = match ended {
                 true => format!("{} · Done at 14:02", talk.name).into(),
@@ -689,6 +740,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             if ended {
                 talk.on = None;
             }
+            // Its answer, the line after the trace, finished when the task did.
+            talk.finished = vec![(1, "14:02".into())];
             let mut lines = vec![
                 done(0, &items),
                 Line::Said(
@@ -781,6 +834,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                     key: 10,
                     running: false,
                     took: Some(52),
+                    started: None,
                     items: helper_lines(HELPER_PAGES.len(), false, false),
                 }),
                 Line::Said(
@@ -802,6 +856,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: github.with().into(),
+                page: None,
+                says: "".into(),
             };
             let reading = TraceStep {
                 key: 11,
@@ -812,11 +868,14 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: "".into(),
+                page: None,
+                says: "Looking for the pull requests that wait on a review".into(),
             };
             let trace = Trace {
                 key: 10,
                 running: true,
                 took: None,
+                started: None,
                 items: vec![TraceItem::Step(opened), TraceItem::Step(reading)],
             };
             vec![done(0, before), Line::Trace(trace)]

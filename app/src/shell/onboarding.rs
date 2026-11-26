@@ -315,8 +315,6 @@ pub(super) struct Onboarding {
     _assistants: Option<Subscription>,
     /// The assistants' rows the preview shows, as it has no Agents to read.
     shown_assistants: Option<Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>>,
-    /// The assistant the preview marks as the threads' default.
-    shown_marked: Option<crate::agents::runner::Cli>,
     /// Help improve as turned at the last step, None while untouched: it's set as the step is left.
     help: Option<bool>,
     /// When the command's line to paste was last copied, which Copy Line says for a moment.
@@ -572,7 +570,6 @@ impl Shell {
                 })
             }),
             shown_assistants: None,
-            shown_marked: None,
             help: None,
             copied: None,
             tidy,
@@ -797,17 +794,17 @@ impl Shell {
         self.onboarding_pick(index, cx);
     }
 
-    /// Shows the assistants' step with `rows`, `marked` the threads' default, for the preview's
+    /// Shows the assistants' step with `rows`, each as a press would leave it, for the preview's
     /// captures: the preview has no Agents for them to come from.
     pub fn onboarding_show_assistants(
         &mut self,
         rows: Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>,
-        marked: Option<crate::agents::runner::Cli>,
         cx: &mut Context<Self>,
     ) {
         if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.shown_assistants = Some(rows);
-            onboarding.shown_marked = marked;
+            let rows = rows.into_iter();
+            let rows = rows.map(|(cli, shown)| (cli, card_words(cli, shown, true)));
+            onboarding.shown_assistants = Some(rows.collect());
             cx.notify();
         }
     }
@@ -1943,18 +1940,23 @@ impl Shell {
             .collect()
     }
 
-    /// The assistants, as Settings › Models has them, one component in both places: each signs in
-    /// with its maker's own sign-in. Without the app's Agents, as in a test's shell, the rows the
-    /// preview gave, or none.
+    /// The assistants, as Settings › Models has them, in first run's form of its row (v9 §4): each
+    /// signs in with its maker's own sign-in. Without the app's Agents, as in a test's shell, the
+    /// rows the preview gave, or none.
     fn assistant_rows(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
         use crate::agents::runner::Cli;
-        use crate::settings_rows::{Act, assistant_row};
-        let look = Look::on(inks.group(), inks.text(1.), rgb(SIGNAL));
+        use crate::settings_rows::{Act, first_run_row};
+        // The line in text-2 and the mark in the text's ink (v9 §1, §4): mixed over the card's
+        // see-through ground, as Look::on would, they'd all but vanish.
+        let look = Look {
+            detail: inks.text_2(),
+            glyph: inks.text(1.),
+            ..Look::on(inks.group(), inks.text(1.), rgb(SIGNAL))
+        };
         let shell = cx.weak_entity();
         let a11y = self.a11y;
         let rows = crate::agents::global(cx).map(|agents| {
             let model = agents.read(cx);
-            let marked = model.default_task_agent();
             let pressed = (self.onboarding.as_ref()).map_or(&[][..], |o| &o.pressed[..]);
             let shown = Cli::ALL.map(|cli| (cli, card_row(model, cli, pressed.contains(&cli))));
             let rows = shown.map(|(cli, shown)| {
@@ -1975,9 +1977,8 @@ impl Shell {
                             .ok();
                     }
                     Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
-                    Act::Mark => {
-                        agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx))
-                    }
+                    // The card draws no mark.
+                    Act::Mark => {}
                     Act::Menu => {
                         let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
                             shell.browser.agents_settings(cx);
@@ -1985,14 +1986,12 @@ impl Shell {
                         shell.update(cx, open).ok();
                     }
                 };
-                assistant_row(
+                first_run_row(
                     &look,
                     cli,
                     &shown,
-                    marked == Some(cli),
                     a11y,
-                    div(),
-                    div(),
+                    card::check_disc(inks),
                     Rc::new(act),
                 )
                 .children(self.place(step, cli.id()))
@@ -2000,23 +1999,10 @@ impl Shell {
             group(&look, rows)
         });
         let rows = rows.or_else(|| {
-            let onboarding = self.onboarding.as_ref()?;
-            let (shown, marked) = (
-                onboarding.shown_assistants.clone()?,
-                onboarding.shown_marked,
-            );
+            let shown = self.onboarding.as_ref()?.shown_assistants.clone()?;
             let rows = shown.iter().map(|(cli, shown)| {
                 let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
-                assistant_row(
-                    &look,
-                    *cli,
-                    shown,
-                    marked == Some(*cli),
-                    a11y,
-                    div(),
-                    div(),
-                    act,
-                )
+                first_run_row(&look, *cli, shown, a11y, card::check_disc(inks), act)
             });
             Some(group(&look, rows))
         });
@@ -2282,7 +2268,7 @@ mod tests;
 
 /// An assistant's row on the card. Until its Sign In is pressed it draws from what the browser
 /// already holds, running nothing: its maker's plan and Sign In, or the sign-in the browser knows
-/// of. Once pressed, it says what the press learned, as Settings › Models' row does.
+/// of. Once pressed, it says what the press learned, in the card's words.
 fn card_row(
     agents: &crate::agents::Agents,
     cli: crate::agents::runner::Cli,
@@ -2294,11 +2280,30 @@ fn card_row(
         shown.offer,
         Offer::Cancel | Offer::SignedIn | Offer::TryAgain
     ) || agents.found(cli) == Ready::SignedIn;
-    if pressed || known {
-        return shown;
-    }
-    crate::agents::sign_in::Shown {
-        line: format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
-        offer: Offer::SignIn,
-    }
+    card_words(cli, shown, pressed || known)
+}
+
+/// What an assistant's row says on the card (v9 §4), from what Settings › Models' row would:
+/// its maker's plan until `learned` is what the browser holds or a press found, then the wait,
+/// a failed or closed sign-in, or its maker's plan again once signed in, as no use is reported.
+/// Settings' own words (a missing program, a sign-in that needs a terminal) aren't the card's:
+/// its Sign In does what Settings' does.
+fn card_words(
+    cli: crate::agents::runner::Cli,
+    shown: crate::agents::sign_in::Shown,
+    learned: bool,
+) -> crate::agents::sign_in::Shown {
+    use crate::agents::{runner::Cli, sign_in::Offer};
+    let offer = match learned {
+        true => shown.offer,
+        false => Offer::SignIn,
+    };
+    let line = match (offer, cli) {
+        // Claude's sign-in is in the computer's browser, ChatGPT's in a window here.
+        (Offer::Cancel, Cli::Claude) => "Finish in the browser that opened.".into(),
+        (Offer::Cancel, Cli::Codex) => "Finish in the window that opened.".into(),
+        (Offer::TryAgain, _) => "Sign-in didn't finish.".into(),
+        _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
+    };
+    crate::agents::sign_in::Shown { line, offer }
 }

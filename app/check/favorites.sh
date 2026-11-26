@@ -654,9 +654,10 @@ expect '^browser: sidebar width 164$' "dragging the sidebar's edge didn't narrow
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
-send resize 1000 220
+# Two rows of tiles 40 tall and 8 apart are 88, more than 0.4 of a window 200 tall (80).
+send resize 1000 200
 expect '^browser: tiles scroll with the list$' \
-  "two rows of tiles in a window 220 tall didn't scroll with the list"
+  "two rows of tiles in a window 200 tall didn't scroll with the list"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-tall.png" || fail "no window to capture"
 # Scrolled 40, the tiles went up 40 with the rows, and the first tile's place holds the third's.
 send scroll 100 150 20 2

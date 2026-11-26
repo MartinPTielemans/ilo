@@ -62,9 +62,19 @@ use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
 
-/// The name the clients list the server by: the browser's, a dev build's apart.
+/// The name the clients list the server by: the product's, a dev build's apart.
 pub fn server_name() -> String {
-    let name = env!("APP_NAME").to_lowercase();
+    listed_as(PRODUCT)
+}
+
+/// The name the clients listed the server by before it took the product's, which Connect Again
+/// takes out of a client's config.
+pub fn old_server_name() -> String {
+    listed_as(env!("APP_NAME"))
+}
+
+fn listed_as(name: &str) -> String {
+    let name = name.to_lowercase();
     match cfg!(feature = "prod") {
         true => name,
         false => format!("{name}-dev"),
@@ -763,11 +773,14 @@ pub fn next_entry_id() -> u64 {
     NEXT_ENTRY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// An agent the user connected.
+/// An agent the user connected. One connected before the server took the product's name, whose
+/// stored entry has no name or another, is stale: its token is void, and its row says Connect
+/// Again, or for the command Add Again.
 #[derive(Clone, Debug)]
 pub struct Agent {
     pub client: Client,
     token: String,
+    stale: bool,
 }
 
 /// Whether a press of the X server's `button` in an agent's page takes it over: a click of any of
@@ -1136,7 +1149,12 @@ impl Agents {
             .filter_map(|agent| {
                 let client = Client::from_id(agent.get("client")?.as_str()?)?;
                 let token = agent.get("token")?.as_str()?.to_string();
-                Some(Agent { client, token })
+                let stale = agent.get("name").and_then(Value::as_str) != Some(PRODUCT);
+                Some(Agent {
+                    client,
+                    token,
+                    stale,
+                })
             })
             .collect();
         self.tokens_changed();
@@ -1200,9 +1218,11 @@ impl Agents {
                 let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
                 Some((cli, model.get(1)?.as_str()?.to_string()))
             });
+            let effort = (last.get("effort").and_then(Value::as_str)).and_then(task::known_effort);
             let last = task::Last {
                 tier: tier.unwrap_or_default(),
                 model,
+                effort,
             };
             Some((profile.clone(), last))
         }))
@@ -1487,6 +1507,9 @@ impl Agents {
     /// On Windows, added in a folder no longer on the user's PATH is Add again (#3783). A
     /// Flatpak's sandbox can't ask the host's shell, so there the row gives its line either way.
     pub fn command_state(&self) -> cli::State {
+        if self.is_stale(Client::Command) {
+            return cli::State::Stale;
+        }
         let added = self.is_connected(Client::Command);
         let flatpak = self.command_flatpak_line().is_some();
         cli::state(added, self.command_searched || flatpak, cfg!(windows))
@@ -1647,7 +1670,13 @@ impl Agents {
     }
 
     pub fn is_connected(&self, client: Client) -> bool {
-        self.agents.iter().any(|agent| agent.client == client)
+        (self.agents.iter()).any(|agent| agent.client == client && !agent.stale)
+    }
+
+    /// Whether the client was connected before the server took the product's name, and needs
+    /// Connect Again.
+    pub fn is_stale(&self, client: Client) -> bool {
+        (self.agents.iter()).any(|agent| agent.client == client && agent.stale)
     }
 
     /// Whether the client's Connect is still writing its config.
@@ -1718,13 +1747,25 @@ impl Agents {
         }
         let token = random_token();
         let entry = self.entry(&token);
+        // Connect Again takes the server's old name out of the client's config first. The
+        // command's Add takes its old link and file away itself (cli::Install).
+        // A build whose name and product are one adds under the same name, so takes none out.
+        let old = (self.is_stale(client) && client != Client::Command)
+            .then(old_server_name)
+            .filter(|old| cli::renamed(old, &server_name()));
         self.connecting = Some(client);
         self.failed.retain(|(each, _)| *each != client);
         cx.notify();
         let clients = self.clients.clone();
         cx.spawn(async move |agents, cx| {
             let done = cx
-                .background_spawn(async move { clients.connect(client, &entry) })
+                .background_spawn(async move {
+                    // A name the user took out by hand fails its remove, and leaves nothing to take.
+                    if let Some(old) = old {
+                        _ = clients.disconnect(client, &old);
+                    }
+                    clients.connect(client, &entry)
+                })
                 .await;
             agents
                 .update(cx, |agents, cx| agents.connected(client, token, done, cx))
@@ -1746,7 +1787,11 @@ impl Agents {
                 // check.sh reads this line.
                 log!("browser: agent {} connected", client.id());
                 self.agents.retain(|agent| agent.client != client);
-                self.agents.push(Agent { client, token });
+                self.agents.push(Agent {
+                    client,
+                    token,
+                    stale: false,
+                });
                 self.tokens_changed();
                 // In the same save as what it added, unless turned off while it was writing.
                 if self.outside_on_landing.contains(&client) && !self.unwanted.contains(&client) {
@@ -1831,7 +1876,7 @@ impl Agents {
     /// What an MCP client's config needs, for the user to paste: the bridge, its socket and the
     /// agent's token, as most clients write a stdio server.
     pub fn setup(&self, client: Client) -> Option<String> {
-        let agent = self.agents.iter().find(|agent| agent.client == client)?;
+        let agent = (self.agents.iter()).find(|agent| agent.client == client && !agent.stale)?;
         let config = json!({ "mcpServers": { server_name(): self.entry(&agent.token).json() } });
         serde_json::to_string_pretty(&config).ok()
     }
@@ -2005,7 +2050,12 @@ impl Agents {
         }
     }
 
-    fn call(&mut self, call: Call, cx: &mut Context<Self>) {
+    fn call(&mut self, mut call: Call, cx: &mut Context<Self>) {
+        // The assistant's word on its step goes out of the call before anything reads it, and
+        // only to its step in the trace. Only the product's own threads, a helper's calls among
+        // them, may say one: anyone else's is dropped unread.
+        let noted = is_task(&call.agent) && tools::NOTED.contains(&call.tool.as_str());
+        let says = tools::take_note(noted, &mut call.arguments);
         // A token's agent is always one the user connected, or a task of theirs.
         if !self.may_call(&call.agent) {
             _ = call
@@ -2055,7 +2105,7 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
-        self.trace_call(&call, cx);
+        self.trace_call(&call, says, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
         self.live.insert(call.agent.clone());
@@ -2747,9 +2797,14 @@ impl Agents {
 
     /// Starts the run's next step, which answers it through `advance`.
     fn next_step(&mut self, mut run: Run, cx: &mut Context<Self>) {
-        let Some(step) = run.steps.pop_front() else {
+        let Some(mut step) = run.steps.pop_front() else {
             return;
         };
+        // Each step's word goes out of it before anything reads it, and only to its trace line,
+        // where its action may carry one outside a run too.
+        let action = (step.get("action").and_then(Value::as_str)).unwrap_or_default();
+        let noted = is_task(&run.agent) && tools::NOTED.contains(&action);
+        let says = tools::take_note(noted, &mut step);
         // A step took the tab to a fenced site: the run stops there, saying nothing of its page.
         if let Some(site) = self.came_to(run.tab, cx) {
             let stopped = fence::run_stopped(run.done.len() + 1, run.tab, &site);
@@ -2764,7 +2819,15 @@ impl Agents {
             .to_string();
         let (reply, answer) = mpsc::channel();
         run.step = answer;
-        self.trace_step(&run.agent, run.connection, run.call, run.tab, &step, cx);
+        self.trace_step(
+            &run.agent,
+            run.connection,
+            run.call,
+            run.tab,
+            &step,
+            says,
+            cx,
+        );
         if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
@@ -5638,9 +5701,8 @@ impl Agents {
     }
 
     fn tokens_changed(&self) {
-        let tokens = self
-            .agents
-            .iter()
+        let tokens = (self.agents.iter())
+            .filter(|agent| !agent.stale)
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
         // A session's calls come with its client's token: it has none of its own. A thread of the
         // product's own has one only while the inside switch is on.
@@ -5654,7 +5716,12 @@ impl Agents {
     fn save(&self) {
         let Some(path) = &self.path else { return };
         let agents: Vec<Value> = (self.agents.iter())
-            .map(|agent| json!({ "client": agent.client.id(), "token": agent.token }))
+            .map(|agent| match agent.stale {
+                true => json!({ "client": agent.client.id(), "token": agent.token }),
+                false => {
+                    json!({ "client": agent.client.id(), "token": agent.token, "name": PRODUCT })
+                }
+            })
             .collect();
         let grants: serde_json::Map<String, Value> = (self.grants.iter())
             .map(|(agent, sites)| {
@@ -5675,7 +5742,7 @@ impl Agents {
                 let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
                 (
                     profile.clone(),
-                    json!({ "level": last.tier.id(), "model": model }),
+                    json!({ "level": last.tier.id(), "model": model, "effort": last.effort }),
                 )
             })
             .collect();

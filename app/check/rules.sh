@@ -33,8 +33,8 @@ mkdir -p "$profile_dir"
 agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 other_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"},{"client":"codex","token":"%s"}]}' \
-  "$token" "$other_token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"},{"client":"codex","token":"%s","name":"%s"}]}' \
+  "$token" "$product" "$other_token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 local_site="http://localhost:$port"
 other_site="http://other.localhost:$port"
@@ -326,7 +326,7 @@ stopped() {
   logged=$(grep -c "$refusals" "$log" || true)
   got=$(call request "{\"tab\":$1,\"requests\":$3}")
   case "$got" in
-    "error: ilo stopped this: make $4 on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*) ;;
+    "error: $product stopped this: make $4 on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*) ;;
     *) missed "$2 answered: $got" && return ;;
   esac
   await_more "$at_work" "$before" || missed "$2 was refused, but isn't logged as ilo's stop"

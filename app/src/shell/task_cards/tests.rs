@@ -5,13 +5,14 @@ use std::time::{Duration, Instant};
 
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
-use super::card::{Look, count, look, second_line, spoken};
+use super::card::{Look, count, look, second_lead, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
+use crate::tokens::shell::task_card::{FROM_LINE, GAP};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
@@ -40,6 +41,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -262,11 +264,8 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
         state_line(&working).as_ref(),
         "Full access · Working · 3 helpers"
     );
-    assert_eq!(
-        super::state_lead(&state_line(&working)),
-        "Full access".len()
-    );
-    assert_eq!(super::state_lead(&state_line(&done)), 0);
+    assert_eq!(super::state(&working).1, Tier::Full.label().len());
+    assert_eq!(super::state(&done).1, 0);
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
     asks.status = "Which would you rather visit?".into();
@@ -310,6 +309,94 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// How much of a card's line is in the title's ink is its level's: a card at Full access leads its
+/// state's line with the level's label, and a card at any other level has no lead, though its
+/// client is named as the label and its line so begins as that one does. A line that isn't its
+/// state's, its step at work, has none at either level.
+#[test]
+fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
+    let label = Tier::Full.label();
+    let mut posing = card(1, Dot::Ended);
+    posing.name = label.into();
+    let mut full = card(2, Dot::Ended);
+    full.tier = Tier::Full;
+    assert_eq!(state_line(&posing), state_line(&full));
+    for form in [Form::Ended, Form::EndedLine, Form::DoneUnseen] {
+        assert_eq!(second_lead(&posing, form), 0, "{form:?}");
+        assert_eq!(second_lead(&full, form), label.len(), "{form:?}");
+    }
+    // At work the line is the step, which for a session begins with its client's name.
+    for card in [&mut posing, &mut full] {
+        card.dot = Dot::Working;
+        card.status = format!("{label} · Opening tap.pt").into();
+        assert_eq!(second_lead(card, Form::Working), 0);
+    }
+}
+
+/// An outside app's card has its line from the kind of its connection alone, a session with no
+/// task's token, and a task's never does, whatever either is named. The name, however long or made
+/// of whatever state words, moves nothing and changes no rim, mark or button.
+#[test]
+fn an_outside_apps_line_comes_from_its_connection_alone() {
+    let long = "Flights ".repeat(25);
+    let names = [
+        "Flights",
+        "Needs you",
+        "Done · 13:31",
+        "Working",
+        "Claude",
+        "",
+        long.as_str(),
+    ];
+    let forms = [
+        Form::Working,
+        Form::Waits,
+        Form::DoneUnseen,
+        Form::Ended,
+        Form::WorkingLine,
+        Form::DoneLine,
+        Form::EndedLine,
+    ];
+    for name in names {
+        for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
+            let task = Card {
+                name: name.into(),
+                ..paged(1, dot, &[30])
+            };
+            let session = Card {
+                replies: false,
+                ..task.clone()
+            };
+            let short = Card {
+                name: "Flights".into(),
+                ..session.clone()
+            };
+            for form in forms {
+                let (theirs, ours) = (look(&task, form, true), look(&session, form, true));
+                assert!(!theirs.from && ours.from, "{name:?} {form:?}");
+                assert_eq!(
+                    Look {
+                        from: false,
+                        ..ours
+                    },
+                    theirs,
+                    "{name:?} {form:?}"
+                );
+                assert_eq!(
+                    super::room(&session, form, 1),
+                    super::room(&short, form, 1),
+                    "{form:?}"
+                );
+                // A whole card makes room for the line over its first row; a folded one carries
+                // only the mark, in its one line.
+                let more = super::room(&session, form, 1) - super::room(&task, form, 1);
+                let line = FROM_LINE + GAP;
+                assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
+            }
+        }
+    }
 }
 
 /// Whether a card's line says its status in its word's place is a fact its maker set, never read
@@ -364,6 +451,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -374,6 +462,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: true,
                 button: true,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -387,6 +476,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: true,
+                from: false,
             },
             "{status}"
         );
@@ -468,6 +558,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
         finding: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -525,6 +616,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         told: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(1, Dot::Done)
     };
     assert_eq!(
@@ -1491,4 +1583,113 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
+}
+
+/// The shown thread's card joins its stage, on the stage's ground rather than the sidebar's: its
+/// title still reads there at 4.5:1, Dark and Light, on every theme.
+#[test]
+fn the_joined_cards_title_reads_on_its_stage() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::{Appearance, Theme};
+    let mut palettes = vec![Palette::default()];
+    for appearance in Appearance::ALL {
+        for step in 0..24 {
+            let angle = step as f32 * std::f32::consts::TAU / 24.;
+            for distance in [0., 0.35, 0.7, 1.] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(distance * angle.cos(), distance * angle.sin())
+                };
+                palettes
+                    .extend([Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(&theme), tone)));
+            }
+        }
+    }
+    for palette in &palettes {
+        let stage = super::super::conversation::stage_fill(palette);
+        let ground = gpui::Rgba { a: 1., ..stage };
+        let ink = gpui::Rgba::from(super::super::title_ink(palette, true));
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(
+            ratio >= 4.5,
+            "the joined card's title is {ratio:.2}:1 on {stage:?}"
+        );
+    }
+}
+
+/// The shown thread's card is one shape with its stage (spec-thread-stage, the join): it takes the
+/// stage's fill, has no outline of its own and reaches the sidebar's edge. A card not shown keeps
+/// its state's outline, and a waiting one shown gives up its rim and has it back once another
+/// thread is shown.
+#[gpui::test]
+fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+    use super::card::Framed;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
+    let two = vec![
+        paged(2, Dot::Waiting, &[1020]),
+        paged(1, Dot::Working, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two);
+    still(cx);
+    tick(5.);
+    draw(&shell, cx);
+    let framed = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let card = (shell.task_cards.iter())
+                .find(|card| card.agent.as_ref() == agent)
+                .expect("its card");
+            let space = shell.shown_space().expect("a Space shown");
+            let placed = (space.placed.iter())
+                .find(|placed| placed.agent.as_ref() == agent)
+                .expect("its place");
+            shell.card_framed(card, placed.form, shell.task_list.unseen.contains(agent))
+        })
+    };
+    let rim = Framed::Outlined {
+        outline: RIM,
+        width: RIM_WIDTH,
+    };
+    let outline = Framed::Outlined {
+        outline: OUTLINE,
+        width: OUTLINE_WIDTH,
+    };
+    assert_eq!(framed(&shell, "task-2", cx), rim);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let show = |shell: &Entity<Shell>, agent: &str, cx: &mut VisualTestContext| {
+        let at = (shell.read_with(cx, |shell, _| shell.task_plate_drawn(agent)))
+            .expect("its card")
+            .origin
+            + gpui::point(gpui::px(24.), gpui::px(8.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        draw(shell, cx);
+    };
+    show(&shell, "task-2", cx);
+    assert_eq!(
+        shell
+            .read_with(cx, |shell, _| shell.talk_agent())
+            .as_deref(),
+        Some("task-2")
+    );
+    assert_eq!(framed(&shell, "task-2", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-1", cx), outline);
+    let (edge, plate) = shell.read_with(cx, |shell, _| {
+        (
+            shell.width(),
+            shell.task_plate_drawn("task-2").expect("its card"),
+        )
+    });
+    assert_eq!(
+        f32::from(plate.right()),
+        edge,
+        "the joined card's right end"
+    );
+    let joined = crate::shell::join::JOINED.take().expect("the card's join");
+    let palette = shell.read_with(cx, |shell, _| shell.palette);
+    let stage = crate::shell::conversation::stage_fill(&palette);
+    assert_eq!(joined.fill, gpui::Hsla::from(stage));
+    assert_eq!(joined.line, plate);
+    show(&shell, "task-1", cx);
+    assert_eq!(framed(&shell, "task-1", cx), Framed::Joined);
+    assert_eq!(framed(&shell, "task-2", cx), rim);
 }

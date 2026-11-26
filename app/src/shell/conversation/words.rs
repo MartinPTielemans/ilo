@@ -16,12 +16,6 @@ pub const MARK: &str = PRODUCT;
 pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
 
-/// The live line while no step is under way: between steps, and after Hand Back or a change of
-/// access, until the next step starts.
-pub fn working(agent: &str) -> String {
-    format!("{agent} is working")
-}
-
 /// The assistant's own words as a screen reader is told them, the first line of its answer: the
 /// mark before them is the app's, and spoken only, so nothing an assistant writes is heard as a
 /// line of the product's.
@@ -31,6 +25,24 @@ pub fn says(assistant: &str, said: &str) -> String {
 
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
+
+/// The button under an answer that copies it, as a screen reader names it (Z18).
+pub const COPY_ANSWER: &str = "Copy Answer";
+
+/// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
+pub fn split(strands: usize) -> Option<String> {
+    (strands > 1).then(|| format!("Split into {strands} strands"))
+}
+
+/// The fold over a stretch of work (Z14), the one place the weaving pair stands: at work, its word
+/// and the time so far; done, the time it took.
+pub fn fold(took: Option<u64>, so_far: u64) -> (String, String) {
+    use crate::agents::task::duration;
+    match took {
+        Some(took) => (format!("Woven in {}", duration(took)), String::new()),
+        None => ("Weaving".to_string(), duration(so_far)),
+    }
+}
 
 /// The live line's button while the user has the task's page.
 pub const HAND_BACK: &str = "Hand Back";
@@ -42,7 +54,7 @@ pub fn live(live: &Live) -> Option<String> {
     match live {
         Live::Working => None,
         Live::Refused | Live::Handed => None,
-        Live::Yours { site: None, .. } => Some("You're driving".into()),
+        Live::Yours { site: None, .. } => Some(crate::agents::task::DRIVING.into()),
         Live::Yours {
             site: Some(site), ..
         } => Some(format!("You're driving {site}")),
@@ -314,7 +326,32 @@ pub fn button(button: IloButton) -> &'static str {
 }
 
 /// What a line's buttons promise, under them, if anything.
+/// Under Full access, how long it lasts: the behaviours menu's foot, word for word (C3).
 pub fn note(buttons: &[IloButton]) -> Option<&'static str> {
-    (buttons.contains(&IloButton::Raise(Tier::Full)))
-        .then_some("Full access lasts for this thread only.")
+    (buttons.contains(&IloButton::Raise(Tier::Full))).then_some("For this thread only")
+}
+
+/// The quiet line in the reply field's place, if any: on an outside app's session, which `name`
+/// is, where to reply (C2); while Settings › Threads' switch is off, that it is (C1).
+pub fn in_reply_place(replies: bool, threads_off: bool, name: &str) -> Option<String> {
+    match (replies, threads_off) {
+        (false, _) => Some(format!("Reply in {name}.")),
+        (true, true) => Some("Threads are off in Settings › Threads.".to_string()),
+        (true, false) => None,
+    }
+}
+
+/// The reply field's placeholder while its thread is at work (Z-who): typing there steers it.
+pub const STEER: &str = "Steer it, or ask";
+
+/// The reply field's placeholder otherwise (Z-who), and the name of the button that sends what's
+/// typed, whoever is at work: the user reads ilo as the one at work, never the assistant.
+pub const REPLY: &str = "Reply";
+
+/// The reply field's placeholder, as its thread is `at_work` or not.
+pub fn reply_field(at_work: bool) -> &'static str {
+    match at_work {
+        true => STEER,
+        false => REPLY,
+    }
 }

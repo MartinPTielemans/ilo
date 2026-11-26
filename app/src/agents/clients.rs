@@ -63,7 +63,7 @@ impl Client {
             Client::ClaudeCode => "Claude Code",
             Client::Codex => "Codex",
             Client::Other => "Another app",
-            Client::Command => "ilo CLI",
+            Client::Command => concat!("The ", env!("PRODUCT_NAME"), " command"),
         }
     }
 
@@ -301,6 +301,7 @@ fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
         file,
         linked: super::bridge::flatpak_id().is_none(),
         store: false,
+        old: super::cli::OLD_LINK.into(),
     })
 }
 

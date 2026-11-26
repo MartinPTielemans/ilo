@@ -30,9 +30,10 @@ use crate::{
 
 pub use crate::tokens::menu::*;
 
-/// The panel's colour, 0xRRGGBBAA: what floats over a dark or a light window (#4090).
-pub const DARK_FILL: u32 = (crate::tokens::palette::OVERLAY_DARK << 8) | 0xff;
-pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
+/// The panel's colour, 0xRRGGBBAA, opaque: what floats over a dark or a light window, where the
+/// host has no material under it (#4090).
+pub const DARK_FILL: u32 = crate::tokens::floating::FILL | 0xff;
+pub const LIGHT_FILL: u32 = crate::tokens::floating::LIGHT_FILL | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
@@ -50,7 +51,7 @@ pub struct Palette {
 
 const DARK: Palette = Palette {
     fill: DARK_FILL,
-    rim: DARK_RIM,
+    rim: crate::tokens::floating::RIM,
     label: DARK_LABEL,
     secondary: DARK_SECONDARY,
     line: DARK_LINE,
@@ -60,7 +61,7 @@ const DARK: Palette = Palette {
 
 const LIGHT: Palette = Palette {
     fill: LIGHT_FILL,
-    rim: LIGHT_RIM,
+    rim: crate::tokens::floating::LIGHT_RIM,
     label: LIGHT_LABEL,
     secondary: LIGHT_SECONDARY,
     line: LIGHT_LINE,
@@ -206,7 +207,7 @@ pub fn glass<E: Styled + ParentElement + gpui::prelude::FluentBuilder>(
         inset: true,
     };
     let mut shadows = match shadowed {
-        true => crate::elevation::menu_shadow(light),
+        true => crate::elevation::menu_shadow(),
         false => Vec::new(),
     };
     shadows.push(match light {
@@ -1463,7 +1464,7 @@ pub fn show(request: Request, cx: &mut App) {
         let search = (request.items.iter().any(|item| item.field)).then(|| {
             let palette = request.look.palette();
             let colors = text_input::Colors {
-                caret: rgba(palette.label).into(),
+                caret: Some(rgba(palette.label).into()),
                 ..text_input::Colors::placeholder(rgba(palette.secondary))
             };
             let placeholder = (request.items.iter().find(|item| item.field))

@@ -104,7 +104,7 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -1049,7 +1049,7 @@ if [ -n "$yours_step" ]; then
     stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
     unsent=$(call request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}")
     case "$unsent" in
-      "error: ilo stopped this: "*"It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*"the same call will go through.") ;;
+      "error: $product stopped this: "*"It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*"the same call will go through.") ;;
       *) fail "a change at Work on pages answered: $unsent" ;;
     esac
     await_more '^browser: agent mcp-client stopped Request at Work on pages: localhost$' "$stops" ||
@@ -1340,22 +1340,22 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
-  # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
-  # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
-  # where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows alone, the
-  # change's.
+  # Tab round the ring never gives the watched agent's page the keyboard: its stop is the words of
+  # the panel's page row, so the handback into a page, which on Windows gives the shown page's pane
+  # the keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the
+  # page's stops, where F6 would leave the agent's Space for the user's (sidebar_keys.rs). Windows
+  # alone, the change's.
   ring_strip() {
     windows || return 0
     ringed=$((step + 1))
     send key tab
-    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the strip under it"
+    expect '^browser: strip keyed ' "Tab with the agent's split watched didn't ring the page's stops beside it"
     for _ in 1 2 3 4 5 6 7 8; do
       send key tab
     done
     send state
     logged '^browser: strip keyed page$' "$ringed" ||
-      fail "Tab round the strip with the agent's split watched never rang its page's stop"
+      fail "Tab round the ring with the agent's split watched never rang its page's stop, the page row's words"
     ! logged '^browser: ring gave the page ' "$ringed" ||
       fail "Tab round the ring with the agent's split watched gave its page the keyboard"
     case "$key $focus" in
@@ -1509,9 +1509,9 @@ PICTURE
   hand_back_warned
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
   # keeps the keys that answer it (dialog_keys.cc). The click that gave it the keyboard took the
-  # tab over, so the Escape is the user's act on their own tab, and the strip says they have it
-  # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
-  # tab page, as it had no page before it. ⌘↩ hands it back after.
+  # tab over, so the Escape is the user's act on their own tab, and the panel's page row says they
+  # have it before the page leaves. The warning goes, and the tab leaves the http page, here for the
+  # new tab page, as it had no page before it. ⌘↩ hands it back after.
   to_pages "tab $warned"
   # The press beside took $beside over, where the agent acted last, which ended its session there.
   # The click on the warning in $warned, its other tab, takes that one over too: whose tab it is
@@ -1521,11 +1521,11 @@ PICTURE
     fail "the press beside the agent's warning didn't end its session in $beside, where it acted last, before the click on the warning in tab $warned: $last"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
+  driving=$(grep -c "^browser: page row $warned yours\$" "$log" || true)
   watch_warning "before Escape"
   took_warned "before Escape"
-  await_more "^browser: task strip $warned says You're driving" "$driving" ||
-    fail "the strip under tab $warned didn't say the user has it once the click on its warning took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
+  await_more "^browser: page row $warned yours\$" "$driving" ||
+    fail "the panel's page row for tab $warned didn't say the user has it once the click on its warning took it: $(grep "^browser: page row $warned " "$log" | tail -1)"
   send key escape
   escaped=$step
   for _ in $(seq 50); do
@@ -2611,7 +2611,7 @@ addEventListener("message", (event) => {
     reached=$(grep -c '^\(POST\|PUT\|PATCH\|DELETE\) ' "$out/site.log" || true)
     case "$2" in 1) what="a change" ;; *) what="$2 changes" ;; esac
     changed=$(call request "{\"tab\":$frames_tab,\"requests\":[$1]}")
-    [ "$changed" = "error: ilo stopped this: make $what on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through." ] ||
+    [ "$changed" = "error: $product stopped this: make $what on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product. Don't try another way to the same end; if they change it, the same call will go through." ] ||
       fail "$what at Work on pages answered: $changed"
     await_more "$stops" "$before" || fail "$what refused at Work on pages wasn't logged as ilo's stop"
     await_more "$unsent" "$((noted + $2 - 1))" ||
@@ -3231,22 +3231,23 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   watch "$agent_tab"
 
   # From the conversation, a press in the page watched takes the tab the agent is at work in over,
-  # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
-  # user hands it back. The strip then says the user drives.
+  # as Take Over in the panel's page row does (#1080), and the agent's next action there is refused
+  # until the user hands it back.
   before=$(grep -c "$back" "$log" || true)
   shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
   await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
   await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
   watch "$opened_tab"
-  await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
-  read -r sx sy sw _ <<STRIP
-$(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
-STRIP
-  # In the page, above the strip, where nothing on the page takes the click.
-  send click $((sx + sw / 2)) $((sy - 120))
-  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
+  await_log "^browser: task page $opened_tab at " "the page watched was never placed beside the panel"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-page.png" || fail "no window to capture"
+  read -r px py pw ph <<PAGE
+$(grep "^browser: task page $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+PAGE
+  # The middle of the page, from where the app logged it: the long page is plain text there,
+  # which takes no click, and the app draws nothing over it.
+  send click $((px + pw / 2)) $((py + ph / 2))
+  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the app"
   await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
   ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
   refused=$(call scroll "{\"tab\":$opened_tab}")
@@ -3507,7 +3508,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     case "$level" in
       "Work on pages")
         case "$did" in
-          "error: ilo stopped this: "*" on $3"*". It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo. Don't try another way to the same end; if they change it, the same call will go through.") ;;
+          "error: $product stopped this: "*" on $3"*". It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product. Don't try another way to the same end; if they change it, the same call will go through.") ;;
           *) fail "$1 $2 at Work on pages answered: $did" ;;
         esac
         await_more "$stop" "$before" ||
@@ -3631,7 +3632,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     case "$level" in
       "Work on pages")
         case "$allowed" in
-          "error: ilo stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*) ;;
+          "error: $product stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*) ;;
           *) fail "a bank's site at Work on pages answered: $allowed" ;;
         esac
         await_more "$stop" "$before" ||
@@ -3855,7 +3856,7 @@ for (const each of document.querySelectorAll('iframe, object'))
   # Whether $1, the answer to $2, is ilo's refusal of $3 on the site, logged as its stop since
   # $before.
   fence_refused() {
-    [ "$1" = "error: ilo stopped this: $3 pension.localhost. pension.localhost is off limits to agents, whatever a task's access. Only the user can change that, in ilo. Don't try another way to the same end." ] ||
+    [ "$1" = "error: $product stopped this: $3 pension.localhost. pension.localhost is off limits to agents, whatever a task's access. Only the user can change that, in $product. Don't try another way to the same end." ] ||
       fail "$2 answered: $1"
     await_more "$fence_stops" "$before" ||
       fail "$2 wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
@@ -4257,7 +4258,7 @@ quit
 # The switch the run turned off goes back on. The launch waits 3 s for a handoff in place of the
 # spec's 15 minutes, which the time limit's step below reaches, and ends a task 3 s after its last
 # page closed in place of 60.
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 log="$out/mcp-waits.log"
 step=0
 BROWSER_DRIVE=1 "$browser" --agent-waits=2,3,3 < "$out/drive" > "$log" 2>&1 &
@@ -4400,7 +4401,7 @@ say(); middle.onchange = say;
 </script>' > "$out/site/widths-yours.html"
   rm -rf "$profile_dir"
   mkdir -p "$profile_dir/Default"
-  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
   # The size the agent's last picture of |tab| had, as WxH.
   pictured_at() {
     grep "browser: agent picture of tab $1 at " "$log" | tail -1 | sed 's/.* at //'

@@ -19,6 +19,7 @@ fail() {
 }
 
 name=$(cat "$app/branding/name")
+product=$(cat "$app/branding/product")
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$app/Cargo.toml" | head -1)
 store() { git config -f "$app/branding/windows-store.ini" "store.$1"; }
 
@@ -42,6 +43,7 @@ manifest=${manifest//@PUBLISHER_DISPLAY_NAME@/$(xml "$(store publisher-display-n
 manifest=${manifest//@PUBLISHER@/$(xml "$(store publisher)")}
 manifest=${manifest//@VERSION@/$version.0}
 manifest=${manifest//@NAME@/$(xml "$name")}
+manifest=${manifest//@PRODUCT@/$(xml "$product")}
 printf '%s\n' "$manifest" >"$stage/AppxManifest.xml"
 ! grep -q '@[A-Z_]*@' "$stage/AppxManifest.xml" || fail "AppxManifest.xml has a value msix.sh doesn't fill."
 

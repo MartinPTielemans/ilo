@@ -15,7 +15,7 @@ use gpui::{
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
 use crate::palette::{
-    CARD_PLATE, FIELD_PLATE, INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER, TEXT_SECONDARY,
+    CARD_PLATE, FIELD_PLATE, INK, OVERLAY_DARK, PAPER, TEXT_SECONDARY, darker, ink_states,
 };
 use crate::text_input::Colors;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
@@ -44,7 +44,7 @@ use crate::tokens::text::SMALL;
 mod assistant;
 pub use assistant::{
     Act, SIGN_IN, SIGN_INS_STAY, another_agent_name_row, another_agent_row, assistant_name,
-    assistant_name_alone, assistant_row,
+    assistant_name_alone, assistant_row, first_run_row,
 };
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
@@ -353,13 +353,15 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// The host's own green, where a view still takes it.
-    pub accent: Rgba,
     /// The one button that does what the view is for, and its label: Settings' is the text colour
     /// with the other look's ink on it, as the owner drew it; a look on another view's ground
     /// keeps that ground's accent with white.
     pub primary: Rgba,
     pub on_primary: Rgba,
+    /// That button under the pointer and pressed: Settings', the text's ink, a step toward its
+    /// label and a step further; a ground's accent each channel darker, as every filled button.
+    pub primary_hovered: Rgba,
+    pub primary_pressed: Rgba,
 }
 
 impl Look {
@@ -368,7 +370,7 @@ impl Look {
     /// is. Its groups are the palette's card plate of the ink in both looks, with the page's inner
     /// line. Its controls are neutral: a switch that's on is the text colour with the other look's
     /// ink for its knob, and one that's off the shown plate with a knob of the text colour. Its
-    /// one main action is ilo's green, as the app's window isn't a Space's (#319).
+    /// one main action is the text colour too, as the app's window isn't a Space's (#319).
     pub fn settings(dark: bool) -> Look {
         let (card, base, other) = match dark {
             true => (rgb(OVERLAY_DARK), rgb(PAPER), rgb(INK)),
@@ -378,6 +380,7 @@ impl Look {
         let surface = card.blend(base.opacity(CARD_PLATE));
         let mix = |amount: f32| surface.blend(base.opacity(amount));
         let ink = mix(NAME);
+        let (primary_hovered, primary_pressed) = ink_states(mix(PRIMARY), other);
         Look {
             surface,
             ink,
@@ -395,9 +398,10 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(rgba(if dark { PAGE_LINE } else { LIGHT_PAGE_LINE })),
-            accent: rgb(NO_THEME_ACCENT),
             primary: mix(PRIMARY),
             on_primary: other,
+            primary_hovered,
+            primary_pressed,
         }
     }
 
@@ -423,9 +427,10 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
-            accent,
             primary: accent,
             on_primary: gpui::white().into(),
+            primary_hovered: darker(accent, ACCENT_HOVERED),
+            primary_pressed: darker(accent, ACCENT_PRESSED),
         }
     }
 
@@ -444,7 +449,7 @@ impl Look {
     pub fn field(&self) -> Colors {
         Colors {
             placeholder: self.detail.into(),
-            caret: self.ink.into(),
+            caret: Some(self.ink.into()),
             ..Colors::default()
         }
     }
@@ -709,20 +714,13 @@ pub fn icon_button(
 }
 
 /// The push button that does what the view is for, one at most in sight: its label on the look's
-/// primary at semibold, each channel darker under the pointer and darker again pressed, as every
-/// filled button is.
+/// primary at semibold, with the look's own steps under the pointer and pressed.
 pub fn primary(
     look: &Look,
     id: impl Into<gpui::ElementId>,
     title: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    let shade = |by: f32| Rgba {
-        r: look.primary.r * by,
-        g: look.primary.g * by,
-        b: look.primary.b * by,
-        a: look.primary.a,
-    };
-    let (hovered, pressed) = (shade(ACCENT_HOVERED), shade(ACCENT_PRESSED));
+    let (hovered, pressed) = (look.primary_hovered, look.primary_pressed);
     div()
         .id(id)
         .px(px(CONTROL_PADDING))
@@ -1353,18 +1351,17 @@ mod tests {
         let (dark, light) = (Look::settings(true), Look::settings(false));
         assert!(lum(dark.ink) > lum(dark.surface) && lum(light.ink) < lum(light.surface));
         assert!(!dark.light() && light.light());
-        let on = Look::on(dark.surface, dark.ink, dark.accent);
+        let on = Look::on(dark.surface, dark.ink, dark.primary);
         assert!(on.edge.is_some());
     }
 
     /// In Settings what's on is the text's colour, a switch's knob on it the card's, never green
     /// (#4092): it stands off the group as far as a name does, and its knob reads on it at WCAG's
-    /// 3:1 for a control. Off Settings' card, on is still the accent.
+    /// 3:1 for a control. Off Settings' card, on is still the ground's accent.
     #[test]
     fn whats_on_is_the_text_colour_not_the_green() {
         for dark in [true, false] {
             let look = Look::settings(dark);
-            assert_ne!(look.on, look.accent, "{dark}");
             assert!(
                 contrast(&look, look.on) >= contrast(&look, look.ink) * 0.95,
                 "{dark}: on is quieter than a name"
@@ -1373,8 +1370,9 @@ mod tests {
             assert!(knob >= 3., "{dark}: the knob reads at {knob}");
         }
         let settings = Look::settings(true);
-        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
-        assert_eq!(elsewhere.on, settings.accent);
+        let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+        let elsewhere = Look::on(settings.surface, settings.ink, signal);
+        assert_eq!(elsewhere.on, signal);
     }
 
     /// Settings' main button is the text colour, not the green (the owner's), and its label
@@ -1384,13 +1382,52 @@ mod tests {
     fn the_main_button_is_the_text_colour_and_its_label_reads() {
         for dark in [true, false] {
             let look = Look::settings(dark);
-            assert_ne!(look.primary, look.accent, "{dark}");
+            assert_eq!(look.primary, look.on, "{dark}");
             let label = crate::palette::contrast(look.on_primary, look.primary);
             assert!(label >= 4.5, "{dark}: the label reads at {label}");
         }
         let settings = Look::settings(true);
-        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
-        assert_eq!(elsewhere.primary, settings.accent);
+        let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+        let elsewhere = Look::on(settings.surface, settings.ink, signal);
+        assert_eq!(elsewhere.primary, signal);
+    }
+
+    /// Settings' main button is the text's ink, which has no darker to go to in light: under the
+    /// pointer it goes a step toward its label and pressed a step further, each a step that
+    /// tells with the label still reading as text, in dark and light. A ground's accent goes each
+    /// channel darker, as every filled button does.
+    #[test]
+    fn the_main_button_tells_under_the_pointer_in_both_looks() {
+        use crate::palette::{TELLS, TEXT, contrast};
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            let (hovered, pressed) = (look.primary_hovered, look.primary_pressed);
+            assert_eq!(
+                (hovered, pressed),
+                ink_states(look.primary, look.on_primary),
+                "{dark}"
+            );
+            let (rest, further) = (contrast(hovered, look.primary), contrast(pressed, hovered));
+            assert!(rest >= TELLS, "{dark}: under the pointer tells at {rest}");
+            assert!(further > 1., "{dark}: pressed is no further at {further}");
+            for (name, fill) in [("hovered", hovered), ("pressed", pressed)] {
+                let label = contrast(look.on_primary, fill);
+                assert!(
+                    label >= TEXT,
+                    "{dark}: the label on {name} reads at {label}"
+                );
+            }
+        }
+        let settings = Look::settings(true);
+        let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+        let elsewhere = Look::on(settings.surface, settings.ink, signal);
+        assert_eq!(
+            (elsewhere.primary_hovered, elsewhere.primary_pressed),
+            (
+                darker(signal, ACCENT_HOVERED),
+                darker(signal, ACCENT_PRESSED)
+            )
+        );
     }
 
     /// The row for the threads kept is named by how many there are, in a form of its own for

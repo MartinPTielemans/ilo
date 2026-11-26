@@ -21,12 +21,12 @@ use crate::space_transparency::solid_share;
 use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
 
 use crate::tokens::icon_picker::{
-    FILL as CARD, HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
+    HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
-    ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
-    SWATCH_MAIN_TO,
+    ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
+    INTENSITY_SPAN, NO_THEME_SELECTION, RING, SELECTION, SWATCH_MAIN_TO,
 };
 pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
@@ -43,7 +43,7 @@ use crate::tokens::palette::{
     FLOAT_MATERIAL, FLOAT_MATERIAL_MORE, LIGHT_FLOAT_MATERIAL, LIGHT_FLOAT_MATERIAL_MORE,
 };
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
-pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
+pub use crate::tokens::palette::{INK, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{LIGHT_PLATE_GRAY, LIGHT_STATE_SELECTED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
@@ -273,16 +273,17 @@ impl Tone {
 /// How `tone`'s ink reads on what floats at a transparency level (#4090).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloatInk {
-    /// The least alpha at which it reads as text at rest on the overlay's fill, and on the
-    /// dialog's, for a float whose row under the pointer draws its words whole, as the menu's.
-    pub rest: [f32; 2],
+    /// The least alpha at which it reads as text at rest on the overlay's fill, the dialog's and
+    /// the floating one's (`Float::fill_index`), for a float whose row under the pointer draws its
+    /// words whole, as the menu's.
+    pub rest: [f32; 3],
     /// The least alpha at which it reads as text, and as a glyph, at rest and on a plate under the
     /// pointer as it is opaque.
     pub text: f32,
     pub glyph: f32,
-    /// The least shade of the overlay's colour, and of the dialog's, over a row's plate under the
-    /// pointer at which its words read there at those alphas.
-    pub shades: [f32; 2],
+    /// The least shade of the overlay's colour, the dialog's and the floating one's, over a row's
+    /// plate under the pointer at which its words read there at those alphas.
+    pub shades: [f32; 3],
 }
 
 /// The material under a float at its worst for `tone`'s ink at `level`, as the check VM measured
@@ -296,12 +297,13 @@ fn float_worst(tone: Tone, level: Option<Transparency>) -> Rgba {
     })
 }
 
-/// What text on a float lies on at its worst, as `(ground, colour)` for the overlay's fill and the
-/// dialog's: the colour at `level`'s alpha over the material's worst for the ink, or opaque with
-/// `None`, where the host has no material under it.
-fn float_grounds(tone: Tone, level: Option<Transparency>) -> [(Rgba, Rgba); 2] {
+/// What text on a float lies on at its worst, as `(ground, colour)` for the overlay's fill, the
+/// dialog's and the floating one's (`Float::fill_index`): the colour at its alpha over the
+/// material's worst for the ink at `level`, or opaque with `None`, where the host has no material
+/// under it.
+fn float_grounds(tone: Tone, level: Option<Transparency>) -> [(Rgba, Rgba); 3] {
     let worst = float_worst(tone, level);
-    [Float::Menu, Float::Dialog].map(|float| {
+    [Float::SiteControls, Float::Dialog, Float::Menu].map(|float| {
         let fill = float.fill_at(tone, level);
         let colour = Rgba { a: 1., ..fill };
         (over(worst, colour, fill.a), colour)
@@ -502,7 +504,7 @@ impl Float {
     /// The alpha a word drawn at `alpha` takes at rest on it in a `tone` window on this host, where
     /// its row under the pointer draws its words whole (`float_ink`).
     pub fn word(self, tone: Tone, alpha: f32) -> f32 {
-        let (tone, fill) = (self.tone(tone), (self == Float::Dialog) as usize);
+        let (tone, fill) = (self.tone(tone), self.fill_index());
         let (ground, _) = float_grounds(tone, float_level())[fill];
         float_ink_now(tone).word(tone.ink(), ground, fill, alpha)
     }
@@ -513,12 +515,38 @@ impl Float {
         self.fill_at(tone, self.over_material().then(transparency))
     }
 
-    /// Its fill at `level` over the host's material, or opaque with none.
+    /// Which of the fills it wears, as `float_grounds` lists them: the overlay's, the dialog's or
+    /// the floating one's.
+    pub(crate) fn fill_index(self) -> usize {
+        match self {
+            Float::Dialog => 1,
+            Float::Menu | Float::Picker => 2,
+            _ => 0,
+        }
+    }
+
+    /// The floating fill (the lead, 25 Nov) for what wears it, a menu and the pickers' card, at its
+    /// own alpha: the Transparency bar changes the window's glass only.
+    fn floating(self, tone: Tone) -> Option<Rgba> {
+        use crate::tokens::floating::{FILL, LIGHT_FILL};
+        (self.fill_index() == 2).then(|| {
+            rgba(match self.tone(tone) {
+                Tone::Dark => FILL,
+                Tone::Light => LIGHT_FILL,
+            })
+        })
+    }
+
+    /// Its fill at `level` over the host's material, or opaque with none. The floating fill keeps
+    /// its own alpha at every level.
     pub fn fill_at(self, tone: Tone, level: Option<Transparency>) -> Rgba {
         let colour = self.colour(tone);
         let Some(level) = level else {
             return colour;
         };
+        if let Some(floating) = self.floating(tone) {
+            return floating;
+        }
         let [dark, light, light_dialog] = float_alphas(level);
         let a = match (self, self.tone(tone)) {
             (_, Tone::Dark) => dark,
@@ -537,8 +565,16 @@ impl Float {
         }
     }
 
+    /// The pickers' card's fill over what blurs behind it: the floating fill, dark in both looks.
+    fn card(self) -> Rgba {
+        self.floating(Tone::Dark).unwrap_or(rgb(OVERLAY_DARK))
+    }
+
     /// Its colour, opaque.
     fn colour(self, tone: Tone) -> Rgba {
+        if let Some(floating) = self.floating(tone) {
+            return Rgba { a: 1., ..floating };
+        }
         rgb(match (self, self.tone(tone)) {
             (Float::Dialog, Tone::Dark) => DIALOG_DARK,
             (Float::Dialog, Tone::Light) => DIALOG_LIGHT,
@@ -598,15 +634,15 @@ pub struct Palette {
     pub overlay: Rgba,
     /// A dialog's fill.
     pub dialog: Rgba,
-    /// The least alpha at which `ink` reads as text, and as a glyph, on the overlay and the
-    /// dialog, and their shades over a row's plate under the pointer (`float_ink`).
+    /// The least alpha at which `ink` reads as text, and as a glyph, on the overlay, the dialog and
+    /// the floating fill, and their shades over a row's plate under the pointer (`float_ink`).
     pub overlay_floor: f32,
     pub overlay_glyph_floor: f32,
-    pub float_shades: [f32; 2],
+    pub float_shades: [f32; 3],
     /// The card the pages lie in, over the window.
     pub page: Rgba,
-    /// The icon and theme pickers' card, over what's behind it: Arc's grey where the card's text
-    /// reads on it over the window, and otherwise the least step toward the dark overlay, opaque,
+    /// The icon and theme pickers' card, over what's behind it: the floating fill where the card's
+    /// text reads on it over the window, and otherwise the least step toward its colour, opaque,
     /// at which it does.
     pub card: Rgba,
     /// The Space's mark.
@@ -725,19 +761,13 @@ impl Palette {
         }
     }
 
-    /// No theme: the tinted material alone, and ilo green, as light as it has to
-    /// be to read on it, as the accent.
+    /// No theme: the tinted material alone. Its accent is the text's ink with the other look's
+    /// ink on it, as a switch that's on is, so a Space without a colour wears none.
     fn untinted(tone: Tone, glass: f32) -> Palette {
         let window = Window::of_none(tone, glass);
         let palette = Palette::with(0., &window, None);
-        let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
-        let section_glyph = palette.solve_section_glyph(accent, &window);
-        let swatch = Swatch::of(None, &window);
         Palette {
-            accent,
-            accent_label: label_on(accent),
-            section_glyph,
-            swatch,
+            accent_label: label_on(palette.accent),
             ..palette
         }
     }
@@ -767,9 +797,9 @@ impl Palette {
             dialog,
             overlay_floor: 0.,
             overlay_glyph_floor: 0.,
-            float_shades: [0.; 2],
+            float_shades: [0.; 3],
             page: tone.page(),
-            card: rgba(CARD),
+            card: Float::Picker.card(),
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
             pointed_shade: 0.,
@@ -980,7 +1010,7 @@ impl Palette {
     /// where it lies on the material (`float_ink`).
     pub fn on_float(&self, float: Float, plate: Hsla) -> Hsla {
         let shade = match float.over_material() {
-            true => self.float_shades[(float == Float::Dialog) as usize],
+            true => self.float_shades[float.fill_index()],
             false => 0.,
         };
         if shade == 0. {
@@ -1057,28 +1087,21 @@ impl Palette {
         }
     }
 
-    /// The accent under the pointer, darker, as every filled button goes.
+    /// The accent under the pointer, darker, as every filled button goes. Without a theme the
+    /// accent is the text's ink, which goes toward its label instead (`ink_states`).
     pub fn accent_hovered(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_HOVERED,
-            g: g * ACCENT_HOVERED,
-            b: b * ACCENT_HOVERED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_HOVERED).into(),
+            None => ink_states(self.accent, self.accent_label).0.into(),
         }
-        .into()
     }
 
-    /// The accent pressed, a step darker than under the pointer, whatever its label (the owner).
+    /// The accent pressed, a step further than under the pointer, whatever its label (the owner).
     pub fn accent_pressed(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_PRESSED,
-            g: g * ACCENT_PRESSED,
-            b: b * ACCENT_PRESSED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_PRESSED).into(),
+            None => ink_states(self.accent, self.accent_label).1.into(),
         }
-        .into()
     }
 
     /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
@@ -1093,9 +1116,24 @@ impl Palette {
         (fill, label_on(fill))
     }
 
-    /// Behind selected text in a field: the accent, faint.
+    /// Behind selected text in a field: the accent, faint. Without a theme the accent is the
+    /// text's ink, which is fainter there, since a selection lies under text of its own colour.
     pub fn selection(&self) -> Hsla {
-        Hsla::from(self.accent).opacity(SELECTION)
+        let alpha = match self.shown {
+            Some(_) => SELECTION,
+            None => NO_THEME_SELECTION,
+        };
+        Hsla::from(self.accent).opacity(alpha)
+    }
+
+    /// The accent and its label on a fill that's dark in either look, as the find bar's material
+    /// and the pickers' card are: the Space's, or without a theme the dark look's ink, as a light
+    /// window's own ink is such a fill's colour.
+    pub fn accent_on_dark(&self) -> (Rgba, Rgba) {
+        match self.shown {
+            Some(_) => (self.accent, self.accent_label),
+            None => (Tone::Dark.ink(), label_on(Tone::Dark.ink())),
+        }
     }
 
     /// Where a dragged row or Space would go: the ink, firm, so it shows on either window.
@@ -1360,7 +1398,7 @@ impl Palette {
     /// The pickers' card as they draw it: what floats' fill where the host has its material under
     /// them; translucent where the host blurs what's behind a picker otherwise, as Linux's
     /// compositor can. Elsewhere what's behind shows sharp through the card and reads as noise, so
-    /// there the card is opaque over the dark overlay.
+    /// there the card is opaque over the floating fill's colour.
     pub fn card_drawn(&self) -> Rgba {
         if Float::Picker.over_material() {
             return Float::Picker.fill(self.tone);
@@ -1377,13 +1415,13 @@ impl Palette {
         if blurred {
             return self.card;
         }
-        over(rgb(OVERLAY_DARK), self.card, self.card.a)
+        over(Float::Picker.colour(self.tone), self.card, self.card.a)
     }
 
-    /// The pickers' card: Arc's measured grey, then a step at a time toward the dark overlay,
-    /// opaque, until its hint and its segments' labels read on it over every point of the window.
+    /// The pickers' card: the floating fill, then a step at a time toward its colour, opaque,
+    /// until its hint and its segments' labels read on it over every point of the window.
     fn solve_card(&self, window: &Window) -> Rgba {
-        let (measured, opaque) = (rgba(CARD), rgb(OVERLAY_DARK));
+        let (measured, opaque) = (Float::Picker.card(), Float::Picker.colour(self.tone));
         let behind = window.samples(self.layer_alpha);
         let steps = (1. / SHADE_STEP).round() as i32;
         let toward = |t: f32| Rgba {
@@ -1510,7 +1548,7 @@ fn nearest(main: Rgba, passes: impl Fn(Rgba) -> bool) -> Option<Rgba> {
 }
 
 impl Swatch {
-    /// `theme`'s swatch, or ilo green's for none, without the rest of its palette.
+    /// `theme`'s swatch, or the ink's for none, without the rest of its palette.
     pub fn of_theme(theme: Option<&Theme>) -> Swatch {
         let glass = crate::space_transparency::START;
         match theme {
@@ -1521,7 +1559,7 @@ impl Swatch {
 
     fn of(theme: Option<&Theme>, window: &Window) -> Swatch {
         let Some(theme) = theme else {
-            let accent = rgb(NO_THEME_ACCENT);
+            let accent = window.tone.ink();
             let lum = luminance(accent);
             return Swatch {
                 from: accent,
@@ -1962,6 +2000,26 @@ pub fn composite(under: Rgba, top: Rgba) -> Rgba {
         b: mix(under.b, top.b),
         a,
     }
+}
+
+/// A filled button's `fill` with each channel at `by`, as a coloured one goes under the pointer.
+pub fn darker(fill: Rgba, by: f32) -> Rgba {
+    Rgba {
+        r: fill.r * by,
+        g: fill.g * by,
+        b: fill.b * by,
+        a: fill.a,
+    }
+}
+
+/// A button filled with the text's ink, under the pointer and pressed: its fill a step toward
+/// `label`, the other look's ink on it, and a step further. Ink has no darker to go to, so the
+/// rule is one for both looks.
+pub fn ink_states(fill: Rgba, label: Rgba) -> (Rgba, Rgba) {
+    (
+        over(fill, label, INK_HOVER_MIX),
+        over(fill, label, INK_PRESSED_MIX),
+    )
 }
 
 /// `color` at `alpha` over opaque `base`.

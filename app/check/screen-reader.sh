@@ -319,7 +319,7 @@ rm -f "$saved" "$profile_dir/Account"
 serve
 printf '%s' '<title>agent</title>' > "$out/site/agent.html"
 agent_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$agent_token" \
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$agent_token" "$product" \
   > "$profile_dir/Agents"
 chmod 600 "$profile_dir/Agents"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
@@ -549,7 +549,7 @@ says "$at" "'Second', 'document'" "NVDA didn't say the page after F10 from the m
 # it said only the window's before (#3238).
 judging=1
 press l cmd shift
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't on the Library's search field after ⇧⌃L: $focus_file"
 # ↓ from the field rings History's first row, this run's pages, and NVDA says it and where it
 # stands, as it says the command bar's selected suggestion, while the field keeps the keyboard.
@@ -569,7 +569,7 @@ expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't hig
 expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 press escape
 expect '^browser: menu closed$' "escape didn't close History's row's menu"
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't back on the Library's search field after the row's menu: $focus_file"
 none_since '^browser: library rows ring ended$' "$at" || fail "the row's menu ended the ring on History's row"
 # Tab from the field goes on to the Library's other controls, its sections first, which ↓ walks,
@@ -589,7 +589,7 @@ press down
 in_library Downloads down
 press tab shift
 press tab shift
-in_library "Search History" "⇧Tab twice"
+in_library "Search history" "⇧Tab twice"
 judging=
 press escape
 # An agent's change that ilo refuses (#4086, #4244) asks nothing and takes no keyboard. With its
@@ -628,7 +628,7 @@ expect '^browser: agent mcp-client stopped Request at Work on pages: localhost$'
   "the agent's change wasn't refused at Work on pages"
 stopped=$(agent_line) || fail "the browser didn't answer the agent's refused change"
 case "$stopped" in
-  *"ilo stopped this: "*) ;;
+  *"$product stopped this: "*) ;;
   *) fail "the agent's change at Work on pages answered: $stopped" ;;
 esac
 says "$at" "Needs you" "NVDA didn't say the agent's task needs the user as ilo refused its change"

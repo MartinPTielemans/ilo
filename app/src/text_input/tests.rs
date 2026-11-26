@@ -507,3 +507,20 @@ fn korean_backspace_takes_a_syllable_apart(cx: &mut TestAppContext) {
     compose(&input, korean::HANGEUL, &mut cx);
     assert_eq!(shows(&input, &mut cx), ("a한글b".into(), 7..7, true));
 }
+
+/// A field draws the caret and the selection its owner gives. One whose owner gives none wears no
+/// colour of its own: its caret is the colour its text is drawn in and its selection that colour
+/// at the token's share, each on its own, whatever the Space.
+#[test]
+fn a_field_with_no_caret_of_its_owners_draws_it_in_its_texts_colour() {
+    let (text, given, behind) = (gpui::white(), gpui::red(), gpui::blue());
+    let faint = text.opacity(NO_THEME_SELECTION);
+    assert_eq!(Colors::default().caret, None);
+    assert_eq!(Colors::default().selection, None);
+    assert_eq!(own_or_texts(None, None, text), (text, faint));
+    assert_eq!(own_or_texts(Some(given), None, text), (given, faint));
+    assert_eq!(
+        own_or_texts(Some(given), Some(behind), text),
+        (given, behind)
+    );
+}

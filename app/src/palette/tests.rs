@@ -289,7 +289,7 @@ fn failures_over(
     // The Space's swatch, ringed where its edge doesn't reach 3:1 on the window.
     let swatch = match theme {
         Some(theme) => Window::of(theme, tone, palette.glass).swatch(),
-        None => vec![rgb(NO_THEME_ACCENT)],
+        None => vec![tone.ink()],
     };
     let edge = match Palette::swatch_ring_on(theme, window) {
         Some(ring) => window
@@ -577,18 +577,15 @@ fn sweep(themes: &[Theme]) -> Vec<String> {
 }
 
 /// A Space with no theme has the measured window, black at `tint` over the material and nothing
-/// more, and ilo green made to read with Ink on it, and everything passes, at every transparency
-/// level: primary text at 4.5:1 and gray text at the level's (#4090).
+/// more, and the text's ink for its accent with Ink on it, and everything passes, at every
+/// transparency level: primary text at 4.5:1 and gray text at the level's (#4090).
 #[test]
-fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
+fn no_theme_is_the_measured_window_and_the_texts_ink_with_ink() {
     let palette = Palette::of(None, Tone::Dark);
     assert_eq!((palette.tint.a, palette.layer_alpha), (TINT, 0.));
-    // #289054 reads 2.7:1 on the window over a white backdrop, so ilo green, lighter, at its hue.
-    assert_eq!(hex(palette.accent), 0x78d999);
+    assert_eq!(palette.accent, palette.ink);
     assert_eq!(hex(palette.accent_label), INK);
     assert!(contrast(palette.accent_label, palette.accent) >= TEXT);
-    // #0B8045 with Paper, the value #319 first had, is under 4.5.
-    assert!(contrast(rgb(PAPER), rgb(0x0b8045)) < TEXT);
     for level in Transparency::ALL {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
@@ -606,7 +603,7 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
 }
 
 /// A light window is its material under white 0.8 with Ink on it, a theme's colours over it at
-/// Dia's light layer's alpha, and ilo green darker so it reads there; everything passes.
+/// Dia's light layer's alpha, and with no theme its accent the Ink too; everything passes.
 #[test]
 fn a_light_window_is_white_over_the_material_with_ink() {
     let palette = Palette::of(None, Tone::Light);
@@ -710,8 +707,8 @@ fn a_themed_window_has_the_glass_of_one_without() {
     set_transparency(Transparency::Standard);
 }
 
-/// The pickers' card takes the least step from Arc's measured grey toward the dark overlay at
-/// which its text reads, four on the HUD window's material, over the black Space as with no theme,
+/// The pickers' card takes the least step from the floating fill toward its colour, opaque, at
+/// which its text reads, none on the HUD window's material, over the black Space as with no theme,
 /// as a theme leaves the window's glass as it is (#4090), and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
 /// secondary colour, at 3:1, and its field's words, in the label's, as text on the field's tint of
 /// the line colour.
@@ -720,14 +717,14 @@ fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
         (hex(black.card), black.card.a),
-        (0x403f3e, 0.65176475),
-        "four steps from the measured grey over the black Space"
+        (0x303036, 0.92156863),
+        "the floating fill over the black Space"
     );
     let none = Palette::of(None, Tone::Dark).card;
     assert_eq!(
         (hex(none), none.a),
-        (0x403f3e, 0.65176475),
-        "four steps from the measured grey with no theme"
+        (0x303036, 0.92156863),
+        "the floating fill with no theme"
     );
     let lay = |at: Rgba, colour: u32| over(at, rgb(colour >> 8), (colour & 0xff) as f32 / 255.);
     for light in [false, true] {
@@ -751,8 +748,8 @@ fn the_pickers_card_and_captures_menu_read() {
 
 /// The selected Library section's glyph is the accent where the accent reads on the Library's
 /// column under the section's plate, and otherwise, alone, the nearest colour at its hue that
-/// reads, the accent staying. With no theme on the HUD window's material, ilo green, made to
-/// read with Ink, reads there as it is.
+/// reads, the accent staying. With no theme on the HUD window's material the accent is the ink,
+/// which reads there as it is.
 #[test]
 fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
     use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
@@ -766,19 +763,13 @@ fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
             .map(|&at| contrast(c, at))
             .fold(f32::MAX, f32::min)
     };
-    assert_eq!(hex(none.accent), 0x78d999);
+    assert_eq!(none.accent, none.ink);
     assert!(
         worst(none.accent) >= GLYPH + BETWEEN,
-        "ilo green doesn't read there: {:.2}",
+        "the ink doesn't read there: {:.2}",
         worst(none.accent)
     );
     assert_eq!(none.section_glyph, none.accent);
-    assert!(worst(none.section_glyph) >= GLYPH + BETWEEN);
-    let (hue, glyph_hue) = (Hsla::from(none.accent).h, Hsla::from(none.section_glyph).h);
-    assert!(
-        (hue - glyph_hue).abs() < 0.02,
-        "the glyph keeps ilo green's hue"
-    );
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Dark);
     assert_eq!(violet.section_glyph, violet.accent);
 }
@@ -947,8 +938,8 @@ fn every_theme_of_a_coarse_sweep_reads() {
     assert_eq!(sweep(&themes), Vec::<String>::new());
 }
 
-/// A filled button pressed goes a step darker than under the pointer, whatever its label (the
-/// owner, #707): ilo green from #4EA76E to #469462, not lighter.
+/// A filled button of a Space's colour pressed goes a step darker than under the pointer, whatever
+/// its label (the owner, #707), not lighter.
 #[test]
 fn a_pressed_accent_goes_darker_than_hovered() {
     let themes = grid(
@@ -960,23 +951,17 @@ fn a_pressed_accent_goes_darker_than_hovered() {
     let tones = [Tone::Dark, Tone::Light];
     for (theme, tone) in themes
         .iter()
-        .map(Some)
-        .chain([None])
-        .flat_map(|theme| tones.map(|tone| (theme, tone)))
+        .flat_map(|theme| tones.map(|tone| (Some(theme), tone)))
     {
         let palette = Palette::of(theme, tone);
         let [hovered, _, _] = crate::theme::oklab(palette.accent_hovered().to_rgb());
         let [pressed, _, _] = crate::theme::oklab(palette.accent_pressed().to_rgb());
         assert!(pressed < hovered, "{theme:?} {tone:?}");
     }
-    assert_eq!(
-        hex(Palette::of(None, Tone::Dark).accent_pressed().to_rgb()),
-        0x60ae7a
-    );
 }
 
-/// A filled button under the pointer goes 0.9 darker, whatever its label (the owner, 2026-10-26):
-/// the dialog's OK on ilo green from #78D999 to #6CC38A, not lighter.
+/// A filled button of a Space's colour under the pointer goes 0.9 darker, whatever its label (the
+/// owner, 2026-10-26): the dialog's OK too, not lighter.
 #[test]
 fn a_hovered_accent_goes_darker() {
     let themes = grid(
@@ -988,9 +973,7 @@ fn a_hovered_accent_goes_darker() {
     let tones = [Tone::Dark, Tone::Light];
     for (theme, tone) in themes
         .iter()
-        .map(Some)
-        .chain([None])
-        .flat_map(|theme| tones.map(|tone| (theme, tone)))
+        .flat_map(|theme| tones.map(|tone| (Some(theme), tone)))
     {
         let palette = Palette::of(theme, tone);
         let hovered = palette.accent_hovered().to_rgb();
@@ -1002,15 +985,120 @@ fn a_hovered_accent_goes_darker() {
             assert!((hovered - rest * 0.9).abs() < 0.005, "{theme:?} {tone:?}");
         }
     }
-    let green = Palette::of(None, Tone::Dark);
-    assert_eq!(hex(green.accent), 0x78d999);
-    assert_eq!(hex(green.accent_hovered().to_rgb()), 0x6cc38a);
 }
 
-/// The find bar's caret is ilo green on its dark fill, whatever the Space's theme.
+/// A button filled with the text's ink, a Space's with no colour, has no darker to go to in a light
+/// window: under the pointer its fill goes the token's share toward its label and pressed the
+/// token's further share, in both looks at every level. Each step tells, pressed from rest more
+/// than hovered does, and the label still reads as text on both.
 #[test]
-fn ilo_green_reads_on_the_dark_overlay() {
-    assert!(contrast(rgb(NO_THEME_ACCENT), rgb(OVERLAY_DARK)) >= GLYPH);
+fn an_ink_button_goes_toward_its_label_under_the_pointer() {
+    use crate::tokens::palette::{INK_HOVER_MIX, INK_PRESSED_MIX};
+    for tone in [Tone::Dark, Tone::Light] {
+        for level in Transparency::ALL {
+            set_transparency(level);
+            let palette = Palette::of(None, tone);
+            let (rest, label) = (palette.accent, palette.accent_label);
+            let hovered = palette.accent_hovered().to_rgb();
+            let pressed = palette.accent_pressed().to_rgb();
+            let said = format!("{tone:?} {level:?}");
+            assert_eq!(
+                (hex(hovered), hex(pressed)),
+                (
+                    hex(over(rest, label, INK_HOVER_MIX)),
+                    hex(over(rest, label, INK_PRESSED_MIX))
+                ),
+                "{said}"
+            );
+            let (tells, further) = (contrast(hovered, rest), contrast(pressed, rest));
+            assert!(
+                tells >= TELLS,
+                "{said}: under the pointer tells at {tells:.3}"
+            );
+            assert!(further > tells, "{said}: pressed tells at {further:.3}");
+            for (name, fill) in [("hovered", hovered), ("pressed", pressed)] {
+                let reads = contrast(label, fill);
+                assert!(
+                    reads >= TEXT,
+                    "{said}: the label on {name} reads {reads:.2}"
+                );
+            }
+        }
+        set_transparency(Transparency::Standard);
+    }
+}
+
+/// A Space with no colour wears no green (spec-bar-composer.md, The greens still worn): in both
+/// looks, at every transparency level, its accent is the text's ink with the other look's ink on
+/// it, as a switch that's on is, and so are the selected section's glyph and its swatch. Its
+/// selection is the text at the token's share, under text that still reads on it, and on a fill
+/// that's dark in either look it wears the dark look's ink. A Space with a colour keeps its own.
+#[test]
+fn a_space_with_no_colour_wears_the_texts_ink() {
+    use crate::tokens::palette::{NO_THEME_SELECTION, SELECTION};
+    let other = |tone: Tone| match tone {
+        Tone::Dark => Tone::Light.ink(),
+        Tone::Light => Tone::Dark.ink(),
+    };
+    for tone in [Tone::Dark, Tone::Light] {
+        for level in Transparency::ALL {
+            set_transparency(level);
+            let palette = Palette::of(None, tone);
+            let said = format!("{tone:?} {level:?}");
+            assert_eq!(
+                (palette.accent, palette.accent_label),
+                (tone.ink(), other(tone)),
+                "{said}"
+            );
+            assert_eq!(
+                (palette.section_glyph, palette.swatch.main()),
+                (palette.ink, palette.ink),
+                "{said}"
+            );
+            let label = contrast(palette.accent_label, palette.accent);
+            assert!(
+                label >= TEXT,
+                "{said}: a label on the accent reads {label:.2}"
+            );
+            let grounds =
+                (palette.window_samples(None).into_iter()).chain([palette.overlay, palette.dialog]);
+            for at in grounds {
+                let control = contrast(palette.accent, at);
+                assert!(control >= TEXT, "{said}: the accent reads {control:.2}");
+            }
+            let selection = palette.selection();
+            assert_eq!(
+                selection,
+                Hsla::from(palette.ink).opacity(NO_THEME_SELECTION),
+                "{said}"
+            );
+            for at in [palette.overlay, palette.dialog] {
+                let selected = contrast(palette.ink, over(at, palette.ink, selection.a));
+                assert!(
+                    selected >= TEXT,
+                    "{said}: selected text reads {selected:.2}"
+                );
+            }
+            assert_eq!(
+                palette.accent_on_dark(),
+                (Tone::Dark.ink(), Tone::Light.ink()),
+                "{said}"
+            );
+        }
+        set_transparency(Transparency::Standard);
+        let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), tone);
+        assert_ne!(violet.accent, violet.ink, "{tone:?}");
+        assert_eq!(
+            violet.selection(),
+            Hsla::from(violet.accent).opacity(SELECTION),
+            "{tone:?}"
+        );
+        assert_eq!(
+            violet.accent_on_dark(),
+            (violet.accent, violet.accent_label),
+            "{tone:?}"
+        );
+    }
 }
 
 /// The design sweep's grid, 1,197,504 themes: `cargo test --release --lib -- --ignored
@@ -1048,7 +1136,9 @@ fn full_sweep() {
     let palettes: Vec<Palette> = (themes.iter())
         .flat_map(|t| [Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(t), tone)))
         .collect();
-    let card = palettes.iter().filter(|p| p.card != rgba(CARD)).count();
+    let card = (palettes.iter())
+        .filter(|p| p.card != Float::Picker.card())
+        .count();
     let faded = (themes.iter().flat_map(|t| [t, t]))
         .zip(&palettes)
         .filter(|(t, p)| p.layer_alpha < layer_alpha(t, p.tone) - 1e-6)
@@ -1213,7 +1303,7 @@ fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
             );
             assert_eq!(
                 opaque,
-                over(rgb(OVERLAY_DARK), palette.card, palette.card.a)
+                over(Float::Picker.colour(tone), palette.card, palette.card.a)
             );
         }
     }
@@ -1370,12 +1460,22 @@ fn each_transparency_level_holds_its_rule_over_any_page() {
 }
 
 /// Each level shows more of what's behind than the one before, and the dark and light fills step
-/// together, so the user's choice reads the same in both looks.
+/// together, so the user's choice reads the same in both looks. What wears the floating fill, a
+/// menu and the pickers' card, keeps its own alpha at every level: the level is the window's glass.
 #[test]
 fn each_transparency_level_shows_more_than_the_one_before() {
+    use crate::tokens::floating::{FILL, LIGHT_FILL};
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
             let alphas = Transparency::ALL.map(|level| surface.fill_at(tone, Some(level)).a);
+            if surface.fill_index() == 2 {
+                let floating = match surface.tone(tone) {
+                    Tone::Dark => rgba(FILL),
+                    Tone::Light => rgba(LIGHT_FILL),
+                };
+                assert_eq!(alphas, [floating.a; 3], "{surface:?} {tone:?}");
+                continue;
+            }
             assert!(
                 alphas.windows(2).all(|pair| pair[0] > pair[1]),
                 "{surface:?} {tone:?}: {alphas:?}"
@@ -2359,7 +2459,7 @@ fn the_pickers_hint_and_labels_read_on_their_card_at_every_level() {
 #[test]
 fn off_the_material_the_plate_under_the_pointer_takes_no_shade() {
     for tone in [Tone::Dark, Tone::Light] {
-        assert_eq!(float_ink(tone, None).shades, [0.; 2], "{tone:?}");
+        assert_eq!(float_ink(tone, None).shades, [0.; 3], "{tone:?}");
     }
 }
 
@@ -2371,7 +2471,7 @@ fn a_float_over_the_material_is_never_grayer_than_it_is_opaque() {
         for level in FLOAT_LEVELS {
             let float = float_ink(tone, level);
             assert!(float.text >= opaque.text && float.glyph >= opaque.glyph);
-            for fill in 0..2 {
+            for fill in 0..3 {
                 assert!(float.rest[fill] <= float.text, "{tone:?} at {level:?}");
             }
         }
@@ -2479,7 +2579,9 @@ fn dark_floats() -> String {
 /// Light's pass (#4276) moves the palette's ink and Light's plates, and a dark window draws as it
 /// did before it: with no theme, each of the picker's swatches and the field's extremes, at the
 /// bar's two ends and its three old levels, and what floats at each level. Only where Dark draws
-/// the ink itself, as a label on a light accent, does it follow the ink.
+/// the ink itself, as a label on a light accent, does it follow the ink. With no theme the accent,
+/// the selected section's glyph and the swatch are the text's ink since the greens went
+/// (spec-bar-composer.md, The greens still worn); nothing else of Dark's moved with them.
 #[test]
 fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
     let themes: Vec<Option<Theme>> = [
@@ -2504,7 +2606,7 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     assert_eq!(
-        pin, 16_060_714_430_231_399_352,
+        pin, 12_704_512_350_845_494_042,
         "a dark window's palette moved:\n{all}"
     );
 }
@@ -2612,7 +2714,7 @@ fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
     use crate::tokens::menu::LIGHT_DESTRUCTIVE;
     let red = rgba(LIGHT_DESTRUCTIVE);
     assert_eq!(red.a, 1.);
-    let floating = rgba(crate::tokens::shell::recent_downloads::LIGHT_FILL);
+    let floating = rgba(crate::tokens::floating::LIGHT_FILL);
     let on_float = over(rgb(LIGHT_FLOAT_MATERIAL), floating, floating.a);
     assert!(
         contrast(red, on_float) >= TEXT,

@@ -4,7 +4,7 @@
 ; /waitpid=<ilo's process> waits for it to go, and /relaunch=1 starts ilo again after. package.sh
 ; compiles it with ISCC, giving each value below.
 #ifndef AppVersion
-  #error ISCC /DAppName=ilo /DAppPublisher=ilo /DAppVersion=0.1.0 /DSource=<staged app> /DOutput=<dir> ilo.iss
+  #error ISCC /DAppName=ilo /DProduct=<branding/product> /DAppPublisher=ilo /DAppVersion=0.1.0 /DSource=<staged app> /DOutput=<dir> ilo.iss
 #endif
 ; -app-only for Browser.dll packed without an engine, which doesn't run.
 #ifndef Suffix
@@ -47,6 +47,8 @@ Source: "{#Source}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cre
 ; WinSparkle, the updater before ilo's own, and its licence.
 Type: files; Name: "{app}\WinSparkle.dll"
 Type: files; Name: "{app}\WinSparkle-COPYING.txt"
+; The command under its name from before it took the product's, which the PATH would still reach.
+Type: files; Name: "{app}\bin\{#AppName}.exe"
 
 [UninstallDelete]
 ; What the updater downloaded.
@@ -196,18 +198,27 @@ function SendMessageTimeout(Window: HWND; Msg: Cardinal; WParam: Longint; LParam
   Flags: Cardinal; Timeout: Cardinal; var Answer: Cardinal): Longint;
   external 'SendMessageTimeoutW@user32.dll stdcall';
 
-// The entry Settings › Agents › Command line put on the user's PATH, as the ilo command's agent
-// file records it (app/src/agents/cli.rs), or '' when it put none there.
-function CommandEntry: String;
+// The PATH entry the agent file AgentFile records (app/src/agents/cli.rs), or '' when it has none.
+function EntryIn(AgentFile: String): String;
 var
   Lines: TArrayOfString;
   I: Integer;
 begin
   Result := '';
-  if LoadStringsFromFile(ExpandConstant('{localappdata}\{#AppName}\User Data\ilo-command'), Lines) then
+  if LoadStringsFromFile(AgentFile, Lines) then
     for I := 0 to GetArrayLength(Lines) - 1 do
       if Copy(Lines[I], 1, 5) = 'path ' then
         Result := Copy(Lines[I], 6, Length(Lines[I]));
+end;
+
+// The entry Settings › Agents › Command line put on the user's PATH, as the command's agent file
+// records it, or the file from before the command took the product's name, which a user who never
+// added it again still has; '' when it put none there.
+function CommandEntry: String;
+begin
+  Result := EntryIn(ExpandConstant('{localappdata}\{#AppName}\User Data\{#Product}-command'));
+  if Result = '' then
+    Result := EntryIn(ExpandConstant('{localappdata}\{#AppName}\User Data\{#AppName}-command'));
 end;
 
 // Path without Entry, as cli.rs's path_without takes it out: the last entry that is exactly it,

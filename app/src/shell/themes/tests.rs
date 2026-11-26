@@ -206,7 +206,7 @@ fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     assert_ne!(
         accents[1].fill,
         Highlight::of(&Palette::default()).fill,
-        "the theme's accent is ilo green"
+        "the theme's accent is a Space's with none"
     );
     let entries = host.entries.borrow();
     let [.., line, delete] = &entries[..] else {

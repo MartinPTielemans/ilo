@@ -322,7 +322,8 @@ fn sample_mini_bar(tab: bc::bc_id) {
             shell.read(cx).page_frame(content).0,
             shell.read(cx).palette(),
         );
-        let Some(shown) = browser::mini_bar::sample(&kind, page, palette.accent.into()) else {
+        let Some(shown) = browser::mini_bar::sample(&kind, page, palette.accent_on_dark().0.into())
+        else {
             return;
         };
         let id = window.id;

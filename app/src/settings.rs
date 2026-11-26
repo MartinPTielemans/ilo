@@ -71,6 +71,7 @@ use browser::tokens::shell::{
 use browser::tokens::text;
 
 mod assistants;
+mod new_thread;
 mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
@@ -201,8 +202,10 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' Notify.
-    Notify,
+    /// Threads › A new thread starts with: its Access and its Model.
+    NewThreadAccess,
+    NewThreadModel,
+    NewThreadEffort,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -222,7 +225,9 @@ impl Popup {
                 format!("{} options", browser::settings_rows::assistant_name(cli)).into()
             }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
-            Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
+            Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadModel => browser::agents::task::MODEL.into(),
+            Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -3894,6 +3899,10 @@ impl Settings {
         };
         let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
+        // Where a new thread starts, while threads are on, as the drawing has it under the switch.
+        if on {
+            threads.extend(self.new_thread(agents, cx));
+        }
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
@@ -4724,13 +4733,20 @@ impl Settings {
                     }),
                 "disconnect",
             ),
+            // One connected before the server took the product's name (CN2).
             false => (
-                self.button(("connect-agent", index), "Connect")
-                    .on_click(move |_, _, cx| {
-                        // check.sh reads this line.
-                        log!("browser: connect agent {}", client.id());
-                        agents.update(cx, |agents, cx| agents.connect(client, cx))
-                    }),
+                self.button(
+                    ("connect-agent", index),
+                    match model.is_stale(client) {
+                        true => "Connect Again",
+                        false => "Connect",
+                    },
+                )
+                .on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
                 "connect",
             ),
         };
@@ -4789,7 +4805,7 @@ impl Settings {
                     // Add follows the row, not the agent: on Windows a command whose PATH entry
                     // was taken off is still connected, and Add puts the entry back (#3783).
                     agents.update(cx, |agents, cx| match agents.command_state() {
-                        agents::cli::State::Off => {
+                        agents::cli::State::Off | agents::cli::State::Stale => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
@@ -4826,6 +4842,8 @@ impl Settings {
         }
         controls.push(match state {
             agents::cli::State::Off => action("Add", "add-command"),
+            // Added before the command took the product's name (CN2).
+            agents::cli::State::Stale => action("Add Again", "add-command"),
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())
@@ -5088,8 +5106,10 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
+    /// Bring in, take out: the import's view, as it is, then Export Spaces as Markdown, under one
+    /// heading as drawn (S6); inside an import, the crumb that names its browser.
     fn import_export(&self, cx: &mut Context<Self>) -> Page {
+        const BRING_IN: &str = "Bring in, take out";
         let look = &self.look;
         let export = self
             .button("export-spaces", "Export…")
@@ -5098,7 +5118,7 @@ impl Settings {
             .on_click(|_, _, cx| crate::export_spaces(cx));
         let export = setting(
             look,
-            "Spaces as Markdown",
+            "Export Spaces as Markdown",
             None,
             vec![export.into_any_element()],
         );
@@ -5107,7 +5127,7 @@ impl Settings {
         let inside = import.and_then(ImportView::crumb).is_some();
         let heading = match import.and_then(ImportView::crumb) {
             Some(inside) => Block::Crumb("Import".into(), inside),
-            None => Block::Heading("Import".into()),
+            None => Block::Heading(BRING_IN.into()),
         };
         let under_way = import.is_some_and(ImportView::under_way);
         let mut blocks = vec![heading];
@@ -5117,7 +5137,6 @@ impl Settings {
                 .map(|import| Block::View(import.into_any_element())),
         );
         if !under_way {
-            blocks.push(Block::Heading("Export".into()));
             blocks.push(Block::Rows(vec![export]));
         }
         // Inside an import the crumb says where it is, so the page's sentence gives way.
