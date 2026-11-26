@@ -938,8 +938,8 @@ fn every_theme_of_a_coarse_sweep_reads() {
     assert_eq!(sweep(&themes), Vec::<String>::new());
 }
 
-/// A filled button pressed goes a step darker than under the pointer, whatever its label (the
-/// owner, #707), not lighter.
+/// A filled button of a Space's colour pressed goes a step darker than under the pointer, whatever
+/// its label (the owner, #707), not lighter.
 #[test]
 fn a_pressed_accent_goes_darker_than_hovered() {
     let themes = grid(
@@ -951,9 +951,7 @@ fn a_pressed_accent_goes_darker_than_hovered() {
     let tones = [Tone::Dark, Tone::Light];
     for (theme, tone) in themes
         .iter()
-        .map(Some)
-        .chain([None])
-        .flat_map(|theme| tones.map(|tone| (theme, tone)))
+        .flat_map(|theme| tones.map(|tone| (Some(theme), tone)))
     {
         let palette = Palette::of(theme, tone);
         let [hovered, _, _] = crate::theme::oklab(palette.accent_hovered().to_rgb());
@@ -962,8 +960,8 @@ fn a_pressed_accent_goes_darker_than_hovered() {
     }
 }
 
-/// A filled button under the pointer goes 0.9 darker, whatever its label (the owner, 2026-10-26):
-/// the dialog's OK too, not lighter.
+/// A filled button of a Space's colour under the pointer goes 0.9 darker, whatever its label (the
+/// owner, 2026-10-26): the dialog's OK too, not lighter.
 #[test]
 fn a_hovered_accent_goes_darker() {
     let themes = grid(
@@ -975,9 +973,7 @@ fn a_hovered_accent_goes_darker() {
     let tones = [Tone::Dark, Tone::Light];
     for (theme, tone) in themes
         .iter()
-        .map(Some)
-        .chain([None])
-        .flat_map(|theme| tones.map(|tone| (theme, tone)))
+        .flat_map(|theme| tones.map(|tone| (Some(theme), tone)))
     {
         let palette = Palette::of(theme, tone);
         let hovered = palette.accent_hovered().to_rgb();
@@ -988,6 +984,47 @@ fn a_hovered_accent_goes_darker() {
         ] {
             assert!((hovered - rest * 0.9).abs() < 0.005, "{theme:?} {tone:?}");
         }
+    }
+}
+
+/// A button filled with the text's ink, a Space's with no colour, has no darker to go to in a light
+/// window: under the pointer its fill goes the token's share toward its label and pressed the
+/// token's further share, in both looks at every level. Each step tells, pressed from rest more
+/// than hovered does, and the label still reads as text on both.
+#[test]
+fn an_ink_button_goes_toward_its_label_under_the_pointer() {
+    use crate::tokens::palette::{INK_HOVER_MIX, INK_PRESSED_MIX};
+    for tone in [Tone::Dark, Tone::Light] {
+        for level in Transparency::ALL {
+            set_transparency(level);
+            let palette = Palette::of(None, tone);
+            let (rest, label) = (palette.accent, palette.accent_label);
+            let hovered = palette.accent_hovered().to_rgb();
+            let pressed = palette.accent_pressed().to_rgb();
+            let said = format!("{tone:?} {level:?}");
+            assert_eq!(
+                (hex(hovered), hex(pressed)),
+                (
+                    hex(over(rest, label, INK_HOVER_MIX)),
+                    hex(over(rest, label, INK_PRESSED_MIX))
+                ),
+                "{said}"
+            );
+            let (tells, further) = (contrast(hovered, rest), contrast(pressed, rest));
+            assert!(
+                tells >= TELLS,
+                "{said}: under the pointer tells at {tells:.3}"
+            );
+            assert!(further > tells, "{said}: pressed tells at {further:.3}");
+            for (name, fill) in [("hovered", hovered), ("pressed", pressed)] {
+                let reads = contrast(label, fill);
+                assert!(
+                    reads >= TEXT,
+                    "{said}: the label on {name} reads {reads:.2}"
+                );
+            }
+        }
+        set_transparency(Transparency::Standard);
     }
 }
 

@@ -1117,6 +1117,12 @@ swatch-main-to = 0.25
 # `no-theme-selection`.
 accent-hovered = 0.9
 accent-pressed = 0.8
+# A button filled with the text's ink, a Space's without a theme and Settings' main one, has no
+# darker to go to in a light window, where 0.9 of Ink is 1.02:1 from Ink. Under the pointer its
+# fill goes this far toward its label's colour, `on-primary`, and pressed this far, in both looks
+# (the lead, spec-bar-composer.md, The greens, 3).
+ink-hover-mix = 0.12
+ink-pressed-mix = 0.2
 selection = 0.28
 no-theme-selection = 0.24
 # One ladder of states for every control whose states Arc wasn't recorded with, but the accent's

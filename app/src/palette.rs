@@ -25,8 +25,8 @@ use crate::tokens::icon_picker::{
 };
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
-    ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, NO_THEME_SELECTION, RING,
-    SELECTION, SWATCH_MAIN_TO,
+    ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
+    INTENSITY_SPAN, NO_THEME_SELECTION, RING, SELECTION, SWATCH_MAIN_TO,
 };
 pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
@@ -1051,28 +1051,21 @@ impl Palette {
         }
     }
 
-    /// The accent under the pointer, darker, as every filled button goes.
+    /// The accent under the pointer, darker, as every filled button goes. Without a theme the
+    /// accent is the text's ink, which goes toward its label instead (`ink_states`).
     pub fn accent_hovered(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_HOVERED,
-            g: g * ACCENT_HOVERED,
-            b: b * ACCENT_HOVERED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_HOVERED).into(),
+            None => ink_states(self.accent, self.accent_label).0.into(),
         }
-        .into()
     }
 
-    /// The accent pressed, a step darker than under the pointer, whatever its label (the owner).
+    /// The accent pressed, a step further than under the pointer, whatever its label (the owner).
     pub fn accent_pressed(&self) -> Hsla {
-        let Rgba { r, g, b, a } = self.accent;
-        Rgba {
-            r: r * ACCENT_PRESSED,
-            g: g * ACCENT_PRESSED,
-            b: b * ACCENT_PRESSED,
-            a,
+        match self.shown {
+            Some(_) => darker(self.accent, ACCENT_PRESSED).into(),
+            None => ink_states(self.accent, self.accent_label).1.into(),
         }
-        .into()
     }
 
     /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
@@ -1974,6 +1967,26 @@ pub fn composite(under: Rgba, top: Rgba) -> Rgba {
 }
 
 /// `color` at `alpha` over opaque `base`.
+/// A filled button's `fill` with each channel at `by`, as a coloured one goes under the pointer.
+pub fn darker(fill: Rgba, by: f32) -> Rgba {
+    Rgba {
+        r: fill.r * by,
+        g: fill.g * by,
+        b: fill.b * by,
+        a: fill.a,
+    }
+}
+
+/// A button filled with the text's ink, under the pointer and pressed: its fill a step toward
+/// `label`, the other look's ink on it, and a step further. Ink has no darker to go to, so the
+/// rule is one for both looks.
+pub fn ink_states(fill: Rgba, label: Rgba) -> (Rgba, Rgba) {
+    (
+        over(fill, label, INK_HOVER_MIX),
+        over(fill, label, INK_PRESSED_MIX),
+    )
+}
+
 pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
     let mix = |b: f32, c: f32| b + (c - b) * alpha;
     Rgba {
