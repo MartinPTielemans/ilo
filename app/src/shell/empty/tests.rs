@@ -6,7 +6,8 @@ use std::{
 };
 
 use gpui::{
-    Entity, Modifiers, Pixels, Point, SharedString, TestAppContext, VisualTestContext, point, px,
+    Entity, EntityInputHandler, Modifiers, Pixels, Point, SharedString, TestAppContext,
+    VisualTestContext, point, px,
 };
 
 use crate::agents::task::{Card, Dot};
@@ -356,6 +357,241 @@ fn tab_grows_the_bar_in_place_and_back_keeps_the_words(cx: &mut TestAppContext) 
     );
 }
 
+/// Another empty Space shown while the composer is open at rest: the bar there is search, with
+/// the words kept (the bar's own test holds that the picks go).
+#[gpui::test]
+fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
+                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("tab");
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    shell.update(cx, |shell, cx| {
+        shell.set_space(2, cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(
+        (composer(&shell, cx).0, typed.as_str()),
+        (false, "book a table"),
+        "the composer came into the other Space"
+    );
+}
+
+/// Under the bar at rest are the threads whose home is the window's Space alone, those a run
+/// before left there too: another Space's never show, and a Space with none lists none.
+#[gpui::test]
+fn the_bar_at_rest_lists_its_own_spaces_threads_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    let at = |n: u64, home: u64| Card {
+        home,
+        ..card(n, Dot::Working)
+    };
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64| (id, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space(1), space(2), space(3)], cx);
+        shell.set_space(1, cx);
+        shell.set_task_cards(vec![at(1, 1), at(2, 2), at(3, 1)], cx);
+        shell.set_kept_cards(vec![at(4, 2), at(5, 1)], cx);
+    });
+    let listed = |space: u64, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_space(space, cx));
+        shell.read_with(cx, |shell, _| {
+            (shell.latest_tasks(5).into_iter())
+                .map(|card| card.agent.to_string())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(listed(1, cx), ["task-1", "task-3", "task-5"]);
+    assert_eq!(listed(2, cx), ["task-2", "task-4"]);
+    assert_eq!(listed(3, cx), Vec::<String>::new());
+}
+
+/// A window whose one Space has the unloaded pinned tab 20 and shows no page, so its field at
+/// rest has the keyboard, by itself.
+fn resting_by_a_pinned_tab(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    // ⌘Z and ⇧⌘Z are the window's keys and a field's, as the app binds them.
+    cx.update(crate::shell::bind_keys);
+    cx.update(crate::text_input::bind_keys);
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![20], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        field_focused(&shell, cx),
+        "the field didn't take the keyboard"
+    );
+    (shell, cx, host)
+}
+
+/// Removes the pinned tab 20, as its row's button does, and the core reports it gone.
+fn remove_the_pinned_tab(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    shell.update(cx, |shell, cx| {
+        shell.remove_pinned(20, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    host.take_edits();
+}
+
+/// The field at rest takes the keyboard by itself as the last page leaves, so while it holds no
+/// text the user changed, ⌘Z is for what they did last: a pinned tab removed is pinned again.
+#[gpui::test]
+fn command_z_in_the_empty_field_at_rest_undoes_the_windows_last_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    assert!(field_focused(&shell, cx));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 20 as 1001", "move 1001 true 0 0"],
+        "⌘Z stopped in the field"
+    );
+    // The core reports the tab pinned again, under its new id.
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![1001], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-cmd-z");
+    assert!(!host.take_edits().is_empty(), "⇧⌘Z stopped in the field");
+}
+
+/// Once the user has typed in the field at rest, ⌘Z is the field's, as in any field, and undoes
+/// nothing of the window's, even once what was typed is gone.
+#[gpui::test]
+fn command_z_after_typing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    cx.simulate_input("book");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(typed, "book", "⌘Z changed what was typed");
+    cx.simulate_keystrokes("backspace backspace backspace backspace cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+}
+
+/// While an input method composes in the field at rest, as Japanese does before it commits,
+/// ⌘Z is the field's, and the composition stays.
+#[gpui::test]
+fn command_z_while_composing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    let field = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).field()
+    });
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.composing()),
+        "the composition went"
+    );
+}
+
+/// On a new profile ilo hasn't looked for an assistant yet: ⇥ grows the bar at rest into the
+/// composer and looks, once, as ⌘T's does. The assistant the browser finds after is the
+/// composer's, and ↩ starts the thread on it; before, ↩ starts nothing.
+#[gpui::test]
+fn an_assistant_found_later_shows_at_rest(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.unlearned.set(true);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    host.resting.take();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    let asked = host.resting.take();
+    assert_eq!(
+        (asked.iter())
+            .filter(|call| *call == "look for agents")
+            .count(),
+        1,
+        "⇥ looks for the assistants, once: {asked:?}"
+    );
+    let agent = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let resting = shell.read(cx).resting.as_ref().unwrap();
+            resting.bar.read(cx).composer_agent().map(String::from)
+        })
+    };
+    assert_eq!(agent(&shell, cx), None, "none found yet");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        !rested(&host)
+            .iter()
+            .any(|call| call.starts_with("run task")),
+        "a thread started with no assistant"
+    );
+
+    // The browser found Claude, and the window is sent what it knows (send_agents).
+    host.unlearned.set(false);
+    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
+    cx.run_until_parked();
+    assert_eq!(agent(&shell, cx).as_deref(), Some("claude"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        rested(&host),
+        ["run task at rest claude book a table at work"]
+    );
+}
+
 /// ↩ in the composer at rest starts what was typed as a thread on the assistant, where the bar
 /// rests, at the level the composer shows, and empties the field.
 #[gpui::test]
@@ -365,7 +601,11 @@ fn return_in_the_composer_at_rest_starts_the_thread(cx: &mut TestAppContext) {
     cx.simulate_input("book a table");
     host.resting.take();
     cx.simulate_keystrokes("tab");
-    assert_eq!(rested(&host), Vec::<String>::new(), "⇥ asked the core");
+    assert_eq!(
+        host.resting.take(),
+        ["look for agents"],
+        "⇥ asked the core for more than the assistants"
+    );
     cx.simulate_keystrokes("enter");
     assert_eq!(
         rested(&host),
@@ -901,12 +1141,15 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         host.private_bar.set(private);
         cx.simulate_click(middle(&shell, cx), Modifiers::none());
         cx.simulate_input("book a table");
-        cx.simulate_keystrokes("tab enter");
+        cx.simulate_keystrokes("tab");
         assert_eq!(
-            composer(&shell, cx).0 || rested(&host).iter().any(|c| c.starts_with("run task")),
+            composer(&shell, cx).0,
             !private,
-            "private: {private}"
+            "⇥ grew the bar, private: {private}"
         );
+        cx.simulate_keystrokes("enter");
+        let ran = rested(&host).iter().any(|c| c.starts_with("run task"));
+        assert_eq!(ran, !private, "↩ started a thread, private: {private}");
     }
 }
 

@@ -11,40 +11,20 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use std::f32::consts::FRAC_PI_2;
-
 use gpui::{
-    AnyElement, AnyView, Bounds, Context, Corners, FontWeight, Hsla, MouseButton, Pixels, Radians,
-    SharedString, Size, Task, Transformation, Window, canvas, div, point, prelude::*, px, rgb,
-    size, svg,
+    AnyElement, AnyView, Bounds, Context, Corners, MouseButton, Pixels, SharedString, Size, Task,
+    Window, canvas, div, point, prelude::*, px, rgb, size,
 };
 
 use super::{
-    Command, DialogKind, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space,
-    SpaceEntry, TITLE, Theme,
-    agent_bar::{Bar, bar_words, stop_keys},
-    card,
-    conversation::{page_chip, page_chip_keyed},
-    cubic_bezier,
-    keys::user_keys,
-    permission::{Look, card_listener},
-    picture::next_request,
-    task_cards::{PageWord, act},
+    Command, DialogKind, Folders, PagePicture, Shell, Space, SpaceEntry, Theme, agent_bar::Bar,
+    card, cubic_bezier, picture::next_request, task_cards::PageWord,
 };
-use crate::agents::task::{Card, Dot, TaskAction, status_lead};
+use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::agent_pointer::{COLOR, RING};
+use crate::tokens::shell::agent_pointer::RING;
 use crate::tokens::shell::conversation::ilo::ARM;
-use crate::tokens::shell::permission::LINE;
-use crate::tokens::shell::task::STATUS;
-use crate::tokens::shell::task_area::{
-    BACK, BACK_GLYPH, BESIDE, BESIDE_GAP, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP,
-};
-use crate::tokens::text;
-use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X};
-
-use super::page_ends::StripStop;
+use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -118,28 +98,36 @@ impl Zoom {
     }
 }
 
-/// Where a watched page goes in the card: its top, the card's width, with room under it for the
-/// strip.
+/// Where a watched page goes in its part of the card: all of it, as the panel beside it holds
+/// everything the page's strip under it did.
 fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(
-        card.origin,
-        size(card.size.width, card.size.height - px(PAGE_ROOM)),
-    )
+    card
 }
 
 /// The card split for standing on a page with the conversation beside it: the page's part on its
-/// left, and the conversation's panel at its right.
+/// right, and the conversation's panel at its left, between the sidebar and the page.
 fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
-    let wide = px(BESIDE.min(f32::from(card.size.width) / 2.));
+    let wide = px(panel_width(f32::from(card.size.width)));
+    let panel = Bounds::new(card.origin, size(wide, card.size.height));
     let page = Bounds::new(
-        card.origin,
+        point(panel.right() + px(BESIDE_GAP), card.top()),
         size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
     );
-    let panel = Bounds::new(
-        point(card.right() - wide, card.top()),
-        size(wide, card.size.height),
-    );
     (page, panel)
+}
+
+/// The panel's width in a card `card` wide: its own while the page keeps its least beside it, then
+/// what the page leaves it down to the panel's least, and narrower still each in proportion to its
+/// least, so neither jumps as the window narrows.
+fn panel_width(card: f32) -> f32 {
+    let room = (card - BESIDE_GAP).max(0.);
+    if room >= BESIDE + PAGE_LEAST {
+        BESIDE
+    } else if room >= BESIDE_LEAST + PAGE_LEAST {
+        room - PAGE_LEAST
+    } else {
+        room * BESIDE_LEAST / (BESIDE_LEAST + PAGE_LEAST)
+    }
 }
 
 fn pushed(bounds: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
@@ -435,13 +423,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Puts a task's conversation beside the page it watches (`talk_beside`).
-    pub fn set_talk_beside(&mut self, beside: bool, cx: &mut Context<Self>) {
-        self.talk_beside = beside;
-        self.talk_redraw(cx);
-        cx.notify();
-    }
-
     /// The task's `tab` zooms out of its thumbnail, at `from` in the window and pictured by
     /// `picture` if there's one, to fill the page area, and says whether it did. With the user
     /// holding it from the agent it has the keyboard; while the agent drives, the UI keeps it.
@@ -473,6 +454,43 @@ impl Shell {
                 zoom,
                 by_ilo,
                 guarded: by_ilo,
+                waiting: None,
+            },
+            cx,
+        );
+        true
+    }
+
+    /// Standing on one of the task's pages, the user stands on its `tab` instead, at once, as a tab
+    /// switch is: it goes back into the picture the page it replaces would have. Says whether it
+    /// did.
+    pub fn stand_on_task_page(
+        &mut self,
+        tab: u64,
+        picture: Option<PagePicture>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(area) = &self.task_area else {
+            return false;
+        };
+        let Some(thumb) = area.page.as_ref().map(|page| page.thumb) else {
+            return false;
+        };
+        if !self.task_standing() || !self.task_tabs(area.space).contains(&tab) {
+            return false;
+        }
+        if area.page.as_ref().is_some_and(|page| page.tab == tab) {
+            return true;
+        }
+        self.show_watched(
+            Watched {
+                tab,
+                thumb,
+                picture,
+                asked: false,
+                zoom: Zoom::Rest,
+                by_ilo: false,
+                guarded: false,
                 waiting: None,
             },
             cx,
@@ -659,11 +677,11 @@ impl Shell {
         ))
     }
 
-    /// Whether the user stands on a task's page with its conversation beside it, rather than over
-    /// it: with `talk_beside`, from the page's zoom out until it goes back, and not full screen.
+    /// Whether the user stands on a task's page, its conversation in the panel beside it, the one
+    /// way a thread's page is watched: from the page's zoom out until it goes back, and not full
+    /// screen.
     pub(super) fn task_standing(&self) -> bool {
-        self.talk_beside
-            && !self.page_fullscreen
+        !self.page_fullscreen
             && (self.task_area.as_ref())
                 .and_then(|area| area.page.as_ref())
                 .is_some_and(|page| !matches!(page.zoom, Zoom::In(_)))
@@ -1185,10 +1203,10 @@ impl Shell {
     }
 
     /// What the page area draws for a task, if it shows one: the conversation, and a page watched
-    /// zooming or in place over its card, with the strip under it.
+    /// zooming or in place over its card, beside the panel.
     pub(super) fn task_area_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let Some(area) = self.task_area.as_ref() else {
-            self.task_strip_drawn.set(None);
+            self.task_page_at.set(None);
             return None;
         };
         let (card_frame, _) = self.page_frame(self.viewport);
@@ -1229,17 +1247,18 @@ impl Shell {
             );
         }
         let Some(page) = &area.page else {
-            // Drawn again, for another page, the strip is logged again.
-            self.task_strip_drawn.set(None);
+            // Watched again, the page's place is logged again.
+            self.task_page_at.set(None);
             return Some(layer.into_any_element());
         };
         let part = self.page_part(card_frame);
         let place = watched(part);
+        super::permission::logged_at("task page", &self.task_page_at, page.tab, place);
         let in_place = self.task_page_live() == Some(page.tab);
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
-        // While the agent drives the page, the Signal ring of its pointer goes round it.
+        // While the agent drives the page, its pointer's ring goes round it, in `primary`.
         let driving = in_place && self.task_drives(page.tab);
         if driving {
             let ring = place.dilate(px(RING));
@@ -1252,7 +1271,7 @@ impl Shell {
                     .h(ring.size.height)
                     .rounded(px(self.card_radius() + RING))
                     .border(px(RING))
-                    .border_color(rgb(COLOR)),
+                    .border_color(rgb(super::agent_pointer::pointer_inks(&self.palette).0)),
             );
         }
         if in_place {
@@ -1263,11 +1282,7 @@ impl Shell {
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
-        Some(
-            layer
-                .child(self.task_strip(part, page.tab, zoom, cx))
-                .into_any_element(),
-        )
+        Some(layer.into_any_element())
     }
 
     /// The page watched as it zooms: its picture, or its card till there is one, which a press
@@ -1361,46 +1376,8 @@ impl Shell {
         self.task_cards.iter().find(|card| card.agent == agent)
     }
 
-    /// What the strip under a page watched says, by its task's card: who works and on what, or
-    /// that it finished and where, or that it stopped. The user holding the page has the Agent
-    /// Space bar's words.
-    pub(super) fn task_strip_words(&self, tab: u64) -> (String, String) {
-        if let Some(bar @ Bar::Held { .. }) = self.agent_bar() {
-            let (title, detail, _) = bar_words(&bar);
-            return (title, detail);
-        }
-        let Some(card) = self.task_card_shown() else {
-            return (self.title(tab).to_string(), String::new());
-        };
-        let name = card.name.clone();
-        match self.task_strip_dot().unwrap_or(card.dot) {
-            // The page's own step once the task works on several, never another page's, nor
-            // what the task waits for on another: only its card and conversation say those.
-            Dot::Working => {
-                let own = (card.page_steps.iter()).find(|(each, _)| *each == tab);
-                let detail = match (own, card.page_steps.is_empty() && card.dot == Dot::Working) {
-                    (Some((_, step)), _) => step.to_string(),
-                    (None, true) => card.status.to_string(),
-                    (None, false) => String::new(),
-                };
-                (format!("{name} is working"), detail)
-            }
-            // What it needs the user for, without the card's "Needs you", which the title says.
-            Dot::Waiting => {
-                let lead = status_lead(&card.status);
-                let why = card.status[lead..].trim_start_matches(" · ");
-                (format!("{name} needs you"), why.to_string())
-            }
-            Dot::Done => (
-                format!("{name} finished"),
-                crate::agents::site(&self.page(tab).url).to_string(),
-            ),
-            Dot::Ended => (card.word.alone(&name).to_string(), String::new()),
-        }
-    }
-
-    /// The strip's Open on a finished task's page: the page shown's own, of those the task left the
-    /// user, and none once it moved.
+    /// The page row's Open on a finished task's page: the page shown's own, of those the task left
+    /// the user, and none once it moved.
     pub(super) fn task_strip_open(&self, tab: u64) -> Option<String> {
         let card = self
             .task_card_shown()
@@ -1410,296 +1387,10 @@ impl Shell {
             .map(|(_, site)| format!("Open {site}"))
     }
 
-    /// The page watched's speaker, before the strip's chips while it plays: crossed while it's
-    /// muted, as an agent's tabs start (#1080), and a click unmutes or mutes it, as a row's does.
-    fn strip_sound(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
-        let page = self.page(tab);
-        page.audible.then_some(())?;
-        let palette = self.palette;
-        Some(
-            div()
-                .id("task-sound")
-                .flex_none()
-                .size(px(CHIP_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(CHIP_RADIUS))
-                .bg(palette.plate(CHIP_FILL))
-                .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-                .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
-                .child(
-                    svg()
-                        .path(super::rows::speaker_glyph(page.muted))
-                        .size(px(CHIP_GLYPH))
-                        .text_color(palette.text(TITLE)),
-                )
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.toggle_mute(tab, cx);
-                })),
-        )
-    }
-
-    /// The strip's chips, as `strip_chips` has them for the page watched: beside the
-    /// conversation, Take Over is always the strip's, and Stop is the composer's. The ring's stops
-    /// are these, so it never rings one that isn't drawn.
-    pub(super) fn strip_shows(
-        &self,
-        held: bool,
-        dot: Option<Dot>,
-        open: bool,
-        keyed: bool,
-    ) -> Vec<(StripChip, Look)> {
-        let standing = self.task_standing();
-        (strip_chips(held, dot, open, keyed || standing).into_iter())
-            .filter(|(chip, _)| !(standing && *chip == StripChip::Stop))
-            .collect()
-    }
-
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown()
             .is_some_and(|card| card.dot == Dot::Working)
-    }
-
-    /// The strip under a page watched: back to the conversation, the words, and the chips at its
-    /// right: Take Over and Stop while the agent works, Hand Back while the user holds the page,
-    /// Open <site> once a task left the user this page. It comes in with the page.
-    fn task_strip(
-        &self,
-        card_frame: Bounds<Pixels>,
-        tab: u64,
-        shown: f32,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let (title, detail) = self.task_strip_words(tab);
-        let palette = self.palette;
-        let card = self.task_card_shown();
-        let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
-        // ⌘↩, or off the Mac Ctrl+Enter, as a menu spells it.
-        let take_over = |cx: &mut Context<Self>| user_keys(cx).label(Command::BackToPinnedUrl);
-        let bar = self.agent_bar();
-        let dot = self.task_strip_dot();
-        let open = self.task_strip_open(tab);
-        let held = matches!(bar, Some(Bar::Held { .. }));
-        let keyed = self.keyed_strip.is_some();
-        let shows = self.strip_shows(held, dot, open.is_some(), keyed);
-        let chips: Vec<_> = (shows.into_iter())
-            .map(|(chip, look)| match chip {
-                // A click while it shows does what its key does, as Take Over is on screen.
-                StripChip::TakeOver => self.strip_stop(
-                    strip_chip(palette, "task-take-over", "Take Over", take_over(cx), look)
-                        .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
-                    StripStop::TakeOver,
-                    "Take Over".into(),
-                    CHIP_RADIUS,
-                ),
-                StripChip::HandBack => self.strip_stop(
-                    strip_chip(palette, "task-hand-back", "Hand Back", take_over(cx), look)
-                        .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
-                    StripStop::HandBack,
-                    "Hand Back".into(),
-                    CHIP_RADIUS,
-                ),
-                StripChip::Stop => self.strip_stop(
-                    strip_chip(palette, "task-stop", "Stop", Some(stop_keys()), look)
-                        .on_click(act(agent.clone(), TaskAction::Stop, cx)),
-                    StripStop::Stop,
-                    "Stop".into(),
-                    CHIP_RADIUS,
-                ),
-                StripChip::Open => {
-                    let words = open.clone().unwrap_or_default();
-                    let label = SharedString::from(words.clone());
-                    let agent = agent.clone();
-                    let chip = strip_chip(palette, "task-open", words, None, look)
-                        .child(self.strip_open_listener())
-                        .on_click(cx.listener(move |shell, _, _, cx| {
-                            cx.stop_propagation();
-                            let from = shell.task_list.strip_open.get();
-                            log!("browser: command open-task-pages via strip");
-                            shell.open_task_pages(agent.clone(), Some(tab), from, cx);
-                        }));
-                    self.strip_stop(chip, StripStop::Open, label, CHIP_RADIUS)
-                }
-            })
-            .collect();
-        // Only a strip whose agent needs the user is heavier, as its card is.
-        let needs_you = dot == Some(Dot::Waiting);
-        let glyph = card
-            .zip(dot)
-            .map(|(card, dot)| self.task_glyph(&card.agent, dot));
-        // The back's chevron lines up with the page's edge, its plate hanging outside.
-        let left = card_frame.left() - px((BACK - BACK_GLYPH) / 2.);
-        let back = div()
-            .id("task-back")
-            .flex_none()
-            .size(px(BACK))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(palette.plate(STATE_PRESSED)))
-            .on_click(cx.listener(|shell, _, _, cx| shell.task_page_back(cx)))
-            .child(
-                svg()
-                    .path("icons/chevron-down.svg")
-                    .size(px(BACK_GLYPH))
-                    .with_transformation(Transformation::rotate(Radians(FRAC_PI_2)))
-                    .text_color(palette.text(SECONDARY)),
-            );
-        let back = self.strip_stop(
-            back,
-            StripStop::Back,
-            "Back to the conversation".into(),
-            NAV_RADIUS,
-        );
-        let page_name = self.strip_page_name(tab, &title, &detail);
-        let detail = (!detail.is_empty()).then(|| format!(" · {detail}"));
-        let words = format!("{title}{}", detail.as_deref().unwrap_or_default());
-        let mut said = self.task_strip_said.borrow_mut();
-        if said.as_ref() != Some(&(tab, words.clone())) {
-            // check.sh reads this line: the strip says who has the page, as the bar did.
-            log!("browser: task strip {tab} says {words}");
-            *said = Some((tab, words));
-        }
-        drop(said);
-        div()
-            .id("task-strip")
-            .absolute()
-            .left(left)
-            .top(card_frame.bottom() - px(STRIP))
-            .w(card_frame.right() - left)
-            .h(px(STRIP))
-            .flex()
-            .items_center()
-            .gap(px(GAP))
-            .opacity(shown)
-            .block_mouse_except_scroll()
-            .text_size(px(text::BODY))
-            .line_height(px(LINE))
-            .child(card_listener("task strip", &self.task_strip_drawn, tab))
-            .child(back)
-            .child(
-                // The page's stop holds the agent's dot and the words, with a chip's room round
-                // them, given back on its left so the dot stays where it is beside Back.
-                self.strip_stop(
-                    div()
-                        .id("task-words")
-                        .flex_1()
-                        .min_w(px(0.))
-                        .h(px(CHIP_HEIGHT))
-                        .px(px(CHIP_X))
-                        .ml(px(-CHIP_X))
-                        .flex()
-                        .items_center()
-                        .gap(px(GAP))
-                        .children(glyph)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .flex()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(palette.text(TITLE))
-                                        .font_weight(match needs_you {
-                                            true => FontWeight::SEMIBOLD,
-                                            false => FontWeight::MEDIUM,
-                                        })
-                                        .child(title),
-                                )
-                                .children(detail.map(|detail| {
-                                    div()
-                                        .min_w(px(0.))
-                                        .truncate()
-                                        .text_color(palette.text(if needs_you {
-                                            TITLE
-                                        } else {
-                                            STATUS
-                                        }))
-                                        .child(detail)
-                                })),
-                        ),
-                    StripStop::Page,
-                    page_name,
-                    CHIP_RADIUS,
-                ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .gap(px(CHIP_GAP))
-                    .children(self.strip_sound(tab, cx))
-                    .children(chips),
-            )
-            .into_any_element()
-    }
-}
-
-/// A chip of the strip under a page watched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StripChip {
-    TakeOver,
-    HandBack,
-    Stop,
-    Open,
-}
-
-/// The strip's chips, in order, each with its look: Hand Back while the user holds the page,
-/// `held`; Stop while its task works or waits; Open once it's done and left the user the page, if
-/// it did. A press in the page takes it over, and ⌘↩ still does, so Take Over shows only while the
-/// ring is on one of the task's stops, `keyed`: its card, back, the page, Take Over or Stop, so it
-/// is there before the ring reaches it. It's the ring's own stop, as a key from the ring never
-/// takes the page over (#3220, #1080). It comes before Stop, which stays where it is, the words
-/// giving it room.
-/// Quiet until the agent needs the user: only while its card waits on them is Hand Back, the
-/// answer it waits for, the one primary.
-pub(super) fn strip_chips(
-    held: bool,
-    dot: Option<Dot>,
-    open: bool,
-    keyed: bool,
-) -> Vec<(StripChip, Look)> {
-    match (held, dot) {
-        (true, Some(Dot::Waiting)) => vec![(StripChip::HandBack, Look::Primary)],
-        (true, _) => vec![(StripChip::HandBack, Look::Quiet)],
-        (false, Some(Dot::Working | Dot::Waiting)) => keyed
-            .then_some((StripChip::TakeOver, Look::Quiet))
-            .into_iter()
-            .chain([(StripChip::Stop, Look::Quiet)])
-            .collect(),
-        (false, Some(Dot::Done)) if open => vec![(StripChip::Open, Look::Quiet)],
-        _ => Vec::new(),
-    }
-}
-
-/// A strip's chip in `look`: the conversation's, or for the primary the Space's accent with its
-/// label, its key fainter on it, darker under the pointer and pressed as every filled button goes.
-fn strip_chip(
-    palette: Palette,
-    id: &'static str,
-    words: impl Into<SharedString>,
-    key: Option<String>,
-    look: Look,
-) -> gpui::Stateful<gpui::Div> {
-    match look {
-        Look::Primary => {
-            let (hovered, pressed) = (palette.accent_hovered(), palette.accent_pressed());
-            let label = Hsla::from(palette.accent_label);
-            page_chip_keyed(palette, id, words, key, label.opacity(PRIMARY_KEY))
-                .bg(palette.accent)
-                .hover(move |style| style.bg(hovered))
-                .active(move |style| style.bg(pressed))
-                .text_color(label)
-        }
-        Look::Quiet | Look::Text => page_chip(palette, id, words, key),
     }
 }
 

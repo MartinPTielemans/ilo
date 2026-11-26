@@ -152,7 +152,7 @@ impl Past {
         sites
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         // No title or pages: a build from before sorts reads no task in the line, and skips it.
         if let Some(sorted) = self.sorted {
             return json!({

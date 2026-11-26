@@ -539,6 +539,33 @@ fn a_helpers_lines_are_never_the_tasks_finding(cx: &mut TestAppContext) {
     assert_eq!(card(&run, cx).finding, "Two seats at 9:05, car 4.");
 }
 
+/// A card's maker says where its status is its state's word in the fuller form, which its line
+/// then says in the word's place: the helpers' line and how far a stopped task got are, a step of
+/// the task's own isn't.
+#[gpui::test]
+fn a_card_says_where_its_status_is_its_words_fuller_form(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("fuller", cx);
+    pages(&run, 1);
+    outline(&run, &agent, PAGES[0].0, cx);
+    let step = card(&run, cx);
+    assert_eq!(
+        (step.dot, step.fuller),
+        (Dot::Working, false),
+        "{}",
+        step.status
+    );
+    begun(&run, &agent, "toolu_a", cx);
+    let helpers = card(&run, cx);
+    assert_eq!(helpers.status, live(&run, &agent, cx).line());
+    assert!(helpers.fuller, "the helpers' line isn't the word's form");
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::Stop, cx)
+    });
+    let stopped = card(&run, cx);
+    assert_eq!(stopped.dot, Dot::Ended);
+    assert!(stopped.fuller, "{}", stopped.status);
+}
+
 /// A helper is counted and shown from its start: before it has done anything its line stands,
 /// under way, with the name its task gave it, and the live line and the card count it. The page
 /// it opens is its own, never a step of the task's nor a group of them, and has its own step on
@@ -861,6 +888,33 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     for (path, text) in files {
         assert!(!text.contains("Shop toolu_"), "{}", path.display());
     }
+}
+
+/// A helper's noted step has its note on that helper's own line, which draws it under itself,
+/// never on the task's steps; the task's own noted step keeps its own.
+#[gpui::test]
+fn a_helpers_note_is_on_its_own_line_and_not_the_tasks(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("notes", cx);
+    pages(&run, 2);
+    helper(&run, &agent, "toolu_a", PAGES[0].0, cx);
+    let noted = |tab: u64, note: &str| json!({ "tab": tab, "direction": "down", "note": note });
+    let helpers = noted(PAGES[0].0, "Finding two seats together");
+    let _a = call(&run.agents, &agent, "scroll", helpers, cx);
+    let own = noted(PAGES[1].0, "Checking the stalls");
+    let _own = call(&run.agents, &agent, "scroll", own, cx);
+    let trace = live(&run, &agent, cx);
+    let says: Vec<(bool, &str)> = (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Helper { step, .. } => Some((true, step.says.as_ref())),
+            TraceItem::Step(step) => Some((false, step.says.as_ref())),
+            TraceItem::Said(_) => None,
+        })
+        .collect();
+    let wanted = [
+        (true, "Finding two seats together"),
+        (false, "Checking the stalls"),
+    ];
+    assert_eq!(says, wanted);
 }
 
 /// A card is made again whenever any task changes, so one of a task with helpers at work costs no

@@ -31,6 +31,14 @@ pub enum Cli {
 impl Cli {
     pub const ALL: [Cli; 2] = [Cli::Claude, Cli::Codex];
 
+    /// Whether its program takes another model for a thread's next message. Codex's app-server
+    /// does: turn/start's model overrides it "for this turn and subsequent turns" (its
+    /// generate-json-schema). Claude's --help gives --model for the session alone, and a running
+    /// session reads only messages, so a thread keeps the model it started on.
+    pub fn switches_model(self) -> bool {
+        matches!(self, Cli::Codex)
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             Cli::Claude => "claude",
@@ -368,6 +376,13 @@ impl Process {
             began?;
         }
         Ok(process)
+    }
+
+    /// The model its next turns run on, by id, where its program takes one per turn.
+    pub fn set_model(&mut self, model: &str) {
+        if let (Cli::Codex, Some(state)) = (self.cli, &self.codex) {
+            super::codex::set_model(state, model);
+        }
     }
 
     /// Sends the user's message, which the agent reads once its turn under way ends.

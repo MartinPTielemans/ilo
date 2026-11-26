@@ -146,7 +146,11 @@ impl Shell {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
-        if let Some(page) = self.resting_page(frame, cx) {
+        let page = match self.rests_on_bar() {
+            true => self.resting_page(frame, cx),
+            false => None,
+        };
+        if let Some(page) = page {
             let opacity = self.empty_opacity(cx.background_executor().now());
             return Some(
                 div()

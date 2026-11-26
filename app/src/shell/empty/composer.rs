@@ -8,8 +8,7 @@ use gpui::{
     point, prelude::*, px, rgba,
 };
 
-use crate::agents::task::{Card, Dot, TaskAction, Word};
-use crate::agents::tier::Tier;
+use crate::agents::task::{Card, Dot, Word};
 use crate::command_bar::CommandBar;
 use crate::palette::{Palette, Tone};
 use crate::product;
@@ -19,13 +18,7 @@ use crate::tokens::shell::composer::*;
 use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::text;
 
-use super::super::{
-    Shell,
-    broom::working_ring,
-    cast::TURN,
-    menus::{MenuAction, MenuEntry},
-    task_area::covering,
-};
+use super::super::{Shell, broom::working_ring, cast::TURN, task_area::covering};
 
 /// Over the cards.
 const LATEST: &str = "Pick up a thread";
@@ -53,7 +46,7 @@ fn hung_under(chip: Option<Bounds<Pixels>>, clicked: gpui::Point<Pixels>) -> gpu
 }
 
 /// The level's menu's last row, which opens Settings › Agents at Access.
-const SETTINGS: &str = "Settings…";
+pub(in crate::shell) const SETTINGS: &str = "Settings…";
 
 /// Why the field is owed the keyboard, if it is.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,10 +60,16 @@ enum Owed {
 }
 
 impl Shell {
+    /// Whether the card rests on the bar: the Space shows no page, the welcome hasn't the card,
+    /// and the window isn't a Little ilo window's, which keeps its own bar inside it.
+    pub(in crate::shell) fn rests_on_bar(&self) -> bool {
+        self.selected == 0 && !self.welcome && self.little.is_none()
+    }
+
     /// Makes the bar the page rests on as the Space comes to show no page, and drops it as a page
     /// shows, or the welcome takes the card.
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             if let Some(resting) = self.resting.take() {
                 // GPUI's focus would go with the field, and the shortcuts with it, as the shell's
                 // context holds them, until a click lands on the shell, which a header button's
@@ -91,6 +90,8 @@ impl Shell {
             if resting.space != space {
                 resting.space = space;
                 resting.wants_keys = Owed::Shown;
+                let bar = resting.bar.clone();
+                bar.update(cx, |bar, cx| bar.space_changed(window, cx));
             }
             return self.give_resting_keys(window, cx);
         }
@@ -115,7 +116,7 @@ impl Shell {
     /// over it (#4140). Whether it did.
     pub(in crate::shell) fn keys_to_resting(&mut self, cx: &mut Context<Self>) -> bool {
         // The field stays until the next frame drops it, so a page shown since isn't one.
-        if self.selected != 0 || self.welcome {
+        if !self.rests_on_bar() {
             return false;
         }
         let Some(resting) = &mut self.resting else {
@@ -232,36 +233,6 @@ impl Shell {
         if self.selected == over && self.space() == home && self.talk_agent().is_none() {
             self.show_task(agent, cx);
         }
-    }
-
-    /// The level chip's menu under a task's reply field, as the composer's: names only, the
-    /// task's level checked, and Settings. Only the user's pick here changes the task's level,
-    /// through the press its refusal's button makes; there's no agent path to it.
-    pub(in crate::shell) fn task_tier_menu(
-        &mut self,
-        agent: SharedString,
-        current: Tier,
-        chip: Option<Bounds<Pixels>>,
-        clicked: gpui::Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let press = |action: TaskAction| -> MenuAction {
-            let agent = agent.clone();
-            Box::new(move |shell, cx| shell.browser.task(agent, action, cx))
-        };
-        let mut items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
-            .map(|tier| {
-                (
-                    MenuEntry::named(tier.label(), true).checked(tier == current),
-                    press(TaskAction::PickTier(tier)),
-                )
-            })
-            .collect();
-        let none: fn() -> MenuAction = || Box::new(|_, _| {});
-        items.push((MenuEntry::line(), none()));
-        let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
-        items.push((MenuEntry::new(SETTINGS, true), settings));
-        self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 
     /// The page in the card at `frame`: the bar at the height ⌘T's opens at, the product's mark

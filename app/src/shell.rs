@@ -140,6 +140,7 @@ mod recent_tabs_tests;
 #[cfg(test)]
 pub(crate) mod recorder;
 mod return_mark;
+mod ring;
 mod rows;
 mod safe_start;
 mod scripting;
@@ -213,6 +214,7 @@ pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
 pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
+pub use onboarding::first_run_waiting;
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
 pub use pair::{Pair, PairKind};
@@ -1929,13 +1931,8 @@ pub struct Shell {
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
-    task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether a task's conversation stands beside the page it watches, with what the strip under
-    /// the page says in it, and the composer's row under its reply (#4095, #4094). Only the preview
-    /// sets it until the task's ilo lines are wired (#4086).
-    talk_beside: bool,
-    /// The words the strip last said, and for which tab, which check.sh reads as they change.
-    task_strip_said: RefCell<Option<(u64, String)>>,
+    /// Where the page watched was last placed, which check.sh reads to press in it.
+    task_page_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tabs whose player × put away until their page plays again.
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
@@ -2397,9 +2394,7 @@ impl Shell {
             task_closing: None,
             task_core: 0,
             task_live_logged: None,
-            task_strip_drawn: Rc::default(),
-            talk_beside: false,
-            task_strip_said: RefCell::default(),
+            task_page_at: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_stack: Default::default(),
@@ -6293,7 +6288,7 @@ fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32)
     let fill = palette.shown(hover).opacity(opacity);
     #[cfg(test)]
     SHOWN_FILL.set(Some(fill));
-    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+    plate.bg(fill)
 }
 
 #[cfg(test)]
@@ -6321,8 +6316,13 @@ fn title(palette: &Palette, title: SharedString, selected: bool) -> gpui::Div {
         .min_w_0()
         .truncate()
         .text_size(px(text::BODY))
-        .text_color(palette.text(if selected { TITLE } else { UNSELECTED_TITLE }))
+        .text_color(title_ink(palette, selected))
         .child(title)
+}
+
+/// A row's title's ink, the selected row's firmer.
+fn title_ink(palette: &Palette, selected: bool) -> gpui::Hsla {
+    palette.text(if selected { TITLE } else { UNSELECTED_TITLE })
 }
 
 /// How far a fade from `from` to `to` has come `elapsed` seconds into `duration`, on the scroll

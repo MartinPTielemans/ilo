@@ -364,7 +364,7 @@ impl Shell {
         // The strip's stop went with its page, or as its chips changed, or a card's with its task
         // or as its card changed.
         if let Some(stop) = self.keyed_strip
-            && !self.ring_stops().contains(&Some(stop))
+            && !self.ring_stops(cx).contains(&Some(stop))
             && !self.card_stops().iter().any(|&(each, _)| each == stop)
         {
             self.leave_strip("strip", cx);
