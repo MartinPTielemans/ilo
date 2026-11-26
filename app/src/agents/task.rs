@@ -149,6 +149,9 @@ pub struct Conversation {
     pub tabs: Vec<(u64, SharedString)>,
     /// The tab the agent is on while it works, whose picture has the Signal ring.
     pub on: Option<u64>,
+    /// Those of its pages the user holds, each theirs on its own row in the panel whichever page
+    /// the agent works on.
+    pub held: Vec<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
     /// What the live line over the reply field says of it, read where its card's word is, so the
@@ -195,6 +198,16 @@ pub enum Live {
     },
     /// Its own question waits on the user, which the question's line says with its answers.
     Asked,
+}
+
+/// What the live line says of `tab`, a page of `tabs` the user holds: `site` names it while the
+/// task has more than one page.
+pub fn yours(tab: u64, tabs: &[(u64, SharedString)]) -> Live {
+    let site = (tabs.len() > 1)
+        .then(|| tabs.iter().find(|(each, _)| *each == tab))
+        .flatten()
+        .map(|(_, site)| tier::plain(site).into());
+    Live::Yours { tab, site }
 }
 
 /// A line of a task's conversation.
@@ -1263,11 +1276,7 @@ impl Agents {
             (State::Asking { .. }, None) => Live::Asked,
             (_, Some(_)) => Live::Handed,
             _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
-            _ if let Some((tab, _)) = taken => Live::Yours {
-                tab: *tab,
-                site: (tabs.len() > 1)
-                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
-            },
+            _ if let Some((tab, _)) = taken => yours(*tab, &tabs),
             _ => Live::Working,
         };
         let working = task.state == State::Working;
@@ -1337,6 +1346,10 @@ impl Agents {
             (None, false) => format!("{} · {} · {about}", task.name, task.model),
         };
         let finished = finished(&task.messages, &lines);
+        let held = (tabs.iter())
+            .map(|(tab, _)| *tab)
+            .filter(|tab| self.held.contains_key(tab))
+            .collect();
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.name.clone(),
@@ -1347,6 +1360,7 @@ impl Agents {
             lines,
             tabs,
             on,
+            held,
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
             live,
             open: open_label(&self.open_tabs(task, cx)),

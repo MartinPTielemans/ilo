@@ -1615,6 +1615,11 @@ impl TalkView {
             Live::Yours { tab, .. } if shown.stoppable && *tab == on => {
                 words::live(&shown.live).map(|said| RowCase::Yours(said.into()))
             }
+            // A page the user holds is theirs on its own row, whichever page the thread works on.
+            Live::Working | Live::Yours { .. } if shown.stoppable && shown.held.contains(&on) => {
+                let yours = crate::agents::task::yours(on, &shown.tabs);
+                words::live(&yours).map(|said| RowCase::Yours(said.into()))
+            }
             _ => None,
         };
         PageRow {
