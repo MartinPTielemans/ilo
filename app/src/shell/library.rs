@@ -147,10 +147,10 @@ use crate::tokens::shell::library::{
     FILTER_CHEVRON, FILTER_CHEVRON_GAP, FILTER_GAP, FILTER_PAD_LEFT, FILTER_PAD_RIGHT,
 };
 
-use crate::tokens::shell::library::ARCHIVE_LEAST;
 use super::recent_downloads::{come, progress, tile_glyph};
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::palette::{LIGHT_SHOWN, SHOWN};
+use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
 use crate::tokens::shell::library::ARCHIVED_FAVICON_X;
