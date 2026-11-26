@@ -4703,7 +4703,7 @@ impl Render for TalkView {
         let composed = self.replies || !look.standing;
         let gap = (self.sign).gap(sign, now, composed && knot::moves(window, cx));
         if !std::mem::replace(&mut self.sign_moving, gap.is_some()) && gap.is_some() {
-            // perf-threads.sh reads this line.
+            // For the checks (perf-threads.sh), once as it starts, never a frame's.
             log!("browser: task card {} knot moving", self.agent);
         }
         if !self.folding.is_empty() || busy {
