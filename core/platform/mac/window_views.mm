@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/page_edge_strips.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
 #include "content/public/browser/page_tile_mac.h"
@@ -100,8 +101,16 @@
 }
 
 // Through the pages a switch is leaving, as if they had gone: they only stand in for the pages it
-// shows until those draw.
+// shows until those draw. Out of full screen, the strips along the window's sides are the UI's,
+// over a page that reaches them too (page_edge_strips.h).
 - (NSView*)hitTest:(NSPoint)point {
+  NSPoint local = [self convertPoint:point fromView:self.superview];
+  const BOOL fullScreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+  if (!fullScreen && self.uiView && [self mouse:local inRect:self.bounds] &&
+      browser_core::InPageEdgeStrip(local.x, NSWidth(self.bounds), browser_core::kPageEdgeStrip)) {
+    NSView* ui = [self.uiView hitTest:local];
+    return ui ? ui : self.uiView;
+  }
   NSView* hit = [super hitTest:point];
   if (!hit || self.leaving.count == 0) {
     return hit;
@@ -113,7 +122,6 @@
   if (!leaving) {
     return hit;
   }
-  NSPoint local = [self convertPoint:point fromView:self.superview];
   for (NSView* subview in [self.subviews reverseObjectEnumerator]) {
     if (![self.leaving containsObject:subview]) {
       if (NSView* under = [subview hitTest:local]) {

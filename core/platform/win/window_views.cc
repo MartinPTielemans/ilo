@@ -26,6 +26,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
+#include "browser_core/page_edge_strips.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
 #include "browser_core/tab.h"
@@ -518,6 +519,65 @@ gfx::Insets InsetsOf(const gfx::Rect& frame, const gfx::Size& window) {
                            window.width() - frame.right());
 }
 
+// Hands the pointer in the strips along a browser window's sides (page_edge_strips.h), and in the
+// top edge that resizes it (host.cc's FrameHit), from a page reaching them to the UI's holder under
+// the pane, out of full screen: over a page, the UI would hear neither the hidden sidebar's edge
+// nor the top edge. Answers for the pane's window and the windows content makes in it on this
+// thread, as content's own answers its hit test itself (LegacyRenderWidgetHostHWND::OnNCHitTest),
+// and Windows passes HTTRANSPARENT on to the window under it on the same thread.
+class EdgeStrips : public ui::HWNDMessageFilter {
+ public:
+  EdgeStrips() = default;
+  EdgeStrips(const EdgeStrips&) = delete;
+  EdgeStrips& operator=(const EdgeStrips&) = delete;
+  ~EdgeStrips() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+
+  // Answers for |pane| and the windows in it on this thread, from now. A window's filters are a
+  // set, so a window already answered for stays as it is.
+  void Watch(HWND pane) {
+    Add(pane);
+    EnumChildWindows(pane, &EdgeStrips::Each, reinterpret_cast<LPARAM>(this));
+  }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND hwnd, UINT message, WPARAM, LPARAM l_param, LRESULT* result) override {
+    if (message != WM_NCHITTEST) {
+      return false;
+    }
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    // Full screen takes the caption style away, as FrameHit reads it.
+    if (!root || !(GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION)) {
+      return false;
+    }
+    POINT at{static_cast<short>(LOWORD(l_param)), static_cast<short>(HIWORD(l_param))};
+    ScreenToClient(root, &at);
+    RECT client{};
+    GetClientRect(root, &client);
+    const UINT dpi = GetDpiForWindow(root);
+    const double strip = kPageEdgeStrip * dpi / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    // host.cc's TopEdge, kept in step with it.
+    const int top =
+        GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    if (InPageEdgeStrip(at.x, client.right, strip) || (!IsZoomed(root) && at.y >= 0 && at.y < top)) {
+      *result = HTTRANSPARENT;
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  static BOOL CALLBACK Each(HWND child, LPARAM strips) {
+    reinterpret_cast<EdgeStrips*>(strips)->Add(child);
+    return TRUE;
+  }
+
+  void Add(HWND window) {
+    if (GetWindowThreadProcessId(window, nullptr) == GetCurrentThreadId()) {
+      ui::HWNDSubclass::AddFilterToTarget(window, this);
+    }
+  }
+};
+
 class WindowViews : public views::WidgetObserver,
                     public aura::WindowObserver,
                     public ui::HWNDMessageFilter {
@@ -766,6 +826,8 @@ class WindowViews : public views::WidgetObserver,
     HWND hwnd = views::HWNDForWidget(slot.widget.get());
     SetWindowPos(hwnd, HWND_TOP, pixels.x(), pixels.y(), pixels.width(), pixels.height(),
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    // Here, as the page content made its window for is in the slot by now.
+    edge_strips_.Watch(hwnd);
     // The pages fill the slot in its own DIPs, which Windows' Text size makes fewer than the app's
     // points: in those the page ran past the window by the text scale (#3621).
     const float to_page = scale / PageScale(slot);
@@ -1022,6 +1084,7 @@ class WindowViews : public views::WidgetObserver,
   Slot preview_;
   // How its page is drawn for the card's motion (DrawPreview).
   Drawn preview_drawn_;
+  EdgeStrips edge_strips_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
