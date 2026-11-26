@@ -55,4 +55,17 @@ AgentCloseAsk::Step AgentCloseAsk::PageGone(bool tab_stays) {
   return Answering(tab_stays ? Answer::kStays : Answer::kClosed);
 }
 
+AgentArchive::Does AgentArchive::What() const {
+  if (!handed || held) {
+    return Does::kRefused;
+  }
+  if (pinned) {
+    return Does::kPinned;
+  }
+  if (asks && !discard) {
+    return Does::kAsks;
+  }
+  return Does::kArchives;
+}
+
 }  // namespace browser_core
