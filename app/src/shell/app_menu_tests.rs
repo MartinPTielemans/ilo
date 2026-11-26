@@ -19,9 +19,9 @@ const TITLES: [&str; 7] = [
     "Import from Other Browsers…",
     "Privacy Policy",
     "",
-    concat!("About ", env!("APP_NAME")),
+    concat!("About ", env!("PRODUCT_NAME")),
     "",
-    concat!("Quit ", env!("APP_NAME")),
+    concat!("Quit ", env!("PRODUCT_NAME")),
 ];
 
 /// A window with two Spaces, drawn with the menu control as off the Mac if `control`.
@@ -276,5 +276,57 @@ fn the_bar_finds_focus_ilo_menu() {
             found.iter().any(|row| row.command == Command::FocusMenu),
             "{typed} didn't find {name}"
         );
+    }
+}
+
+/// The menu's About, Hide and Quit are found by the product's name: the command bar finds About
+/// and Quit by it, and Settings › Shortcuts lists the three under it. Where the bundle's files keep
+/// another name, that one finds none of the three.
+#[test]
+fn about_hide_and_quit_are_found_by_the_products_name() {
+    let product = crate::product::PRODUCT;
+    let find =
+        |typed: &str| crate::shell::find_commands(typed, &Default::default(), |name, _| Some(name));
+    let rows = crate::settings_shortcuts::SHORTCUTS
+        .iter()
+        .find(|(group, _)| *group == product)
+        .map(|(_, rows)| rows.iter().map(|(name, _)| *name).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for (word, command) in [
+        ("About", Some(Command::About)),
+        ("Hide", None),
+        ("Quit", Some(Command::Quit)),
+    ] {
+        let name = format!("{word} {product}");
+        assert!(rows.contains(&name.as_str()), "Shortcuts lists no {name}");
+        let Some(command) = command else { continue };
+        assert_eq!(command.title(), name);
+        for typed in [name.as_str(), product] {
+            assert!(
+                find(typed).iter().any(|row| row.command == command),
+                "{typed} didn't find {name}"
+            );
+        }
+    }
+    let files = env!("APP_NAME");
+    if files.eq_ignore_ascii_case(product) {
+        return;
+    }
+    let found = find(files);
+    for command in [Command::About, Command::Quit] {
+        assert!(
+            !found.iter().any(|row| row.command == command),
+            "{files} found {}",
+            command.title()
+        );
+    }
+    let named = crate::settings_shortcuts::SHORTCUTS
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().map(|(name, _)| *name));
+    for name in named {
+        let three = ["About ", "Hide ", "Quit "]
+            .iter()
+            .any(|word| name.strip_prefix(word) == Some(files));
+        assert!(!three, "Shortcuts still lists {name}");
     }
 }

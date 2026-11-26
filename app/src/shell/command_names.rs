@@ -190,7 +190,7 @@ impl Command {
             ClearBrowsingData => &["Clear Browsing Data…"],
             Settings => &["Settings…"],
             KeyboardShortcuts => &["Essential Keyboard Shortcuts"],
-            About => &[concat!("About ", env!("APP_NAME"))],
+            About => &[concat!("About ", env!("PRODUCT_NAME"))],
             CheckForUpdates => &[updates::CHECK_FOR_UPDATES, updates::RESTART],
             Import => &["Import from Other Browsers…"],
             Passwords => &["Passwords"],
@@ -207,7 +207,7 @@ impl Command {
             HelpCenter => &["Help Center"],
             WhatsNew => &["What's New"],
             PrivacyPolicy => &["Privacy Policy"],
-            Quit => &[concat!("Quit ", env!("APP_NAME"))],
+            Quit => &[concat!("Quit ", env!("PRODUCT_NAME"))],
         }
     }
 
