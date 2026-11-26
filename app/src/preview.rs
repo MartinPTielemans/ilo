@@ -1055,6 +1055,12 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    // One the user stopped and one whose assistant broke, among those done.
+                    end: Some(match id {
+                        "session-3" => browser::agents::kept::End::Stopped,
+                        "task-2" => browser::agents::kept::End::Failed,
+                        _ => browser::agents::kept::End::Done,
+                    }),
                     sorted: None,
                 }
             };

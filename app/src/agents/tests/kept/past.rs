@@ -767,6 +767,52 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
     assert_eq!(after(&args, "--resume"), Some(made[1].1.as_str()));
 }
 
+/// Library › Threads keeps how each thread's last turn ended, which its row says: one that broke
+/// as Interrupted, one the user stopped as Stopped, one done as Done. One at its limit or still at
+/// work has no entry, and gets none.
+#[gpui::test]
+fn a_threads_entry_keeps_how_its_last_turn_ended(cx: &mut TestAppContext) {
+    use crate::agents::kept::End;
+    let run = Run::new("entry-ends", cx);
+    let names = ["Failed", "Limit", "Stopped", "Working", "Done"];
+    let mut made = Vec::new();
+    for (at, name) in names.into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push(agent);
+    }
+    for (name, agent) in names.into_iter().zip(&made) {
+        match name {
+            "Failed" => {
+                let failure = Failure::Other("It broke.".into());
+                run.said(agent, Out::Ended(Some(failure)), cx)
+            }
+            "Limit" => {
+                let resets = Failure::Limit(Some(1_900_000_000));
+                run.said(agent, Out::Ended(Some(resets)), cx)
+            }
+            "Stopped" => act(&run, agent, TaskAction::Stop, cx),
+            "Done" => run.finish(agent, cx),
+            _ => {}
+        }
+    }
+    let kept = (run.agents).update(cx, |agents, cx| agents.take_ended(cx));
+    let mut ends: Vec<(String, Option<End>)> = (kept.into_iter())
+        .map(|(_, past)| (past.title, past.end))
+        .collect();
+    ends.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        ends,
+        [
+            ("Done".to_string(), Some(End::Done)),
+            ("Failed".to_string(), Some(End::Failed)),
+            ("Stopped".to_string(), Some(End::Stopped)),
+        ],
+        "the entries kept, by title, with how each ended"
+    );
+}
+
 /// A task at work when the browser goes with no quit, as when it's killed, is there at the next
 /// launch as one that broke off: Interrupted, by the name its agent gave it, in its profile, and
 /// with its conversation, which nothing removed, so a reply takes it up. Its row is written at

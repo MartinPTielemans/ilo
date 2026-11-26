@@ -3714,6 +3714,13 @@ impl Agents {
                 (Some(_), None) => fallback(&task.trace).unwrap_or_else(|| task.name.to_string()),
                 _ => task.title.to_string(),
             };
+            let end = match task.state {
+                State::Done { .. } => super::kept::End::Done,
+                State::Stopped => super::kept::End::Stopped,
+                State::Failed { .. } => super::kept::End::Failed,
+                State::Limit { .. } => super::kept::End::Limit,
+                State::Working | State::Asking { .. } => continue,
+            };
             let past = crate::agent_history::Past {
                 id: format!("{}-{}", task.agent, seconds(task.started)),
                 title,
@@ -3731,6 +3738,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                end: Some(end),
                 sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
