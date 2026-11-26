@@ -551,8 +551,9 @@ impl Shell {
     }
 
     /// A whole card's third row, if it has one: at work its pages, those not yet visited faint,
-    /// and how many it has been on; waiting the page it waits on and Show Page; done or ended the
-    /// pages it visited, and an ended task's chip.
+    /// and how many it has been on; waiting the page it waits on and Show Page, which isn't drawn
+    /// while that page is the one shown, the row as high without it so the list stays where it is;
+    /// done or ended the pages it visited, and an ended task's chip.
     fn card_third(
         &self,
         card: &Card,
@@ -597,32 +598,33 @@ impl Shell {
                 let tab = self.waiting_page(card)?;
                 let agent = card.agent.clone();
                 let label: SharedString = words::button(IloButton::ShowPage).into();
-                let button = div()
-                    .id(("task-show-page", n))
-                    .flex_none()
-                    .h(px(BUTTON_HEIGHT))
-                    .px(px(BUTTON_X))
-                    .flex()
-                    .items_center()
-                    .rounded(px(BUTTON_RADIUS))
-                    .bg(Hsla::from(self.palette.ink))
-                    .text_size(px(text::SMALL))
-                    .line_height(px(BUTTON_LINE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.on_primary());
-                let button = self
-                    .strip_stop(button, StripStop::Chip(n), label.clone(), BUTTON_RADIUS)
-                    .child(label)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |shell, _, _, cx| {
-                        cx.stop_propagation();
-                        shell.card_button(agent.clone(), cx);
-                    }));
+                let button = self.offers_page(card).then(|| {
+                    let button = div()
+                        .id(("task-show-page", n))
+                        .flex_none()
+                        .h(px(BUTTON_HEIGHT))
+                        .px(px(BUTTON_X))
+                        .flex()
+                        .items_center()
+                        .rounded(px(BUTTON_RADIUS))
+                        .bg(Hsla::from(self.palette.ink))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(BUTTON_LINE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.on_primary());
+                    self.strip_stop(button, StripStop::Chip(n), label.clone(), BUTTON_RADIUS)
+                        .child(label)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            cx.stop_propagation();
+                            shell.card_button(agent.clone(), cx);
+                        }))
+                });
                 let row = row()
                     .h(px(BUTTON_HEIGHT))
                     .child(self.card_icon(tab, 1.))
                     .child(div().flex_1())
-                    .child(button);
+                    .children(button);
                 Some(row.into_any_element())
             }
             Form::DoneUnseen if !card.visited.is_empty() => {
