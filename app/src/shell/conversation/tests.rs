@@ -3894,6 +3894,38 @@ fn standing_with(
     (shell, host, view, cx)
 }
 
+/// Standing on one of the thread's pages, the panel head's button of its other page stands on that
+/// one at once. Its press runs in the panel's own update, as here, so nothing the shell does for it
+/// may read the panel.
+#[gpui::test]
+fn the_panel_heads_button_of_its_other_page_stands_on_it(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        ..conversation(3)
+    };
+    let (shell, host, view, cx) = standing_with(card(), talk, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    redraw(&shell, &view, cx);
+    host.take();
+    // As the button's listener does: the stand runs inside the panel's own update.
+    view.update(cx, |view, cx| view.stand(31, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
+    );
+    assert!(host.take().contains(&"select 31".to_string()));
+}
+
 fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
     view.update(cx, |_, cx| cx.notify());
     shell.update(cx, |_, cx| cx.notify());
