@@ -4,6 +4,7 @@
 
 use serde_json::{Value, json};
 
+use super::tier::Why;
 use super::{TabInfo, page};
 use crate::product::PRODUCT;
 
@@ -869,6 +870,8 @@ pub struct Did {
     /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
     /// trace draws it: never a log, the activity file, a card or the kept list.
     pub says: Note,
+    /// What ilo judged its act does beyond its page, once it has (`check`).
+    pub judged: Judged,
 }
 
 /// The tool of a step that's a search the assistant's program made, by its provider's own search:
@@ -1233,6 +1236,62 @@ pub fn step_glyph(tool: &str) -> &'static str {
     }
 }
 
+/// What ilo judged a step's act does beyond its page (access.rs, `why_of`), once it has: a step
+/// is traced as it's called, before its page has said what the act would do.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Judged {
+    #[default]
+    Not,
+    /// Nothing a level may refuse: it opens, reads or acts on the page alone.
+    Page,
+    /// What a level may refuse, and why, whether it was allowed or not.
+    Refusable(Why),
+}
+
+/// The tools whose step keeps the product's words whatever the assistant sent: each closes a
+/// tab, or hands a file, a step or a question to the user.
+const OWN_WORDS: [&str; 6] = [
+    "close_tab",
+    "remove_tab",
+    "upload",
+    "hand_off",
+    "ask_for_tab",
+    "ask",
+];
+
+/// The tools ilo judges before they run (`Agents::check`): one under way keeps the product's
+/// words until it's judged. A run's steps are each judged as their tool is.
+const JUDGED_FIRST: [&str; 6] = [
+    "click",
+    "type",
+    "select",
+    "press_key",
+    "request",
+    "run_steps",
+];
+
+/// Whether a step's line keeps the product's words whatever the assistant sent for it: the one
+/// list (window-and-threads.md, Whose words, limit b). That's a step that changes something
+/// beyond its page (an order or a payment, a message sent, a request that may change something,
+/// a file saved, a sign-in, a bank's site, a tab closed or thrown away, a fenced site), one a page
+/// permission stopped, and one that failed or was refused (`failed`), stopped, or waits on the
+/// user (`waiting`). An act under way that ilo hasn't judged yet keeps them until it has, so one
+/// that turns out to be an order never showed as anything else; a step ilo never judges, such as
+/// a scroll, is the assistant's from the start.
+pub fn product_words(did: &Did, running: bool, failed: bool, stopped: bool, waiting: bool) -> bool {
+    let beyond = match did.judged {
+        Judged::Refusable(why) => why != Why::Act,
+        Judged::Not => running && JUDGED_FIRST.contains(&did.tool.as_str()),
+        Judged::Page => false,
+    };
+    beyond
+        || failed
+        || stopped
+        || waiting
+        || OWN_WORDS.contains(&did.tool.as_str())
+        || permission_stopped(&did.tool, &did.site).is_some()
+}
+
 /// Why a step failed, of the kinds a task's card says in a few words (#3702). Each is set where
 /// its failure is known, from the core's code or the app's own reason, so no wording decides it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1416,6 +1475,69 @@ mod note_tests {
         let mut arguments = json!({ "tab": 3, "note": 7 });
         assert_eq!(take_note(true, &mut arguments), "");
         assert_eq!(plain_note(&"x".repeat(500)).chars().count(), NOTE_MOST);
+    }
+
+    /// The one list of steps whose line keeps the product's words whatever the assistant sent
+    /// (limit b), case by case: what ilo judged an act does beyond its page, the tools that close
+    /// a tab or hand something to the user, a page permission, and a step that failed, stopped or
+    /// waits. A plain act on the page, judged, keeps the assistant's.
+    #[test]
+    fn the_steps_that_keep_the_products_words() {
+        let did = |tool: &str, judged: Judged| Did {
+            tool: tool.into(),
+            site: "shop.example".into(),
+            judged,
+            ..Did::default()
+        };
+        let own = |did: &Did, running: bool| product_words(did, running, false, false, false);
+        assert!(own(&did("click", Judged::Not), true), "not judged yet");
+        assert!(
+            !own(&did("scroll", Judged::Not), true),
+            "a scroll is never judged"
+        );
+        assert!(
+            !own(&did("click", Judged::Not), false),
+            "ended with nothing to judge"
+        );
+        assert!(!own(&did("click", Judged::Page), true));
+        assert!(!own(&did("type", Judged::Refusable(Why::Act)), true));
+        for why in [
+            Why::Message,
+            Why::Order,
+            Why::Bank,
+            Why::Download,
+            Why::Discard,
+            Why::Request,
+            Why::Fenced,
+            Why::Never,
+            Why::SignIn,
+            Why::SignInBank,
+        ] {
+            let judged = did("click", Judged::Refusable(why));
+            assert!(own(&judged, true) && own(&judged, false), "{why:?}");
+        }
+        for tool in [
+            "close_tab",
+            "remove_tab",
+            "upload",
+            "hand_off",
+            "ask_for_tab",
+            "ask",
+        ] {
+            assert!(own(&did(tool, Judged::Page), false), "{tool}");
+        }
+        let camera = format!("{PERMISSION}camera");
+        assert!(own(&did(&camera, Judged::Page), false), "a page permission");
+        let plain = did("navigate", Judged::Page);
+        assert!(
+            product_words(&plain, false, true, false, false),
+            "failed or refused"
+        );
+        assert!(product_words(&plain, false, false, true, false), "stopped");
+        assert!(
+            product_words(&plain, true, false, false, true),
+            "waiting on the user"
+        );
     }
 
     /// A step printed whole, as a log line or a failed assertion prints it, says how long its

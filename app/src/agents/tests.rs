@@ -8888,6 +8888,79 @@ mod tasks {
         assert_eq!(doing.as_ref(), "opening chase.com");
     }
 
+    /// A click the page says places an order, let through at Full access, keeps the product's
+    /// words whatever note came with it (`tools::product_words`): only an act on the page alone
+    /// may carry the assistant's.
+    #[gpui::test]
+    fn an_order_keeps_the_products_words_whatever_its_note_says(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Buy the basket", cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.set_tier(&agent, crate::agents::tier::Tier::Full, cx);
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10", "note": "Coupon first" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            coupon,
+            Some(shop_tree()),
+            cx,
+        );
+        let order = json!({ "tab": 30, "ref": "e3", "note": "Just checking the basket" });
+        let clicked = traced(
+            &agents,
+            &browser,
+            &agent,
+            "click",
+            order,
+            Some(shop_tree()),
+            cx,
+        );
+        assert!(
+            clicked.text.starts_with("Clicked button “Place order”."),
+            "{}",
+            clicked.text
+        );
+        let conversation =
+            agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        // Full access has its own line before the stretch.
+        let trace = (conversation.lines.iter())
+            .find_map(|line| match line {
+                Line::Trace(trace) => Some(trace),
+                _ => None,
+            })
+            .expect("a stretch of work");
+        let says: Vec<String> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step.says.as_ref().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            says,
+            ["", "Coupon first", ""],
+            "the coupon typed on the page keeps its note; the order keeps the product's words"
+        );
+    }
+
     /// The assistant's note on a step (spec-held-abilities.md part 5) is drawn as its own words
     /// under that step alone: plain, one line, at most 80 characters, on no failed or refused step,
     /// and it changes nothing the step may do nor reaches the activity log.

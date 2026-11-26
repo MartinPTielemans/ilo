@@ -24,7 +24,7 @@ use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{self, StartedWith, Stop, Tier};
+use super::tier::{self, StartedWith, Stop, Tier, Why};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -3262,6 +3262,23 @@ impl Agents {
         Some(task.agent.clone())
     }
 
+    /// Writes what ilo judged the act of `agent`'s call `call` does beyond its page, `why`, onto
+    /// the step it was traced as: until then that step's line keeps the product's words
+    /// (`tools::product_words`).
+    pub(super) fn judged(&mut self, agent: &str, connection: u64, call: u64, why: Option<Why>) {
+        if call == 0 {
+            return;
+        }
+        let key = (self.acting_task(agent, connection, call)).map(|task| task.agent.clone());
+        let Some(task) = key.and_then(|key| self.task_mut(&key)) else {
+            return;
+        };
+        let step = (task.trace.iter_mut()).rfind(|step| step.call == call && step.ended.is_none());
+        if let Some(step) = step {
+            step.did.judged = why.map_or(tools::Judged::Page, tools::Judged::Refusable);
+        }
+    }
+
     /// The task an act of `agent`'s on `connection`, for its call `call` (0 for none), is of: a ⌘T
     /// task's own, else the session its call is part of, else its connection's session under way.
     pub(super) fn acting_task(&self, agent: &str, connection: u64, call: u64) -> Option<&Task> {
@@ -4883,7 +4900,12 @@ fn hold_waits(lines: &mut [Line], waiting: impl Fn(usize) -> bool) {
                 }
                 step.running &= tabs.iter().any(|tab| tab.running);
             }
-            _ => step.running &= !waiting(step.key),
+            _ if waiting(step.key) => {
+                step.running = false;
+                // A step waiting on the user keeps the product's words (`tools::product_words`).
+                step.says = tools::Note::default();
+            }
+            _ => {}
         }
     }
 }
@@ -5472,10 +5494,16 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         .map(|note| note.with().into())
         .unwrap_or_default(),
         page: on_page(&step.did),
-        // The assistant's word on its step, only on one that went as it asked.
-        says: match step.error {
-            None => step.did.says.clone(),
-            Some(_) => tools::Note::default(),
+        // The assistant's word on its step, only where the product's words needn't stand.
+        says: match tools::product_words(
+            &step.did,
+            step.ended.is_none(),
+            step.error.is_some(),
+            step.stopped(),
+            waits(step),
+        ) {
+            false => step.did.says.clone(),
+            true => tools::Note::default(),
         },
     }
 }

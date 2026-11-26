@@ -3948,6 +3948,7 @@ impl Agents {
             _ if self.said_never(&act.agent, &site) => tier::Why::Never,
             _ => why,
         });
+        self.judged(&act.agent, act.connection, act.call, why);
         match why {
             Some(why) if !tier.allows(why) => self.stopped(act, site, why, tier, cx),
             // What the tier allowed has its answer: a request's changes go with it.
