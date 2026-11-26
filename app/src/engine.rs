@@ -661,7 +661,8 @@ impl Browser for Engine {
     }
 
     fn ask_again(&self, asked: SharedString, cx: &mut App) {
-        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
+        // The bar's ask reads the front window's Shell, which asks this inside its own update.
+        cx.defer(move |cx| with_overlays(move |cx| command_bar::ask_again(asked, cx), cx));
     }
 
     fn show_task(&self, agent: SharedString, _: &mut App) {
