@@ -525,11 +525,28 @@ impl Agents {
         by: By,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.return_tab_at(agent, tab, by, None, cx)
+    }
+
+    /// `return_tab` of a tab whose page is at `at`, for the window that asks from inside its own
+    /// update: there the browser's `tab` can't be asked, as it reads that window. With none the
+    /// address is looked up.
+    fn return_tab_at(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        by: By,
+        at: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         // No longer the thread's from here, whatever the core's report of the move then asks.
         if !self.forget_handed_of(agent, tab) {
             return false;
         }
-        let site = site(&self.browser.tab(tab, cx).url);
+        let site = match at {
+            Some(url) => site(url),
+            None => site(&self.browser.tab(tab, cx).url),
+        };
         let space = self.browser.space_of(tab, cx);
         // The user's own hold on it ends with it: the tab is theirs, with nothing to hand back.
         // A call that waited on the hold hears they returned it only where they did: at their
@@ -608,20 +625,33 @@ impl Agents {
 
     /// The user closes `tab`. One a thread holds of theirs never closes while it's the thread's:
     /// their close of it is their return of it, on the page it's at. Whether it was one, so nothing
-    /// is to close.
-    pub fn close_returns(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+    /// is to close. Their window closes it from inside its own update, so it gives the address
+    /// of a page it has (`address`), asked only of one a thread holds.
+    pub fn close_returns(
+        &mut self,
+        tab: u64,
+        address: &dyn Fn(u64) -> SharedString,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let held = &self.tasks.handed.held;
         let Some(agent) = (held.iter().find(|each| each.tab == tab)).map(|each| each.agent.clone())
         else {
             return false;
         };
-        self.return_tab(&agent, tab, By::User, cx)
+        let at = address(tab);
+        self.return_tab_at(&agent, tab, By::User, Some(&at), cx)
     }
 
     /// The user closes `tab`, with its split view where `split`. Each pane a thread holds of theirs
     /// is returned as their close of it alone returns it, so every one has its entry and the
     /// core's own refusal to close one never has to act. The panes still to close.
-    pub fn close_leaves(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) -> Vec<u64> {
+    pub fn close_leaves(
+        &mut self,
+        tab: u64,
+        split: bool,
+        address: &dyn Fn(u64) -> SharedString,
+        cx: &mut Context<Self>,
+    ) -> Vec<u64> {
         let mut panes = match split {
             true => self.browser.split(tab, cx),
             false => Vec::new(),
@@ -629,15 +659,20 @@ impl Agents {
         if !panes.contains(&tab) {
             panes.insert(0, tab);
         }
-        panes.retain(|&pane| !self.close_returns(pane, cx));
+        panes.retain(|&pane| !self.close_returns(pane, address, cx));
         panes
     }
 
     /// The user moves `tab` to a Space of theirs, on the product's own UI. One a thread holds of
     /// theirs is returned first, as by Return to Your Tabs, so the move is of a tab of their own.
     /// Whether it was one.
-    pub fn move_returns(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
-        self.close_returns(tab, cx)
+    pub fn move_returns(
+        &mut self,
+        tab: u64,
+        address: &dyn Fn(u64) -> SharedString,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.close_returns(tab, address, cx)
     }
 
     /// `agent`'s close of `tab`, by close_tab or remove_tab. One it holds of the user's never

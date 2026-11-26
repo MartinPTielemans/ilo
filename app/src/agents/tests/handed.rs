@@ -893,7 +893,9 @@ fn the_users_move_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
     let run = run("handed-user-move", cx);
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     let moves = |cx: &mut TestAppContext, tab: u64| {
-        (run.agents).update(cx, |agents, cx| agents.move_returns(tab, cx))
+        (run.agents).update(cx, |agents, cx| {
+            agents.move_returns(tab, &address(&run), cx)
+        })
     };
     assert!(!moves(cx, SEATS.0) && !moves(cx, 10) && !moves(cx, 99));
     assert!(moves(cx, TRAINS.0));
@@ -1013,6 +1015,43 @@ fn a_remove_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
     );
 }
 
+/// The address the user's window has of each page, which it gives with its close or move of one.
+fn address(run: &Run) -> impl Fn(u64) -> SharedString + '_ {
+    |tab| {
+        let tabs = run.browser.tabs.borrow();
+        let found = tabs.iter().find(|each| each.0 == tab);
+        found.map_or("", |each| each.3).into()
+    }
+}
+
+/// The user's window closes or moves a tab from inside its own update, where the browser can't
+/// be asked for a tab, as it reads that window. A tab a thread holds of theirs is returned all
+/// the same, each pane of a split too, and its entry names the page by the address the window
+/// gave.
+#[gpui::test]
+fn the_users_close_or_move_of_a_handed_tab_reads_nothing_of_their_window(cx: &mut TestAppContext) {
+    let run = run("handed-close-in-update", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let own = opens_its_own(&run, &agent, cx);
+    run.browser.splits.borrow_mut().push(vec![own, TRAINS.0]);
+    run.browser.window_updating.set(true);
+    let left = (run.agents).update(cx, |agents, cx| {
+        agents.close_leaves(own, true, &address(&run), cx)
+    });
+    let moved = (run.agents).update(cx, |agents, cx| {
+        agents.move_returns(SEATS.0, &address(&run), cx)
+    });
+    run.browser.window_updating.set(false);
+    assert_eq!(left, [own]);
+    assert!(moved);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com", "tickets.example"]
+    );
+}
+
 /// The user's own close of a tab a thread holds of theirs returns it instead: it's theirs again,
 /// open, and the entry says they returned it. Any other tab is theirs to close as ever.
 #[gpui::test]
@@ -1020,7 +1059,9 @@ fn the_users_close_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
     let run = run("handed-user-close", cx);
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     let closes = |cx: &mut TestAppContext, tab: u64| {
-        (run.agents).update(cx, |agents, cx| agents.close_returns(tab, cx))
+        (run.agents).update(cx, |agents, cx| {
+            agents.close_returns(tab, &address(&run), cx)
+        })
     };
     assert!(!closes(cx, SEATS.0) && !closes(cx, 10) && !closes(cx, 99));
     assert!(run.browser.returned.borrow().is_empty());
@@ -1055,7 +1096,9 @@ fn the_users_close_of_a_split_returns_each_handed_pane(cx: &mut TestAppContext) 
     let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
     let own = opens_its_own(&run, &agent, cx);
     let closes = |cx: &mut TestAppContext, tab: u64, split: bool| {
-        (run.agents).update(cx, |agents, cx| agents.close_leaves(tab, split, cx))
+        (run.agents).update(cx, |agents, cx| {
+            agents.close_leaves(tab, split, &address(&run), cx)
+        })
     };
     // The close names the thread's own pane: the handed one beside it goes back.
     run.browser.splits.borrow_mut().push(vec![own, TRAINS.0]);

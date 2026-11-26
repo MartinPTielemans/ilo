@@ -109,7 +109,7 @@ impl Shell {
         }
         match self.split_of(row) {
             Some((tabs, look)) => self.move_split(&tabs, &look, space, cx),
-            None => self.browser.move_to_space(row, space, cx),
+            None => (self.browser).move_to_space(row, space, &|tab| self.url(tab), cx),
         }
     }
 }

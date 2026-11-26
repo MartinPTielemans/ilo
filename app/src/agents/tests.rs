@@ -23,6 +23,9 @@ const HELD: &str = "The user has this tab until they hand it back. Ask for it wi
 /// example.com, once it has one.
 #[derive(Default)]
 struct Made {
+    /// The user's window is inside its own update, where the real core can read no tab: it
+    /// reads them from that window.
+    window_updating: std::cell::Cell<bool>,
     agent_spaces: RefCell<HashMap<String, u64>>,
     /// Each tab's Space, title and URL.
     tabs: RefCell<Vec<(u64, u64, &'static str, &'static str)>>,
@@ -122,6 +125,11 @@ impl Browser for Made {
     }
 
     fn space_tabs(&self, space: u64, _: &App) -> Vec<TabInfo> {
+        let updating = self.window_updating.get();
+        assert!(
+            !updating,
+            "a tab was read from a window inside its own update"
+        );
         (self.tabs.borrow().iter())
             .filter(|tab| tab.1 == space && !self.unlisted.borrow().contains(&tab.0))
             .map(|&(id, _, title, url)| TabInfo {
@@ -141,6 +149,11 @@ impl Browser for Made {
     }
 
     fn tab(&self, tab: u64, _: &App) -> TabInfo {
+        let updating = self.window_updating.get();
+        assert!(
+            !updating,
+            "a tab was read from a window inside its own update"
+        );
         let tabs = self.tabs.borrow();
         let found = tabs.iter().find(|each| each.0 == tab);
         found.map_or(
@@ -429,6 +442,11 @@ impl Browser for Made {
     }
 
     fn in_use(&self, tab: u64, _: &App) -> bool {
+        let updating = self.window_updating.get();
+        assert!(
+            !updating,
+            "a tab was read from a window inside its own update"
+        );
         self.in_use.borrow().contains(&tab)
     }
 

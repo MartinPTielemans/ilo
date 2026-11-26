@@ -472,7 +472,7 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_selected(tab, cx));
     }
 
-    fn close(&self, tab: u64, _split: bool, cx: &mut App) {
+    fn close(&self, tab: u64, _split: bool, _: &dyn Fn(u64) -> SharedString, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             let mut today = shell.today().to_vec();
             let Some(index) = today.iter().position(|&id| id == tab) else {
@@ -521,7 +521,7 @@ impl Browser for Fake {
     }
 
     // The made-up tabs stay in their Space.
-    fn move_to_space(&self, _: u64, _: u64, _: &mut App) {}
+    fn move_to_space(&self, _: u64, _: u64, _: &dyn Fn(u64) -> SharedString, _: &mut App) {}
 
     fn move_folder_to_space(&self, _: u64, _: u64, _: &mut App) {}
 

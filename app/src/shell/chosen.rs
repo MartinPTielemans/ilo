@@ -170,7 +170,7 @@ impl Shell {
         let show = self.shown_among(&tabs);
         // Bottom up, as Close Tabs Below closes them, so each reopens at its place.
         for &row in rows.iter().rev() {
-            self.browser.close(row, true, cx);
+            self.browser.close(row, true, &|tab| self.url(tab), cx);
         }
         self.chosen.clear();
         self.chosen_from = 0;
@@ -245,7 +245,7 @@ impl Shell {
             edits.extend(self.put_back(row));
             match self.is_folder(row) {
                 true => self.browser.move_folder_to_space(row, space, cx),
-                false => self.browser.move_to_space(row, space, cx),
+                false => (self.browser).move_to_space(row, space, &|tab| self.url(tab), cx),
             }
         }
         self.unchoose(cx);

@@ -453,7 +453,7 @@ impl Browser for Recorder {
         self.record(format!("select {tab}"))
     }
 
-    fn close(&self, tab: u64, split: bool, _: &mut App) {
+    fn close(&self, tab: u64, split: bool, _: &dyn Fn(u64) -> SharedString, _: &mut App) {
         if split {
             self.split_closes.borrow_mut().push(tab);
         }
@@ -470,7 +470,7 @@ impl Browser for Recorder {
         self.make()
     }
 
-    fn move_to_space(&self, tab: u64, space: u64, _: &mut App) {
+    fn move_to_space(&self, tab: u64, space: u64, _: &dyn Fn(u64) -> SharedString, _: &mut App) {
         self.edit(format!("space {tab} {space}"));
     }
 

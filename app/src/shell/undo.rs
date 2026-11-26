@@ -540,7 +540,7 @@ impl Edit {
                 let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| shell.has_tab(tab)).collect();
                 let show = shell.shown_among(&tabs);
                 for &tab in tabs.iter().rev() {
-                    shell.browser.close(tab, false, cx);
+                    (shell.browser).close(tab, false, &|tab| shell.url(tab), cx);
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
             }
@@ -1061,7 +1061,7 @@ impl Shell {
             && !split
             && let Some(join) = self.join_of(tab)
         {
-            self.browser.close(tab, false, cx);
+            self.browser.close(tab, false, &|tab| self.url(tab), cx);
             self.closed_preview = None;
             self.closed_pinned = (!self.one_space()).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
@@ -1076,7 +1076,7 @@ impl Shell {
         if tabs.is_empty() {
             self.show_the_tab_before(tab, split, cx);
         }
-        self.browser.close(tab, split, cx);
+        self.browser.close(tab, split, &|tab| self.url(tab), cx);
         let what = if tabs.len() > 1 {
             What::CLOSE_TABS
         } else {
@@ -1133,7 +1133,7 @@ impl Shell {
     /// which puts the row at the top of Today, and closing it there.
     fn unpin_and_close(&mut self, tab: u64, cx: &mut Context<Self>) {
         self.browser.set_pinned(tab, false, cx);
-        self.browser.close(tab, true, cx);
+        self.browser.close(tab, true, &|tab| self.url(tab), cx);
     }
 
     /// The step that pins the row whose first tab is `tab` again where it is, once it's removed.
@@ -1276,7 +1276,7 @@ impl Shell {
             if !same_profile {
                 // There the core makes each page a new tab, in a row of its own.
                 for &each in &tabs {
-                    self.browser.move_to_space(each, space, cx);
+                    (self.browser).move_to_space(each, space, &|tab| self.url(tab), cx);
                 }
                 return self.keep(What::MOVE_TO_SPACE, None, cx);
             }
@@ -1289,7 +1289,7 @@ impl Shell {
             self.move_split(&tabs, &look, space, cx);
             return self.keep(What::MOVE_TO_SPACE, before, cx);
         }
-        self.browser.move_to_space(tab, space, cx);
+        (self.browser).move_to_space(tab, space, &|tab| self.url(tab), cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
     }
 
@@ -1303,7 +1303,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         for &tab in tabs {
-            self.browser.move_to_space(tab, space, cx);
+            (self.browser).move_to_space(tab, space, &|tab| self.url(tab), cx);
         }
         self.join_again(tabs, look, cx);
     }
@@ -1608,7 +1608,7 @@ impl Shell {
         if now.space != spot.space && !favorite(now.at) && !favorite(spot.at) {
             match self.is_folder_anywhere(tab) {
                 true => self.browser.move_folder_to_space(tab, spot.space, cx),
-                false => self.browser.move_to_space(tab, spot.space, cx),
+                false => (self.browser).move_to_space(tab, spot.space, &|tab| self.url(tab), cx),
             }
         }
         match spot.at {

@@ -1106,7 +1106,7 @@ impl Shell {
             close: false,
         });
         if !here {
-            self.browser.move_to_space(tab, self.space, cx);
+            (self.browser).move_to_space(tab, self.space, &|tab| self.url(tab), cx);
         }
         self.browser.move_tab(tab, in_pinned, folder, index, cx);
         self.browser.select(tab, cx);

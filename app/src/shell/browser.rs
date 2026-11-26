@@ -22,16 +22,24 @@ use super::{
 pub trait Browser {
     fn select(&self, tab: u64, cx: &mut App);
     /// Closes a Today tab. A pinned tab stays, and only its page goes. A tab in a split view
-    /// leaves it, unless `split` closes the rest of the split with it.
-    fn close(&self, tab: u64, split: bool, cx: &mut App);
+    /// leaves it, unless `split` closes the rest of the split with it. The shell asks from inside
+    /// its own update, where nothing can read it, so it gives the address of a page it has
+    /// (`address`) for what the close needs of one.
+    fn close(&self, tab: u64, split: bool, address: &dyn Fn(u64) -> SharedString, cx: &mut App);
     /// Closes the Today tabs below `tab`, showing `tab` if one of them showed.
     fn close_below(&self, tab: u64, cx: &mut App);
     /// Opens a copy of `tab` with its history, under it in Today, and shows it. Returns its id, or
     /// 0.
     fn duplicate(&self, tab: u64, cx: &mut App) -> u64;
     /// Moves `tab` to `space`. The window goes with it if it shows it. Into another profile's Space
-    /// it goes as a new tab, whose page loads there again.
-    fn move_to_space(&self, tab: u64, space: u64, cx: &mut App);
+    /// it goes as a new tab, whose page loads there again. `address` as `close` has it.
+    fn move_to_space(
+        &self,
+        tab: u64,
+        space: u64,
+        address: &dyn Fn(u64) -> SharedString,
+        cx: &mut App,
+    );
     /// Moves the pinned folder, with what's in it, to the bottom of `space`'s pinned tabs, as
     /// `move_to_space` moves a pinned tab.
     fn move_folder_to_space(&self, folder: u64, space: u64, cx: &mut App);
