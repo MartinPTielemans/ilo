@@ -44,6 +44,7 @@
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
 #include "browser_core/system_engine.h"
+#include "browser_core/tile.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
@@ -1677,9 +1678,13 @@ void Tab::ShowOnPageColor() {
 void Tab::RenderFrameHostChanged(content::RenderFrameHost* old_host,
                                  content::RenderFrameHost* new_host) {
   // A page from another site comes in a view of its own, white until its first frame.
-  if (page_color_ && new_host == web_contents()->GetPrimaryMainFrame() && new_host->GetView()) {
+  if (new_host != web_contents()->GetPrimaryMainFrame()) {
+    return;
+  }
+  if (page_color_ && new_host->GetView()) {
     new_host->GetView()->SetBackgroundColor(*page_color_);
   }
+  tiles::PageViewChanged(id_);
 }
 
 void Tab::RenderViewReady() {
@@ -2163,6 +2168,7 @@ void Tab::BeforeUnloadFired(bool proceed) {
 
 void Tab::WebContentsDestroyed() {
   user_load_.Closed();
+  tiles::End(id_);
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
   infobar_observation_.Reset();

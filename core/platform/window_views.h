@@ -18,6 +18,7 @@
 
 namespace content {
 class RenderWidgetHostView;
+class WebContents;
 }  // namespace content
 
 namespace views {
@@ -113,6 +114,29 @@ void ShowPageIn(views::Widget* widget,
                 const gfx::Rect& frame,
                 double corner_radius,
                 base::OnceClosure shown);
+
+// Tiles (#4115): whether an agent's page can show in a view of the app's apart from the pages its
+// window shows. The Mac's can; Linux and Windows hold one page a window, and the app draws the
+// tab's picture instead.
+bool CanTile();
+
+// Shows |contents|' page in |view|, an NSView of the app's, at |frame| from its top-left, over what
+// the view draws, with corners of |corner_radius|: at the page's own size, scaled by the frame's
+// width over the page's from its top-left and cut at its foot, and taking no input there
+// (content::SetPageTile). Called again, it moves to the view and frame of that call. Only where
+// CanTile.
+void ShowTile(content::WebContents* contents,
+              void* view,
+              const gfx::Rect& frame,
+              double corner_radius);
+
+// Takes |contents|' page out of the tile ShowTile put it in, out of sight, and lets it take input
+// again.
+void EndTile(content::WebContents* contents);
+
+// |contents|' page came in a view of its own, a page from another site committing, while it's a
+// tile: the view takes the page's own size again, which Chromium sized from the tile's.
+void TilePageChanged(content::WebContents* contents);
 
 // Draws |page|, which ShowPageIn shows, at |scale| of its frame's size about |about|, in the
 // frame's coordinates, and at |opacity|, without laying it out again, until the next call or
