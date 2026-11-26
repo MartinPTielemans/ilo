@@ -134,8 +134,8 @@ impl Zoom {
 const DEFAULT_WINDOW: (f32, f32) = (1280., 800.);
 
 /// An agent's page's own size, which the core gives it (core/window.cc, kAgentPageSize) and a tile
-/// never changes: the area a page watched has in a window at its default size, so a watch there
-/// shows it at 1:1 (#3788).
+/// never changes: a watch fits it whole into the page's part beside the panel, never past 1:1
+/// (#3788).
 pub(super) fn agent_page_size() -> Size<Pixels> {
     size(
         px(DEFAULT_WINDOW.0 - SIDEBAR_WIDTH - CARD_INSET),
@@ -648,7 +648,9 @@ impl Shell {
         if let Some(area) = &mut self.task_area
             && let Some(old) = area.page.replace(page)
         {
-            self.let_go_of_watch(old, true);
+            // Only standing on another page replaces a page watched, and there the conversation
+            // has no rail for the tile to go back into: it ends, in the frame the other's shows.
+            self.let_go_of_watch(old, false);
         }
         // check.sh reads this line.
         log!("browser: task page {tab} watched");

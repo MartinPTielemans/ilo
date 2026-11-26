@@ -2135,10 +2135,12 @@ fn a_watched_page_is_its_tile_grown_to_the_area(cx: &mut TestAppContext) {
     assert_eq!(place.center().x, area.center().x);
 }
 
-/// A window resized, or the conversation standing beside, while a tile is watched moves the tile
-/// alone: the agent's page is never laid out, selected or shown in the window.
+/// A window resized while a tile is watched moves the tile alone: the agent's page is never laid
+/// out, selected or shown in the window. Standing on another of the task's pages needs the
+/// conversation's own tiles, so its test is the conversation's
+/// (`standing_on_a_page_ends_the_conversations_other_tiles`).
 #[gpui::test]
-fn a_resize_or_standing_beside_moves_only_the_tile(cx: &mut TestAppContext) {
+fn a_resize_moves_only_the_tile(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
     watching_tile(&shell, &host, cx);
     host.take();
@@ -2150,9 +2152,6 @@ fn a_resize_or_standing_beside_moves_only_the_tile(cx: &mut TestAppContext) {
         asked.iter().any(|line| line.starts_with(&tile_line(place))),
         "{asked:?}"
     );
-    page_untouched(&asked);
-    draw(&shell, cx);
-    let asked = host.take();
     page_untouched(&asked);
     assert!(
         !asked.iter().any(|line| line.starts_with("end tile")),

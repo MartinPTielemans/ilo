@@ -3272,6 +3272,90 @@ fn its_pages_are_live_in_the_rail_and_end_as_it_goes(cx: &mut TestAppContext) {
     );
 }
 
+/// Standing on a page, the conversation is in its panel with no rail to place tiles in, so none
+/// of its other pages stays live: they end as the watch begins, and the tile of the page left
+/// behind ends as the user stands on another, whose own tile is the one shown. Only tiles move
+/// for it: no page is the window's, laid out or shown in its Space.
+#[gpui::test]
+fn standing_on_a_page_ends_the_conversations_other_tiles(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    let mut talk = conversation(1);
+    talk.tabs = vec![(30, "tickets.example".into()), (31, "seats.example".into())];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_conversation(Some(talk), cx);
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    let shown = |did: &[String], tab: u64| {
+        did.iter()
+            .any(|line| line.starts_with(&format!("tile {tab} at ")))
+    };
+    let ended = |did: &[String], tab: u64| did.contains(&format!("end tile {tab}"));
+    let untouched = |did: &[String]| {
+        !did.iter()
+            .any(|line| ["select 30", "select 31", "show space 3"].contains(&line.as_str()))
+    };
+    let did = draw(cx);
+    assert!(
+        shown(&did, 30) && shown(&did, 31),
+        "not both live in the rail: {did:?}"
+    );
+
+    let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    cx.simulate_click(at.center(), Modifiers::none());
+    let did = draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    assert!(
+        ended(&did, 31),
+        "the other page's tile stayed live beside the page stood on: {did:?}"
+    );
+    assert!(
+        shown(&did, 30) && !ended(&did, 30),
+        "the watched page left its tile: {did:?}"
+    );
+    assert!(untouched(&did), "a page was the window's: {did:?}");
+
+    assert!(shell.update(cx, |shell, cx| shell.stand_on_task_page(31, None, cx)));
+    let did = draw(cx);
+    assert!(
+        ended(&did, 30),
+        "the page left behind kept its tile: {did:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(31)))
+    );
+    assert!(
+        shown(&did, 31) && !ended(&did, 31),
+        "the page stood on isn't in its tile: {did:?}"
+    );
+    assert!(untouched(&did), "a page was the window's: {did:?}");
+    // Drawn again with nothing changed, nothing more is asked of either tile.
+    let did = draw(cx);
+    assert!(
+        !did.iter().any(|line| line.contains("tile")),
+        "a tile was asked for again: {did:?}"
+    );
+}
+
 /// A close a page of the user's refuses brings a page watched in its tile back in that tile grown
 /// to the area (#3788, #4202): it goes back to its picture for the close, and the window never
 /// shows the agent's tab.

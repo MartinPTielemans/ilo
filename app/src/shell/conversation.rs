@@ -4731,6 +4731,10 @@ impl Render for TalkView {
             self.drawn.borrow_mut().clear();
             self.crashed_drawn.borrow_mut().clear();
             self.tiles.end_all(cx);
+        } else if standing {
+            // Beside a page stood on there's no rail to place its tiles in, and one left live
+            // would stay drawn where its picture was, over the page's part.
+            self.tiles.end_all(cx);
         }
         let column = div().size_full().flex().child(column).children(rail);
         let drawn = self.drawn_at.clone();

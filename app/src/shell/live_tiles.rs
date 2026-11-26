@@ -186,8 +186,9 @@ impl LiveTiles {
         self.asked.borrow_mut().remove(&request)
     }
 
-    /// Ends every tile, as the conversation isn't drawn: a page is watched over it, or the page
-    /// area shows something else, such as a tab or another Space.
+    /// Ends every tile, as the conversation's pictures aren't drawn: it stands in its panel beside
+    /// a page, a page is watched over it, or the page area shows something else, such as a tab or
+    /// another Space.
     pub(super) fn end_all(&self, cx: &mut App) {
         let tabs: Vec<u64> = self.live.borrow().keys().copied().collect();
         for tab in tabs {
