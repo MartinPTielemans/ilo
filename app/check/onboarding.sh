@@ -506,7 +506,8 @@ fav_import_home=$fav_home
 ! windows || fav_import_home=$(cygpath -w "$fav_home")
 log="$out/onboarding-favorites.log"
 step=0
-rm -f "$saved" "$profile_dir/Account"
+# And the step the skill launch's quit kept, so first run plays from its start.
+rm -f "$saved" "$profile_dir/Account" "$profile_dir/first-run-step"
 BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
