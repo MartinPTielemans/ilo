@@ -594,6 +594,10 @@ pub struct Card {
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
+    /// Whether `status` is `word` in the fuller form ilo has for it, which its card's line says in
+    /// the word's place: how far a stopped task got, a session's receipt, the helpers at work.
+    /// Set where the status is made, so no place reads it off the words.
+    pub fuller: bool,
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
@@ -1357,17 +1361,25 @@ impl Agents {
     pub fn card(&self, task: &Task, cx: &App) -> Card {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
-        let (status, dot) = match (&task.state, &question) {
+        // With each status, whether it's its state's word in the fuller form (`Card::fuller`).
+        let (status, dot, fuller) = match (&task.state, &question) {
             (State::Working | State::Asking { .. }, Some(question)) => {
-                (needs_you(question), Dot::Waiting)
+                (needs_you(question), Dot::Waiting, false)
             }
             // A refusal the user hasn't settled says where it stopped, as its line says why.
-            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => {
-                (format!("{STOPPED_AT} {}", stop.at).into(), Dot::Waiting)
+            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => (
+                format!("{STOPPED_AT} {}", stop.at).into(),
+                Dot::Waiting,
+                false,
+            ),
+            (State::Working, None) => {
+                let (status, helpers) = working(task);
+                (status, Dot::Working, helpers)
             }
-            (State::Working, None) => (working(task), Dot::Working),
-            (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
-            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
+            (State::Asking { question, .. }, None) if asks => {
+                (question.clone(), Dot::Waiting, false)
+            }
+            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting, false),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -1375,7 +1387,7 @@ impl Agents {
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (receipt(session, &at).into(), Dot::Done)
+                (receipt(session, &at).into(), Dot::Done, true)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -1386,10 +1398,13 @@ impl Agents {
             ) => (
                 summary.clone().unwrap_or_else(|| first_words(result)),
                 Dot::Done,
+                false,
             ),
-            (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
-            (State::Stopped, _) => (stopped(task), Dot::Ended),
-            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
+            (State::Limit { resets }, _) => {
+                (limit_words(&task.name, resets).into(), Dot::Ended, false)
+            }
+            (State::Stopped, _) => (stopped(task), Dot::Ended, true),
+            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended, false),
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
@@ -1418,6 +1433,7 @@ impl Agents {
             replies: task.session.is_none(),
             title: task.title.clone(),
             status,
+            fuller,
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
@@ -4378,19 +4394,20 @@ fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
 /// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
-/// step comes, never on a clock.
-fn working(task: &Task) -> SharedString {
+/// step comes, never on a clock. With it, whether it's the helpers' line, the word Working in its
+/// fuller form (`Card::fuller`).
+fn working(task: &Task) -> (SharedString, bool) {
     // With helpers at work, the conversation's live line, in its own words: their steps come in
     // turn, and a card that said each would flicker between them.
     let helpers = helpers_under_way(task);
     if helpers > 0 {
         let (title, counted) = summary(None, (helpers, Counted::Helpers));
-        return format!("{title} · {counted}").into();
+        return (format!("{title} · {counted}").into(), true);
     }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
     // name, then what it's doing, whose room the step count would take (#3690).
-    match (taken.first(), &task.session) {
+    let step: SharedString = match (taken.first(), &task.session) {
         (Some(step), Some(_)) => format!(
             "{} · {}",
             task.name,
@@ -4405,7 +4422,8 @@ fn working(task: &Task) -> SharedString {
         .into(),
         (None, Some(_)) => format!("{} · no steps yet", task.name).into(),
         (None, None) => "Thinking · no steps yet".into(),
-    }
+    };
+    (step, false)
 }
 
 /// How many helpers the stretch under way of a working task has, which its conversation's live

@@ -121,13 +121,7 @@ fn chip(card: &Card) -> Option<Chip> {
 /// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
 /// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
 fn state_line(card: &Card) -> SharedString {
-    let fuller = match card.word {
-        Word::Stopped => card.status.starts_with("Stopped"),
-        Word::Done => !card.replies && card.status.starts_with("Done"),
-        Word::Working => card.status.starts_with("Working · "),
-        _ => false,
-    };
-    let state = match fuller {
+    let state = match card.fuller {
         true => card.status.as_ref(),
         false => card.word.after_name(),
     };

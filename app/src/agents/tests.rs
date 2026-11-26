@@ -12603,6 +12603,7 @@ mod sessions {
             (card.dot, card.status.as_ref()),
             (Dot::Done, "Done · 1 order placed")
         );
+        assert!(card.fuller, "a session's receipt isn't its word's form");
         assert_eq!(card.open, vec![(20, "example.com".into())]);
         assert!(
             (log(&agents, "claude-code", cx).iter()).any(|entry| entry.0 == "done"),
