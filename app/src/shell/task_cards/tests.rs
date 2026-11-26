@@ -15,6 +15,7 @@ use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
+        kept_picture: None,
         agent: format!("task-{n}").into(),
         home: 1,
         space: 100 + n,

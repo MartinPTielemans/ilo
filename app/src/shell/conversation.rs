@@ -636,11 +636,13 @@ impl Shell {
             .extend(gone.into_iter().map(|(.., picture)| picture.image()));
     }
 
-    /// The picture a card of Latest tasks shows on its plate, if its conversation left one.
+    /// The picture a card of Latest tasks shows on its plate, if its conversation left one, or
+    /// after a quit, its kept card's.
     pub(super) fn plate_of(&self, card: &Card) -> Option<PagePicture> {
         (self.card_plates.iter())
             .find(|(agent, tab, _)| *agent == card.agent && card.last_tab == Some(*tab))
             .map(|(.., picture)| picture.clone())
+            .or_else(|| card.kept_picture.as_ref().map(PagePicture::kept))
     }
 
     /// A picture the conversation asked for came, or the core had none: whether it was one of its

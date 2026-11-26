@@ -6888,6 +6888,32 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// The card offers the install for the fact that the program isn't there, never for a
+    /// failure's words: what a CLI says of something of its own that "isn't installed" is its
+    /// own failure, said as it said it, with no fix of the assistant's.
+    #[gpui::test]
+    fn the_install_is_offered_for_the_program_missing_not_for_a_failures_words(
+        cx: &mut TestAppContext,
+    ) {
+        let (agents, _) = ready(None, cx);
+        start(&agents, "Find a flight", cx);
+        set_found(&agents, Ready::NotFound, cx);
+        let agent = card_of(&agents, cx).agent.clone();
+        let fails = |failure: Failure, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| agents.fail(&agent, failure, cx));
+            card_of(&agents, cx)
+        };
+
+        let words = "The plugin it needs isn't installed.";
+        let card = fails(Failure::Other(words.into()), cx);
+        assert_eq!(card.status.as_ref(), words);
+        assert_eq!(card.fix, None, "a failure's words chose the card's form");
+
+        let card = fails(Failure::NotInstalled, cx);
+        assert_eq!(card.status.as_ref(), "Claude isn't installed.");
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+    }
+
     /// The inside switch off: ⌘T's ask lists no agent, no thread starts, and one at its limit
     /// offers no Retry and takes no reply or retry; other apps' agents work on, and on again a
     /// thread starts.

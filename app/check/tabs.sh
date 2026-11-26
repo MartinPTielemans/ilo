@@ -127,8 +127,13 @@ expect "^browser: page $a audible 1 muted 1\$" "the muted tab's sound didn't sho
 ../tools/window-screenshot.sh "$pid" "$out/muted.png" || fail "no window to capture"
 send key x
 expect "^browser: page $a audible 0 muted 1\$" "the tab's sound didn't stop"
-# The speaker is after the favicon, at the title's x, 43.
-send click 52 $(row 0 | cut -d' ' -f2)
+# The speaker sits at the line's end, before the row's button, which the pointer on the row brings
+# and which moves it, so it's clicked where its line says once the pointer rests on its row.
+await "^browser: speaker $a at " || fail "the muted tab's row logged no speaker"
+speaker_y=$(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f6)
+send move $(row 0 | cut -d' ' -f1) $speaker_y
+expect "^browser: speaker $a at " "the pointer on the muted tab's row didn't move its speaker"
+send click $(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f5-)
 expect '^browser: command toggle-mute via sidebar$' "a click on the speaker didn't reach the UI"
 expect "^browser: page $a audible 0 muted 0\$" "a click on the speaker didn't unmute the tab"
 open_from_bar example.com

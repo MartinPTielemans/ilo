@@ -231,6 +231,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         pages: (task_pages((at - FIRST_TASK) as usize).iter())
             .map(|&(tab, ..)| tab)
             .collect(),
+        kept_picture: None,
         tier: Default::default(),
         question: None,
         open: match dot {

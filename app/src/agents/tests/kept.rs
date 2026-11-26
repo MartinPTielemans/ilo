@@ -37,7 +37,7 @@ exec cat > "$0.in.$run"
 pub(super) struct Run {
     pub(super) agents: Entity<Agents>,
     pub(super) browser: Rc<Made>,
-    profile: PathBuf,
+    pub(super) profile: PathBuf,
     pub(super) program: PathBuf,
 }
 
@@ -80,7 +80,7 @@ impl Run {
     }
 
     /// The browser, started on a profile and the stand-in a run before left.
-    fn again(profile: PathBuf, program: PathBuf, cx: &mut TestAppContext) -> Run {
+    pub(super) fn again(profile: PathBuf, program: PathBuf, cx: &mut TestAppContext) -> Run {
         // The stand-in's thread says when it ends, whenever that is, from a thread GPUI doesn't
         // run: unless told the test has real I/O, GPUI fails the test for it.
         cx.executor().allow_parking();

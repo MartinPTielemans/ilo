@@ -4697,7 +4697,7 @@ impl Settings {
             )
             .into()
         } else if connected {
-            format!("Connected in {}", client.config()).into()
+            client.set_up_line().into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
             let missing: Vec<&str> = (Client::APPS.into_iter())
@@ -5840,7 +5840,8 @@ fn feature_row(
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished threads so you can reply";
-const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
+const KEPT_WHERE: &str =
+    "The thread as you saw it stays on this computer only. Your assistant keeps the conversation.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 

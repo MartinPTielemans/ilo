@@ -1596,7 +1596,7 @@ impl Shell {
                 .child(button)
                 .children(drawn.map(|(at, settled)| button_frame(at, settled)));
             let key = super::key_name("enter", super::OFF_THE_MAC);
-            frame::main_button(control, key.into(), inks)
+            frame::main_button(control, Some(key.into()), inks)
         });
         let focus = (self.onboarding.as_ref())
             .filter(|onboarding| onboarding.step == step)
@@ -2203,6 +2203,16 @@ fn swatch_row(
                         .border_color(colors.ink(SWATCH_EDGE)),
                 )
         }))
+}
+
+/// First run's main button for the welcome card, outside the flow: `button` with its label in it
+/// and `key` at its end, in a light window's inks or a dark one's.
+pub(super) fn main_button(
+    button: gpui::Stateful<gpui::Div>,
+    key: Option<SharedString>,
+    light: bool,
+) -> gpui::Stateful<gpui::Div> {
+    frame::main_button(button, key, frame::Inks::of(Colors::of(light)))
 }
 
 /// The flow's two colours: the ground, and the ink drawn on it.

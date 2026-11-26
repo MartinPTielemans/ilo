@@ -204,29 +204,35 @@ fn quiet(id: &'static str, label: &'static str, inks: Inks) -> Stateful<gpui::Di
 }
 
 /// The step's main button, `button` with its label in it: the text's ink, its label on it, and the
-/// key that presses it, `key`, at its end.
+/// key that presses it, `key`, at its end, if it has one.
 pub(super) fn main_button(
     button: Stateful<gpui::Div>,
-    key: SharedString,
+    key: Option<SharedString>,
     inks: Inks,
 ) -> Stateful<gpui::Div> {
-    let chip = div()
-        .h(px(t::KEY_HEIGHT))
-        .px(px(t::KEY_INSET))
-        .flex()
-        .items_center()
-        .rounded(px(t::KEY_RADIUS))
-        .bg(with_alpha(inks.on_primary, t::KEY))
-        .text_size(px(t::KEY_SIZE))
-        .line_height(px(t::KEY_LINE))
-        .font_weight(FontWeight::NORMAL)
-        .child(key);
+    let end = match key {
+        Some(_) => t::MAIN_END,
+        None => t::MAIN_START,
+    };
+    let chip = key.map(|key| {
+        div()
+            .h(px(t::KEY_HEIGHT))
+            .px(px(t::KEY_INSET))
+            .flex()
+            .items_center()
+            .rounded(px(t::KEY_RADIUS))
+            .bg(with_alpha(inks.on_primary, t::KEY))
+            .text_size(px(t::KEY_SIZE))
+            .line_height(px(t::KEY_LINE))
+            .font_weight(FontWeight::NORMAL)
+            .child(key)
+    });
     button
         .flex_none()
         .relative()
         .h(px(t::BUTTON_HEIGHT))
         .pl(px(t::MAIN_START))
-        .pr(px(t::MAIN_END))
+        .pr(px(end))
         .flex()
         .items_center()
         .gap(px(t::MAIN_GAP))
@@ -238,7 +244,7 @@ pub(super) fn main_button(
         .font_weight(FontWeight::SEMIBOLD)
         .hover(|style| style.opacity(0.9))
         .focus_visible(ring(inks.text(1.)))
-        .child(chip)
+        .children(chip)
 }
 
 impl Shell {

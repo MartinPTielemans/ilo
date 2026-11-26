@@ -240,6 +240,8 @@ fn a_place_is_its_mark_and_its_folder_only_its_user_reads() {
         mark: true,
         folder: true,
     };
+    assert_eq!(place.name(), Some(expected.name.as_str()));
+    assert!(is_name(&expected.name) && !is_name("0123") && !is_name(&"A".repeat(16)));
     assert_eq!(left_in(&root), [expected]);
     assert!(!format!("{place:?}").contains("ilo-leftovers"));
     std::fs::remove_dir_all(&tasks).unwrap();
@@ -264,13 +266,28 @@ fn the_launchs_cleanup_sweeps_each_mark_and_removes_what_started_nothing() {
     // A place made after the list, as a task's own would be.
     let later = Place::make(&root).unwrap();
     let fake = Fake::with(&[(5, true), (6, false)]);
-    let cleaned = clean_up_by(&fake, &root, &left);
+    let mut cleaned = clean_up_by(&fake, &root, &left);
+    // Each place whose mark was swept is named clean, with what its sweep ended.
+    cleaned.clean.sort();
+    let name = |place: &Place| place.name().unwrap().to_string();
+    let mut clean = vec![name(&swept), name(&no_folder)];
+    clean.sort();
+    assert_eq!(
+        (cleaned.clean.iter().map(|(name, _)| name.clone())).collect::<Vec<_>>(),
+        clean
+    );
+    assert_eq!(
+        cleaned.clean.iter().map(|(_, ended)| ended).sum::<usize>(),
+        1
+    );
+    cleaned.clean.clear();
     assert_eq!(
         cleaned,
         Cleaned {
             ended: 1,
             removed: 4,
-            kept: 0
+            kept: 0,
+            clean: Vec::new(),
         }
     );
     // Both marks that could be read were swept, and between them they ended the one inside.
@@ -307,7 +324,8 @@ fn a_place_whose_sweep_isnt_clean_is_kept_for_the_next_launch() {
         Cleaned {
             ended: 0,
             removed: 0,
-            kept: 1
+            kept: 1,
+            clean: Vec::new(),
         }
     );
     assert!(place.tmp().is_dir() && place.tmp().with_extension("mark").is_file());

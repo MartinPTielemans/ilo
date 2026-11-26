@@ -1224,6 +1224,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
     watching(&shell, &host, cx);
     let card = |dot: Dot| Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -1827,6 +1828,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     use crate::agents::task::{Card, Dot, Word};
     still(cx);
     let card = Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,

@@ -63,6 +63,11 @@ const NAME_ROW: At = At::Beside {
 
 impl Panel {
     fn new(theme: Option<Theme>, cx: &mut TestAppContext) -> Self {
+        Self::opened(theme, false, cx)
+    }
+
+    /// The panel as `new` shows it, opened to the left of the sidebar's edge if `left`.
+    fn opened(theme: Option<Theme>, left: bool, cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
         let window = cx
             .update(|cx| open(host.clone(), cx))
@@ -70,7 +75,7 @@ impl Panel {
         let (changed, also_) = (changed_for(&host), also_for(&host));
         // From browser window 2, as a context menu in a window behind another asks (#1432).
         cx.update(|cx| {
-            show(2, 7, theme, NAME_ROW, false, 900., changed, cx);
+            show(2, 7, theme, NAME_ROW, left, 900., changed, cx);
             also(also_, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
@@ -102,6 +107,33 @@ impl Panel {
         self.cx.run_until_parked();
         self.cx
             .simulate_mouse_up(Self::at(to.0, to.1), left, Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// A press at `from` and a move to `to` in one update, with no draw between them, as a quick
+    /// flick or the driver's press and dragto put both in one frame; then the hold is drawn and
+    /// it's let go where it moved to.
+    fn flick(&mut self, from: (f32, f32), to: (f32, f32)) {
+        let (from, to) = (Self::at(from.0, from.1), Self::at(to.0, to.1));
+        self.cx.update(|window, cx| {
+            let down = MouseDownEvent {
+                position: from,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            };
+            window.dispatch_event(PlatformInput::MouseDown(down), cx);
+            let moved = MouseMoveEvent {
+                position: to,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            };
+            window.dispatch_event(PlatformInput::MouseMove(moved), cx);
+        });
+        self.cx.run_until_parked();
+        self.cx
+            .simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -454,6 +486,43 @@ fn dragging_another_handle_places_its_colour_alone_and_chooses_it(cx: &mut TestA
     assert_eq!(panel.chosen(), 2);
 }
 
+/// A drag that moves before the panel has drawn the hold still moves what it holds: a handle,
+/// Intensity and Transparency (#2605).
+#[gpui::test]
+fn a_drag_that_moves_before_the_hold_is_drawn_still_moves(cx: &mut TestAppContext) {
+    let start = Theme::at(0.5, 0.).with_count(2);
+    let mut panel = Panel::new(Some(start), cx);
+    let to = Panel::on_pad(0.6, 0.7);
+    panel.flick(layout::handle(&start, 0), to);
+    let theme = panel.theme().unwrap();
+    assert!(
+        close(layout::handle(&theme, 0), to),
+        "the main handle at {:?}",
+        layout::handle(&theme, 0)
+    );
+    assert_eq!(
+        panel.handed_on().last(),
+        Some(&true),
+        "the move wasn't kept"
+    );
+    panel.flick(
+        Panel::thumb(Bar::Intensity, DEFAULT_INTENSITY),
+        Panel::thumb(Bar::Intensity, 0.25),
+    );
+    let intensity = panel.theme().unwrap().intensity;
+    assert!((intensity - 0.25).abs() < 0.001, "intensity {intensity}");
+    panel.flick(
+        Panel::thumb(Bar::Transparency, START),
+        Panel::thumb(Bar::Transparency, 0.25),
+    );
+    assert!(
+        (panel.glass() - 0.25).abs() < 0.001,
+        "transparency {}",
+        panel.glass()
+    );
+    assert_eq!(panel.glassed().last().map(|&(_, done)| done), Some(true));
+}
+
 /// The handles are drawn at rest, then held from the press's own frame, which is the first to
 /// listen for the drag's moves, and at rest again once let go, and a bar's thumb is drawn held the
 /// same way (check.sh waits for each).
@@ -688,6 +757,30 @@ fn a_drag_bumps_once_as_it_reaches_a_bar_s_end(cx: &mut TestAppContext) {
     assert_eq!(detents(&panel), 2);
 }
 
+/// Opened to the left, from a sidebar on the right, it grows from its top right, and presses still
+/// land on what's drawn: a palette, and the pad.
+#[gpui::test]
+fn opened_to_the_left_a_press_lands_on_the_pad(cx: &mut TestAppContext) {
+    let mut panel = Panel::opened(None, true, cx);
+    let calls = panel.calls();
+    let left = 240. - BESIDE - WIDTH;
+    assert_eq!(
+        calls[0],
+        format!("show {left:.1} 120.0 from {WIDTH:.1},0.0 over 2"),
+        "{calls:?}"
+    );
+    let at = Panel::on_pad(0.2, 0.45);
+    panel.click(at);
+    let theme = panel.theme().expect("no colour placed");
+    assert!(
+        close(layout::handle(&theme, 0), at),
+        "at {:?}",
+        layout::handle(&theme, 0)
+    );
+    panel.click(layout::disc(3));
+    assert_eq!(layout::palette_of(panel.theme().as_ref()), Some(3));
+}
+
 #[test]
 fn presses_land_on_what_is_drawn_there() {
     let theme = Theme::at(0.5, 0.).with_count(2);
@@ -901,6 +994,37 @@ fn voiceover_reads_the_panel_and_moves_its_bars(cx: &mut TestAppContext) {
     assert_eq!(panel.theme(), None);
     let (_, intensity) = named(&mut panel, Role::Slider, "Intensity");
     assert!(intensity.is_disabled(), "Intensity without a colour");
+}
+
+/// The empty pad tells VoiceOver how to place the first colour, and its press places it, as a
+/// click there does; with a colour, the hint and the press go.
+#[gpui::test]
+fn voiceover_places_the_first_colour_from_the_empty_pad(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(None, cx);
+    panel.cx.simulate_a11y_activation();
+    panel.cx.run_until_parked();
+    let (pad, node) = named(&mut panel, Role::Group, "Colors, none");
+    assert_eq!(node.description(), Some(HINT));
+    assert!(
+        node.supports_action(Action::Click),
+        "the pad can't be pressed"
+    );
+    let (_, intensity) = named(&mut panel, Role::Slider, "Intensity");
+    assert!(intensity.is_disabled(), "Intensity without a colour");
+    panel.cx.simulate_a11y_action(pad, Action::Click);
+    panel.cx.run_until_parked();
+    let theme = panel.theme().expect("no colour placed");
+    assert_eq!(theme.count, 1);
+    assert_eq!(
+        panel.handed_on().last(),
+        Some(&true),
+        "the colour wasn't kept"
+    );
+    let (_, node) = named(&mut panel, Role::Group, "Colors, 1");
+    assert_eq!(node.description(), None);
+    assert!(!node.supports_action(Action::Click));
+    let (_, intensity) = named(&mut panel, Role::Slider, "Intensity");
+    assert!(!intensity.is_disabled(), "Intensity with a colour");
 }
 
 #[test]
