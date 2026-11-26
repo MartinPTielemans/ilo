@@ -9,9 +9,7 @@ use gpui::{
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{
-    Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
-};
+use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::shell::conversation::words;
@@ -37,11 +35,12 @@ fn needs_you(site: &str) -> SharedString {
     }
 }
 
-/// A done card's second line, with no finding: when it ended (Z6, after the wording pass).
-fn done_at(card: &Card) -> SharedString {
+/// A done card's second line, with no finding: when it ended (Z6, after the wording pass). With
+/// it, how much of it is its lead (`second`).
+fn done_at(card: &Card) -> (SharedString, usize) {
     match card.ended_time.is_empty() {
-        true => state_line(card),
-        false => format!("Done · {}", card.ended_time).into(),
+        true => state(card),
+        false => (format!("Done · {}", card.ended_time).into(), 0),
     }
 }
 
@@ -77,12 +76,25 @@ pub(super) fn count(card: &Card) -> Option<SharedString> {
 
 /// The second line of a whole card in `form`: ilo's words alone.
 pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
+    second(card, form, site).0
+}
+
+/// How much of a whole card's second line in `form` is its lead, in the title's ink: the level's
+/// label where the line is its state's and the card is at Full access, by the card's level and
+/// never by what the line begins with.
+pub(super) fn second_lead(card: &Card, form: Form) -> usize {
+    second(card, form, "").1
+}
+
+/// A whole card's second line in `form` and how much of it is its lead: only its state's line
+/// has one.
+fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
     match form {
-        Form::Working if !card.status.is_empty() => card.status.clone(),
-        Form::Waits => needs_you(site),
-        Form::DoneUnseen if !card.finding.is_empty() => card.finding.clone(),
+        Form::Working if !card.status.is_empty() => (card.status.clone(), 0),
+        Form::Waits => (needs_you(site), 0),
+        Form::DoneUnseen if !card.finding.is_empty() => (card.finding.clone(), 0),
         Form::DoneUnseen => done_at(card),
-        _ => state_line(card),
+        _ => state(card),
     }
 }
 
@@ -355,7 +367,7 @@ impl Shell {
         let second = match finding {
             true => self.card_finding(card, text_2).into_any_element(),
             false => {
-                let lead = state_lead(&words);
+                let lead = second_lead(card, form);
                 let line = match form {
                     Form::DoneUnseen => DONE_LINE,
                     _ => LIVE_LINE,

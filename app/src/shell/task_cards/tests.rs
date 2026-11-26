@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
-use super::card::{Look, count, look, second_line, spoken};
+use super::card::{Look, count, look, second_lead, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
@@ -262,11 +262,8 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
         state_line(&working).as_ref(),
         "Full access · Working · 3 helpers"
     );
-    assert_eq!(
-        super::state_lead(&state_line(&working)),
-        "Full access".len()
-    );
-    assert_eq!(super::state_lead(&state_line(&done)), 0);
+    assert_eq!(super::state(&working).1, Tier::Full.label().len());
+    assert_eq!(super::state(&done).1, 0);
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
     asks.status = "Which would you rather visit?".into();
@@ -310,6 +307,30 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     }
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// How much of a card's line is in the title's ink is its level's: a card at Full access leads its
+/// state's line with the level's label, and a card at any other level has no lead, though its
+/// client is named as the label and its line so begins as that one does. A line that isn't its
+/// state's, its step at work, has none at either level.
+#[test]
+fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
+    let label = Tier::Full.label();
+    let mut posing = card(1, Dot::Ended);
+    posing.name = label.into();
+    let mut full = card(2, Dot::Ended);
+    full.tier = Tier::Full;
+    assert_eq!(state_line(&posing), state_line(&full));
+    for form in [Form::Ended, Form::EndedLine, Form::DoneUnseen] {
+        assert_eq!(second_lead(&posing, form), 0, "{form:?}");
+        assert_eq!(second_lead(&full, form), label.len(), "{form:?}");
+    }
+    // At work the line is the step, which for a session begins with its client's name.
+    for card in [&mut posing, &mut full] {
+        card.dot = Dot::Working;
+        card.status = format!("{label} · Opening tap.pt").into();
+        assert_eq!(second_lead(card, Form::Working), 0);
+    }
 }
 
 /// Whether a card's line says its status in its word's place is a fact its maker set, never read
