@@ -53,7 +53,13 @@ fn a_card_is_its_line_and_picture_in_a_folder_of_its_own() {
     let root = root("written");
     let id = CardId::new();
     let line = "Two seats at 9:05, car 4.";
-    assert!(write(&root, &id, Some(line), &Picture::Write(picture())));
+    assert!(write(
+        &root,
+        &id,
+        Some(line),
+        &Picture::Write(picture()),
+        None
+    ));
     assert_eq!(names(&root), [id.as_str()]);
     let folder = root.join(id.as_str());
     assert_eq!(names(&folder), ["card.png", "line"]);
@@ -77,12 +83,12 @@ fn a_card_is_its_line_and_picture_in_a_folder_of_its_own() {
 fn a_card_written_again_keeps_nothing_of_the_one_before() {
     let root = root("again");
     let id = CardId::new();
-    write(&root, &id, Some("First."), &Picture::Write(picture()));
-    assert!(write(&root, &id, Some("Second."), &Picture::Remove));
+    write(&root, &id, Some("First."), &Picture::Write(picture()), None);
+    assert!(write(&root, &id, Some("Second."), &Picture::Remove, None));
     let card = read(&root, &id);
     assert_eq!(card.line.as_deref(), Some("Second."));
     assert_eq!(card.picture, None);
-    assert!(write(&root, &id, None, &Picture::Remove));
+    assert!(write(&root, &id, None, &Picture::Remove, None));
     assert!(!root.join(id.as_str()).exists());
 }
 
@@ -92,7 +98,7 @@ fn a_card_written_again_keeps_nothing_of_the_one_before() {
 fn a_changed_card_reads_as_nothing() {
     let root = root("changed");
     let id = CardId::new();
-    write(&root, &id, Some("Fine."), &Picture::Write(picture()));
+    write(&root, &id, Some("Fine."), &Picture::Write(picture()), None);
     let folder = root.join(id.as_str());
     for line in ["a\u{1b}[2J".to_string(), "x".repeat(5000)] {
         std::fs::write(folder.join("line"), &line).unwrap();
@@ -105,7 +111,7 @@ fn a_changed_card_reads_as_nothing() {
         width: 3000,
         height: 1,
     };
-    write(&root, &id, None, &Picture::Write(large));
+    write(&root, &id, None, &Picture::Write(large), None);
     assert_eq!(read(&root, &id).picture, None);
     #[cfg(unix)]
     {
@@ -115,7 +121,7 @@ fn a_changed_card_reads_as_nothing() {
         std::os::unix::fs::symlink(&elsewhere, folder.join("line")).unwrap();
         assert_eq!(read(&root, &id).line, None);
         // Written over, the link goes and what it pointed to stays as it was.
-        write(&root, &id, Some("Mine."), &Picture::Leave);
+        write(&root, &id, Some("Mine."), &Picture::Leave, None);
         assert_eq!(
             std::fs::read_to_string(&elsewhere).unwrap(),
             "Not the card's."
@@ -129,8 +135,14 @@ fn a_changed_card_reads_as_nothing() {
 fn remove_takes_one_card_and_remove_all_takes_every_one() {
     let root = root("removed");
     let (one, other) = (CardId::new(), CardId::new());
-    write(&root, &one, Some("One."), &Picture::Remove);
-    write(&root, &other, Some("Other."), &Picture::Write(picture()));
+    write(&root, &one, Some("One."), &Picture::Remove, None);
+    write(
+        &root,
+        &other,
+        Some("Other."),
+        &Picture::Write(picture()),
+        None,
+    );
     assert!(remove(&root, &one));
     assert_eq!(names(&root), [other.as_str()]);
     remove_all(&root);
@@ -143,8 +155,20 @@ fn remove_takes_one_card_and_remove_all_takes_every_one() {
 fn the_sweep_takes_a_card_with_no_record_and_leaves_one_with_a_record() {
     let root = root("swept");
     let (recorded, left) = (CardId::new(), CardId::new());
-    write(&root, &recorded, Some("Kept."), &Picture::Write(picture()));
-    write(&root, &left, Some("Left."), &Picture::Write(picture()));
+    write(
+        &root,
+        &recorded,
+        Some("Kept."),
+        &Picture::Write(picture()),
+        None,
+    );
+    write(
+        &root,
+        &left,
+        Some("Left."),
+        &Picture::Write(picture()),
+        None,
+    );
     sweep(&root, std::slice::from_ref(&recorded));
     assert_eq!(names(&root), [recorded.as_str()]);
     assert_eq!(read(&root, &recorded).line.as_deref(), Some("Kept."));
@@ -166,6 +190,7 @@ fn the_queue_runs_its_jobs_in_the_order_asked(cx: &mut gpui::TestAppContext) {
         id: id.clone(),
         line: Some(line.to_string()),
         picture,
+        log: None,
     };
     let (first, second, third) = (CardId::new(), CardId::new(), CardId::new());
     queue.ask(
@@ -197,4 +222,53 @@ fn the_queue_runs_its_jobs_in_the_order_asked(cx: &mut gpui::TestAppContext) {
     cx.run_until_parked();
     assert_eq!(card(&first), Card::default());
     assert_eq!(card(&second).line.as_deref(), Some("Back."));
+}
+
+/// A card's log is a file of its folder's own, only its owner can read, and reads back as the
+/// records written. One the app didn't write, or over a log's most, reads as none, and the rest
+/// of the card stays. A write with no log takes the one there out, as one over the most at the
+/// thread's Done is never written.
+#[test]
+fn a_cards_log_is_a_file_of_its_own_read_back_whole_or_not_at_all() {
+    use crate::agents::kept::log::{self, Record};
+    let root = root("log");
+    let id = CardId::new();
+    let records = vec![
+        Record::You("Two seats".into()),
+        Record::Said("Done.".into()),
+    ];
+    let text = log::write(&records).unwrap();
+    assert!(write(
+        &root,
+        &id,
+        Some("Line."),
+        &Picture::Remove,
+        Some(&text)
+    ));
+    let folder = root.join(id.as_str());
+    assert_eq!(names(&folder), ["line", "log"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(folder.join("log"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    assert_eq!(read(&root, &id).log, Some(records));
+
+    std::fs::write(folder.join("log"), "button\tPay\n").unwrap();
+    let card = read(&root, &id);
+    assert_eq!((card.log, card.line.as_deref()), (None, Some("Line.")));
+    std::fs::write(folder.join("log"), "x".repeat(log::MOST + 1)).unwrap();
+    assert_eq!(read(&root, &id).log, None);
+
+    assert!(write(&root, &id, Some("Line."), &Picture::Remove, None));
+    assert_eq!(names(&folder), ["line"]);
+    // A log alone is a card's.
+    assert!(write(&root, &id, None, &Picture::Remove, Some(&text)));
+    assert_eq!(names(&folder), ["log"]);
+    assert!(remove(&root, &id));
+    assert!(!folder.exists());
 }

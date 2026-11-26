@@ -67,7 +67,7 @@ mod clean_link;
 mod close_tab;
 mod command_names;
 mod commands;
-mod conversation;
+pub(crate) mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;

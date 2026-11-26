@@ -94,6 +94,8 @@ impl Agents {
             return;
         }
         let line = Some(finding(&task.messages).to_string()).filter(|line| !line.is_empty());
+        // Over the most a log may be, none is written, and the one there goes.
+        let log = kept::log::write(&self.log_of(task, cx));
         let last = last_tab(task, &self.pages(task, cx));
         // A page that couldn't be kept now, as one the user held since its picture was taken,
         // keeps none, whatever its tile says.
@@ -119,6 +121,7 @@ impl Agents {
             id: card,
             line,
             picture,
+            log,
         };
         self.tasks.card_jobs.ask(job, cx.background_executor());
     }

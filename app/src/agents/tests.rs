@@ -2113,7 +2113,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
 }
 
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
-/// that orders.
+/// that orders. Its fields say what a core with the field kinds says of each.
 fn shop_tree() -> String {
     shop_tree_named("Place order")
 }
@@ -2125,9 +2125,9 @@ fn shop_tree_named(button: &str) -> String {
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
         { "nodeId": "3", "role": { "value": "textbox" }, "name": { "value": "Coupon" },
-          "backendDOMNodeId": 31 },
+          "backendDOMNodeId": 31, "secret": false, "autofilled": false },
         { "nodeId": "4", "role": { "value": "textbox" }, "name": { "value": "Password" },
-          "backendDOMNodeId": 41, "password": true },
+          "backendDOMNodeId": 41, "password": true, "secret": true, "autofilled": false },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": button },
           "backendDOMNodeId": 51 },
     ]})

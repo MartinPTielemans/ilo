@@ -1920,6 +1920,10 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tab: 1,
             limit: HelpersLimit::Kind,
         },
+        // A kept log's line, as it stored one of the above.
+        IloKind::Kept {
+            words: super::words::stored(&IloKind::EndedLeft, "Claude").into(),
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1947,7 +1951,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::KeepsNothing
             | IloKind::NoProfile
             | IloKind::NoSpace
-            | IloKind::Helpers { .. } => {}
+            | IloKind::Helpers { .. }
+            | IloKind::Kept { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
         let verb = VERBS.iter().any(|verb| own.split(' ').next() == Some(verb));

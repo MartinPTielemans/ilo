@@ -949,6 +949,12 @@ fn a_private_window_starts_no_task_and_keeps_nothing(cx: &mut TestAppContext) {
     assert!(!started(&run, 1));
     assert!(!index(&run).exists());
     assert_eq!(run.kept(cx), (0, 0));
+    // No card, so no line, picture or log of it either.
+    assert!(
+        !run.profile
+            .join(crate::agents::kept::cards::FOLDER)
+            .exists()
+    );
 
     let agent = start_in(&run, 1, cx);
     run.ran(1);

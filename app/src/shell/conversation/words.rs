@@ -202,6 +202,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep conversations."), None),
         IloKind::NoProfile => ("· This thread's profile was deleted.".into(), None),
         IloKind::NoSpace => ("· This thread's profile has no Space left.".into(), None),
+        IloKind::Kept { words } => (words.to_string(), None),
     }
 }
 
@@ -229,6 +230,48 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
             (said, start..end)
         }
     }
+}
+
+/// An ilo line as a kept thread's log stores it (agents/kept/log.rs): its words as drawn, the
+/// name in them included, and why under them; never its buttons, its link or its count. A file's
+/// or a folder's name is left out, as a chip of one is, and so is a saved login's account.
+pub fn stored(kind: &IloKind, agent: &str) -> String {
+    let (own, name) = head(kind, agent);
+    let unnamed = match kind {
+        IloKind::StartedWithout {
+            left: LeftOut::File(_),
+        }
+        | IloKind::NotRestarted {
+            left: LeftOut::File(_),
+        }
+        | IloKind::NotCopied {
+            left: LeftOut::File(_),
+        } => Some("a file"),
+        IloKind::StartedWithout { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotCopied { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::Revoked { .. }
+        | IloKind::FolderGone { .. } => Some("a folder"),
+        _ => None,
+    };
+    let mut words = match (name.as_deref(), unnamed) {
+        (Some(_), Some(unnamed)) => format!("{own} {unnamed}"),
+        (Some(name), None) => with_name(kind, &own, name).0,
+        (None, _) => own,
+    };
+    words.extend(tail(kind, agent));
+    let why = match kind {
+        IloKind::SignedIn { .. } => None,
+        _ => body(kind, name.as_deref().unwrap_or_default()),
+    };
+    if let Some(why) = why {
+        words.push('\n');
+        words.push_str(&why);
+    }
+    words
 }
 
 /// How the line of what a run left running ends: what the user can do about it.
@@ -303,6 +346,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         | IloKind::KeepsNothing
         | IloKind::NoProfile
         | IloKind::NoSpace => None,
+        IloKind::Kept { .. } => None,
     }
 }
 

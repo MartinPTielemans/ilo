@@ -29,6 +29,7 @@ use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
+mod log_of;
 mod pick_up;
 pub(super) mod revoke;
 pub(super) mod rewall;
@@ -3998,8 +3999,9 @@ impl Agents {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
                 let shows = element.as_ref().is_some_and(page::Element::shows_typed);
-                if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
-                    did.text = typed;
+                // What may show is cut at its most, as a chosen option is, never dropped whole.
+                if tool == "type" && shows {
+                    did.text = page::clip(&page::one_line(&typed), tools::TYPED_SHOWN);
                 }
             }
             "select" => {
