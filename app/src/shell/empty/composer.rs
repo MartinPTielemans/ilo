@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use crate::agents::task::{Card, Dot, TaskAction, Word};
-use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
+use crate::agents::tier::Tier;
 use crate::command_bar::{self, CommandBar};
 use crate::palette::{Palette, Tone};
 use crate::shell::ShowStarted;
@@ -231,14 +231,12 @@ impl Shell {
     }
 
     /// The level chip's menu under a task's reply field, as the composer's: names only, the
-    /// task's level checked, where it may go, and Settings. Only the user's pick here changes the
-    /// task's level, through the press its refusal's button makes; there's no agent path to it. A
-    /// running task can widen to any site but not narrow to the sites added, which it never had.
+    /// task's level checked, and Settings. Only the user's pick here changes the task's level,
+    /// through the press its refusal's button makes; there's no agent path to it.
     pub(in crate::shell) fn task_tier_menu(
         &mut self,
         agent: SharedString,
         current: Tier,
-        only: bool,
         chip: Option<Bounds<Pixels>>,
         clicked: gpui::Point<Pixels>,
         cx: &mut Context<Self>,
@@ -256,12 +254,6 @@ impl Shell {
             })
             .collect();
         let none: fn() -> MenuAction = || Box::new(|_, _| {});
-        items.push((MenuEntry::line(), none()));
-        items.push((
-            MenuEntry::named(ANY_SITE, true).checked(!only),
-            press(TaskAction::PickAnySite),
-        ));
-        items.push((MenuEntry::named(ONLY_ADDED, only).checked(only), none()));
         items.push((MenuEntry::line(), none()));
         let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
         items.push((MenuEntry::new(SETTINGS, true), settings));
@@ -338,8 +330,9 @@ impl Shell {
     /// A recent task's card: its state, its title and its last steps, the one under way in full
     /// ink (or its status, with no steps this turn), over the picture its last page's tile ended
     /// on. Once over, its one line is a done task's answer's first or, quiet, a stopped one's
-    /// last finished step, if it has one; a task a run before left says when it ended and has
-    /// none. A card with no picture ends after its words. A click opens it.
+    /// last finished step, if it has one; a task a run before left says when it ended, and has
+    /// the line and picture its kept card read back, if any. A card with no picture ends after
+    /// its words. A click opens it.
     fn recent_card(
         &self,
         index: usize,
@@ -360,7 +353,6 @@ impl Shell {
         });
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.word {
-            _ if card.ended_at.is_some() => Vec::new(),
             // A done task says its answer's first line; a stopped one only its last finished
             // step, quiet, or nothing after its title.
             Word::Done | Word::Stopped => (card.line.clone().into_iter())

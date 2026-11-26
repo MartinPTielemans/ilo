@@ -421,7 +421,7 @@ impl gpui::Render for PicturesPage {
                     feature(
                         "icons/terminal.svg",
                         "Claude Code",
-                        "Connected in ~/.claude.json",
+                        "Set up in ~/.claude.json",
                         vec![button("disconnect-claude", "Disconnect")],
                     ),
                     feature(

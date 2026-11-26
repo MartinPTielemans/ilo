@@ -27,6 +27,7 @@ use crate::tooltip::text_width;
 
 pub(super) fn card() -> Card {
     Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -95,7 +96,6 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
-        only_added: false,
         folder: None,
     }
 }
@@ -1365,10 +1365,6 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         said(&stopped(Why::Fenced)),
         "stopped Claude from going to seatmap.example"
     );
-    assert_eq!(
-        said(&stopped(Why::OtherSite)),
-        "stopped Claude from going to seatmap.example"
-    );
     let signed_in = IloKind::SignedIn {
         tab: 30,
         site: "tickets.example".into(),
@@ -2427,11 +2423,11 @@ fn a_buttons_place_for_the_checks_holds_no_word_of_its_line(cx: &mut TestAppCont
             })
             .expect("no ilo line")
     });
-    // The same stop at another site's door, where the line says the site.
+    // The same stop at an Off limits site's door, where the line says the site.
     let mut site = order.clone();
     if let IloKind::Stopped { at, why, .. } = &mut site {
         *at = "seatmap.example".into();
-        *why = Why::OtherSite;
+        *why = Why::Fenced;
     }
     let yours = IloKind::Yours {
         tab: 30,
@@ -2748,9 +2744,6 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
                 row("Work on pages", true),
                 row("Full access", true),
                 row("", false),
-                row("Any site", true),
-                row("Only the sites you add", false),
-                row("", false),
                 row("Settings…", true),
             ],
             "the level menu's rows at {tier:?}"
@@ -2759,16 +2752,7 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
         let at = |each: Tier| tier == each;
         assert_eq!(
             checked,
-            [
-                at(Tier::Look),
-                at(Tier::Work),
-                at(Tier::Full),
-                false,
-                true,
-                false,
-                false,
-                false
-            ],
+            [at(Tier::Look), at(Tier::Work), at(Tier::Full), false, false],
             "the menu checks {tier:?}, the task's own level"
         );
     }
@@ -3277,6 +3261,28 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
     let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
     assert_eq!(held, 0, "a picture no card shows is still held");
+}
+
+/// After a quit, a kept card's plate in Latest tasks shows the picture its card read back; a card
+/// with none has no plate.
+#[gpui::test]
+fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
+    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+    let plate = crate::agents::kept::cards::Plate {
+        image,
+        size: (3, 2),
+    };
+    let kept = Card {
+        kept_picture: Some(plate),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(kept.clone(), cx);
+    let size = |card: &Card, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
+    };
+    assert_eq!(size(&kept, cx), Some((3., 2.)));
+    assert_eq!(size(&card(), cx), None, "a plate with no picture");
 }
 
 /// A picture the conversation takes goes to its task's kept card only if it could have been

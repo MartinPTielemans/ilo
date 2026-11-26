@@ -119,8 +119,8 @@ send click 100 299
 expect "^browser: theme picker for $second\$" "the form's Choose a Theme row didn't open the picker"
 expect '^browser: theme picker shown$' "the form's Choose a Theme row didn't show the picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-send clickkey "$(swatch_x 6)" $swatch_y
-expect "^browser: colored space $second [0-9a-f]*\$" "the green swatch didn't colour the Space"
+send clickkey $(panel_at palette 4)
+expect "^browser: colored space $second [0-9a-f]*\$" "the green palette didn't colour the Space"
 ../tools/window-screenshot.sh "$pid" "$out/profile-form.png" || fail "no window to capture"
 send key escape
 expect '^browser: theme picker hidden$' "escape didn't close the theme picker"

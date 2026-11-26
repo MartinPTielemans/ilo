@@ -56,7 +56,7 @@ pub fn live(live: &Live) -> Option<String> {
 pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
     match kind {
         IloKind::Stopped {
-            why: Why::Fenced | Why::OtherSite,
+            why: Why::Fenced,
             at,
             ..
         } => (
@@ -217,7 +217,7 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
     let site = matches!(
         kind,
         IloKind::Stopped {
-            why: Why::Fenced | Why::OtherSite,
+            why: Why::Fenced,
             ..
         } | IloKind::SignedIn { .. }
             | IloKind::Yours { .. }
@@ -327,7 +327,6 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Look) => "Look only",
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
-        IloButton::AnySite => "Any site",
         IloButton::HandBack | IloButton::PagesBack => "Hand Back",
         IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",

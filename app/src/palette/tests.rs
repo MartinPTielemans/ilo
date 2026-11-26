@@ -2,7 +2,7 @@ use super::*;
 use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
 use crate::tokens::palette::{LIGHT_TINT, TINT};
-use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST, LESS};
+use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -162,20 +162,19 @@ fn failures_over(
         against(&plated(SECTION_PLATE)),
         GLYPH,
     );
-    // The selected section's glyph, on the Library's column under Arc's selected plate (#371).
-    use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
-    let selected: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(over(at, ink, COLUMN), ink, LIBRARY_PLATE))
-        .collect();
-    let glyph = palette.section_glyph;
+    // The shown section's glyph, name and count, on the window under the selected plate, as the
+    // Library's column has no fill of its own.
+    let plate = Rgba::from(palette.selected(0.));
+    let shown_section: Vec<Rgba> = window.iter().map(|&at| over(at, plate, plate.a)).collect();
     check(
-        "selected Library section glyph",
-        selected
-            .iter()
-            .map(|&at| contrast(glyph, at))
-            .fold(f32::MAX, f32::min),
-        GLYPH,
+        "shown Library section",
+        on(palette.text(TEXT_PRIMARY), &shown_section),
+        TEXT,
+    );
+    check(
+        "shown Library section count",
+        on(palette.text(palette.secondary()), &shown_section),
+        gray,
     );
     let targets: Vec<Rgba> = plated(TARGET_PLATE)
         .iter()
@@ -346,29 +345,27 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
             .collect()
     };
     let white = |alpha: f32| Hsla::from(WHITE).opacity(alpha);
-    let column: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(at, ink, shell::library::COLUMN))
-        .collect();
     let (overlay, dialog) = (vec![palette.overlay], vec![palette.dialog]);
-    let sections = [
-        shell::library::SECTION_HOVERED,
-        shell::library::LIBRARY_PLATE,
-    ];
     let mut states = vec![
         // On the window.
-        // A section's plates are Arc's selected one and ours under it.
+        // A section's row, at rest, under the pointer and pressed; the shown one's apart.
         (
             "Library section label",
-            palette.gray(shell::library::SECTION_LABEL),
+            palette.text(TEXT_PRIMARY),
+            TEXT,
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
+        ),
+        (
+            "Library section count",
+            palette.text(palette.secondary()),
             gray,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library section glyph",
             palette.glyph(shell::library::SECTION_GLYPH_UNSELECTED),
             GLYPH,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library row title",
@@ -1949,30 +1946,10 @@ fn gray_margin(palette: &Palette) -> f32 {
     worst - gray_text_at(palette.glass)
 }
 
-/// The sweep's one excused miss, by the lead's word (2026-11-25): the Library's section label on a
-/// dark window in a colour, where Less sits, reads just under gray's 4.5 there, in today's build
-/// too, which no coarser test saw. No colour moves at Less for it; P6 redraws the Library and
-/// takes this out. It fails the day the label reads 4.5 or more, or less than this.
-const LABEL_AT_LESS: f32 = 4.49;
-const LIBRARY_LABEL: &str = "Library section label, every state";
-
-/// The least the Library's section label reads on `palette`'s `window` in each state it takes.
-fn library_label_reads(palette: &Palette, window: &[Rgba], gray: f32) -> f32 {
-    let (_, label, _, grounds) = states(palette, window, gray)
-        .into_iter()
-        .find(|(name, ..)| format!("{name}, every state") == LIBRARY_LABEL)
-        .expect("the Library's section label is one of the states");
-    let label = Rgba::from(label);
-    (grounds.iter())
-        .map(|&at| contrast(over(at, label, label.a), at))
-        .fold(f32::MAX, f32::min)
-}
-
 /// A Space's glass anywhere on its bar keeps every floor of the window and what lies on it, gray
 /// text at the one where its glass sits, over a black and a white backdrop: a sweep from solid to
 /// clear in hundredths, in Dark and Light, with no colour and with one. The title on a plate under
-/// the pointer may read less past the bar's last stretch, as at today's More, and the Library's
-/// section label is excused at one point (`LABEL_AT_LESS`).
+/// the pointer may read less past the bar's last stretch, as at today's More.
 #[test]
 fn a_spaces_glass_holds_every_floor_across_its_bar() {
     let colored = Theme::at(0.3, -0.5);
@@ -1983,19 +1960,7 @@ fn a_spaces_glass_holds_every_floor_across_its_bar() {
                 let palette = Palette::at(theme, tone, glass);
                 let window = fine_window(&palette);
                 let gray = gray_text_at(glass);
-                let mut failures = failures_over(theme, &palette, &window, gray);
-                if tone == Tone::Dark && theme.is_some() && glass == LESS {
-                    let reads = library_label_reads(&palette, &window, gray);
-                    assert!(
-                        (LABEL_AT_LESS..gray).contains(&reads),
-                        "the Library's section label, Dark, coloured, where Less sits, reads \
-                         {reads:.4}: the miss it was excused for ({LABEL_AT_LESS} to under \
-                         {gray}) has gone or grown; take the exception out or stop"
-                    );
-                    let before = failures.len();
-                    failures.retain(|each| !each.starts_with(LIBRARY_LABEL));
-                    assert_eq!(before - failures.len(), 1, "{failures:#?}");
-                }
+                let failures = failures_over(theme, &palette, &window, gray);
                 let colour = if theme.is_some() { "coloured" } else { "none" };
                 failed.extend(
                     failures
@@ -2149,6 +2114,198 @@ fn the_ink_on_a_pages_colour_is_the_colours_alone_not_the_windows() {
     // Paper on a dark page and Ink on a light one, as the window's own text is.
     assert_eq!(dark.on_fill(rgb(0x101014)).ink, rgb(PAPER));
     assert_eq!(dark.on_fill(rgb(0xffffff)).ink, rgb(INK));
+}
+
+/// Every word that floats over the window, gray or not, as its float draws it: the menu's label and
+/// its shortcut, chevron, detail and heading; Site Controls' text, link and secondary; the tab
+/// switcher's title and host; the hover card's title and host and its rows' hint; the link
+/// preview's secondary; the dialog's lines. Each as (dark alpha, light alpha), raised to the floor.
+fn float_words() -> Vec<(&'static str, f32, f32)> {
+    use crate::tokens::{
+        command_bar, dialog, folder_preview, hover_card, menu, shell, site_controls,
+    };
+    let alpha = |colour: u32| (colour & 0xff) as f32 / 255.;
+    vec![
+        ("the menu's label", 1., 1.),
+        (
+            "the menu's secondary",
+            alpha(menu::DARK_SECONDARY),
+            alpha(menu::LIGHT_SECONDARY),
+        ),
+        (
+            "Site Controls' text",
+            site_controls::TEXT,
+            site_controls::TEXT,
+        ),
+        (
+            "Site Controls' link",
+            site_controls::LINK,
+            site_controls::LINK,
+        ),
+        (
+            "Site Controls' secondary",
+            site_controls::SECONDARY,
+            site_controls::SECONDARY,
+        ),
+        (
+            "the tab switcher's title",
+            command_bar::TITLE,
+            command_bar::TITLE,
+        ),
+        (
+            "the tab switcher's host",
+            command_bar::DIM,
+            command_bar::DIM,
+        ),
+        (
+            "the hover card's title",
+            hover_card::TITLE,
+            hover_card::TITLE,
+        ),
+        ("the hover card's host", hover_card::HOST, hover_card::HOST),
+        (
+            "the hover card's hint",
+            folder_preview::HINT,
+            folder_preview::HINT,
+        ),
+        (
+            "the link preview's secondary",
+            shell::SECONDARY,
+            shell::SECONDARY,
+        ),
+        (
+            "the dialog's subline",
+            dialog::SUBLINE_TEXT,
+            dialog::SUBLINE_TEXT,
+        ),
+        ("the dialog's detail", dialog::DETAIL, dialog::DETAIL),
+        ("the dialog's Esc", dialog::ESC_TEXT, dialog::ESC_TEXT),
+        (
+            "the dialog's Cancel",
+            dialog::CANCEL_TEXT,
+            dialog::CANCEL_TEXT,
+        ),
+        ("the dialog's field", dialog::FIELD_TEXT, dialog::FIELD_TEXT),
+        (
+            "the dialog's placeholder",
+            dialog::FIELD_PLACEHOLDER,
+            dialog::FIELD_PLACEHOLDER,
+        ),
+    ]
+}
+
+const FLOAT_LEVELS: [Option<Transparency>; 4] = [
+    None,
+    Some(Transparency::Less),
+    Some(Transparency::Standard),
+    Some(Transparency::More),
+];
+
+/// Every word on what floats holds 4.5:1 at all three levels and opaque, at rest and on a row's
+/// plate under the pointer with its shade, over the material's worst for its ink (#4090); and a
+/// glyph 3:1 at its floor. The menu's words take the floor at rest alone, as its row under the
+/// pointer draws them whole.
+#[test]
+fn every_word_that_floats_reads_at_rest_and_under_the_pointer_at_every_level() {
+    for level in FLOAT_LEVELS {
+        for tone in [Tone::Dark, Tone::Light] {
+            let ink = tone.ink();
+            let float = float_ink(tone, level);
+            for (fill, (ground, colour)) in float_grounds(tone, level).into_iter().enumerate() {
+                let hovered = over(over(ground, ink, FLOAT_HOVERED), colour, float.shades[fill]);
+                for (at, where_) in [(ground, "at rest"), (hovered, "under the pointer")] {
+                    for (word, dark, light) in float_words() {
+                        let alpha = match tone {
+                            Tone::Dark => dark,
+                            Tone::Light => light,
+                        };
+                        let alpha = match (word.starts_with("the menu's"), at == ground) {
+                            (true, true) => float.word(ink, ground, fill, alpha),
+                            (true, false) => 1.,
+                            (false, _) => alpha.max(float.text),
+                        };
+                        let read = contrast(over(at, ink, alpha), at);
+                        assert!(
+                            read >= TEXT,
+                            "{word} read {read:.2} {where_} on fill {fill} in {tone:?} at {level:?}"
+                        );
+                    }
+                    let glyph = contrast(over(at, ink, float.glyph), at);
+                    assert!(
+                        glyph >= GLYPH,
+                        "a glyph read {glyph:.2} {where_} at {level:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The material's worst under a float is what the check VM's menu showed (#4090): its panel over
+/// a white page in dark and a deep blue one in light, within one step of 8 bits a channel.
+#[test]
+fn the_worst_ground_under_a_float_is_the_panel_the_check_vm_measured() {
+    for (tone, level, panel) in [
+        (Tone::Dark, Transparency::Standard, 0x262520),
+        (Tone::Dark, Transparency::More, 0x252421),
+        (Tone::Light, Transparency::Standard, 0xdddcd8),
+        (Tone::Light, Transparency::More, 0xbbbaba),
+    ] {
+        let (ground, measured) = (float_grounds(tone, Some(level))[0].0, rgb(panel));
+        for (ours, theirs) in [
+            (ground.r, measured.r),
+            (ground.g, measured.g),
+            (ground.b, measured.b),
+        ] {
+            assert!(
+                (ours - theirs).abs() <= 1.5 / 255.,
+                "{tone:?} at {level:?}: {ground:?} against {measured:?}"
+            );
+        }
+    }
+}
+
+/// The pickers' card is what floats' fill over the material (#4090), dark in both looks: its hint
+/// and its segments' labels read on it at every level, over the material's worst.
+#[test]
+fn the_pickers_hint_and_labels_read_on_their_card_at_every_level() {
+    for level in FLOAT_LEVELS {
+        for tone in [Tone::Dark, Tone::Light] {
+            let fill = Float::Picker.fill_at(tone, level);
+            let card = over(float_worst(Tone::Dark, level), fill, fill.a);
+            let segments = over(card, WHITE, rgba(CARD_SEGMENTS).a);
+            let hint = contrast(over(card, WHITE, rgba(CARD_HINT).a), card);
+            let label = contrast(rgb(CARD_LABEL), segments);
+            assert!(
+                hint >= TEXT && label >= TEXT,
+                "{tone:?} at {level:?}: hint {hint:.2}, label {label:.2}"
+            );
+        }
+    }
+}
+
+/// Off the material a row's plate under the pointer takes no shade, as its words read there at
+/// the floor, so a float without one draws as it did.
+#[test]
+fn off_the_material_the_plate_under_the_pointer_takes_no_shade() {
+    for tone in [Tone::Dark, Tone::Light] {
+        assert_eq!(float_ink(tone, None).shades, [0.; 2], "{tone:?}");
+    }
+}
+
+/// A word on what floats is never fainter over the material than it is on the opaque fill.
+#[test]
+fn a_float_over_the_material_is_never_grayer_than_it_is_opaque() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let opaque = float_ink(tone, None);
+        for level in FLOAT_LEVELS {
+            let float = float_ink(tone, level);
+            assert!(float.text >= opaque.text && float.glyph >= opaque.glyph);
+            for fill in 0..2 {
+                assert!(float.rest[fill] <= float.text, "{tone:?} at {level:?}");
+            }
+        }
+    }
 }
 
 /// The foot's buttons' plates tell from the window around them at TELLS at every level, in either

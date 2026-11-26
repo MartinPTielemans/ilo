@@ -42,6 +42,16 @@ impl Cli {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
     }
 
+    /// The effort levels its own program takes when ilo starts it, under the names its help gives
+    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
+    /// lists these; Codex's help names no effort option.
+    pub fn efforts(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Cli::Codex => &[],
+        }
+    }
+
     /// What the user calls it, in text only: agents have no maker's logo or colour.
     pub fn name(self) -> &'static str {
         match self {
@@ -105,6 +115,9 @@ pub struct Launch {
     pub server: Server,
     /// The model, or None for the CLI's default.
     pub model: Option<String>,
+    /// The effort level the user picked for the thread, one of `cli.efforts()`, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// What it's told about working in the browser, after its own system prompt.
     pub instructions: String,
     /// The tools it may call, as the server lists them.
@@ -182,6 +195,8 @@ pub enum Failure {
     /// says.
     Limit(Option<u64>),
     SignedOut,
+    /// The assistant's program isn't on this computer, so no run started.
+    NotInstalled,
     /// The CLI said why, in its words.
     Other(String),
 }
@@ -503,6 +518,14 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    // Inside a wall the listener is the only proxy anything reads: nothing exempt from it, and
+    // no lower-case name of the browser's own naming another, which curl reads first. Cleared
+    // before the start's own are set, since on Windows a name in any case is the same variable.
+    if launch.wall.is_some() {
+        for name in PROXY_CLEARED {
+            command.env_remove(name);
+        }
+    }
     command.envs(sets(launch));
 }
 
@@ -531,6 +554,12 @@ pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
             sets.push((CLAUDE_TMP, tmp.into()));
         }
     }
+    // Inside a wall either assistant reaches its own service through the wall's listener, the
+    // one port its network may reach (#4101).
+    if let Some(port) = (launch.wall.as_ref()).and_then(|wall| wall.port()) {
+        let proxy = format!("http://127.0.0.1:{port}");
+        sets.extend(PROXY.map(|name| (name, proxy.as_str().into())));
+    }
     sets
 }
 
@@ -545,6 +574,16 @@ pub(crate) const CLAUDE_WALLED: [&str; 5] = [
 ];
 /// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
 const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+/// What a walled start names its listener with, for either assistant.
+const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+/// What a walled start clears of the browser's own environment.
+const PROXY_CLEARED: [&str; 5] = [
+    "NO_PROXY",
+    "no_proxy",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+];
 
 /// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
 /// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
@@ -554,9 +593,15 @@ pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
         Cli::Claude => {
             let helpers = super::helpers::ENV.map(|(name, _)| name);
-            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+            [
+                &[PATH, CLAUDE_TMP][..],
+                &CLAUDE_WALLED[..],
+                &helpers[..],
+                &PROXY[..],
+            ]
+            .concat()
         }
-        Cli::Codex => vec![PATH, super::bridge::TOKEN],
+        Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }
 
@@ -643,6 +688,9 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     args.push(allowed.join(","));
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
+    }
+    if let Some(effort) = (launch.effort.as_deref()).filter(|e| Cli::Claude.efforts().contains(e)) {
+        args.extend(["--effort".into(), effort.to_string()]);
     }
     args.extend([
         "--append-system-prompt-file".into(),

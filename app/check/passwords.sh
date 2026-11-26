@@ -102,12 +102,16 @@ offer_field() {
 offer_never() {
   echo "$((ox + 24)) $((oy + 150))"
 }
-# The card is 18 from the top right corner of the window's content, 8 in from the page card's.
+# The card is 8 in from the page's top right corner. The layout's y counts from the content's
+# bottom.
 check_offer() {
-  content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
-    sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
-  [ "$child" = "$((content - 338)),18 320x180" ] ||
-    fail "$1: the offer is at $child in a window $content wide"
+  read -r content height page_x page_y page_w page_h << EOF
+$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' | sed -n \
+    's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*, WebContentsViewCocoa \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
+EOF
+  [ -n "$page_h" ] || fail "$1: the layout named no page"
+  [ "$child" = "$((page_x + page_w - 8 - 320)),$((height - page_y - page_h + 8)) 320x180" ] ||
+    fail "$1: the offer is at $child in a window $content wide, its page at $page_x,$page_y ${page_w}x$page_h"
 }
 
 log_in hunter2.check

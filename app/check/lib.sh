@@ -28,12 +28,83 @@ cased() {
   }'
 }
 
-# A Space's theme in its menu: the theme picker, and once it has a colour, the way back to none.
+# A Space's theme in its menu: the theme panel, and once it has a colour, the way back to none.
 colors=$(cased "Edit Theme Color…")
 themed=$(cased "$colors, Remove Theme Color")
-# Where the theme picker's swatches are, from its top left: 13 for its arrow, then a 29.5 pitch.
-swatch_y=380
-swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
+# Where the theme panel's parts are, in points from the top left of its window, which is the
+# panel's own, worked out from design/tokens.toml's [theme-panel] as app/src/theme_picker/layout.rs
+# lays them out. panel_at palette <n>: palette disc n, 0 for no colour; look <automatic|light|dark>:
+# that segment; field <x> <y>: where the pad shows the field's point (x, y); plus <count>: the Points
+# chip's + after count colours; value: the value field; bar <intensity|transparency|grain> <0-1>:
+# that bar's thumb at that value; note <along>: the note's words, along from their left, where a
+# press finds nothing; beside: how far right of the sidebar it hangs; size: its width and height.
+panel_at() {
+  awk -v part="$1" -v a="${2:-0}" -v b="${3:-0}" '
+    /^\[/ { inside = ($0 == "[theme-panel]"); next }
+    inside && $2 == "=" {
+      t[$1] = $3
+      if ($1 == "palette-colors") t[$1] = gsub(/,/, ",") + 1
+    }
+    END {
+      p = t["padding"]; w = t["width"]; inner = w - 2 * p
+      palettes = p + t["head"] + t["gap"] + t["label"] + t["palettes-gap"]
+      pad = palettes + t["slot"] + t["gap"]
+      chip = pad + t["pad-height"] - t["chip-inset"] - t["chip-height"] / 2
+      bars = pad + t["pad-height"] + t["gap"]
+      step = t["label"] + t["bar-label-gap"] + t["thumb"] + t["bar-gap"]
+      note = bars + 2 * step + t["label"] + t["bar-label-gap"] + t["thumb"] + t["gap"]
+      if (part == "palette") {
+        print p + t["slot"] / 2 + a * (inner - t["slot"]) / t["palette-colors"], palettes + t["slot"] / 2
+      } else if (part == "look") {
+        i = a == "light" ? 1 : a == "dark" ? 2 : 0
+        print w - p - 3 * t["segment-width"] - t["segment-inset"] + (i + 0.5) * t["segment-width"], p + t["head"] / 2
+      } else if (part == "field") {
+        hue = atan2(b, a) / (2 * atan2(0, -1))
+        if (hue < 0) hue += 1
+        across = hue - t["hue-start"]
+        if (across < 0) across += 1
+        down = (sqrt(a * a + b * b) - t["light-top"]) / (t["light-bottom"] - t["light-top"])
+        if (down < 0) down = 0
+        if (down > 1) down = 1
+        print p + t["dot-left"] + across * t["dot-pitch"] * (t["dots-across"] - 1), pad + t["dot-top"] + down * t["dot-pitch"] * (t["dots-down"] - 1)
+      } else if (part == "plus") {
+        print p + t["chip-inset"] + t["chip-left"] + a * (t["chip-dot"] + t["chip-gap"]) + t["plus"] / 2, chip
+      } else if (part == "value") {
+        print p + t["pad-width"] - t["chip-inset"] - t["field-width"] / 2, chip
+      } else if (part == "bar") {
+        i = a == "transparency" ? 1 : a == "grain" ? 2 : 0
+        print p + t["label-inset"] + t["thumb"] / 2 + b * (inner - 2 * t["label-inset"] - t["thumb"]), bars + i * step + t["label"] + t["bar-label-gap"] + t["thumb"] / 2
+      } else if (part == "note") {
+        print p + t["label-inset"] + a, note + t["label"] / 2
+      } else if (part == "beside") {
+        print t["beside"] + 0
+      } else if (part == "size") {
+        print w + 0, note + t["label"] + p
+      }
+    }' design/tokens.toml
+}
+# Palette $1's first colour, as six hex digits, from the same tokens.
+panel_color() {
+  awk -v n="$1" '
+    /^\[/ { inside = ($0 == "[theme-panel]"); next }
+    inside && $1 == "palette-colors" { line = $0; sub(/^[^[]*\[/, "", line); gsub(/[] ]/, "", line); split(line, counts, ",") }
+    inside && $1 == "palettes" { line = $0; sub(/^[^[]*\[/, "", line); gsub(/[] ]/, "", line); split(line, colors, ",") }
+    END { first = 1; for (i = 1; i < n; i++) first += counts[i]; c = colors[first]; sub(/^0x/, "", c); print c }' design/tokens.toml
+}
+# Channel $2 of colour $1, six hex digits, as a number: 1 is red, 2 green, 3 blue. Cut out, as the
+# checks run under sh, which has no ${name:offset:length}.
+channel() {
+  echo $((0x$(printf %s "$1" | cut -c"$(($2 * 2 - 1))-$(($2 * 2))")))
+}
+# Whether colours $1 and $2, six hex digits each, are two steps of a channel apart at most, as a
+# palette's colour comes back from the field it's placed in (layout.rs's same_colors).
+near_color() {
+  local i d
+  for i in 1 2 3; do
+    d=$(($(channel "$1" $i) - $(channel "$2" $i)))
+    [ "$d" -le 2 ] && [ "$d" -ge -2 ] || return 1
+  done
+}
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
 profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
 # A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
@@ -790,9 +861,10 @@ in_sight() {
 # one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
 # driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
 # a mark it awaits from, keeps.
+# With $3, the place is one drawn after the last line matching it, as in_sight's $2.
 click_in_sight() {
   local at sight top bottom y by rest
-  in_sight "$1" || fail "Settings didn't draw $1"
+  in_sight "$1" "${3:-}" || fail "Settings didn't draw $1"
   send "${2:-clickkey}" $at
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
@@ -804,6 +876,12 @@ new_window_bar() {
   [ -z "${1:-}" ] || ../tools/window-screenshot.sh "$pid" "$1" all || fail "no window to capture"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
+}
+# ⌘$1 in a window whose Space shows no page gives the bar it rests on the keyboard, where ⌘T's bar
+# opened over the card before (#4140). $2 names the window in the fail line.
+resting_key() {
+  send key "$1" cmd
+  expect '^browser: resting field has the keyboard$' "⌘$1 didn't give the $2's resting bar the keyboard"
 }
 # What the app logged since the last command was sent, or since command $1.
 since() {

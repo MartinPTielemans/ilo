@@ -140,6 +140,9 @@ pub(super) enum Prop {
     SpaceName(u64),
     SpaceIcon(u64),
     SpaceColor(u64),
+    /// Where a Space's glass sits on its Transparency bar, as `space_transparency` writes it, or
+    /// empty for none.
+    SpaceTransparency(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -446,7 +449,10 @@ impl Edit {
                 | Prop::FolderIcon(each)
                 | Prop::SplitName(each)
                 | Prop::SplitIcon(each) => id(each),
-                Prop::SpaceName(_) | Prop::SpaceIcon(_) | Prop::SpaceColor(_) => {}
+                Prop::SpaceName(_)
+                | Prop::SpaceIcon(_)
+                | Prop::SpaceColor(_)
+                | Prop::SpaceTransparency(_) => {}
             },
             Edit::UndoClear { .. }
             | Edit::Clear(_)
@@ -1508,6 +1514,7 @@ impl Shell {
                 Value::Color { color: None, .. } => What::REMOVE_THEME,
                 _ => What::CHANGE_THEME,
             },
+            Prop::SpaceTransparency(_) => What::CHANGE_THEME,
         };
         self.keep(what, before.map(|before| Edit::Set(prop, before)), cx);
     }
@@ -1785,6 +1792,9 @@ impl Shell {
                     theme,
                 }
             }
+            Prop::SpaceTransparency(id) => Value::Text(
+                (space(id)?.transparency).map_or_else(String::new, |value| format!("{value:.3}")),
+            ),
         })
     }
 
@@ -1821,6 +1831,20 @@ impl Shell {
                 let text = crate::space_transparency::with(theme, kept);
                 browser.set_space_theme(space, &text, cx);
                 browser.set_space_color(space, *color, cx);
+                cx.notify();
+            }
+            (Prop::SpaceTransparency(space), Value::Text(value)) => {
+                let value = value.parse::<f32>().ok();
+                // The glass being made gives way to the one ⌘Z gives back.
+                if self
+                    .glass_preview
+                    .is_some_and(|(previewed, made)| previewed == space && Some(made) != value)
+                {
+                    self.glass_preview = None;
+                }
+                if let Some(kept) = self.spaces.iter().find(|each| each.id == space) {
+                    browser.set_space_theme(space, &kept.theme_text(value), cx);
+                }
                 cx.notify();
             }
             _ => {}

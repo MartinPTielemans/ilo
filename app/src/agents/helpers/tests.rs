@@ -26,6 +26,7 @@ fn launch(helpers: bool) -> Launch {
             token: "secret".into(),
         },
         model: Some("haiku".into()),
+        effort: None,
         instructions: String::new(),
         tools: ["open_tab", "read_page", "title", "ask", "finish"]
             .map(String::from)

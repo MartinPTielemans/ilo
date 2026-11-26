@@ -39,6 +39,9 @@ use crate::tokens::palette::{
     NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
+use crate::tokens::palette::{
+    FLOAT_MATERIAL, FLOAT_MATERIAL_MORE, LIGHT_FLOAT_MATERIAL, LIGHT_FLOAT_MATERIAL_MORE,
+};
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{
@@ -81,6 +84,8 @@ const CLEAR: Rgba = Rgba {
 };
 /// The steps a plate's shade rises by from none, and a theme's alpha falls by.
 const SHADE_STEP: f32 = 0.05;
+/// A row's plate on a float under the pointer: the most a control's states reach.
+const FLOAT_HOVERED: f32 = state_alpha(OVERLAY_REST, STATE_HOVERED);
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
 pub const TEXT: f32 = 4.5;
 pub const GLYPH: f32 = 3.;
@@ -268,6 +273,140 @@ impl Tone {
     }
 }
 
+/// How `tone`'s ink reads on what floats at a transparency level (#4090).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatInk {
+    /// The least alpha at which it reads as text at rest on the overlay's fill, and on the
+    /// dialog's, for a float whose row under the pointer draws its words whole, as the menu's.
+    pub rest: [f32; 2],
+    /// The least alpha at which it reads as text, and as a glyph, at rest and on a plate under the
+    /// pointer as it is opaque.
+    pub text: f32,
+    pub glyph: f32,
+    /// The least shade of the overlay's colour, and of the dialog's, over a row's plate under the
+    /// pointer at which its words read there at those alphas.
+    pub shades: [f32; 2],
+}
+
+/// The material under a float at its worst for `tone`'s ink at `level`, as the check VM measured
+/// it (`float-material`).
+fn float_worst(tone: Tone, level: Option<Transparency>) -> Rgba {
+    rgb(match (tone, level) {
+        (Tone::Dark, Some(Transparency::More)) => FLOAT_MATERIAL_MORE,
+        (Tone::Dark, _) => FLOAT_MATERIAL,
+        (Tone::Light, Some(Transparency::More)) => LIGHT_FLOAT_MATERIAL_MORE,
+        (Tone::Light, _) => LIGHT_FLOAT_MATERIAL,
+    })
+}
+
+/// What text on a float lies on at its worst, as `(ground, colour)` for the overlay's fill and the
+/// dialog's: the colour at `level`'s alpha over the material's worst for the ink, or opaque with
+/// `None`, where the host has no material under it.
+fn float_grounds(tone: Tone, level: Option<Transparency>) -> [(Rgba, Rgba); 2] {
+    let worst = float_worst(tone, level);
+    [Float::Menu, Float::Dialog].map(|float| {
+        let fill = float.fill_at(tone, level);
+        let colour = Rgba { a: 1., ..fill };
+        (over(worst, colour, fill.a), colour)
+    })
+}
+
+/// How `tone`'s ink reads on a float at `level`, or opaque with `None`: every word holds TEXT at
+/// rest and under the pointer. Its floors are never under what they are opaque with a plate under
+/// the pointer, so a float off the material reads as it did. Where a row's plate under the pointer
+/// takes its words under, the plate takes the least shade of the float's own colour that brings
+/// them back, as the window's plates take the tint's (`solve_ground`).
+pub fn float_ink(tone: Tone, level: Option<Transparency>) -> FloatInk {
+    let ink = tone.ink();
+    let grounds = float_grounds(tone, level);
+    let opaque: Vec<Rgba> = float_grounds(tone, None)
+        .iter()
+        .flat_map(|&(ground, _)| [ground, over(ground, ink, FLOAT_HOVERED)])
+        .collect();
+    let at_rest = grounds.map(|(ground, _)| ground);
+    let floor = |minimum: f32| {
+        least_alpha(ink, &at_rest, minimum + BETWEEN).max(least_alpha(
+            ink,
+            &opaque,
+            minimum + BETWEEN,
+        ))
+    };
+    let (text, glyph) = (floor(TEXT), floor(GLYPH));
+    let reads = |at: Rgba| {
+        contrast(over(at, ink, text), at) >= TEXT + BETWEEN
+            && contrast(over(at, ink, glyph), at) >= GLYPH + BETWEEN
+    };
+    let steps = (1. / SHADE_STEP).round() as i32;
+    let shades = grounds.map(|(ground, colour)| {
+        let plate = over(ground, ink, FLOAT_HOVERED);
+        (0..=steps)
+            .map(|step| step as f32 * SHADE_STEP)
+            .find(|&shade| reads(over(plate, colour, shade)))
+            .unwrap_or(1.)
+    });
+    FloatInk {
+        rest: at_rest.map(|ground| least_alpha(ink, &[ground], TEXT + BETWEEN)),
+        text,
+        glyph,
+        shades,
+    }
+}
+
+impl FloatInk {
+    /// The alpha a word drawn at `alpha` takes at rest on a float's `fill`, lying on `ground`: its
+    /// own where it reads there, or the floor.
+    pub fn word(self, ink: Rgba, ground: Rgba, fill: usize, alpha: f32) -> f32 {
+        let reads = contrast(over(ground, ink, alpha), ground) >= TEXT + BETWEEN;
+        match alpha >= self.rest[fill] || reads {
+            true => alpha,
+            false => self.rest[fill],
+        }
+    }
+}
+
+thread_local! {
+    /// `float_ink` as last worked out for each tone, with the level it was for.
+    static FLOAT_INK: std::cell::Cell<[Option<(Option<Transparency>, FloatInk)>; 2]> =
+        const { std::cell::Cell::new([None; 2]) };
+}
+
+/// The level what floats is worked out for: the user's, where the host has a material.
+fn float_level() -> Option<Transparency> {
+    window_material().then(transparency)
+}
+
+/// `float_ink` at the level now, where the host has a material.
+fn float_ink_now(tone: Tone) -> FloatInk {
+    let level = float_level();
+    let index = (tone == Tone::Light) as usize;
+    let mut known = FLOAT_INK.get();
+    match known[index] {
+        Some((at, ink)) if at == level => ink,
+        _ => {
+            let ink = float_ink(tone, level);
+            known[index] = Some((level, ink));
+            FLOAT_INK.set(known);
+            ink
+        }
+    }
+}
+
+/// `plate` with `shade` of `colour` over it, as one colour at one alpha, so it's drawn as one fill.
+/// A plate not drawn takes no shade.
+fn shaded(plate: Rgba, colour: Rgba, shade: f32) -> Rgba {
+    if shade == 0. || plate.a == 0. {
+        return plate;
+    }
+    let a = 1. - (1. - plate.a) * (1. - shade);
+    let mix = |p: f32, c: f32| (p * plate.a * (1. - shade) + c * shade) / a;
+    Rgba {
+        r: mix(plate.r, colour.r),
+        g: mix(plate.g, colour.g),
+        b: mix(plate.b, colour.b),
+        a,
+    }
+}
+
 /// What floats' alphas over the material at `level`: the dark fill's, which the level gives, and
 /// beside it the light fill's and a light dialog's (#4090).
 fn float_alphas(level: Transparency) -> [f32; 3] {
@@ -326,10 +465,13 @@ pub enum Float {
     TabSwitcher,
     Dialog,
     FindBar,
+    /// The theme picker's, the icon picker's and the boost editor's card.
+    Picker,
+    FolderPreview,
 }
 
 impl Float {
-    pub const ALL: [Float; 10] = [
+    pub const ALL: [Float; 12] = [
         Float::Menu,
         Float::SiteControls,
         Float::Toast,
@@ -340,6 +482,8 @@ impl Float {
         Float::TabSwitcher,
         Float::Dialog,
         Float::FindBar,
+        Float::Picker,
+        Float::FolderPreview,
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
@@ -351,9 +495,19 @@ impl Float {
                 Float::Menu
                     | Float::SiteControls
                     | Float::TabSwitcher
+                    | Float::Picker
+                    | Float::FolderPreview
                     | Float::Toast
                     | Float::ZoomHud
             )
+    }
+
+    /// The alpha a word drawn at `alpha` takes at rest on it in a `tone` window on this host, where
+    /// its row under the pointer draws its words whole (`float_ink`).
+    pub fn word(self, tone: Tone, alpha: f32) -> f32 {
+        let (tone, fill) = (self.tone(tone), (self == Float::Dialog) as usize);
+        let (ground, _) = float_grounds(tone, float_level())[fill];
+        float_ink_now(tone).word(tone.ink(), ground, fill, alpha)
     }
 
     /// Its fill in a `tone` window, as drawn on this host, at the app's level whatever the Spaces'
@@ -377,11 +531,11 @@ impl Float {
         Rgba { a, ..colour }
     }
 
-    /// The look it's drawn in: the find bar and tooltips are dark in both, so their white text
-    /// holds on any page.
+    /// The look it's drawn in: the find bar, tooltips and the pickers are dark in both, so their
+    /// white text holds on any page.
     fn tone(self, tone: Tone) -> Tone {
         match self {
-            Float::FindBar | Float::Tooltip => Tone::Dark,
+            Float::FindBar | Float::Tooltip | Float::Picker => Tone::Dark,
             _ => tone,
         }
     }
@@ -448,9 +602,10 @@ pub struct Palette {
     /// A dialog's fill.
     pub dialog: Rgba,
     /// The least alpha at which `ink` reads as text, and as a glyph, on the overlay and the
-    /// dialog.
+    /// dialog, and their shades over a row's plate under the pointer (`float_ink`).
     pub overlay_floor: f32,
     pub overlay_glyph_floor: f32,
+    pub float_shades: [f32; 2],
     /// The card the pages lie in, over the window.
     pub page: Rgba,
     /// The icon and theme pickers' card, over what's behind it: Arc's grey where the card's text
@@ -609,20 +764,19 @@ impl Palette {
             dialog,
             overlay_floor: 0.,
             overlay_glyph_floor: 0.,
+            float_shades: [0.; 2],
             page: tone.page(),
             card: rgba(CARD),
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
             pointed_shade: 0.,
         };
-        // Text and glyphs on an overlay read on it and on a control's plate under the pointer.
-        let under = state_alpha(OVERLAY_REST, STATE_HOVERED);
-        let overlays: Vec<Rgba> = [palette.overlay, palette.dialog]
-            .into_iter()
-            .flat_map(|fill| [fill, over(fill, ink, under)])
-            .collect();
-        palette.overlay_floor = least_alpha(ink, &overlays, TEXT + BETWEEN);
-        palette.overlay_glyph_floor = least_alpha(ink, &overlays, GLYPH + BETWEEN);
+        // Text and glyphs on what floats read on it, over the material, and on a control's plate
+        // under the pointer.
+        let float = float_ink_now(tone);
+        palette.overlay_floor = float.text;
+        palette.overlay_glyph_floor = float.glyph;
+        palette.float_shades = float.shades;
         palette.card = palette.solve_card(window);
         let mut shades = Ground::ALL.map(|ground| palette.solve_ground(ground, window));
         // A row's plate under the pointer lies beside the selected row's and the tab shown's, and
@@ -825,16 +979,20 @@ impl Palette {
         if shade == 0. || plate.a == 0. {
             return plate;
         }
-        let (p, tint) = (plate.to_rgb(), self.tone.tint_color());
-        let a = 1. - (1. - p.a) * (1. - shade);
-        let mix = |plate: f32, tint: f32| (plate * p.a * (1. - shade) + tint * shade) / a;
-        Rgba {
-            r: mix(p.r, tint.r),
-            g: mix(p.g, tint.g),
-            b: mix(p.b, tint.b),
-            a,
+        shaded(plate.to_rgb(), self.tone.tint_color(), shade).into()
+    }
+
+    /// `plate` under a row's words on `float`, with the float's shade of its own colour over it
+    /// where it lies on the material (`float_ink`).
+    pub fn on_float(&self, float: Float, plate: Hsla) -> Hsla {
+        let shade = match float.over_material() {
+            true => self.float_shades[(float == Float::Dialog) as usize],
+            false => 0.,
+        };
+        if shade == 0. {
+            return plate;
         }
-        .into()
+        shaded(plate.to_rgb(), float.colour(self.tone), shade).into()
     }
 
     /// A plate of the ink at `alpha` drawn on `ground`.
@@ -890,6 +1048,9 @@ impl Palette {
             dialog: near.dialog,
             overlay_floor: self.overlay_floor.max(other.overlay_floor),
             overlay_glyph_floor: self.overlay_glyph_floor.max(other.overlay_glyph_floor),
+            float_shades: std::array::from_fn(|fill| {
+                self.float_shades[fill].max(other.float_shades[fill])
+            }),
             page: mix(self.page, other.page),
             card: near.card,
             swatch: near.swatch,
@@ -1229,11 +1390,14 @@ impl Palette {
         window.samples(self.layer_alpha)
     }
 
-    /// The pickers' card as they draw it: translucent where the host blurs what's behind a
-    /// picker, the Mac's always and Linux's where its compositor can. Elsewhere what's behind
-    /// shows sharp through the card and reads as noise, so there the card is opaque over the dark
-    /// overlay.
+    /// The pickers' card as they draw it: what floats' fill where the host has its material under
+    /// them; translucent where the host blurs what's behind a picker otherwise, as Linux's
+    /// compositor can. Elsewhere what's behind shows sharp through the card and reads as noise, so
+    /// there the card is opaque over the dark overlay.
     pub fn card_drawn(&self) -> Rgba {
+        if Float::Picker.over_material() {
+            return Float::Picker.fill(self.tone);
+        }
         #[cfg(target_os = "linux")]
         let blurred = gpui_linux::overlays_blur();
         #[cfg(not(target_os = "linux"))]

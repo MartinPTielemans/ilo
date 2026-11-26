@@ -39,6 +39,7 @@ use crate::tokens::shell::{DIVIDER, LIGHT_SEGMENT_RULE, SEGMENT_RULE};
 use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
+    settings_rows::drawn_of,
     space_icon::has_icon,
     tokens::shell::{
         BLOCK_GAP, DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, SEGMENT_MARK_GAP,
@@ -856,6 +857,12 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
+                // check.sh reads the line to click the speaker, which the row's button moves.
+                // Only where a line is read: the owner's launch draws no more.
+                .when(crate::checked() || cfg!(test), |speaker| {
+                    let logged = self.speakers_drawn.clone();
+                    (speaker.relative()).child(drawn_of("speaker", tab.to_string(), logged))
+                })
                 .child(self.swaps.glyph(
                     Swapped::Speaker(tab),
                     icon,
@@ -4391,6 +4398,68 @@ mod tests {
         cx.simulate_click(point(px(today.0), px(today.1)), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["close 5"]);
+    }
+
+    /// A row's speaker logs where it's drawn, its tab and its square's middle alone, for check.sh
+    /// to click it: once where it is, once more where the row's button, under the pointer, moves
+    /// it, and not again on a draw that leaves it there. A row without one logs nothing.
+    #[gpui::test]
+    fn a_speaker_logs_its_place_once_and_again_where_the_rows_button_moves_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _host) = window(cx, vec![2], vec![4, 5], 4);
+        // The lines since the last ask, the speakers' alone.
+        let heard = || {
+            let lines = crate::heard::take();
+            crate::heard::listen();
+            (lines.into_iter())
+                .filter(|line| line.starts_with("browser: speaker "))
+                .collect::<Vec<_>>()
+        };
+        let place = |line: &str| {
+            let at = line.strip_prefix("browser: speaker 5 at ");
+            let at = at.unwrap_or_else(|| panic!("not the playing tab's line alone: {line}"));
+            let (x, y) = at.split_once(' ').expect("x and y");
+            let number = |text: &str| text.parse::<f32>().expect("a number and nothing else");
+            (number(x), number(y))
+        };
+        let draw_again = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        crate::heard::listen();
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                audible: true,
+                ..Page::default()
+            };
+            shell.set_page(5, page, cx);
+        });
+        cx.run_until_parked();
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it's first drawn: {lines:?}");
+        let rest = place(&lines[0]);
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it was");
+
+        // The row's button comes under the pointer, and the speaker makes room for it.
+        let button = close_button(&shell, cx, 5);
+        move_to(cx, button);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it moved: {lines:?}");
+        let moved = place(&lines[0]);
+        assert!(moved.0 < rest.0, "before the button: {moved:?}, {rest:?}");
+        assert_eq!(moved.1, rest.1, "on its row's line still");
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it moved to");
+
+        // The pointer on a row with no speaker: its own back where it was, and nothing of that row.
+        let silent = close_button(&shell, cx, 4);
+        move_to(cx, silent);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line back at its place: {lines:?}");
+        assert_eq!(place(&lines[0]), rest);
+        crate::heard::take();
     }
 
     /// VoiceOver reads the button the row under the pointer shows by what it does, and the speaker

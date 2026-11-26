@@ -24,7 +24,7 @@ use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{self, Sites, StartedWith, Stop, Tier};
+use super::tier::{self, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -164,8 +164,6 @@ pub struct Conversation {
     pub writing: bool,
     /// Its access, which the chip under the reply field shows and its menu changes.
     pub tier: Tier,
-    /// Whether it may go only to the sites of the pages the user added.
-    pub only_added: bool,
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
@@ -402,6 +400,9 @@ pub struct Task {
     /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
     /// own default; None for Settings' Model, read at each launch.
     pub(super) model_id: Option<String>,
+    /// The effort level the user picked for it, which each of its runs passes its CLI; None for
+    /// the CLI's own.
+    pub(super) effort: Option<String>,
     /// The addresses of the pages the user added to it, which its first message names.
     pub(super) added: Vec<String>,
     pub state: State,
@@ -436,8 +437,6 @@ pub struct Task {
     /// at, and comes down to an ended one's as it takes that one's page (`starting_tier`,
     /// `left_at`).
     pub tier: Tier,
-    /// The sites it may use.
-    pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
     /// The turns the user stopped, each by how many of their messages came before its answer: a
@@ -630,12 +629,15 @@ pub struct Card {
     /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
     /// card's `Done · {time}`.
     pub ended_time: SharedString,
-    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
-    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
-    /// quit, which keeps no conversation.
+    /// Done, the first paragraph of its last answer as plain text (`finding`): from this run's
+    /// conversation, or after a quit the line its kept card read back. Empty when it isn't done,
+    /// ended with no answer, or came back with no line.
     pub finding: SharedString,
     /// Done, what a screen reader is told of its finding (`told`): empty with none.
     pub told: SharedString,
+    /// After a quit, the picture its kept card read back of its last page, which Latest tasks'
+    /// plate shows: None for a task of this run, whose plate is its conversation's.
+    pub kept_picture: Option<super::kept::cards::Plate>,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -757,14 +759,10 @@ pub enum TaskAction {
     TakeOver(u64),
     /// A Stopped line's step up: only the user's press sets a task's access.
     SetTier(Tier),
-    /// A Sites line's Any site.
-    AnySite,
     /// The level the user picked in the level's menu, which they opened: nothing moved under the
     /// pointer, so no guard holds it, and on a task that has ended it's the level its next reply
     /// starts at.
     PickTier(Tier),
-    /// The level's menu's Any site.
-    PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// The stopped line's Hand Back, on an outside agent's task: its pages are its client's
@@ -789,11 +787,12 @@ pub struct Start {
     pub tier: Tier,
     /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
     pub model: Option<String>,
+    /// The effort level picked for it on the composer's menu, one its CLI takes, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// The addresses of the pages the user added on the `+` menu, which the task opens in tabs of
     /// its own: never a tab of the user's, nor its title or anything of its state.
     pub pages: Vec<String>,
-    /// Only the sites you add: the task may go only to the sites of the pages added.
-    pub only_added: bool,
     /// The files and the folder picked on the `+` menu (#4101), given at the start alone.
     pub files: super::files::Picked,
 }
@@ -906,6 +905,9 @@ pub struct Tasks {
     pub(super) profiles: Vec<String>,
     /// The last picture each kept task's card could keep of its last page (pick_up.rs).
     card_tiles: HashMap<String, pick_up::CardTile>,
+    /// What each kept task a run before left read back of its card, until a reply takes it up or
+    /// it goes (pick_up.rs).
+    came_back: HashMap<String, super::kept::cards::Back>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1110,18 +1112,17 @@ impl Agents {
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
             // A Stopped line's step up and the level's menu: the user's own press, the one way a
-            // tier or a task's Sites change. A line's button isn't pressed for what was there
-            // before a refusal's line appeared, nor once its task has ended.
-            TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
+            // tier changes. A line's button isn't pressed for what was there before a refusal's
+            // line appeared, nor once its task has ended.
+            TaskAction::SetTier(_) if self.just_stopped(agent) => {}
             // Nor for what was there before the helpers' limit's line appeared.
-            TaskAction::SetTier(_) | TaskAction::AnySite
+            TaskAction::SetTier(_)
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(_) | TaskAction::AnySite
+            TaskAction::SetTier(_)
                 if (self.task(agent)).is_some_and(|task| task.ended.is_some()) => {}
             TaskAction::SetTier(tier) | TaskAction::PickTier(tier) => {
                 self.set_tier(agent, tier, cx)
             }
-            TaskAction::AnySite | TaskAction::PickAnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.helpers.settle(Some(tab));
@@ -1249,7 +1250,6 @@ impl Agents {
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
             // The chip under the reply field says the task's own level, the one its refusals read.
             tier: task.tier,
-            only_added: matches!(task.sites, Sites::Only(_)),
             folder: (task.ended.is_none() && task.files.folder.is_some())
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
@@ -1390,6 +1390,10 @@ impl Agents {
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
+        // A task a run before left, its card as it was: the line and picture read back of it.
+        let back = self.tasks.came_back.get(&task.agent);
+        let back_line: Option<SharedString> =
+            back.and_then(|back| back.line.clone()).map(Into::into);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1414,7 +1418,7 @@ impl Agents {
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
-                State::Done { result, .. } => first_line(result),
+                State::Done { result, .. } => first_line(result).or_else(|| back_line.clone()),
                 State::Stopped => last_finished(task),
                 _ => None,
             },
@@ -1427,13 +1431,17 @@ impl Agents {
                 .map(|at| super::local_time(seconds(at)).into())
                 .unwrap_or_default(),
             finding: match task.state {
-                State::Done { .. } => finding(&task.messages),
+                State::Done { .. } => {
+                    (back_line.clone()).unwrap_or_else(|| finding(&task.messages))
+                }
                 _ => SharedString::default(),
             },
-            told: match task.state {
-                State::Done { .. } => told(&task.messages),
+            told: match (&task.state, &back_line) {
+                (State::Done { .. }, Some(line)) => told_line(line).unwrap_or_default(),
+                (State::Done { .. }, None) => told(&task.messages),
                 _ => SharedString::default(),
             },
+            kept_picture: back.and_then(|back| back.plate.clone()),
             pages,
             tier: task.tier,
             question,
@@ -1532,6 +1540,11 @@ impl Agents {
     /// Models has it while the inside switch is off.
     pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.look_for(vec![cli], true, cx);
+    }
+
+    /// Whether a look for the assistants is under way, for the ring on a row the user clicked.
+    pub fn looking(&self) -> bool {
+        self.tasks.looking
     }
 
     /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
@@ -1729,10 +1742,12 @@ impl Agents {
         let Start {
             tier,
             model: picked,
+            effort,
             pages,
-            only_added,
             files: given,
         } = start.into();
+        // Only a level its CLI's own program offers is passed it.
+        let effort = effort.filter(|level| cli.efforts().contains(&level.as_str()));
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
         let pages: Vec<String> = (pages.iter())
@@ -1785,6 +1800,7 @@ impl Agents {
             title,
             model,
             model_id,
+            effort,
             added: pages.clone(),
             state: State::Working,
             ended: None,
@@ -1805,15 +1821,6 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: match only_added && !pages.is_empty() {
-                true => Sites::Only(
-                    pages
-                        .iter()
-                        .filter_map(|url| self.browser.url_site(url))
-                        .collect(),
-                ),
-                false => Sites::default(),
-            },
             stops: Vec::new(),
             stopped_turns: Vec::new(),
             picked_from: None,
@@ -2063,11 +2070,7 @@ impl Agents {
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            self.fail(
-                agent,
-                Failure::Other(format!("{} isn't installed.", cli.name())),
-                cx,
-            );
+            self.fail(agent, Failure::NotInstalled, cx);
             return false;
         };
         let dir = self.tasks_dir();
@@ -2076,6 +2079,7 @@ impl Agents {
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = self.launch_model(agent, cli);
+        let effort = self.task(agent).and_then(|task| task.effort.clone());
         // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
         let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
@@ -2090,6 +2094,7 @@ impl Agents {
                 token: task.token.clone(),
             },
             model,
+            effort,
             instructions: match task.helpers.on {
                 true => format!(
                     "{}\n\n{}",
@@ -2371,8 +2376,8 @@ impl Agents {
                     assistant: true,
                 }
             }
-            Failure::Other(why) if why.contains("isn't installed") => State::Failed {
-                why: why.into(),
+            Failure::NotInstalled => State::Failed {
+                why: format!("{} isn't installed.", cli.name()).into(),
                 assistant: true,
             },
             Failure::Other(why) => State::Failed {
@@ -3323,6 +3328,7 @@ impl Agents {
             page: None,
             model: SharedString::default(),
             model_id: None,
+            effort: None,
             added: Vec::new(),
             state: State::Working,
             ended: None,
@@ -3343,7 +3349,6 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
             picked_from: None,

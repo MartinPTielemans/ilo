@@ -800,8 +800,8 @@ fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppCon
     let start = Start {
         tier: Tier::default(),
         model: None,
+        effort: None,
         pages: Vec::new(),
-        only_added: false,
         files: Picked {
             files: vec![missing],
             folder: None,
@@ -1103,8 +1103,8 @@ mod copying {
         let start = Start {
             tier: Tier::default(),
             model: None,
+            effort: None,
             pages: Vec::new(),
-            only_added: false,
             files: Picked {
                 files: vec![file],
                 folder: Some(folder),

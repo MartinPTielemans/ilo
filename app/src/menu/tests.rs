@@ -1322,6 +1322,39 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
     }
 }
 
+/// A disabled row keeps its ink at every level, never fainter and held to no ratio, while a
+/// shortcut, chevron, detail or heading takes at least what a word on what floats takes.
+#[test]
+fn a_disabled_row_keeps_its_ink_and_the_secondary_takes_the_floor() {
+    use crate::palette::{Float, Tone};
+    use crate::tokens::menu::{DARK_DISABLED, DARK_SECONDARY, LIGHT_DISABLED, LIGHT_SECONDARY};
+    use crate::transparency::Transparency;
+    for level in [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ] {
+        crate::palette::set_transparency(level);
+        for (light, tone, disabled, secondary) in [
+            (false, Tone::Dark, DARK_DISABLED, DARK_SECONDARY),
+            (true, Tone::Light, LIGHT_DISABLED, LIGHT_SECONDARY),
+        ] {
+            let look = Look::plain(light);
+            assert_eq!(look.disabled(), gpui::rgba(disabled), "at {level:?}");
+            let ink = look.secondary();
+            let token = gpui::rgba(secondary).a;
+            assert!(ink.a >= token && ink.a == Float::Menu.word(tone, token));
+            assert_eq!(
+                gpui::Rgba { a: 1., ..ink },
+                gpui::Rgba {
+                    a: 1.,
+                    ..gpui::rgba(secondary)
+                }
+            );
+        }
+    }
+}
+
 /// A model menu as the composer's: its search, each assistant's models under its name, one not
 /// signed in with Sign In, and Settings.
 fn models() -> Vec<MenuEntry> {
@@ -1388,17 +1421,17 @@ fn a_search_narrows_the_rows_to_what_holds_it() {
 #[test]
 fn an_offer_is_in_the_secondary_ink() {
     use gpui::rgba;
-    let palette = Look::dark().palette();
+    let look = Look::dark();
     let on_fill = rgba(0x123456ff);
     let menu = models();
     assert_eq!(
-        title_ink(&menu[9], false, &palette, on_fill),
-        rgba(palette.secondary).into()
+        title_ink(&menu[9], false, look, on_fill),
+        look.secondary().into()
     );
-    assert_eq!(title_ink(&menu[9], true, &palette, on_fill), on_fill.into());
+    assert_eq!(title_ink(&menu[9], true, look, on_fill), on_fill.into());
     assert_eq!(
-        title_ink(&menu[3], false, &palette, on_fill),
-        rgba(palette.label).into()
+        title_ink(&menu[3], false, look, on_fill),
+        rgba(look.palette().label).into()
     );
 }
 

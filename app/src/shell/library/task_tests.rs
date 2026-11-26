@@ -41,6 +41,7 @@ fn task(n: u64, ended: f64) -> ArchivedTask {
 /// Task 1's card, back at the foot, in its own Space 101.
 fn card() -> Card {
     Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 101,
@@ -143,7 +144,7 @@ fn row(row: usize) -> gpui::Point<gpui::Pixels> {
 
 fn filter(cx: &mut VisualTestContext) {
     let filter = point(
-        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());

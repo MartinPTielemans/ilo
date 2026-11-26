@@ -5,7 +5,8 @@
 //! way they're written and removed, in the order asked. The names in it are this file's own and
 //! the card's id, never anything of a thread's, and nothing here logs.
 //!
-//! Written at the thread's Done, off the UI's thread; read after a launch's first frame; removed
+//! Written at the thread's Done, off the UI's thread; read after a launch's first frame, off it
+//! too, after the launch's sweep; removed
 //! with the thread, with Remove All, with its profile, and at launch where no kept record holds
 //! the card's id. Its own folder, not the conversation's under `Kept tasks`, as nothing is ever
 //! put in that one (kept.rs).
@@ -133,6 +134,51 @@ fn pixels(image: &RenderImage) -> Option<Pixels> {
 pub struct Card {
     pub line: Option<String>,
     pub picture: Option<Pixels>,
+}
+
+/// A kept card's picture as GPUI draws it, made off the UI's thread: equal only to itself, so a
+/// card redraws when it comes and not after.
+#[derive(Clone)]
+pub struct Plate {
+    pub image: Arc<RenderImage>,
+    pub size: (u32, u32),
+}
+
+impl PartialEq for Plate {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.image, &other.image)
+    }
+}
+
+/// Its size alone.
+impl std::fmt::Debug for Plate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Plate({}x{})", self.size.0, self.size.1)
+    }
+}
+
+impl Plate {
+    fn of(pixels: Pixels) -> Option<Self> {
+        let size = (pixels.width, pixels.height);
+        let image = image::RgbaImage::from_raw(size.0, size.1, pixels.bgra)?;
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
+        Some(Plate { image, size })
+    }
+}
+
+/// What a launch reads back of a kept thread's card: its line and its picture, ready to draw.
+#[derive(Clone, Default)]
+pub struct Back {
+    pub line: Option<String>,
+    pub plate: Option<Plate>,
+}
+
+/// None of the line, so nothing that prints a value prints it.
+impl std::fmt::Debug for Back {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let line = self.line.as_ref().map(|_| "…");
+        write!(f, "Back {{ line: {line:?}, plate: {:?} }}", self.plate)
+    }
 }
 
 /// `id`'s folder in `root`, if it's one of `root`'s own: directly inside it and no link.
@@ -332,6 +378,13 @@ pub enum Job {
     RemoveAll(PathBuf),
     /// A launch: `sweep`.
     Sweep(PathBuf, Vec<CardId>),
+    /// A launch, after its sweep: each card `read`, its picture made ready to draw, answered by
+    /// card in the order asked.
+    Read(
+        PathBuf,
+        Vec<CardId>,
+        futures::channel::oneshot::Sender<Vec<(CardId, Back)>>,
+    ),
 }
 
 impl Job {
@@ -350,6 +403,23 @@ impl Job {
             }
             Job::RemoveAll(root) => remove_all(&root),
             Job::Sweep(root, kept) => sweep(&root, &kept),
+            Job::Read(root, ids, answer) => {
+                let back = (ids.into_iter())
+                    .map(|id| {
+                        let card = read(&root, &id);
+                        let plate = card.picture.and_then(Plate::of);
+                        (
+                            id,
+                            Back {
+                                line: card.line,
+                                plate,
+                            },
+                        )
+                    })
+                    .collect();
+                // A launch that went on without it, as a window closed meanwhile, wants none.
+                _ = answer.send(back);
+            }
         }
     }
 }

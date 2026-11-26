@@ -54,8 +54,8 @@ await '^browser: title [0-9]* scheme [a-z]* col a,b,c at -$' || fail "the fixtur
 tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
 # The look the Space starts in, the system's, and the other, which the theme picker turns it to.
 look=$(grep "^browser: title $tab scheme " "$log" | tail -1 | cut -d' ' -f5)
-other=dark other_at="231.7 49"
-[ "$look" = light ] || other=light other_at="191.3 49"
+other=dark
+[ "$look" = light ] || other=light
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 
 # A click where the window's page point is tells where the page is in the window.
@@ -143,11 +143,10 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $co
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-# The look's buttons take a click once the Space has a colour, as cards.sh's: the first swatch,
-# then the sun, the second appearance button, or the moon, the third.
-send clickkey "$(swatch_x 0)" $swatch_y
-expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
-send clickkey $other_at
+# The first palette, then Light or Dark, as cards.sh's.
+send clickkey $(panel_at palette 1)
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+send clickkey $(panel_at look $other)
 expect "^browser: themed space [0-9]* .*appearance=$other" \
   "the theme picker's $other button didn't make the Space's theme $other"
 send key escape
