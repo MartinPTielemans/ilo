@@ -40,6 +40,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -489,6 +490,7 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
         finding: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(n, Dot::Done)
     };
     shell.update(cx, |shell, cx| {
@@ -546,6 +548,7 @@ fn a_done_cards_finding_is_spoken_as_the_assistants() {
         told: finding.into(),
         ended_time: "10:42".into(),
         fuller: false,
+        lead: 0,
         ..card(1, Dot::Done)
     };
     assert_eq!(

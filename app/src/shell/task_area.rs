@@ -31,7 +31,7 @@ use super::{
     picture::next_request,
     task_cards::{PageWord, act},
 };
-use crate::agents::task::{Card, Dot, TaskAction, status_lead};
+use crate::agents::task::{Card, Dot, TaskAction};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
@@ -1387,8 +1387,7 @@ impl Shell {
             }
             // What it needs the user for, without the card's "Needs you", which the title says.
             Dot::Waiting => {
-                let lead = status_lead(&card.status);
-                let why = card.status[lead..].trim_start_matches(" · ");
+                let why = card.status[card.lead..].trim_start_matches(" · ");
                 (format!("{name} needs you"), why.to_string())
             }
             Dot::Done => (

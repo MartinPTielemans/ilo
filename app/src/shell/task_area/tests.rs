@@ -1250,6 +1250,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1613,6 +1614,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -1667,6 +1669,24 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     done.open.remove(0);
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
     assert_eq!(open(&shell, cx), None);
+
+    // Waiting, the strip says why without the card's lead, which is as long as the card's maker
+    // said: a status that only begins as a count or as the asking words is said whole.
+    let needs_you = crate::agents::task::NEEDS_YOU;
+    let mut waits = card(Dot::Waiting, &format!("{needs_you} · Sign in to maat.pt"));
+    waits.lead = needs_you.len();
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![waits], cx));
+    let (title, why, _) = says(&shell, cx);
+    assert_eq!(
+        (title.as_str(), why.as_str()),
+        ("Claude needs you", "Sign in to maat.pt")
+    );
+    for posing in ["Step 5", needs_you] {
+        let status = format!("{posing} · Opening maat.pt");
+        let waits = card(Dot::Waiting, &status);
+        shell.update(cx, |shell, cx| shell.set_task_cards(vec![waits], cx));
+        assert_eq!(says(&shell, cx).1, status);
+    }
 
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(Dot::Ended, "Stopped")], cx)
@@ -2024,6 +2044,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2089,6 +2110,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     };
@@ -2297,6 +2319,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         visited: Vec::new(),
         ended_time: Default::default(),
         fuller: false,
+        lead: 0,
         finding: Default::default(),
         told: Default::default(),
     };
