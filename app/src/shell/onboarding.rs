@@ -1378,7 +1378,7 @@ impl Shell {
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
         let length = onboarding.exit_length(still);
-        let ended = exiting.is_some_and(|at| at >= length);
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still, viewport));
         if ended {
             // A grown card stays drawn on the frame it ends on. First run's window, the size of
             // the browser's by now, is on screen until the browser window is, and a frame of it

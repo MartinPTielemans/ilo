@@ -8,7 +8,7 @@ use gpui::{
 };
 
 use super::super::card::KNOTS;
-use super::super::exit::{DRAWN, Plate};
+use super::super::exit::{DRAWN, Plate, frame};
 use super::{END_FADE, Step, card, first_window, kept, kept_dir, later, on_to, started, step};
 use crate::shell::browser::Browser as _;
 use crate::shell::recorder::Recorder;
@@ -125,7 +125,7 @@ fn without_a_grow_the_card_cross_fades(cx: &mut TestAppContext) {
 
 /// Where the host grows it, the card grows from its own size to the window's as the window is
 /// on each frame, the host's glass shaped after it, ending at the window's bounds and the
-/// window's corners, and the exit ends as the grow does.
+/// window's corners, and the exit ends with the grow.
 #[gpui::test]
 fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
@@ -153,8 +153,31 @@ fn with_a_grow_the_card_grows_to_its_window(cx: &mut TestAppContext) {
         (w - 1200.).abs() < 1. && (h - 800.).abs() < 1. && (radius - to_radius).abs() < 0.1,
         "ends at {w} {h} {radius}"
     );
-    later(&shell, cx, 0.01);
     assert_eq!(step(&shell, cx), None);
+}
+
+/// A grown exit ends once the card is within `rest` of its window on every side, before the
+/// grow's curve reaches its length, whose tail moves it less than that.
+#[gpui::test]
+fn a_grown_exit_ends_at_rest_before_the_curves_length(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    pressed_and_grown(&shell, cx, &host);
+    // When the curve brings the card within `rest` of the window, by the exit's own frames.
+    let rest = (0..=1000)
+        .map(|i| x::CONTENT + x::GROW * i as f32 / 1000.)
+        .find(|&at| {
+            let (_, _, w, h, _) = frame(at, true, GROWN).plate;
+            (GROWN.0 - w).max(GROWN.1 - h) / 2. <= x::REST
+        })
+        .unwrap();
+    assert!(
+        rest < x::CONTENT + x::GROW - 0.05,
+        "at rest well before the curve's length: {rest}"
+    );
+    later(&shell, cx, rest - x::CONTENT - 0.05);
+    assert_eq!(step(&shell, cx), Some(Step::Done), "still growing");
+    later(&shell, cx, 0.052);
+    assert_eq!(step(&shell, cx), None, "ended at rest");
 }
 
 /// The frame a grown exit ends on still draws the card, the whole window: first run's window
