@@ -101,6 +101,7 @@ jobs:
       found: ${{ steps.engine.outputs.found }}
       run: ${{ steps.app.outputs.run }}
       artifact: ${{ steps.app.outputs.artifact }}
+      prod: ${{ steps.prod.outcome }}
     defaults:
       run:
         working-directory: app
@@ -144,13 +145,13 @@ jobs:
             run=$(../.github/scripts/app-artifact.sh find "app-mac-$GITHUB_SHA")
           echo "run=$run" | tee -a "$GITHUB_OUTPUT"
 
-      - if: ${{ steps.kept.outputs.run == '' }}
+      - if: ${{ steps.kept.outputs.run == '' || inputs.runs == 'all' }}
         run: rustup update stable --no-self-update
 
       # Every ref reads main's build cache, and main alone saves one: a copy saved by each
       # branch pushed main's out of the repository's 10 GB (#1969).
       - id: cache
-        if: ${{ steps.kept.outputs.run == '' }}
+        if: ${{ steps.kept.outputs.run == '' || inputs.runs == 'all' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -182,7 +183,9 @@ jobs:
           retention-days: ${{ inputs.runs == 'keychain' && 1 || 3 }}
           overwrite: true
 
-      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+      # Of the dev build alone, before the prod build below, so the cache never holds the prod
+      # build's artefacts too: it's at the repository's cap (#1969, #4000).
+      - if: ${{ steps.build.outcome == 'success' && steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -190,6 +193,24 @@ jobs:
             ~/.cargo/git
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      # keychain uses the real Keychain, so it needs the prod build, which runs=all's check jobs
+      # take from here for keychain's turn (#4000), for this run alone. A prod build that fails
+      # fails keychain, which says so, and the dev runs still run.
+      - id: prod
+        if: ${{ inputs.runs == 'all' }}
+        continue-on-error: true
+        run: |
+          [ -e .deps/Chromium.app ] || ./setup.sh prebuilt
+          ./build.sh prod
+          ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/prod.tar"
+      - if: ${{ steps.prod.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-mac-prod-${{ github.sha }}
+          path: ${{ runner.temp }}/prod.tar
+          retention-days: 1
+          overwrite: true
 
       - id: app
         env:
@@ -304,21 +325,15 @@ jobs:
           mkdir -p .deps
           tar -xf "$RUNNER_TEMP/app/sparkle.tar" -C .deps
 
-      # The keychain run adds its copies to the cookie key's partition with KEYCHAIN_PASSWORD, the
-      # password of the default keychain the key is made in, the login keychain, whose password on
-      # the runner isn't known: the job makes a default keychain of its own with one it knows.
-      # securityd keeps the login keychain open, so one made anew in its place wouldn't unlock.
-      - if: ${{ inputs.runs == 'keychain' }}
-        run: |
-          password=$(openssl rand -hex 16)
-          echo "::add-mask::$password"
-          keychain="$HOME/Library/Keychains/check.keychain-db"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security list-keychains -d user -s "$keychain"
-          security default-keychain -d user -s "$keychain"
-          echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
+      # runs=all's keychain turn has the build job's prod build (#4000).
+      - id: prod
+        if: ${{ inputs.runs == 'all' && needs.build.outputs.prod == 'success' && contains(steps.runs.outputs.list, ' keychain ') }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: app-mac-prod-${{ github.sha }}
+          path: ${{ runner.temp }}/prod
+          github-token: ${{ github.token }}
 
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
@@ -476,6 +491,9 @@ jobs:
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
           RUNNING: ${{ runner.temp }}/running
+          # How runs=all's prod build went, for keychain's turn, which swaps it in.
+          PROD_BUILD: ${{ inputs.runs == 'all' && (needs.build.outputs.prod || 'skipped') || '' }}
+          PROD_GOT: ${{ steps.prod.outcome }}
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
@@ -517,6 +535,58 @@ jobs:
             done
           ) &
           answering=$!
+          # keychain uses the real Keychain (#4000). The login keychain's password on the runner
+          # isn't known, and securityd keeps it open, so one made in its place wouldn't unlock: its
+          # turn makes a default keychain of its own, with a password keychain.sh adds its copies
+          # to the cookie key's partition with. For runs=all, the turn has the build job's prod
+          # build in place of the dev one. After it, the job's keychains and the dev build come
+          # back for the runs after it, and the log says the app's bundle id before, in and after.
+          bundle() { plutil -extract CFBundleIdentifier raw build/Browser.app/Contents/Info.plist; }
+          made=$HOME/Library/Keychains/check.keychain-db
+          keychain_in() {
+            if [ -n "$PROD_BUILD" ]; then
+              if [ "$PROD_BUILD" != success ] || [ "$PROD_GOT" != success ]; then
+                echo "FAIL: no prod build to check: the build job's prod build was $PROD_BUILD," \
+                  "its download ${PROD_GOT:-skipped}" > "$out/keychain.log"
+                return 1
+              fi
+              before=$(bundle)
+              mv build/Browser.app "$RUNNER_TEMP/dev.app"
+              # Unpacked only in part, the turn would check whatever is there; the dev build goes
+              # back for the runs after it, and the row says why.
+              if ! ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" \
+                "$RUNNER_TEMP/prod/prod.tar"; then
+                rm -rf build/Browser.app
+                mv "$RUNNER_TEMP/dev.app" build/Browser.app
+                echo "FAIL: the prod build couldn't be unpacked from the build job's download," \
+                  "so keychain didn't run" > "$out/keychain.log"
+                return 1
+              fi
+            fi
+            searched=$(security list-keychains -d user | tr -d '"')
+            was=$(security default-keychain -d user | tr -d '" ')
+            KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+            echo "::add-mask::$KEYCHAIN_PASSWORD"
+            export KEYCHAIN_PASSWORD
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$made"
+            security set-keychain-settings "$made"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$made"
+            security list-keychains -d user -s "$made"
+            security default-keychain -d user -s "$made"
+          }
+          keychain_out() {
+            security list-keychains -d user -s $searched
+            security default-keychain -d user -s "$was"
+            security delete-keychain "$made" || true
+            unset KEYCHAIN_PASSWORD
+            if [ -d "$RUNNER_TEMP/dev.app" ]; then
+              during=$(bundle)
+              rm -rf build/Browser.app
+              mv "$RUNNER_TEMP/dev.app" build/Browser.app
+              echo "keychain: the app's bundle id before its turn $before, in it $during," \
+                "after it $(bundle)"
+            fi
+          }
           # GNU's timeout, which macOS doesn't have under that name, if the runner has it.
           limit=$(command -v timeout || command -v gtimeout || true)
           failed=0
@@ -528,11 +598,16 @@ jobs:
               # Perf measures Chrome beside the app.
               minutes=20m
               [ "$run" != perf ] || minutes=40m
-              # The run going, for the step after this one if this step is cut at its limit.
+              # The run going, for the step after this one if this step is cut at its limit. A
+              # cut in keychain's turn leaves its keychain and the prod build in place: only
+              # uploads come after, and the runner goes with the job.
               echo "$run" > "$RUNNING"
-              ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              [ "$run" != keychain ] || keychain_in || status=$?
+              [ "$status" != 0 ] ||
+                ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
+              [ "$run" != keychain ] || [ -z "${was:-}" ] || keychain_out
               rm -f "$RUNNING"
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.

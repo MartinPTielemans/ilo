@@ -4330,18 +4330,12 @@ impl Agents {
                     }
                 }
             },
-            "click" | "type" => {
+            "click" => did.target = element.as_ref().map(named).unwrap_or_default(),
+            // What was typed or chosen shows only where the field lets it, cut at its most.
+            "type" | "select" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
-                let typed = string("text");
-                let shows = element.as_ref().is_some_and(page::Element::shows_typed);
-                // What may show is cut at its most, as a chosen option is, never dropped whole.
-                if tool == "type" && shows {
-                    did.text = page::clip(&page::one_line(&typed), tools::TYPED_SHOWN);
-                }
-            }
-            "select" => {
-                did.target = element.as_ref().map(named).unwrap_or_default();
-                did.text = page::clip(&page::one_line(&string("option")), tools::TYPED_SHOWN);
+                let put = string(if tool == "type" { "text" } else { "option" });
+                did.text = page::typed_shown(element.as_ref(), &put).unwrap_or_default();
             }
             "press_key" => did.target = string("key"),
             "request" => did.target = super::request::described(arguments),

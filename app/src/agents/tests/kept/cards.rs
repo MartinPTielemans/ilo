@@ -493,3 +493,5 @@ fn a_page_off_limits_keeps_its_site_alone_in_the_log(cx: &mut TestAppContext) {
         }
     }
 }
+
+mod typed;
