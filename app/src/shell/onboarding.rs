@@ -147,6 +147,17 @@ impl Step {
     const PICTURED: &[Step] = &[];
 }
 
+/// The switches' rows on the card. On is the text's ink with a knob of the card's, as Settings'
+/// are: no green on a control. A row's second line is text-2, as Look::on's mix over the card's
+/// see-through ground would all but vanish.
+fn switch_look(inks: Inks) -> Look {
+    Look {
+        knob_on: inks.fill(true),
+        detail: inks.text_2(),
+        ..Look::on(inks.group(), inks.text(1.), inks.text(1.))
+    }
+}
+
 /// What the computer is called in a line.
 fn here(os: Os) -> &'static str {
     match os {
@@ -1890,11 +1901,7 @@ impl Shell {
             (onboarding.switched).map(|(turned, at)| (turned, onboarding.secs_since(at)));
         let settled = onboarding.step == step && onboarding.settled;
         let frames = onboarding.frames.clone();
-        // On is the text's ink with a knob of the card's, as Settings' are: no green on a control.
-        let look = Look {
-            knob_on: inks.fill(true),
-            ..Look::on(inks.group(), inks.text(1.), inks.text(1.))
-        };
+        let look = switch_look(inks);
         let a11y = self.a11y;
         (self.switches(step, cx).into_iter())
             .map(|(switch, on)| {

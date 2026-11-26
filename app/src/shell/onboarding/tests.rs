@@ -814,6 +814,47 @@ fn a_step_without_its_picture_draws_no_plane(cx: &mut TestAppContext) {
     }
 }
 
+/// How strong `ink` reads on the card's sheet, as a share of the text's own ink: each drawn over
+/// the opaque sheet, how far it stands from it.
+fn strength(ink: gpui::Rgba, inks: super::card::Inks) -> f32 {
+    let sheet = inks.fill(false);
+    let over = |ink: gpui::Rgba| {
+        [ink.r, ink.g, ink.b]
+            .into_iter()
+            .zip([sheet.r, sheet.g, sheet.b])
+            .map(|(ink_, sheet)| (ink_ * ink.a + sheet * (1. - ink.a) - sheet).abs())
+            .fold(0., f32::max)
+    };
+    over(ink) / over(inks.text(1.))
+}
+
+/// No text on a first-run card reads under text-3 unless its control is off: a row's second line
+/// is text-2 on the switches' rows as on the card's own, in Dark and in Light.
+#[gpui::test]
+fn no_text_on_the_card_reads_under_text_3(_: &mut TestAppContext) {
+    for light in [false, true] {
+        let inks = super::card::Inks::of(light);
+        let look = super::switch_look(inks);
+        for (what, ink) in [
+            ("a row's name", look.ink),
+            ("a row's second line", look.detail),
+            ("the card's second ink", inks.text_2()),
+            ("the card's third ink", inks.text(t::TEXT_3)),
+        ] {
+            assert!(
+                strength(ink, inks) >= t::TEXT_3 - 0.01,
+                "{what}, light {light}: reads at {}",
+                strength(ink, inks)
+            );
+        }
+        assert_eq!(
+            look.detail,
+            inks.text_2(),
+            "light {light}: text-2, one of the three"
+        );
+    }
+}
+
 /// A click on the bar puts it at the stop nearest.
 #[gpui::test]
 fn a_click_on_the_tidy_bar_picks_the_stop_nearest(cx: &mut TestAppContext) {
