@@ -47,6 +47,13 @@ pub fn fold(took: Option<u64>, so_far: u64) -> (String, String) {
 /// The live line's button while the user has the task's page.
 pub const HAND_BACK: &str = "Hand Back";
 
+/// Z34: the way back on a tab the user handed the thread, its tooltip, name and menu item. It's
+/// worded to sit beside Take Over and Hand Back and be mistaken for neither.
+pub const RETURN_TAB: &str = "Return to Your Tabs";
+
+/// Z35: spoken after a handed tab's own words on its tile in the thread, and never drawn.
+pub const YOUR_TAB: &str = "Your tab";
+
 /// The live line's words in a state other than working, one entry each, or None for no line:
 /// waiting at a refused or a handed step, ilo's line with its own buttons is the last over the
 /// field (the lead, 20:22Z).

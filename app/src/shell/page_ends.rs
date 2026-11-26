@@ -32,6 +32,8 @@ pub(super) enum StripStop {
     Page,
     TakeOver,
     HandBack,
+    /// The way back on a tab the user handed the thread.
+    Return,
     Stop,
     Open,
 }
@@ -190,6 +192,18 @@ impl Shell {
                 };
                 self.browser.task(agent, action, cx);
             }
+            StripStop::Return => {
+                let (Some(agent), Some((_, tab))) =
+                    (self.task_strip_agent(), self.watched_task_page())
+                else {
+                    return;
+                };
+                log!("browser: command return-tab via strip keys");
+                self.leave_strip("return", cx);
+                // What the way back's click does.
+                let action = crate::agents::task::TaskAction::ReturnTab(tab);
+                self.browser.task(agent, action, cx);
+            }
             StripStop::Stop => {
                 if let Some(agent) = self.task_strip_agent() {
                     log!("browser: command stop-task via strip keys");
@@ -211,8 +225,9 @@ impl Shell {
     }
 
     /// The ring's stops in order, a row's as None: with a task's page watched, the task's header,
-    /// then the page where the row's words stand for it or the user holds it, the row's button
-    /// and an outside app's Stop; otherwise the row and the page.
+    /// then the page where the row's words stand for it or the user holds it, the row's button,
+    /// the way back on a tab the user handed and an outside app's Stop; otherwise the row and the
+    /// page.
     pub(super) fn ring_stops(&self, cx: &gpui::App) -> Vec<Option<StripStop>> {
         let Some((_, tab)) = self.watched_task_page() else {
             return vec![None, Some(StripStop::Page)];
@@ -223,6 +238,7 @@ impl Shell {
         let said = (row.case.as_ref()).and_then(|case| case.said()).is_some();
         let page = (said || self.strip_held()).then_some(StripStop::Page);
         let button = row.case.as_ref().map(|case| case.button());
+        let back = row.back.then_some(StripStop::Return);
         let stop = row.stop.then_some(StripStop::Stop);
         // The card while the list draws it, so the ring never sits where it can't be seen.
         let header = self
@@ -233,6 +249,7 @@ impl Shell {
             .into_iter()
             .chain(page)
             .chain(button)
+            .chain(back)
             .chain(stop)
             .map(Some)
             .collect()
@@ -359,6 +376,7 @@ fn strip_stop_name(stop: StripStop) -> &'static str {
         StripStop::Page => "page",
         StripStop::TakeOver => "take-over",
         StripStop::HandBack => "hand-back",
+        StripStop::Return => "return",
         StripStop::Stop => "stop",
         StripStop::Open => "open",
     }

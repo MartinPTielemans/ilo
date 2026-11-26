@@ -234,6 +234,12 @@ impl Talk {
         tiles.end_all(cx);
     }
 
+    /// Whether `tab` is one the user handed its thread, whose page's menu offers the way back.
+    pub(super) fn hands(&self, tab: u64, cx: &gpui::App) -> bool {
+        let shown = self.view.read(cx).shown.as_ref();
+        shown.is_some_and(|shown| shown.handed.contains(&tab))
+    }
+
     /// The tiles its pages show live in, which a watch borrows one of.
     pub(super) fn tiles(&self, cx: &gpui::App) -> Rc<LiveTiles> {
         self.view.read(cx).tiles.clone()
@@ -1609,10 +1615,12 @@ impl TalkView {
         let Some(shown) = self.shown.as_ref() else {
             return PageRow::default();
         };
+        let back = shown.handed.contains(&on);
         if self.replies && self.in_field().is_some() {
             return PageRow {
                 case: open.map(|open| RowCase::Ended(open.into())),
                 stop: false,
+                back,
             };
         }
         let case = match &shown.live {
@@ -1627,6 +1635,7 @@ impl TalkView {
         PageRow {
             case: case.or_else(|| open.map(|open| RowCase::Ended(open.into()))),
             stop: !self.replies && shown.stoppable,
+            back,
         }
     }
 
@@ -1643,6 +1652,7 @@ impl TalkView {
             Some(RowCase::Working(_)) => "working",
             Some(RowCase::Yours(_)) => "yours",
             Some(RowCase::Ended(_)) => "ended",
+            None if row.back && !row.stop => "back",
             None => "stop",
         };
         let logged = (row != PageRow::default()).then_some((on, case));
@@ -1752,6 +1762,9 @@ impl TalkView {
                 Some(told),
             )
         });
+        let back = row
+            .back
+            .then(|| self.way_back_of(("conversation-way-back", on), on, look, cx));
         // Each is the ring's stop as well as the pointer's, so the keyboard reaches what's drawn.
         let shell = shell.read(cx);
         let words = words.map(|words| {
@@ -1764,6 +1777,14 @@ impl TalkView {
         });
         let button = button
             .map(|(stop, label, button)| shell.strip_stop(button, stop, label, HELD_BUTTON_RADIUS));
+        let back = back.map(|back| {
+            shell.strip_stop(
+                back,
+                StripStop::Return,
+                words::RETURN_TAB.into(),
+                panel::WAY_BACK_RADIUS,
+            )
+        });
         let stop = stop.map(|stop| {
             shell.strip_stop(
                 stop,
@@ -1787,7 +1808,40 @@ impl TalkView {
                 .children(words)
                 .children(spring)
                 .children(button)
+                .children(back)
                 .children(stop),
+        )
+    }
+
+    /// The way back for `tab`, `id`: its click returns the tab to the user's tabs, and the pointer
+    /// on it shows Z34's tip under it.
+    fn way_back_of(
+        &self,
+        id: impl Into<ElementId>,
+        tab: u64,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let view = cx.entity().downgrade();
+        let shell = self.shell.clone();
+        way_back(
+            look.palette,
+            look.a11y,
+            id,
+            move |cx| {
+                log!("browser: command return-tab via way back");
+                (view.update(cx, |view, cx| view.act(TaskAction::ReturnTab(tab), cx))).ok();
+            },
+            move |at, cx| {
+                (shell.update(cx, |shell, cx| {
+                    let tip = at.map(|at| {
+                        let tip = crate::tooltip::Tip::named(words::RETURN_TAB.into());
+                        (tip, crate::tooltip::Anchor::under(at, shell.viewport))
+                    });
+                    shell.hover_tip(tip, cx);
+                }))
+                .ok();
+            },
         )
     }
 
@@ -2058,14 +2112,30 @@ impl TalkView {
                     .children(ring)
                     .child(said.label())
             });
-            // Spoken, a dead page's tile is its name, then the card's own heading.
-            let spoken =
-                (crashed && look.a11y).then(|| format!("{title}, {}", super::trouble::STOPPED));
+            // A tab the user handed the thread has its way back at the head's end, which no page
+            // the thread opened has.
+            let handed = (self.shown.as_ref()).is_some_and(|shown| shown.handed.contains(&tab));
+            let back = handed
+                .then(|| self.way_back_of(("conversation-tile-way-back", tab), tab, look, cx));
+            // Spoken, a dead page's tile is its name, then the card's own heading; a handed tab's
+            // is its own words, then Z35, which nothing draws.
+            let spoken = look.a11y.then(|| {
+                let mut said = vec![title.to_string()];
+                said.extend(crashed.then(|| super::trouble::STOPPED.to_string()));
+                said.extend(handed.then(|| words::YOUR_TAB.to_string()));
+                said.join(", ")
+            });
+            let spoken = spoken.filter(|_| crashed || handed);
             let head = div()
                 .flex_none()
                 .h(px(RAIL_HEAD))
                 .w_full()
-                .px(px(RAIL_HEAD_X))
+                .pl(px(RAIL_HEAD_X))
+                .pr(px(if handed {
+                    panel::WAY_BACK_HEAD_RIGHT
+                } else {
+                    RAIL_HEAD_X
+                }))
                 .flex()
                 .items_center()
                 .gap(px(RAIL_HEAD_GAP))
@@ -2082,7 +2152,8 @@ impl TalkView {
                         .text_color(palette.text(TITLE))
                         .child(title),
                 )
-                .children(word);
+                .children(word)
+                .children(back);
             let (fill, line) = match palette.tone {
                 Tone::Dark => (TILE_FILL, if acting { TILE_LINE_ON } else { TILE_LINE }),
                 Tone::Light => (
@@ -3517,6 +3588,63 @@ fn primary(palette: super::Palette) -> (Hsla, Hsla) {
 /// Light (light-values.md, Proposed).
 /// A held step's button: the first on `primary` with `on-primary` words at semibold, the second
 /// on `button` at medium.
+/// The way back on a tab the user handed the thread, `id`: the tab-return glyph in a box with
+/// the stage's `button` plate under the pointer, named and tipped Z34. A click is `back`'s, and
+/// never the tile's or the row's under it.
+fn way_back(
+    palette: super::Palette,
+    a11y: bool,
+    id: impl Into<ElementId>,
+    back: impl Fn(&mut gpui::App) + 'static,
+    tip: impl Fn(Option<Bounds<Pixels>>, &mut gpui::App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let plate: Hsla = rgba(palette.toned(HELD_BUTTON_FILL, LIGHT_HELD_BUTTON_FILL)).into();
+    let tip = Rc::new(tip);
+    let drawn: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+    let at = drawn.clone();
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .size(px(panel::WAY_BACK))
+        .rounded(px(panel::WAY_BACK_RADIUS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(move |style| style.bg(plate))
+        .when(a11y, |button| {
+            button.role(Role::Button).aria_label(words::RETURN_TAB)
+        })
+        .child(
+            canvas(move |bounds, _, _| at.set(Some(bounds)), |_, _, _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .child(
+            svg()
+                .path(WAY_BACK_GLYPH)
+                .size(px(panel::WAY_BACK_GLYPH))
+                .text_color(palette.text(panel::WAY_BACK_INK)),
+        )
+        .on_hover({
+            let tip = tip.clone();
+            move |hovered, _, cx| tip(drawn.get().filter(|_| *hovered), cx)
+        })
+        // The tip goes with the press, as the button goes with the tab it returns.
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            tip(None, cx);
+        })
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            back(cx);
+        })
+}
+
+/// The way back's glyph (spec-held-abilities.md, part 1).
+const WAY_BACK_GLYPH: &str = "icons/tab-return.svg";
+
 fn held_button(
     palette: super::Palette,
     id: impl Into<ElementId>,
@@ -4870,6 +4998,8 @@ mod tests;
 pub(super) struct PageRow {
     pub(super) case: Option<RowCase>,
     pub(super) stop: bool,
+    /// The page is a tab the user handed the thread: the way back stands after the row's button.
+    pub(super) back: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

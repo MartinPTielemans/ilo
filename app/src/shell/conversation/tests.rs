@@ -105,6 +105,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         })],
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
+        handed: Vec::new(),
         stoppable: true,
         live: Default::default(),
         open: None,
@@ -4425,8 +4426,13 @@ fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut Tes
                 false => cx.simulate_click(at.center(), Modifiers::none()),
             }
             cx.run_until_parked();
+            // The way back's tip under the pointer is the pointer's alone, and no act of it.
             let calls: Vec<String> = (host.take().into_iter())
-                .filter(|call| !call.starts_with("focus") && !call.starts_with("picture"))
+                .filter(|call| {
+                    !call.starts_with("focus")
+                        && !call.starts_with("picture")
+                        && !call.starts_with("tooltip")
+                })
                 .collect();
             assert!(!calls.is_empty(), "{name}: {button:?} did nothing");
             Some(calls)
@@ -4528,6 +4534,7 @@ fn row_cases() -> Vec<RowCaseShown> {
     let elsewhere = Conversation {
         tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
         on: Some(31),
+        handed: Vec::new(),
         ..conversation(3)
     };
     let (session, session_talk) = session_panel();
@@ -4611,7 +4618,37 @@ fn row_cases() -> Vec<RowCaseShown> {
             ..case(
                 "between steps",
                 &card(),
-                between,
+                between.clone(),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        // A tab the user handed the thread: the way back after the row's button, and alone at the
+        // row's right where the row has no case.
+        RowCaseShown {
+            ring: vec!["Page", "TakeOver", "Return"],
+            button: Some(StripStop::Return),
+            command: task_take_over,
+            ..case(
+                "working on a handed tab",
+                &card(),
+                Conversation {
+                    handed: vec![30],
+                    ..conversation(3)
+                },
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["Return"],
+            button: Some(StripStop::Return),
+            command: task_take_over,
+            ..case(
+                "between steps on a handed tab",
+                &card(),
+                Conversation {
+                    handed: vec![30],
+                    ..between.clone()
+                },
                 Some(at_work("task-1", "Claude")),
             )
         },
@@ -4761,6 +4798,7 @@ fn the_page_row_holds_one_case_at_a_time(cx: &mut TestAppContext) {
     assert!(matches!(row(held, None, cx).case, Some(RowCase::Yours(_))));
     let elsewhere = Conversation {
         on: Some(31),
+        handed: Vec::new(),
         ..conversation(3)
     };
     assert_eq!(
@@ -4941,4 +4979,147 @@ fn a_kept_card_is_told_only_of_a_picture_an_agent_could_have_had(cx: &mut TestAp
 
     shell.update(cx, |shell, _| shell.private = true);
     assert_eq!(taken(&|_, _| {}, cx), None);
+}
+
+/// The thread's pages: tab 30 the user handed it and 31 one it opened, each loaded, shown.
+fn handed_and_opened(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    Rc<Recorder>,
+    Entity<super::TalkView>,
+    &mut VisualTestContext,
+) {
+    let mut working = card();
+    working.pages = vec![30, 31];
+    let (shell, host, cx) = shown_with(working, cx);
+    cx.simulate_a11y_activation();
+    let talk = Conversation {
+        tabs: vec![(30, "tickets.example".into()), (31, "seats.example".into())],
+        handed: vec![30],
+        ..conversation(1)
+    };
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(3, Vec::new(), vec![30, 31], Vec::new(), folders, cx);
+        for (tab, url) in [
+            (30, "https://tickets.example/"),
+            (31, "https://seats.example/"),
+        ] {
+            let page = Page {
+                url: url.into(),
+                loading: false,
+                ..Page::default()
+            };
+            shell.set_page(tab, page, cx);
+        }
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    redraw(&shell, &view, cx);
+    redraw(&shell, &view, cx);
+    (shell, host, view, cx)
+}
+
+/// What a screen reader has, each node's role and words.
+fn spoken(
+    cx: &mut VisualTestContext,
+) -> Vec<(gpui::Role, String, Option<gpui::Bounds<gpui::Pixels>>)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let scale = f64::from(cx.update(|window, _| window.scale_factor()));
+    let point = |x: f64, y: f64| point(px((x / scale) as f32), px((y / scale) as f32));
+    (tree.nodes.into_iter())
+        .map(|(_, node)| {
+            let at = (node.bounds())
+                .map(|at| gpui::Bounds::from_corners(point(at.x0, at.y0), point(at.x1, at.y1)));
+            (
+                node.role(),
+                node.label().unwrap_or_default().to_string(),
+                at,
+            )
+        })
+        .collect()
+}
+
+/// Only a tab the user handed the thread has the way back on its tile, named Z34, and its tile
+/// is spoken with Z35 after its own words; a page the thread opened has neither. A click on it
+/// returns the tab, and isn't the tile's, which would stand on the page.
+#[gpui::test]
+fn only_a_handed_tabs_tile_has_the_way_back(cx: &mut TestAppContext) {
+    use gpui::Role;
+    let (_, host, _, cx) = handed_and_opened(cx);
+    let nodes = spoken(cx);
+    let backs: Vec<_> = (nodes.iter())
+        .filter(|(role, said, _)| *role == Role::Button && said == super::words::RETURN_TAB)
+        .collect();
+    assert_eq!(
+        backs.len(),
+        1,
+        "one way back, on the handed tab's tile: {nodes:?}"
+    );
+    let yours: Vec<_> = (nodes.iter())
+        .filter(|(_, said, _)| said.ends_with(&format!(", {}", super::words::YOUR_TAB)))
+        .map(|(_, said, _)| said.as_str())
+        .collect();
+    assert_eq!(
+        yours.len(),
+        1,
+        "only the handed tab's tile says it's theirs: {nodes:?}"
+    );
+    assert!(
+        !yours[0].contains("seats"),
+        "the page the thread opened says it's the user's: {yours:?}"
+    );
+    let at = backs[0].2.expect("a drawn button has its place");
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    cx.run_until_parked();
+    let calls: Vec<String> = (host.take().into_iter())
+        .filter(|call| !call.starts_with("tooltip") && !call.starts_with("picture"))
+        .collect();
+    assert_eq!(calls, ["task task-1 ReturnTab(30)"], "the way back's click");
+}
+
+/// A handed tab's page menu has the way back first, over a line, and choosing it returns the
+/// tab without running any of the page's commands; a page the thread opened has no such row.
+#[gpui::test]
+fn a_handed_tabs_page_menu_has_the_way_back_first(cx: &mut TestAppContext) {
+    use crate::shell::page_menu::PageMenuItem;
+    let (shell, host, _, cx) = handed_and_opened(cx);
+    let copy = PageMenuItem {
+        command: 4,
+        title: "Copy".into(),
+        parent: None,
+        enabled: true,
+        checked: false,
+    };
+    let titles = |host: &Recorder| -> Vec<String> {
+        (host.entries.borrow().iter())
+            .map(|entry| entry.title.to_string())
+            .collect()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.show_page_menu(31, vec![copy.clone()], point(px(400.), px(300.)), cx)
+    });
+    assert_eq!(titles(&host), ["Copy"], "a page the thread opened");
+    cx.update(|_, cx| host.choose("Copy", cx));
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.show_page_menu(30, vec![copy.clone()], point(px(400.), px(300.)), cx)
+    });
+    assert_eq!(
+        titles(&host),
+        [super::words::RETURN_TAB, "", "Copy"],
+        "a handed tab"
+    );
+    cx.update(|_, cx| host.choose(super::words::RETURN_TAB, cx));
+    cx.run_until_parked();
+    let calls: Vec<String> = (host.take().into_iter())
+        .filter(|call| !call.starts_with("picture") && !call.starts_with("context menu"))
+        .collect();
+    assert_eq!(
+        calls,
+        ["page menu 30 closes", "task task-1 ReturnTab(30)"],
+        "the way back's row"
+    );
 }
