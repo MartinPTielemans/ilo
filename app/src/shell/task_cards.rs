@@ -172,7 +172,7 @@ impl PageWord {
             PageWord::Done => "Done",
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
-            PageWord::Paused => "Paused",
+            PageWord::Paused => crate::agents::task::PAUSED,
             PageWord::Stopped => "Stopped",
         }
     }

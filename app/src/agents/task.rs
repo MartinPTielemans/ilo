@@ -695,6 +695,15 @@ pub enum Word {
 }
 
 impl Word {
+    pub const ALL: [Word; 6] = [
+        Self::Working,
+        Self::NeedsYou,
+        Self::Done,
+        Self::Stopped,
+        Self::Interrupted,
+        Self::AtLimit,
+    ];
+
     /// The word for `state`; `waits` says whether something of the task's waits on the user.
     pub fn of(state: &State, waits: bool) -> Self {
         match state {
@@ -3235,7 +3244,7 @@ impl Agents {
     /// A client said hello on `connection`: the name that connection's session's card shows. One
     /// the user connected in Settings › Agents by name has that; any other MCP client, the name it
     /// gives, as plain text, unless it would pass for the browser, whose words the cards set beside
-    /// an agent's.
+    /// an agent's, or for one of those words, a level's or a state's.
     pub(super) fn hello(&mut self, agent: &str, connection: u64, client: &str) {
         let given = super::request::plain(client);
         // Each of the `ilo` command's commands says hello, and its session keeps the name it
@@ -3247,7 +3256,10 @@ impl Agents {
         let (name, nameless) = match Client::from_id(agent) {
             Some(Client::Command) if under_way => return,
             Some(Client::Other | Client::Command)
-                if !given.is_empty() && !names_the_browser(&given) && !names_a_client(client) =>
+                if !given.is_empty()
+                    && !names_the_browser(&given)
+                    && !names_a_client(client)
+                    && !names_a_state(&given) =>
             {
                 (given, false)
             }
@@ -4444,6 +4456,10 @@ fn last_finished(task: &Task) -> Option<SharedString> {
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`Card::lead`).
 pub const NEEDS_YOU: &str = "Needs you";
+/// A page the user took over, on the bar over it and its row at the sidebar's foot, and one whose
+/// task waits at a refused step, broke off, or went on without it.
+pub const DRIVING: &str = "You're driving";
+pub const PAUSED: &str = "Paused";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
 
@@ -5378,6 +5394,17 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// Whether a client's name reads as one of the browser's own words for a task's level or its
+/// state, which a card sets beside an agent's name: the whole name, in any case and however its
+/// words are joined. A name is a name only, so "Done" is none, and "Done Deals" is an agent's.
+fn names_a_state(name: &str) -> bool {
+    let reads = |words: &str| reads_as(words).replace(' ', "");
+    let given = reads(name);
+    let levels = Tier::ALL.into_iter().map(Tier::label);
+    let states = Word::ALL.into_iter().map(Word::after_name);
+    (levels.chain(states).chain([DRIVING, PAUSED])).any(|own| given == reads(own))
 }
 
 /// The files of the tasks a run before left, but for the places walled tasks left, which are swept

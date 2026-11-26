@@ -12387,6 +12387,33 @@ mod sessions {
             assert_eq!(named(&agents, cx).0, "Another app", "{posing} passed");
             assert!(nameless(&agents, cx), "{posing} passed as a name");
         }
+        // Nor is a name one of the browser's own words for a level or a state, in any case and
+        // however its words are joined: it has its kind's, as one posing as the browser has.
+        use crate::agents::task::{DRIVING, PAUSED, Word};
+        let levels = Tier::ALL.into_iter().map(Tier::label);
+        let states = Word::ALL.into_iter().map(Word::after_name);
+        let words: Vec<&str> = levels.chain(states).chain([DRIVING, PAUSED]).collect();
+        assert_eq!(words.len(), 11);
+        for word in words {
+            let joined = word.replace(' ', "-");
+            for posing in [word, &word.to_uppercase(), &word.to_lowercase(), &joined] {
+                hello(&agents, "mcp-client", "Zed", cx);
+                hello(&agents, "mcp-client", posing, cx);
+                assert_eq!(
+                    named(&agents, cx).0,
+                    Client::Other.name(),
+                    "{posing} passed"
+                );
+                // With no name of its own, as any app that gave none: Settings calls it this app.
+                assert!(nameless(&agents, cx), "{posing} passed as a name");
+            }
+        }
+        // A longer name with such a word in it is an agent's own.
+        for taken in ["Done Deals", "Working Title", "Paused Player 2"] {
+            hello(&agents, "mcp-client", taken, cx);
+            assert_eq!(named(&agents, cx).0, taken);
+            assert!(!nameless(&agents, cx), "{taken} is a name of its own");
+        }
         // A name of its own is shown as given, in any script, accents and all, and without what
         // doesn't show.
         for taken in [
