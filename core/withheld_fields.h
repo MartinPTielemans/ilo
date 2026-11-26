@@ -56,6 +56,12 @@ Seen SeenOf(const FieldFacts& field);
 // whatever they say, so the page isn't asked about it.
 bool CouldShow(const FieldFacts& field);
 
+// Whether the core reads the field's attributes and markup for its outline: one that CouldShow,
+// and every list not yet known to be secret or filled, whose autocomplete alone says whether what
+// is chosen in it is a secret's, as an expiry's is. Once per list per outline; a list whose read
+// fails is then secret, never a password field, as that would refuse a choice in it outright.
+bool Described(const FieldFacts& field);
+
 // Whether what the field holds is withheld from an agent: anything SeenOf doesn't show.
 bool Withheld(const FieldFacts& field);
 

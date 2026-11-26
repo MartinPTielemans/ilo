@@ -249,7 +249,7 @@ constexpr size_t kMostDescribed = 64;
 void Bound(std::vector<std::pair<int64_t, FieldFacts>>& fields) {
   size_t described = 0;
   for (auto& [element, facts] : fields) {
-    if (CouldShow(facts) && ++described > kMostDescribed) {
+    if (Described(facts) && ++described > kMostDescribed) {
       AddDescribed(facts, nullptr);
     }
   }
@@ -485,9 +485,9 @@ base::ListValue AgentTree(base::ListValue nodes,
           dict->Set("contents", "changed");
           break;
       }
-      // Only of a text field, whose type and autocomplete were read (CheckPasswords): of any
-      // other field the two aren't said.
-      if (IsTextField(*dict)) {
+      // Only of a text field, whose type and autocomplete were read (CheckPasswords), and a
+      // list, whose autocomplete was (Described): of any other field the two aren't said.
+      if (IsTextField(*dict) || IsRole(*dict, "combobox")) {
         TellKinds(*dict, field->second.secret, field->second.autofilled);
       }
     }
@@ -2870,8 +2870,8 @@ void AgentPage::ReadContents(base::ListValue nodes,
                              std::set<int64_t> passwords,
                              std::vector<std::pair<int64_t, FieldFacts>> filled,
                              size_t next) {
-  // Only a field that could show what it holds needs anything more of the page.
-  while (next < filled.size() && !CouldShow(filled[next].second)) {
+  // Only a field that could show what it holds, or a list, needs anything more of the page.
+  while (next < filled.size() && !Described(filled[next].second)) {
     ++next;
   }
   if (next < filled.size()) {
