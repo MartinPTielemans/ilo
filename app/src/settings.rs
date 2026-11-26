@@ -874,6 +874,8 @@ fn look_for_clients(cx: &mut App) {
         agents.update(cx, |agents, cx| {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
+            // Whether the command's skill files are still in place, for its row.
+            agents.look_skills(cx);
         });
     }
 }
@@ -4757,11 +4759,27 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(
+        let mut detail = agents::cli::detail(
             state,
             model.command_flatpak_line().as_deref(),
             model.command_windows_folder().as_deref(),
         );
+        // After its own line: the skill written for each program, or one a Remove left (SK1, SK2).
+        let (added, changed) = (model.skills(), model.skills_changed());
+        let skill = match (added.is_empty(), changed.is_empty()) {
+            (false, _) => Some(format!("Skill added for {}.", agents::named(&added))),
+            (_, false) => Some(format!(
+                "Skill for {} was changed, so it wasn't removed.",
+                agents::named(&changed)
+            )),
+            _ => None,
+        };
+        if let Some(skill) = skill {
+            detail.line = format!("{} {skill}", detail.line);
+        }
+        let reveal = (!changed.is_empty())
+            .then(|| model.skill_to_reveal())
+            .flatten();
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)
@@ -4792,6 +4810,19 @@ impl Settings {
                     cx.write_to_clipboard(ClipboardItem::new_string(export.clone()));
                 });
             controls.push(copy.into_any_element());
+        }
+        if let Some(path) = reveal {
+            // The app's words for the system's file manager.
+            let title = match cfg!(target_os = "macos") {
+                true => "Show in Finder",
+                false => "Show in Folder",
+            };
+            let show = self
+                .button("reveal-skill", title)
+                .relative()
+                .child(self.drawn("ilo-command reveal skill".into()))
+                .on_click(move |_, _, _| crate::boosts_host::show_file(&path));
+            controls.push(show.into_any_element());
         }
         controls.push(match state {
             agents::cli::State::Off => action("Add", "add-command"),

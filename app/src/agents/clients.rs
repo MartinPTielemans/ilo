@@ -120,6 +120,20 @@ pub trait Clients: Send + Sync {
     fn searches(&self, _folder: &Path) -> bool {
         true
     }
+    /// The command's Add writes its skill for each of `programs` (agents::skill), and says what
+    /// to keep. No default, so no test's stand-in can reach this computer's home (first run's
+    /// floor 9).
+    fn add_skills(
+        &self,
+        programs: &[Client],
+        kept: &[super::skill::Kept],
+    ) -> Vec<super::skill::Kept>;
+    /// The command's Remove takes away each kept skill still byte for byte ours.
+    fn remove_skills(&self, kept: &[super::skill::Kept]) -> Vec<(Client, super::skill::Removed)>;
+    /// Where each kept skill's file is, by the remover's walk, read only.
+    fn look_skills(&self, kept: &[super::skill::Kept]) -> Vec<super::skill::Place>;
+    /// The file a kept skill's reveal shows, made at the click.
+    fn skill_at(&self, kept: &super::skill::Kept) -> Option<PathBuf>;
     /// Whether a CLI that runs agent tasks is on this computer and signed in, which runs it.
     fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
         super::ready::look(cli)
@@ -196,6 +210,37 @@ impl Clients for System {
             Client::Codex => codex_config().parent().is_some_and(Path::is_dir),
             Client::Other | Client::Command => true,
         }
+    }
+
+    /// Into the user's home, as HOME names it. A Flatpak's sandbox can't reach either maker's
+    /// folder, so there it writes none.
+    fn add_skills(
+        &self,
+        programs: &[Client],
+        kept: &[super::skill::Kept],
+    ) -> Vec<super::skill::Kept> {
+        match (super::skill::real_home(), super::bridge::flatpak_id()) {
+            (Some(home), None) => super::skill::add(&home, programs, kept),
+            _ => kept.to_vec(),
+        }
+    }
+
+    fn remove_skills(&self, kept: &[super::skill::Kept]) -> Vec<(Client, super::skill::Removed)> {
+        match super::skill::real_home() {
+            Some(home) => super::skill::remove_all(&home, kept),
+            None => Vec::new(),
+        }
+    }
+
+    fn look_skills(&self, kept: &[super::skill::Kept]) -> Vec<super::skill::Place> {
+        match super::skill::real_home() {
+            Some(home) => super::skill::look_all(&home, kept),
+            None => vec![super::skill::Place::Missing; kept.len()],
+        }
+    }
+
+    fn skill_at(&self, kept: &super::skill::Kept) -> Option<PathBuf> {
+        super::skill::at(&super::skill::real_home()?, kept.program, &kept.name)
     }
 
     #[cfg(not(windows))]

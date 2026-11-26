@@ -121,7 +121,6 @@ pub(crate) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) threads: Cell<Option<bool>>,
-    pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -2193,15 +2192,6 @@ impl Browser for Recorder {
         if let Some(agents) = crate::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_threads(on, cx));
         }
-    }
-
-    fn other_apps(&self, _: &App) -> Option<bool> {
-        self.other_apps.get()
-    }
-
-    fn set_other_apps(&self, on: bool, _: &mut App) {
-        self.other_apps.set(Some(on));
-        self.record(format!("other apps {on}"))
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
