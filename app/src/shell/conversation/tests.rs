@@ -3089,6 +3089,31 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
+/// A step's line leads with the assistant's words and has the product's account at its right
+/// (T8), and what came of it gives way; a step with none is its account and what came of it.
+#[test]
+fn a_steps_line_is_the_assistants_words_then_the_account() {
+    let said = TraceStep {
+        says: "Picking 16 GB and 512 GB".into(),
+        description: "2 s".into(),
+        ..step(0, "Chose “16 GB”", false)
+    };
+    let (title, note) = super::step_words(&said);
+    assert_eq!(
+        (title.as_ref(), note.as_ref()),
+        ("Picking 16 GB and 512 GB", "Chose “16 GB”")
+    );
+    let alone = TraceStep {
+        description: "3 s".into(),
+        ..step(1, "Read brightcart.example", false)
+    };
+    let (title, note) = super::step_words(&alone);
+    assert_eq!(
+        (title.as_ref(), note.as_ref()),
+        ("Read brightcart.example", "3 s")
+    );
+}
+
 /// A stretch's fold says Z14's words while it works, its word and the time so far from its first
 /// step; done, its summary is the whole line, with no time (TS1a), a split leading it. It has no
 /// dot, whatever the card says. A step's line has no dot before its note.

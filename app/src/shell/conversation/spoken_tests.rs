@@ -372,6 +372,37 @@ fn an_over_stretch_reads_its_summary_and_a_failed_step_on_its_own(cx: &mut TestA
     );
 }
 
+/// A step the assistant spoke to is read as one line: the product's account first, then the
+/// assistant's words as theirs (T8), never as the product's and never on a line of their own.
+#[gpui::test]
+fn a_step_with_the_assistants_words_reads_its_account_then_theirs(cx: &mut TestAppContext) {
+    use crate::agents::task::{TraceItem, TraceStep};
+    let (shell, _host, cx) = shown(cx);
+    reader(&shell, cx);
+    let mut spoken = conversation(1);
+    let Line::Trace(trace) = &mut spoken.lines[0] else {
+        unreachable!()
+    };
+    trace.items = vec![TraceItem::Step(TraceStep {
+        says: "Looking for the 16 GB model".into(),
+        ..step(0, "Reading brightcart.example", true)
+    })];
+    talk(&shell, spoken, cx);
+    drawn(&shell, cx);
+    let read = named(Role::Label, cx);
+    let line = "Reading brightcart.example, Claude says Looking for the 16 GB model";
+    assert!(
+        read.iter().any(|each| each == line),
+        "the step isn't read as its account, then the assistant's words: {read:?}"
+    );
+    assert!(
+        !read
+            .iter()
+            .any(|each| each == "Claude says Looking for the 16 GB model"),
+        "the assistant's words were read on a line of their own: {read:?}"
+    );
+}
+
 /// A task that finishes while its conversation shows has its answer told once, as its first
 /// line, not whole and not the line its agent wrote for its card.
 #[gpui::test]

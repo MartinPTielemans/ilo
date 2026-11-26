@@ -2535,13 +2535,19 @@ impl TalkView {
         };
         let opens = step.opens != Opens::Nothing;
         let open = opens && self.is_open(fold, false);
-        let mut line = TraceLine::new(fold, step.title.clone(), step.description.clone());
+        let (title, note) = step_words(step);
+        let mut line = TraceLine::new(fold, title, note);
+        // Heard, the account comes first, and the words are the assistant's, never the product's.
+        if !step.says.is_empty() {
+            let name = (self.shown.as_ref()).map_or("".into(), |shown| shown.name.clone());
+            let says = words::says(&name, step.says.as_ref());
+            line.heard = Some(format!("{}, {says}", step.title));
+        }
         line.glyph = glyph.then_some(step.glyph);
         line.failed = step.failed;
         line.chevron = opens.then(|| self.chevron(fold, open, look));
-        // The step under way wears the ring. Steps stand flat, with no connector between them.
-        line.ring = (step.running && glyph).then(|| self.turned(look, cx));
-        line.shimmers = (step.running && !glyph).then(|| look.shimmer(self.made));
+        // The step under way shimmers, with no ring. Steps stand flat, with no connector.
+        line.shimmers = step.running.then(|| look.shimmer(self.made));
         self.crossfade(Fold::Step(step.key), &mut line, look);
         line.note_alpha = line.note_alpha.min(self.motion.note(step.key, look.now));
         let mut line = trace_line(look, line);
@@ -2601,16 +2607,11 @@ impl TalkView {
                 .child(step.under.clone())
                 .into_any_element()
         });
-        let says = self.says(step, under, look);
-        std::iter::once(line)
-            .chain(sub)
-            .chain(says)
-            .chain(opened)
-            .collect()
+        std::iter::once(line).chain(sub).chain(opened).collect()
     }
 
-    /// The assistant's own word on why it took `step`, one line under it from `under`, as the
-    /// assistant's, and heard as theirs. None for a step with none.
+    /// The assistant's own word on why it took a helper's `step`, one line under the helper's own
+    /// line from `under`, as the assistant's, and heard as theirs. None for a step with none.
     fn says(&self, step: &TraceStep, under: f32, look: &Look) -> Option<gpui::AnyElement> {
         (!step.says.is_empty()).then(|| {
             let name =
@@ -3767,9 +3768,9 @@ struct TraceLine {
     note: SharedString,
     chevron: Option<f32>,
     shimmers: Option<Option<f32>>,
-    /// The step under way: the ring in its glyph's place, this far round, its words in the
-    /// text's ink.
-    ring: Option<f32>,
+    /// What a screen reader hears for it, where that isn't its words in their order: a step the
+    /// assistant spoke to, its account and then whose words those are.
+    heard: Option<String>,
     /// It joins the line above it with a connector, as a step under its page does.
     joined_above: bool,
     /// A helper's step under way, at its right: the ring after its words, this far round.
@@ -3801,7 +3802,7 @@ impl TraceLine {
             note,
             chevron: None,
             shimmers: None,
-            ring: None,
+            heard: None,
             joined_above: false,
             ring_after: None,
             head: None,
@@ -3821,7 +3822,6 @@ impl TraceLine {
         let words = match self.shimmers {
             _ if ilos => palette.text(ILO_INK),
             _ if self.head == Some(true) => palette.text(TITLE),
-            _ if self.ring.is_some() => palette.text(TITLE),
             Some(None) => palette.text(TITLE),
             // At the shimmer's peak, which each part fades down from.
             Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
@@ -3935,6 +3935,16 @@ fn fold_words(trace: &Trace, now: Instant) -> (SharedString, SharedString) {
     (title.into(), note.into())
 }
 
+/// A step's line's words: the assistant's word on it, leading in the trace's quiet ink, with the
+/// product's account at the right (sheet 45); or with none, as for a step whose product's words
+/// must stand alone, its account and what came of it.
+pub(super) fn step_words(step: &TraceStep) -> (SharedString, SharedString) {
+    match step.says.is_empty() {
+        true => (step.title.clone(), step.description.clone()),
+        false => (step.says.words(), step.title.clone()),
+    }
+}
+
 /// Each step of `trace`, a helper's line's too, and each tab's of a step on several.
 fn trace_steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
     (trace.items.iter())
@@ -3982,7 +3992,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         note: description,
         chevron,
         shimmers,
-        ring,
+        heard,
         joined_above,
         ring_after,
         head,
@@ -3996,9 +4006,10 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let space = if joined { " " } else { "" };
     // A step reads as its words, in its place among the lines; one of ilo's is named as a whole
     // (`TalkView::ilo`).
-    let read = (look.a11y && mark.is_none()).then(|| match description.is_empty() {
-        true => title.to_string(),
-        false => format!("{title} {description}"),
+    let read = (look.a11y && mark.is_none()).then(|| match (heard, description.is_empty()) {
+        (Some(heard), _) => heard,
+        (None, true) => title.to_string(),
+        (None, false) => format!("{title} {description}"),
     });
     let (id, group): (ElementId, SharedString) = match key {
         LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
@@ -4027,28 +4038,12 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         let size = if ilos { ILO_GLYPH } else { TRACE_GLYPH };
         let color = glyph_ink;
         let path = if failed { "icons/x.svg" } else { glyph };
-        match ring {
-            Some(turned) => div()
-                .flex_none()
-                .size(px(size))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(ring::ring(
-                    STEP_RING,
-                    STEP_RING_STROKE,
-                    turned,
-                    palette.text(RING_TRACK),
-                    palette.text(TITLE),
-                ))
-                .into_any_element(),
-            None => svg()
-                .flex_none()
-                .path(path)
-                .size(px(size))
-                .text_color(color)
-                .into_any_element(),
-        }
+        svg()
+            .flex_none()
+            .path(path)
+            .size(px(size))
+            .text_color(color)
+            .into_any_element()
     });
     // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
     // keeps to their first line, which is where a trace's one line is.

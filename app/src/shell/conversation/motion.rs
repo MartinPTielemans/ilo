@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use gpui::{Bounds, Pixels, SharedString};
 
-use super::{Fold, markdown};
+use super::{Fold, markdown, step_words};
 use crate::agents::task::{Conversation, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::cubic_bezier;
 use crate::tokens::shell::conversation::motion::{
@@ -411,7 +411,8 @@ impl Motion {
     }
 
     /// Steps changed from `was`: one that came rises, and one that finished says so, its title
-    /// crossfading to its past tense, then its note fading in.
+    /// crossfading to its past tense, then its note fading in. A step the assistant spoke to keeps
+    /// its words, and its account at the right fades in in its new tense.
     fn steps_changed<'a>(
         &mut self,
         was: impl Iterator<Item = &'a TraceStep>,
@@ -420,24 +421,22 @@ impl Motion {
     ) {
         let before: HashMap<usize, &TraceStep> = was.map(|step| (step.key, step)).collect();
         for step in steps {
-            match before.get(&step.key) {
-                None => _ = self.came.insert(Key::Step(step.key), now),
-                Some(old) if old.title != step.title => {
-                    let was = Was {
-                        title: old.title.clone(),
-                        note: old.description.clone(),
-                        chevron: true,
-                        since: now,
-                    };
-                    self.swaps.insert(Fold::Step(step.key), was);
-                    if old.description != step.description {
-                        self.notes.insert(step.key, now);
-                    }
-                }
-                Some(old) if old.description != step.description => {
-                    _ = self.notes.insert(step.key, now)
-                }
-                _ => {}
+            let Some(old) = before.get(&step.key) else {
+                _ = self.came.insert(Key::Step(step.key), now);
+                continue;
+            };
+            let ((old_title, old_note), (title, note)) = (step_words(old), step_words(step));
+            if old_title != title {
+                let was = Was {
+                    title: old_title,
+                    note: old_note.clone(),
+                    chevron: true,
+                    since: now,
+                };
+                self.swaps.insert(Fold::Step(step.key), was);
+            }
+            if old_note != note {
+                self.notes.insert(step.key, now);
             }
         }
     }

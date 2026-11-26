@@ -3418,10 +3418,12 @@ page-chip-fill = 0.08
 # work its word in the text's ink at medium, the time counting up in text-2, and a chevron down;
 # done, one phrase in text-2 and a chevron right, and it closes by itself. Under the head, its
 # lines `stretch-gap` apart, flat at one indent: an icon slot, the words at `trace-text` on
-# `trace-text-line`, and at the right why a step failed. A step is its kind's glyph, past tense in
-# text-2; the step under way wears the ring, present tense in the text's ink. A helper's line joins
-# the one above with a short connector in the ink at `connector-ink`, under the middle of the icon
-# slot. A failed step is as quiet as any other, a cross for its glyph: never red.
+# `trace-text-line`. A step is its kind's glyph, the assistant's words on it in text-2, and the
+# product's account at the right in text-2; a step with no words of the assistant's is its account
+# alone. The step under way shimmers, with no ring. A helper's line joins the one above with a
+# short connector in the ink at `connector-ink`, under the middle of the icon slot, and its step
+# under way wears the ring after its words. A failed step is as quiet as any other, a cross for
+# its glyph and its reason in its account: never red.
 trace-line = 26.0
 fold-head = 28.0
 fold-gap = 6.0
@@ -3444,9 +3446,10 @@ connector-x = 7.5
 connector-above = 3.0
 connector-ink = 0.2
 trace-below = 12.0
-# What the assistant itself says in a trace, an opened thought and its note on a step, has one form
-# (spec-thread-stage.md, spec-held-abilities.md part 5): text-2 behind a rule `said-rule` wide at
-# the ink's `said-ink`, `said-gap` before the words; a note is `says-top` under its step's line.
+# What the assistant itself says in a trace, an opened thought and its note on a helper's step, has
+# one form (spec-thread-stage.md, spec-held-abilities.md part 5): text-2 behind a rule `said-rule`
+# wide at the ink's `said-ink`, `said-gap` before the words; a note is `says-top` under the
+# helper's line. Its note on one of the task's own steps leads that step's line instead.
 said-rule = 1.0
 said-ink = 0.2
 said-gap = 8.0
