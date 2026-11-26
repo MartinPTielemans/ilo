@@ -5273,7 +5273,7 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
 fn sign_drawn(
     view: &Entity<super::TalkView>,
     cx: &mut VisualTestContext,
-) -> Option<(super::Sign, gpui::Bounds<gpui::Pixels>)> {
+) -> Option<(super::Knot, gpui::Bounds<gpui::Pixels>)> {
     let drawn = view.read_with(cx, |view, _| view.sign_drawn.get());
     drawn.map(|(sign, _, bounds)| (sign, bounds))
 }
@@ -5283,7 +5283,7 @@ fn sign_drawn(
 /// thread's own state alone: an assistant's words that say it waits change nothing.
 #[gpui::test]
 fn the_sign_says_working_waiting_or_nothing_from_the_threads_own_state(cx: &mut TestAppContext) {
-    use super::Sign::{Waiting, Working};
+    use super::Knot::{Waiting, Working};
     let (shell, _, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let yours = Live::Yours {
@@ -5367,7 +5367,7 @@ fn working_alone() -> Conversation {
 /// an even pace, from where the cord starts as the work does.
 #[test]
 fn the_working_gap_travels_round_the_cord_at_an_even_pace() {
-    use super::sign::{Sign, gap};
+    use crate::shell::knot::{Knot, gap};
     use crate::tokens::shell::conversation::sign::{LAP, WORKING_GAP};
     for (gone, at) in [
         (0., 0.),
@@ -5376,7 +5376,7 @@ fn the_working_gap_travels_round_the_cord_at_an_even_pace() {
         (LAP, 0.),
         (LAP * 1.75, 0.75),
     ] {
-        let (was, length) = gap(Sign::Working, gone);
+        let (was, length) = gap(Knot::Working, gone);
         assert!((was - at).abs() < 1e-4, "{gone} s in: at {was}, not {at}");
         assert_eq!(length, WORKING_GAP, "{gone} s in");
     }
@@ -5402,7 +5402,7 @@ fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut Te
     );
     assert_eq!(
         sign_drawn(&view, cx).map(|(sign, _)| sign),
-        Some(super::Sign::Working)
+        Some(super::Knot::Working)
     );
     assert_eq!(
         sign_gap(&view, cx),
@@ -5437,12 +5437,12 @@ fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut Te
 /// and over, the gap's middle always at the loop's top.
 #[test]
 fn the_waiting_gap_opens_and_closes_at_the_loops_top_then_rests() {
-    use super::sign::{Sign, gap};
+    use crate::shell::knot::{Knot, gap};
     use crate::tokens::shell::conversation::sign::{HOLD, OPEN, REST, WAITING_GAP};
     let crown = crate::product::crown();
     let cycle = OPEN + HOLD + OPEN + REST;
     let length = |gone: f32| {
-        let (at, length) = gap(Sign::Waiting, gone);
+        let (at, length) = gap(Knot::Waiting, gone);
         assert!(
             (at + length / 2. - crown).abs() < 1e-4,
             "{gone} s in the gap's middle is at {}, not the loop's top {crown}",
@@ -5485,7 +5485,7 @@ fn the_waiting_gap_opens_and_closes_at_the_loops_top_then_rests() {
 /// is scheduled.
 #[gpui::test]
 fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
-    use super::Sign;
+    use super::Knot;
     let (shell, _, cx) = shown(cx);
     cx.update(|_, cx| cx.set_reduce_motion(false));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
@@ -5513,7 +5513,7 @@ fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
     );
     assert_eq!(
         sign_drawn(&view, cx).map(|(sign, _)| sign),
-        Some(Sign::Waiting)
+        Some(Knot::Waiting)
     );
     assert!(
         sign_gap(&view, cx).is_some(),
@@ -5535,7 +5535,7 @@ fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
     );
     assert_eq!(
         sign_drawn(&view, cx).map(|(sign, _)| sign),
-        Some(Sign::Waiting)
+        Some(Knot::Waiting)
     );
 
     // Handed back, the next step moves and the sign works.
@@ -5548,7 +5548,7 @@ fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
     );
     assert_eq!(
         sign_drawn(&view, cx).map(|(sign, _)| sign),
-        Some(Sign::Working)
+        Some(Knot::Working)
     );
 
     // Waiting again, in a window not shown: nothing is scheduled.
