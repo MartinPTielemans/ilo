@@ -531,6 +531,55 @@ fn a_tab_that_isnt_handed_leaves_nothing_and_the_others_go(cx: &mut TestAppConte
     );
 }
 
+/// A handed tab's page is as the user left it, with whatever they put in it, so from the give a
+/// kept card keeps no picture of it until a new document, while its thread holds it or after: not
+/// for a same-document navigation, and not for its return to the user's tabs. A tab the core
+/// refused to give and one never picked are as they were.
+#[gpui::test]
+fn a_handed_tabs_picture_is_kept_only_from_a_new_document(cx: &mut TestAppContext) {
+    let run = run("handed-unkept", cx);
+    const REFUSED: u64 = 18;
+    run.browser.tabs.borrow_mut().extend([
+        (FARES.0, USERS, FARES.1, FARES.2),
+        (REFUSED, USERS, "Upload", "https://files.example/"),
+    ]);
+    run.browser.not_given.borrow_mut().insert(REFUSED);
+    let keeps = |tab: u64, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| agents.keeps_picture(tab, cx))
+    };
+    let state = |tab: u64, url: &str, loading: bool, cx: &mut TestAppContext| {
+        (run.agents).update(cx, |agents, _| agents.tab_state(tab, url, loading))
+    };
+    let new_document = |tab: u64, url: &str, cx: &mut TestAppContext| {
+        state(tab, url, true, cx);
+        (run.agents).update(cx, |agents, _| agents.tab_loaded(tab));
+        state(tab, url, false, cx);
+    };
+    for tab in [SEATS.0, TRAINS.0, FARES.0, REFUSED] {
+        assert!(keeps(tab, cx), "tab {tab} before any give");
+    }
+
+    let picked = [SEATS.0, REFUSED, TRAINS.0];
+    let agent = send(&run, ASKED, USERS, &picked, cx).expect("started");
+    assert_eq!(given(&run), [SEATS.0, TRAINS.0]);
+    assert!(!keeps(SEATS.0, cx) && !keeps(TRAINS.0, cx), "the give");
+    assert!(keeps(REFUSED, cx), "a tab the core didn't give");
+    assert!(keeps(FARES.0, cx), "a tab never picked");
+
+    state(SEATS.0, "https://tickets.example/seats#row-4", false, cx);
+    assert!(!keeps(SEATS.0, cx), "a same-document navigation");
+    press_return(&run, &agent, SEATS.0, cx);
+    assert!(!is_handed(&run, &agent, SEATS.0, cx));
+    assert!(!keeps(SEATS.0, cx), "its return is no new document");
+    new_document(SEATS.0, "https://tickets.example/paid", cx);
+    assert!(keeps(SEATS.0, cx));
+
+    // While its thread holds it, as after.
+    assert!(is_handed(&run, &agent, TRAINS.0, cx));
+    new_document(TRAINS.0, "https://www.example.com/timetable", cx);
+    assert!(keeps(TRAINS.0, cx));
+}
+
 /// What a pick shows of itself is how many tabs it has, so no log line or failed test names one.
 #[test]
 fn a_pick_shows_only_its_count() {

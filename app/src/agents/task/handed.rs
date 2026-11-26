@@ -344,6 +344,9 @@ impl Agents {
         if !self.browser.give_tab(tab, space, cx) {
             return false;
         }
+        // The page is as the user left it, with whatever they put in it, so a kept card keeps no
+        // picture of it until a new document (kept/unkept.rs).
+        self.unkept.mark(tab);
         // Whatever it left an agent's Space for before, it's this thread's page now.
         self.gone.remove(&tab);
         let agent = agent.to_string();
