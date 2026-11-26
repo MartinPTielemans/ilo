@@ -18,8 +18,10 @@ const THREAD: u64 = 2;
 /// Turns' requests count up from here.
 const TURNS: u64 = 100;
 
-/// The permission profile of ilo's own that a thread's commands run under, by its id, never shown.
-pub const PROFILE: &str = "ilo-thread";
+/// What starts the name of the permission profile of ilo's own that a thread's commands run under,
+/// never shown. Each start's name ends in its own random part, as Codex merges a table of the
+/// user's config.toml into one of the same name and no table written beforehand can name it.
+pub const PROFILE: &str = "ilo-thread-";
 /// The oldest Codex whose thread/start takes a named profile and answers which one is active: the
 /// one they were read from (rust-v0.172.0, app-server-protocol/src/protocol/v2/thread.rs:99-102,
 /// 225-229). An older one could take the thread without the profile and never say so.
@@ -47,6 +49,24 @@ struct Inner {
     thinking: Option<Instant>,
     /// The model the user picked for its next turns, by id, which each turn names from then on.
     model: Option<String>,
+    /// The name of the profile its thread was asked to start under, once it was asked.
+    profile: Option<String>,
+}
+
+impl State {
+    /// The profile's name its thread was asked to start under, for a test to answer with.
+    #[cfg(test)]
+    pub fn profile(&self) -> Option<String> {
+        self.inner.lock().unwrap().profile.clone()
+    }
+}
+
+/// A new name for a start's profile: PROFILE and 16 hex digits from the system's random numbers.
+pub fn profile_name() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).expect("the system has no random numbers");
+    let random: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{PROFILE}{random}")
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
@@ -165,15 +185,18 @@ pub fn read(
                 inner.starting = false;
                 return vec![Out::Gone("Codex is older than its floor".into())];
             }
-            THREAD if !holds(message) => {
+            THREAD if !holds(message, inner.profile.as_deref()) => {
                 inner.starting = false;
                 return vec![Out::Gone("Codex didn't take the thread's profile".into())];
             }
             INITIALIZE => {
+                let profile = profile_name();
+                let params = thread_params(launch, &profile);
+                inner.profile = Some(profile);
                 _ = write_line(stdin, &json!({ "method": "initialized" }));
                 _ = write_line(
                     stdin,
-                    &json!({ "id": THREAD, "method": "thread/start", "params": thread_params(launch) }),
+                    &json!({ "id": THREAD, "method": "thread/start", "params": params }),
                 );
             }
             THREAD => {
@@ -350,7 +373,7 @@ fn searched(item: &Value) -> Vec<Out> {
 /// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
 /// files, network or shell, from which only a patch tool the profile refuses and the browser
 /// server's resources are reachable; Codex has no setting that removes it.
-pub fn thread_params(launch: &Launch) -> Value {
+pub fn thread_params(launch: &Launch, profile_name: &str) -> Value {
     let mut config = Map::new();
     for feature in FEATURES_OFF {
         config.insert(format!("features.{feature}"), json!(false));
@@ -378,7 +401,10 @@ pub fn thread_params(launch: &Launch) -> Value {
         };
         config.insert(format!("mcp_servers.{key}.enabled"), json!(false));
     }
-    config.insert(format!("permissions.{PROFILE}"), profile(&launch.reads));
+    config.insert(
+        format!("permissions.{profile_name}"),
+        profile(&launch.reads),
+    );
     let mut env = Map::new();
     env.insert(super::bridge::TOKEN.into(), json!(launch.server.token));
     // Under approvalPolicy never Codex refuses an MCP call it would ask about; the browser asks
@@ -415,7 +441,7 @@ pub fn thread_params(launch: &Launch) -> Value {
         "approvalsReviewer": "user",
         // In place of the read-only sandbox, which lets a command read the whole disk; Codex
         // takes a profile or a sandbox, never both.
-        "permissions": PROFILE,
+        "permissions": profile_name,
         "ephemeral": true,
         "developerInstructions": launch.instructions,
     });
@@ -453,12 +479,11 @@ pub fn fits(agent: Option<&str>) -> bool {
     parts.is_some_and(|parts| parts.len() == 3 && parts[..] >= OLDEST[..])
 }
 
-/// Whether Codex's answer to thread/start says the thread runs under PROFILE.
-pub fn holds(answer: &Value) -> bool {
-    answer
-        .pointer("/result/activePermissionProfile/id")
-        .and_then(Value::as_str)
-        == Some(PROFILE)
+/// Whether Codex's answer to thread/start says the thread runs under `asked`, the profile this
+/// start named, and not one another start or the user's config named.
+pub fn holds(answer: &Value, asked: Option<&str>) -> bool {
+    let active = answer.pointer("/result/activePermissionProfile/id");
+    asked.is_some() && active.and_then(Value::as_str) == asked
 }
 
 /// Codex's features that would give the model anything but the browser's tools.
