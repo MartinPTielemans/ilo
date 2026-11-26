@@ -93,8 +93,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The window that shows |tab|'s page, focused or beside the tab it shows in a split view, else
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
-  // Gives an agent's page its own size again, the user's size gone with the tab, unless a window
-  // shows it. Nothing for null.
+  // Gives an agent's page the user's page area, the front window's or, with none open, the last
+  // one's (AgentPageArea), so watching it never lays it out again. Not while a window shows it,
+  // whose frame it has, nor for null.
   static void GiveAgentPageItsSize(content::WebContents* contents);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).

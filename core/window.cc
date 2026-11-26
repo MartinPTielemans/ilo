@@ -24,6 +24,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page_area.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/agent_space_page.h"
 #include "browser_core/archive.h"
@@ -427,6 +428,8 @@ base::TimeTicks g_handover_click;
 // pane it had in the window it left, for the handover lines.
 bc_id g_adopted = 0;
 gfx::Size g_left_size;
+// The page area of the last window that closed, which an agent's page takes with none open.
+gfx::Size g_last_page_area;
 
 std::string Handing(bc_id window, bc_id tab) {
   return base::StrCat(
@@ -512,25 +515,6 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 
-// An agent's page's size in CSS pixels: as wide as the card in a new window at its default size,
-// the app's 1280 by 800 (window_opening.rs, WINDOW_SIZE) less the sidebar's 228 and the card's
-// inset of 8 at the right (tokens.toml, [shell]), and as tall as keeps the shape of the page's
-// part of that card, 736 by 784 beside the conversation's panel, so a watch there fills it, scaled
-// down (task_area.rs, agent_page_size). An agent's tab has it until a window shows it: Chromium's
-// tab strip gives a tab added behind the active one that tab's size, and with no active tab none,
-// which nothing can picture (#3788).
-constexpr gfx::Size kAgentPageSize(1044, 1112);
-
-// Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has. Its
-// view saying it shows isn't enough: on the Mac a pop-up its page made starts shown, and a view no
-// window holds is never hidden, so it would keep the size the tab strip gave it, the user's page's.
-void SizeForAgent(content::WebContents* contents) {
-  content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
-  if (contents && !(view && view->IsShowing() && Window::Showing(Tab::IdOf(contents)))) {
-    contents->Resize(gfx::Rect(kAgentPageSize));
-  }
-}
-
 // Makes the new tab |params| asks for as Chrome's Navigate makes it (CreateTargetContents), for
 // |space| to hold from when its tab strip has it until the window places it, and leaves it to
 // Navigate to insert. Its page starts once inserted (HeldLoad::Start), as Chrome's Navigate starts
@@ -559,11 +543,11 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
   std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
   HeldLoad::CreateForWebContents(made.get(), space.id(), params);
   // A tab strip no window watches still loads it, once Navigate has inserted it. The tab strip
-  // sizes a tab added behind the active one to that tab's page, so it takes its own size back.
+  // sizes a tab added behind the active one to that tab's page, so it takes the agent's size.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<content::WebContents> contents) {
-                       SizeForAgent(contents.get());
+                       Window::GiveAgentPageItsSize(contents.get());
                        HeldLoad::Start(contents.get());
                      },
                      made->GetWeakPtr()));
@@ -711,7 +695,24 @@ Window* Window::Showing(bc_id tab) {
 
 // static
 void Window::GiveAgentPageItsSize(content::WebContents* contents) {
-  SizeForAgent(contents);
+  // Its view saying it shows isn't enough: on the Mac a pop-up its page made starts shown, and a
+  // view no window holds is never hidden, so it would keep the size the tab strip gave it, that of
+  // the user's page, or of one pane of their split view.
+  content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
+  if (!contents || (view && view->IsShowing() && Showing(Tab::IdOf(contents)))) {
+    return;
+  }
+  std::vector<gfx::Size> front_to_back;
+  for (bc_id id : Order()) {
+    // A Little ilo or Blank Window's page area is no place a thread's page is watched.
+    if (Window* window = FromId(id); window && !window->own_space_) {
+      front_to_back.push_back(window->page_frame_.size());
+    }
+  }
+  const gfx::Size area = AgentPageArea(front_to_back, g_last_page_area);
+  if (!area.IsEmpty()) {
+    contents->Resize(gfx::Rect(area));
+  }
 }
 
 // static
@@ -1150,7 +1151,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(
                          [](base::WeakPtr<content::WebContents> contents) {
-                           SizeForAgent(contents.get());
+                           Window::GiveAgentPageItsSize(contents.get());
                          },
                          params.contents_to_insert->GetWeakPtr()));
     }
@@ -2142,7 +2143,7 @@ content::WebContents* Window::OpenHeld(Space& space,
   secure_connections_rule::Ask(g_started);
   Navigate(&params);
   content::WebContents* made = params.navigated_or_inserted_contents;
-  SizeForAgent(made);
+  GiveAgentPageItsSize(made);
   HeldLoad::Start(made);
   *load = secure_connections_rule::TakeFor(g_started, made ? Tab::IdOf(made) : 0);
   return made;
@@ -3436,6 +3437,10 @@ void Window::Destroy() {
         tab->Close();
       }
     }
+  }
+  // An agent's page made with no window open takes the last one's page area.
+  if (!own_space_ && !page_frame_.IsEmpty()) {
+    g_last_page_area = page_frame_.size();
   }
   // Out of the list first, so the app can't reach the window from its callback.
   std::erase(Order(), id_);
