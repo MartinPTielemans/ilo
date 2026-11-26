@@ -214,6 +214,22 @@ impl Browser for Core {
         })
     }
 
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        // The engine of a window that shows the Space's profile. A thread's Space has none of its
+        // own, and with no window of its profile open there's no engine to search with, never
+        // another profile's, until the app links an engine with bc_profile_search_url (build 14).
+        let profile = unsafe { bc::bc_space_profile(space) };
+        let window = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .filter(|window| window.regular())
+                .find(|window| unsafe { bc::bc_space_profile(bc::bc_window_space(window.id)) } == profile)
+                .map(|window| window.id)
+        })?;
+        crate::url_for(words, |words, url, capacity| unsafe {
+            bc::bc_search_url(window, std::ptr::null(), words, url, capacity)
+        })
+    }
+
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;

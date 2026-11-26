@@ -78,6 +78,8 @@ struct Made {
     private: RefCell<Vec<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The search engine's host, where a test moves it from search.example.
+    engine: std::cell::Cell<Option<&'static str>>,
 }
 
 impl Made {
@@ -228,6 +230,13 @@ impl Browser for Made {
             (false, true) => format!("https://{text}/"),
             (false, false) => format!("https://duckduckgo.com/?q={text}"),
         })
+    }
+
+    /// A search with an engine of the Space's profile's own, so a test sees whose it was.
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = self.space_profile(space).to_lowercase();
+        let engine = self.engine.get().unwrap_or("search.example");
+        Some(format!("https://{engine}/{profile}?q={words}"))
     }
 
     fn hand_off(&self, _: &str, tab: u64) -> bool {
@@ -3680,10 +3689,11 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 10] = [
+    const READS: [&str; 11] = [
         "list_tabs",
         "list_split",
         "open_tab",
+        "search",
         "navigate",
         "snapshot",
         "read_page",

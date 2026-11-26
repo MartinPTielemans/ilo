@@ -151,9 +151,6 @@ pub enum Out {
     Calling,
     /// The agent thought, for as long as `took`: its reasoning, as its CLI sends it.
     Thought { text: String, took: Duration },
-    /// The agent searched the web with its program's own search, which its provider runs: the
-    /// words it searched for, as its CLI sends them. Nothing the search found is read.
-    Searched(String),
     /// Its turn ended, and it waits for the user's next message: well, or with what went wrong.
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
@@ -190,8 +187,6 @@ pub enum Helper {
     Opens,
     /// It calls a tool that names no tab.
     Calls,
-    /// It searched the web with its program's own search, for these words: a step of its own.
-    Searched(String),
     /// Its CLI says it ended, however it did.
     Ended,
 }
@@ -637,11 +632,10 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         .iter()
         .map(|tool| format!("mcp__{SERVER}__{tool}"))
         .collect();
-    // A helper holds the search as its task does.
-    allowed.push(SEARCH.into());
+    // A thread searches with the browser's own search tool, never its provider's.
     let tools = match launch.helpers {
-        true => format!("{},{SEARCH}", super::helpers::TOOLS[0]),
-        false => SEARCH.into(),
+        true => super::helpers::TOOLS[0].into(),
+        false => String::new(),
     };
     let mut args: Vec<String> = [
         // Print mode, reading the user's messages as stream-json, so a reply is one more line.
@@ -653,8 +647,8 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--verbose",
         // Its text as it writes it, which the conversation shows as it comes.
         "--include-partial-messages",
-        // Of its own tools only its provider's search: no shell, files or web fetch. With
-        // helpers on, the one that starts a helper too.
+        // None of its own tools: no shell, files, web search or fetch. With helpers on, only the
+        // one that starts a helper.
         "--tools",
     ]
     .map(String::from)
@@ -705,11 +699,6 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     }
     args
 }
-
-/// Claude Code's own web search, which its provider runs and which reads no page from this
-/// computer. Its web fetch would, past the Off limits list, the task's access and the activity log,
-/// so a page the task reads opens in a tab of its own instead, and that tool is never given.
-pub const SEARCH: &str = "WebSearch";
 
 /// A walled Claude Code's settings.
 const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
@@ -776,7 +765,6 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                     }
                 })
                 .chain(super::helpers::asked(content.into_iter().flatten()))
-                .chain((content.into_iter().flatten()).filter_map(searched))
                 .collect()
         }
         "rate_limit_event" => {
@@ -805,16 +793,6 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         }
         _ => Vec::new(),
     }
-}
-
-/// A block of Claude's that calls its search: the words searched for alone. The result comes in a
-/// message of the user's, which nothing reads.
-pub(super) fn searched(block: &Value) -> Option<Out> {
-    let search = block.get("type").and_then(Value::as_str) == Some("tool_use")
-        && block.get("name").and_then(Value::as_str) == Some(SEARCH);
-    let query = block.pointer("/input/query").and_then(Value::as_str);
-    (query.filter(|query| search && !query.trim().is_empty()))
-        .map(|query| Out::Searched(query.into()))
 }
 
 /// What a piece of the message Claude is writing says: its text so far as a piece of it comes, and

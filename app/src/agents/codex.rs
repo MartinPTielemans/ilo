@@ -239,7 +239,6 @@ pub fn read(
                 (Some("agentMessage"), Some(text)) if !text.is_empty() => {
                     vec![Out::Said(text.to_string())]
                 }
-                (Some("webSearch"), _) => searched(item),
                 (Some("reasoning"), _) => {
                     let took = inner
                         .thinking
@@ -346,28 +345,6 @@ fn decline(method: &str) -> Value {
     }
 }
 
-/// A search item's words: a search action's query, else each of its queries. Its other actions,
-/// a page opened or a word found in one, say nothing, nor does the item's own `query`, which is an
-/// address for those, or what it found.
-fn searched(item: &Value) -> Vec<Out> {
-    let action = item.get("action").unwrap_or(&Value::Null);
-    if action.get("type").and_then(Value::as_str) != Some("search") {
-        return Vec::new();
-    }
-    let query = action.get("query").and_then(Value::as_str);
-    let queries = action.get("queries").and_then(Value::as_array);
-    let words: Vec<&str> = match query.filter(|query| !query.trim().is_empty()) {
-        Some(query) => vec![query],
-        None => (queries.into_iter().flatten())
-            .filter_map(Value::as_str)
-            .collect(),
-    };
-    (words.into_iter())
-        .filter(|words| !words.trim().is_empty())
-        .map(|words| Out::Searched(words.into()))
-        .collect()
-}
-
 /// The thread's settings: the browser's server as its tools, every feature of Codex's own off,
 /// and none of the user's MCP servers, each turned off by name as config.toml lists them. A model
 /// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
@@ -378,10 +355,9 @@ pub fn thread_params(launch: &Launch, profile_name: &str) -> Value {
     for feature in FEATURES_OFF {
         config.insert(format!("features.{feature}"), json!(false));
     }
-    // Its provider's search over the provider's own index, which opens no page: neither from this
-    // computer nor on the provider's side, as "live" and "indexed" may, unseen. Set so the user's
-    // own config can't change it.
-    config.insert("web_search".into(), json!("cached"));
+    // A thread searches with the browser's own search tool, so its provider's is off, set so the
+    // user's own config can't turn it on.
+    config.insert("web_search".into(), json!("disabled"));
     config.insert("notify".into(), json!([]));
     config.insert("project_doc_max_bytes".into(), json!(0));
     config.insert("tools.update_plan.enabled".into(), json!(false));

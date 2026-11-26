@@ -253,6 +253,9 @@ pub trait Browser {
     );
     /// The URL the address bar goes to for `text`: the page it names, else a search for it.
     fn url_for(&self, text: &str) -> Option<String>;
+    /// The URL of a search for `words` with the default search engine of `space`'s profile, even
+    /// when they name a page, or None if it has none.
+    fn search_url(&self, space: u64, words: &str) -> Option<String>;
     /// The agent hands the tab to the user, who holds it from agents until they hand it back
     /// (bc_agent_hand_off). Whether it did.
     fn hand_off(&self, agent: &str, tab: u64) -> bool;
@@ -486,6 +489,9 @@ struct Act {
     call: u64,
     /// What the activity log names it, as `tools::describe` knows it.
     action: &'static str,
+    /// For the open or navigate a search makes, its words as its entries show them in place of
+    /// its action and the engine's site (AP25); else empty.
+    searched: String,
     /// The tab, or 0 for open_tab, which makes it.
     tab: u64,
     /// Where open_tab and navigate go.
@@ -904,6 +910,9 @@ pub struct Agents {
     cleared: HashMap<u64, Cleared>,
     /// What each agent did last, as the log says it.
     doing: HashMap<String, SharedString>,
+    /// A search's words, as its entries show them (AP25): set by `search` for the act it makes,
+    /// which keeps them, and by that act again just before each entry it logs, which takes them.
+    searching: Option<String>,
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
     /// The pages whose picture a kept card can't keep for what was put in them (kept/unkept.rs).
@@ -1123,6 +1132,7 @@ impl Agents {
             fenced: Vec::new(),
             cleared: HashMap::new(),
             doing: HashMap::new(),
+            searching: None,
             pins: HashMap::new(),
             held: HashMap::new(),
             unkept: Default::default(),
@@ -2185,6 +2195,9 @@ impl Agents {
 
     /// Runs the call, past the fence.
     fn dispatch(&mut self, call: Call, cx: &mut Context<Self>) {
+        if call.tool == tools::SEARCHED {
+            return self.search(call, cx);
+        }
         let Call {
             id,
             agent,
@@ -2312,6 +2325,7 @@ impl Agents {
                     connection,
                     call: id,
                     action: "open_tab",
+                    searched: self.searching.take().unwrap_or_default(),
                     tab: 0,
                     what: format!("open {host}"),
                     asks: String::new(),
@@ -2703,6 +2717,7 @@ impl Agents {
                     connection,
                     call: id,
                     action: "request",
+                    searched: String::new(),
                     tab,
                     url: String::new(),
                     page: PageAction::Snapshot,
@@ -3678,6 +3693,7 @@ impl Agents {
             connection,
             call,
             action: "snapshot",
+            searched: self.searching.take().unwrap_or_default(),
             tab,
             url: String::new(),
             page: PageAction::Snapshot,
@@ -3921,6 +3937,53 @@ impl Agents {
             }
             None => page::opening_risk(site),
         }
+    }
+
+    /// A thread's search: an open of its words' results with the user's search engine for its
+    /// Space's profile, or a navigate to them in the tab it names, as those calls go. The entries
+    /// they log are the search's, with its words and no engine's site (AP25), whenever they're
+    /// logged: at once, refused, or once the user answers what it asked.
+    fn search(&mut self, mut call: Call, cx: &mut Context<Self>) {
+        let words = (call.arguments.get("words").and_then(Value::as_str))
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        if words.is_empty() {
+            _ = call
+                .reply
+                .send(ToolResult::error("words are what to search for."));
+            return;
+        }
+        // Its first call may be this one, and the Space's profile picks the engine.
+        let space = self.space(&call.agent, cx);
+        let Some(url) = self.browser.search_url(space, &words) else {
+            _ = call.reply.send(ToolResult::error(
+                "There's no search engine to search with.",
+            ));
+            return;
+        };
+        // A tab that isn't one is its error, as navigate answers it, and opens nothing.
+        let named = match tools::tab_argument(&call.arguments) {
+            Ok(tab) => tab.is_some(),
+            Err(not_a_tab) => {
+                _ = call.reply.send(ToolResult::error(not_a_tab));
+                return;
+            }
+        };
+        if let Some(arguments) = call.arguments.as_object_mut() {
+            arguments.remove("words");
+            arguments.insert("url".into(), url.into());
+        }
+        call.tool = match named {
+            true => "navigate",
+            false => "open_tab",
+        }
+        .into();
+        // The act it makes keeps its words, for each entry it logs, now or once the user answers
+        // what it asked. One refused before it's made takes them with its entry.
+        self.searching = Some(page::curly_within(&words, tools::SEARCH_SHOWN));
+        self.dispatch(call, cx);
+        self.searching = None;
     }
 
     /// The `url` argument as the address bar takes it, or None once the call has its error.
@@ -4313,6 +4376,7 @@ impl Agents {
         }
         // A call's requests the user said no to are each listed, as each sent one is.
         let by = (act.connection, act.page());
+        self.searching = (!act.searched.is_empty()).then(|| act.searched.clone());
         match act.requests.as_slice() {
             [] => self.note_page(&act.agent, by, act.action, site, why),
             requests => {
@@ -4354,6 +4418,7 @@ impl Agents {
             connection,
             call,
             action,
+            searched,
             mut tab,
             url,
             page,
@@ -4367,6 +4432,8 @@ impl Agents {
             wait,
             ..
         } = act;
+        // A search's entry, whichever logs it below, is the search's.
+        let searched = (!searched.is_empty()).then_some(searched);
         // The user said yes to closing a page the agent didn't open without saving.
         if action == "discard_tab" {
             let site = site(&self.browser.tab(tab, cx).url);
@@ -4388,6 +4455,7 @@ impl Agents {
             // An agent's first call may be this one, and the core opens a tab only in its Space.
             self.space(&agent, cx);
             tab = self.browser.open_tab(&agent, &url, cx);
+            self.searching = searched;
             if tab == 0 {
                 self.note(&agent, connection, action, &site, "The tab couldn't open.");
                 cx.notify();
@@ -4406,6 +4474,7 @@ impl Agents {
             self.browser.set_muted(tab, true);
             note = format!("Opened tab {tab}.");
         } else {
+            self.searching = searched;
             if !self.act(&agent, connection, tab, action, &reply, cx) {
                 return;
             }
@@ -4511,6 +4580,7 @@ impl Agents {
             // A page's download comes from no call of the agent's.
             call: 0,
             action: "download",
+            searched: String::new(),
             // The question is about the file, wherever its tab is.
             tab: 0,
             what: format!("download {name} from {host}"),
@@ -4911,6 +4981,11 @@ impl Agents {
                     "navigate"
                 };
                 let reply = acting.reply.clone();
+                // A search's refusal is the search's, as its entry is.
+                let entry = acting.entry;
+                agents.searching = (agents.log.iter())
+                    .find(|each| each.id == entry && each.action == tools::SEARCHED)
+                    .map(|each| each.target.to_string());
                 if !agents.may_look_again(&agent, connection, tab, action, &reply, cx) {
                     agents.acting.remove(&request);
                     return;
@@ -5640,6 +5715,12 @@ impl Agents {
         refused: &str,
         (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
+        // A search's entry is the search's, with its words and never the engine's site (AP25).
+        let searched = self.searching.take();
+        let (action, site, target) = match &searched {
+            Some(words) => (tools::SEARCHED, "", words.as_str()),
+            None => (action, site, target),
+        };
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
         match refused.is_empty() {
@@ -5647,9 +5728,17 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match site.is_empty() {
-                true => tools::describe(action).to_string(),
-                false => format!("{} · {site}", tools::describe(action)),
+            let doing = match (searched.is_some(), site.is_empty()) {
+                (true, _) => {
+                    let did = tools::Did {
+                        tool: action.into(),
+                        target: target.into(),
+                        ..Default::default()
+                    };
+                    tools::step_title(&did, tools::Tense::Done)
+                }
+                (false, true) => tools::describe(action).to_string(),
+                (false, false) => format!("{} · {site}", tools::describe(action)),
             };
             self.doing.insert(agent.into(), doing.into());
         }
@@ -6055,6 +6144,7 @@ fn act_of(
         connection,
         call,
         action: "close_tab",
+        searched: String::new(),
         tab,
         url: String::new(),
         page: PageAction::Snapshot,

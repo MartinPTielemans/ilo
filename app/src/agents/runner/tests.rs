@@ -105,8 +105,9 @@ fn claude_gets_the_browser_alone() {
     }
     assert_eq!(after("--input-format"), "stream-json");
     assert_eq!(after("--output-format"), "stream-json");
-    // Of its own tools only its provider's search, which reads no page here; never its fetch.
-    assert_eq!(after("--tools"), "WebSearch");
+    // None of its own tools: it searches with the browser's, never its provider's, and never
+    // fetches.
+    assert_eq!(after("--tools"), "");
     assert!(!args.iter().any(|arg| arg.contains("WebFetch")), "{args:?}");
     assert_eq!(after("--setting-sources"), "");
     assert_eq!(after("--permission-mode"), "dontAsk");
@@ -114,7 +115,7 @@ fn claude_gets_the_browser_alone() {
     assert_eq!(after("--mcp-config"), "/tmp/Tasks/task-1.json");
     assert_eq!(
         after("--allowedTools"),
-        format!("mcp__{SERVER}__open_tab,mcp__{SERVER}__finish,WebSearch")
+        format!("mcp__{SERVER}__open_tab,mcp__{SERVER}__finish")
     );
     assert_eq!(after("--model"), "haiku");
     assert_eq!(after("--append-system-prompt-file"), "/tmp/Tasks/task-1.md");
@@ -402,8 +403,8 @@ fn codexs_thread_has_the_browser_alone() {
             "{feature}"
         );
     }
-    // Its provider's search over its own index, which opens no page, whatever the user's config.
-    assert_eq!(config["web_search"], json!("cached"));
+    // Its provider's search is off whatever the user's config: it searches with the browser's.
+    assert_eq!(config["web_search"], json!("disabled"));
     assert!(config.get("tools.web_search").is_none(), "{config}");
     assert_eq!(config["project_doc_max_bytes"], json!(0));
     assert_eq!(
@@ -1223,10 +1224,10 @@ fn a_walled_runs_reap_answers_its_task_with_the_sweep() {
     _ = std::fs::remove_dir_all(&root);
 }
 
-/// Claude's start has its provider's search and never its fetch, walled or not. The wall's hosts
-/// are the ones it had, as the search rides the assistant's own call to its service.
+/// Claude's start has neither its provider's search nor its fetch, walled or not. The wall's hosts
+/// are the ones it had.
 #[test]
-fn claude_searches_by_its_providers_search_and_never_fetches() {
+fn claude_has_neither_its_providers_search_nor_its_fetch() {
     for launch in [launch(Cli::Claude), walled(Cli::Claude, None)] {
         let args = claude_args(&launch);
         let after = |flag: &str| {
@@ -1234,11 +1235,10 @@ fn claude_searches_by_its_providers_search_and_never_fetches() {
                 (args.iter().position(|arg| arg == flag)).unwrap_or_else(|| panic!("no {flag}"));
             args[at + 1].as_str()
         };
-        assert_eq!(after("--tools"), "WebSearch");
+        assert_eq!(after("--tools"), "");
         assert!(
-            after("--allowedTools")
-                .split(',')
-                .any(|tool| tool == "WebSearch")
+            !args.iter().any(|arg| arg.contains("WebSearch")),
+            "{args:?}"
         );
         assert_eq!(after("--permission-mode"), "dontAsk");
         assert!(!args.iter().any(|arg| arg.contains("WebFetch")), "{args:?}");
@@ -1251,43 +1251,27 @@ fn claude_searches_by_its_providers_search_and_never_fetches() {
     assert_eq!(hosts(Cli::Codex), ["chatgpt.com", "auth.openai.com"]);
 }
 
-/// Claude's search says its words alone: not the sites it was held to, and nothing of the result
-/// that comes back in a message of the user's.
+/// A search with Claude's provider's tool is no step of the browser's: it says only that a call
+/// comes, and its words and result are never read.
 #[test]
-fn claudes_search_is_its_words_alone_and_its_result_says_nothing() {
+fn claudes_own_search_says_nothing_of_its_words() {
     let mut turn = Turn::default();
     let search = json!({ "type": "assistant", "message": { "content": [
         { "type": "tool_use", "id": "s1", "name": "WebSearch", "input": {
             "query": "night trains to Lisbon",
-            "allowed_domains": ["timetables.example"],
-            "blocked_domains": ["ads.example"],
         } },
     ] } });
-    assert_eq!(
-        claude_read(&search, &mut turn),
-        [Out::Calling, Out::Searched("night trains to Lisbon".into())]
-    );
+    assert_eq!(claude_read(&search, &mut turn), [Out::Calling]);
     let result = json!({ "type": "user", "message": { "content": [
         { "type": "tool_result", "tool_use_id": "s1",
           "content": "Night train · https://timetables.example/lisbon" },
     ] } });
     assert_eq!(claude_read(&result, &mut turn), []);
-    // Its start as it's written says only that a call comes, its words still to come.
-    let piece = json!({ "type": "stream_event", "event": { "type": "content_block_start",
-        "content_block": { "type": "tool_use", "id": "s2", "name": "WebSearch", "input": {} } } });
-    assert_eq!(claude_read(&piece, &mut turn), [Out::Calling]);
-    // Another tool's query is no search.
-    let other = json!({ "type": "assistant", "message": { "content": [
-        { "type": "tool_use", "id": "s3", "name": format!("mcp__{SERVER}__open_tab"), "input": { "query": "x" } },
-    ] } });
-    assert_eq!(claude_read(&other, &mut turn), [Out::Calling]);
 }
 
-/// Codex's search says a search action's words alone. A page opened or a word found in one, its
-/// other actions, says nothing and is no error, nor are the item's own `query`, which names such
-/// a page, and its results ever read.
+/// Codex's own search item, which its config turns off, says nothing, whatever its action.
 #[test]
-fn codexs_search_is_a_search_actions_words_alone() {
+fn codexs_own_search_says_nothing() {
     let state = codex::State::default();
     let stdin = std::sync::Mutex::new(None);
     let launch = launch(Cli::Codex);
@@ -1299,28 +1283,14 @@ fn codexs_search_is_a_search_actions_words_alone() {
             "results": [{ "title": "Night train", "url": "https://timetables.example/lisbon" }],
         } } })
     };
-    let search = json!({ "type": "search", "query": "night trains to Lisbon" });
-    assert_eq!(read(item("item/started", search.clone())), []);
-    assert_eq!(
-        read(item("item/completed", search)),
-        [Out::Searched("night trains to Lisbon".into())]
-    );
-    assert_eq!(
-        read(item(
-            "item/completed",
-            json!({ "type": "search", "queries": ["trains", "buses"] })
-        )),
-        [
-            Out::Searched("trains".into()),
-            Out::Searched("buses".into())
-        ]
-    );
     for action in [
+        json!({ "type": "search", "query": "night trains to Lisbon" }),
+        json!({ "type": "search", "queries": ["trains", "buses"] }),
         json!({ "type": "openPage", "url": "https://timetables.example/lisbon" }),
-        json!({ "type": "findInPage", "url": "https://timetables.example/lisbon", "pattern": "22:05" }),
-        json!({ "type": "other" }),
         Value::Null,
     ] {
-        assert_eq!(read(item("item/completed", action.clone())), [], "{action}");
+        for method in ["item/started", "item/completed"] {
+            assert_eq!(read(item(method, action.clone())), [], "{method} {action}");
+        }
     }
 }

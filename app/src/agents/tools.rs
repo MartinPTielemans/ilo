@@ -60,8 +60,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
     env!("PRODUCT_NAME"),
     ", their web browser, signed in wherever they are. You work only through its tools, in \
      tabs of your own, which the user can watch on your task's card in their sidebar; you can \
-     only see and use your own tabs. Open pages, read them and act in them. You have no shell, files or web \
-     search, so find everything with the browser.\n\n\
+     only see and use your own tabs. Open pages, read them and act in them. You have no shell or \
+     files, so find everything with the browser, and search the web with search.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
      Give every call its tab once you have more than one: one without acts on the tab you used \
@@ -69,8 +69,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      all in one turn, then do each step on all of them in one turn, one call per tab with its \
      tab. Calls on different tabs run at the same time, so that's faster than one tab after \
      another.\n\n\
-     The tools that act on a page (open_tab, navigate, click, type, select, press_key, scroll, \
-     request, and each step in run_steps) take an optional `note`: a short reason for that step, \
+     The tools that act on a page (open_tab, navigate, search, click, type, select, press_key, \
+     scroll, request, and each step in run_steps) take an optional `note`: a short reason for that step, \
      at most 80 characters, which ",
     env!("APP_NAME"),
     " shows beside the step in the task's trace and which changes nothing about what the step \
@@ -125,9 +125,9 @@ pub fn list(agent: &str) -> Value {
     if let Some(tools) = tools.as_array_mut() {
         match super::is_task(agent) {
             true => {
+                tools.extend(task_tools());
                 // Only the product's own threads, a helper's calls among them, say why a step.
                 noted(tools);
-                tools.extend(task_tools())
             }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
             // from outside pins. It names its session as a task names itself (#3690), and says
@@ -226,11 +226,13 @@ fn title_tool() -> Value {
     })
 }
 
-/// A task's own tools: its title, a question for the user, and finishing.
+/// A task's own tools: its title, a question for the user, finishing, and a search with the user's
+/// search engine, which a thread has in place of its program's own.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     vec![
         title_tool(),
+        search_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -284,6 +286,33 @@ fn task_tools() -> Vec<Value> {
     ]
 }
 
+/// A search for words with the user's search engine: an open_tab, or a navigate with a tab, to its
+/// results, whatever the words name.
+fn search_tool() -> Value {
+    let open = shared();
+    let open = (open.as_array().into_iter().flatten())
+        .find(|tool| tool["name"] == "open_tab")
+        .expect("open_tab is a shared tool");
+    let properties = &open["inputSchema"]["properties"];
+    json!({
+        "name": SEARCHED,
+        "title": "Search",
+        "description": "Search the web for words with the user's search engine, in a new tab of your own, or in tab when you give one. Answers with the results page's outline, or with its text when answer is text. It answers once the page has settled, or once wait_for's text shows in it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "words": { "type": "string", "description": "The words to search for." },
+                "tab": tab_schema(),
+                "answer": properties["answer"],
+                "wait_for": properties["wait_for"],
+                "seconds": properties["seconds"],
+            },
+            "required": ["words"],
+        },
+        "annotations": open["annotations"],
+    })
+}
+
 /// A tool's tab argument.
 fn tab_schema() -> Value {
     json!({
@@ -294,9 +323,10 @@ fn tab_schema() -> Value {
 
 /// The tools that act on a page, each of whose calls, and each step of a run, may carry a `note`:
 /// the assistant's short reason for the step, which only the trace draws (`take_note`).
-pub const NOTED: [&str; 8] = [
+pub const NOTED: [&str; 9] = [
     "open_tab",
     "navigate",
+    SEARCHED,
     "click",
     "type",
     "select",
@@ -808,7 +838,7 @@ fn not_a_tab() -> String {
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Did {
-    /// The tool, a run's step's action, "back" or "forward", "thought", or `SEARCHED`.
+    /// The tool, a run's step's action, "back" or "forward", or "thought".
     pub tool: String,
     /// The site it was on, or went to.
     pub site: String,
@@ -833,9 +863,16 @@ pub struct Did {
     pub says: String,
 }
 
-/// The tool of a step that's a search the assistant's program made, by its provider's own search:
-/// no tool of the browser's.
-pub const SEARCHED: &str = "web_search";
+/// The tool that searches the web with the user's search engine, a thread's in place of its
+/// program's own.
+pub const SEARCHED: &str = "search";
+
+/// What the activity log named a program's own search before threads searched with `SEARCHED`, as
+/// a past thread's file may still hold it.
+const PROGRAM_SEARCHED: &str = "web_search";
+
+/// How many characters of a search's words its activity row shows, its "…" among them (TS6).
+pub const SEARCH_SHOWN: usize = 32;
 
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
@@ -1124,14 +1161,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
-        // A trace's step has its words; the activity log's entry, a thread's, its count alone.
+        // A trace's step has its words whole; the activity log's entry has them clipped and quoted
+        // as its target (AP25), and names no engine.
         SEARCHED => {
-            return match (did.text.is_empty(), did.target.parse::<usize>()) {
-                (false, _) => format!("Searched the web for “{}”", did.text),
-                (true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
-                _ => "Searched the web".into(),
+            return match (tense, did.text.is_empty(), did.target.is_empty()) {
+                (Tense::Failed, ..) => "Couldn't search".into(),
+                (Tense::Now, false, _) => format!("Searching the web for “{}”", did.text),
+                (_, false, _) => format!("Searched the web for “{}”", did.text),
+                (_, true, false) => format!("Searched {}", did.target),
+                (_, true, true) => "Searched the web".into(),
             };
         }
+        PROGRAM_SEARCHED => return "Searched the web".into(),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
@@ -1190,7 +1231,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "upload" => "icons/file.svg",
         // Three dots, as the log draws a thought (spec-thread-stage.md).
         "thought" => "icons/ellipsis.svg",
-        SEARCHED => "icons/search.svg",
+        SEARCHED | PROGRAM_SEARCHED => "icons/search.svg",
         _ => "icons/globe.svg",
     }
 }
@@ -1257,8 +1298,9 @@ pub fn tabs_named(arguments: &Value) -> Vec<u64> {
 }
 
 /// The tools that never act on the tab their connection used last.
-pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
+pub const NO_TAB_OF_ITS_OWN: [&str; 7] = [
     "open_tab",
+    SEARCHED,
     "list_tabs",
     "title",
     "done",
@@ -1273,6 +1315,7 @@ pub fn describe(action: &str) -> &'static str {
         "read_page" => "Read the page",
         "open_tab" => "Opened a page",
         "navigate" => "Went to a page",
+        SEARCHED | PROGRAM_SEARCHED => "Searched the web",
         "back" => "Went back",
         "forward" => "Went forward",
         "snapshot" => "Looked at the page",

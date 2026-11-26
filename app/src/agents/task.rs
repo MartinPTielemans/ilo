@@ -2521,14 +2521,6 @@ impl Agents {
                     notes: None,
                 });
             }
-            Out::Searched(query) => {
-                let Some(task) = self.task_mut(&agent) else {
-                    return;
-                };
-                let step = searched(&query, task.messages.len());
-                task.trace.push(step);
-                self.count_search(&agent);
-            }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
@@ -3093,8 +3085,14 @@ impl Agents {
             )
         };
         self.trace(&key, call.id, did, call.at, cx);
-        // A page opened while the task's helpers work may be one of theirs (#4102).
-        if tool == "open_tab"
+        // A page opened while the task's helpers work may be one of theirs (#4102): an open's, or
+        // a search's that names no tab.
+        let opens = match tool {
+            "open_tab" => true,
+            tools::SEARCHED => tools::tab_argument(&call.arguments) == Ok(None),
+            _ => false,
+        };
+        if opens
             && let Some(task) = self.task_mut(&key).filter(|task| task.helpers.on)
             && let Some(at) = task.trace.len().checked_sub(1)
         {
@@ -3659,7 +3657,9 @@ impl Agents {
     /// the helper of a task's that asked for it (#4102).
     pub(super) fn opened(&mut self, agent: &str, call: u64, tab: u64) {
         if let Some(task) = self.task_mut(agent).filter(|task| task.helpers.on) {
-            let opens = |step: &Traced| step.call == call && step.did.tool == "open_tab";
+            let opens = |step: &Traced| {
+                step.call == call && matches!(step.did.tool.as_str(), "open_tab" | tools::SEARCHED)
+            };
             if let Some(at) = task.trace.iter().rposition(opens) {
                 task.helpers.opened(at, tab);
             }
@@ -4139,6 +4139,14 @@ impl Agents {
                     }
                 }
             },
+            // Its words whole, as a thought is held; never the engine it searched with.
+            tools::SEARCHED => {
+                (did.site, did.page, did.title) = Default::default();
+                did.text = tier::capped(&string("words"), THOUGHT_MOST);
+                if tools::tab_argument(arguments).ok().flatten().is_none() {
+                    did.tab = None;
+                }
+            }
             "click" => did.target = element.as_ref().map(named).unwrap_or_default(),
             // What was typed or chosen shows only where the field lets it, cut at its most.
             "type" | "select" => {
@@ -4629,72 +4637,8 @@ fn labels(text: &str) -> String {
 /// The most characters of a thought a step holds, and of a search's words.
 const THOUGHT_MOST: usize = 4000;
 
-/// A search the assistant's program made, as a step of its trace after `after` messages: its words
-/// alone, one line, cut as a thought is. It's in memory only: the trace is kept nowhere, and a card
-/// leaves it out, as it does a thought.
-pub(super) fn searched(query: &str, after: usize) -> Traced {
-    let now = Instant::now();
-    Traced {
-        call: 0,
-        did: tools::Did {
-            tool: tools::SEARCHED.into(),
-            text: tier::capped(query, THOUGHT_MOST),
-            ..Default::default()
-        },
-        after,
-        started: now,
-        ended: Some(now),
-        error: None,
-        kind: None,
-        picture: None,
-        close: None,
-        notes: None,
-    }
-}
-
-impl Agents {
-    /// A search `agent`'s task's program made, its step already in the trace: the thread's one
-    /// activity entry, counting its searches by that trace, never their words. It's no call of
-    /// the browser's, so no line is logged of it and nothing waits on it.
-    pub(super) fn count_search(&mut self, agent: &str) {
-        let Some(task) = self.task(agent) else {
-            return;
-        };
-        let count = (task.trace.iter())
-            .filter(|step| step.did.tool == tools::SEARCHED)
-            .count();
-        let tier = self.entry_tier(agent, 0, 0).label();
-        let entry = (self.log.iter_mut().rev())
-            .find(|each| each.agent == agent && each.action == tools::SEARCHED);
-        if let Some(entry) = entry {
-            entry.target = count.to_string().into();
-            return;
-        }
-        if self.log.len() >= super::LOG_LENGTH {
-            self.log.remove(0);
-        }
-        self.log.push(super::Activity {
-            at: SystemTime::now(),
-            agent: agent.to_string().into(),
-            connection: 0,
-            action: tools::SEARCHED.into(),
-            site: SharedString::default(),
-            target: count.to_string().into(),
-            refused: SharedString::default(),
-            steps: Vec::new(),
-            by: SharedString::default(),
-            id: super::entry_id(),
-            url: SharedString::default(),
-            sent: Vec::new(),
-            said: SharedString::default(),
-            tier: tier.into(),
-            notes: SharedString::default(),
-        });
-    }
-}
-
-/// Whether a step is the assistant's own, a thought or a search, which acts on no page: a card
-/// counts and says none of them.
+/// Whether a step is the assistant's own, a thought or a search, whose results page is no page
+/// of the task's own: a card counts and says none of them.
 fn own(step: &Traced) -> bool {
     matches!(step.did.tool.as_str(), "thought" | tools::SEARCHED)
 }
@@ -5357,7 +5301,8 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             }
         };
         let did = &step.did;
-        let groups = (did.tab.is_some() || did.tool == "open_tab")
+        let opens = matches!(did.tool.as_str(), "open_tab" | tools::SEARCHED);
+        let groups = (did.tab.is_some() || opens)
             && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
         // Closes join only those their pages answered alike.
         let like = |line: &Together| {

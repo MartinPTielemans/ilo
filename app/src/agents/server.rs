@@ -639,7 +639,8 @@ fn lanes(line: &str) -> Vec<Lane> {
         .and_then(Value::as_u64))
     .filter(|tab| *tab != 0);
     let own = match (tool, tab) {
-        ("open_tab", _) => None,
+        // A search with no tab opens one, as open_tab does.
+        ("open_tab", _) | (super::tools::SEARCHED, None) => None,
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };

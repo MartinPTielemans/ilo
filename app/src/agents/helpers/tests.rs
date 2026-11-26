@@ -87,7 +87,7 @@ fn started_without_the_variables_the_assistant_keeps_kinds_of_its_own() {
 fn off_claude_starts_with_the_arguments_it_had() {
     let allowed = format!(
         "mcp__{SERVER}__open_tab,mcp__{SERVER}__read_page,mcp__{SERVER}__title,mcp__{SERVER}__ask,\
-         mcp__{SERVER}__finish,WebSearch"
+         mcp__{SERVER}__finish"
     );
     let had = [
         "-p",
@@ -98,7 +98,7 @@ fn off_claude_starts_with_the_arguments_it_had() {
         "--verbose",
         "--include-partial-messages",
         "--tools",
-        "WebSearch",
+        "",
         "--strict-mcp-config",
         "--mcp-config",
         "/tmp/Tasks/task-1.json",
@@ -136,8 +136,8 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     assert!(denied.contains(&"Agent(fork)"), "{denied:?}");
     assert!(!denied.iter().any(|each| each.contains(KIND)), "{denied:?}");
     let tools = on.iter().position(|arg| arg == "--tools").unwrap() + 1;
-    assert_eq!(on[tools], format!("{},WebSearch", TOOLS[0]));
-    on[tools] = "WebSearch".into();
+    assert_eq!(on[tools], TOOLS[0]);
+    on[tools] = String::new();
     assert_eq!(on, off, "more than the helper tool and the kinds changed");
 
     let kinds: Value = serde_json::from_str(&kinds).expect("the kinds aren't JSON");
@@ -152,7 +152,6 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
         [
             format!("mcp__{SERVER}__open_tab").as_str(),
             format!("mcp__{SERVER}__read_page").as_str(),
-            "WebSearch"
         ]
     );
     assert!(!kinds[KIND]["prompt"].as_str().unwrap().is_empty());
@@ -517,6 +516,6 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
     let has = kinds[KIND]["tools"].to_string();
     assert_eq!(
         has,
-        format!(r#"["mcp__{SERVER}__open_tab","mcp__{SERVER}__read_page","WebSearch"]"#)
+        format!(r#"["mcp__{SERVER}__open_tab","mcp__{SERVER}__read_page"]"#)
     );
 }

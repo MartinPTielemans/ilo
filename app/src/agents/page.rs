@@ -1144,6 +1144,16 @@ pub fn curly(text: &str, chars: usize) -> String {
     format!("“{}”", clip(&super::request::plain(text), chars))
 }
 
+/// The page's `text` in curly quotes, at most `chars` characters long with the "…" that ends a
+/// cut one, and the quotes not counted (TS6).
+pub fn curly_within(text: &str, chars: usize) -> String {
+    let text = super::request::plain(text);
+    match text.chars().count() <= chars {
+        true => format!("“{text}”"),
+        false => format!("“{}”", clip(&text, chars.saturating_sub(1))),
+    }
+}
+
 /// How many characters of what a field holds its line shows: enough to check a form's answers,
 /// while a long text's line stays a line.
 const HOLDS_SHOWN: usize = 200;

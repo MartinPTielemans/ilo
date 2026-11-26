@@ -199,10 +199,10 @@ pub fn claude_read(parent: &str, kind: &str, message: &Value) -> Vec<Out> {
             let name = block.get("name").and_then(Value::as_str);
             let tool = name.and_then(|name| name.strip_prefix(&ours));
             let tab = block.pointer("/input/tab").and_then(tools::tab_id);
-            let told = match (tool, tab, super::runner::searched(block)) {
-                (Some(_), Some(tab), _) => Helper::On(tab),
-                (Some("open_tab"), None, _) => Helper::Opens,
-                (_, _, Some(Out::Searched(query))) => Helper::Searched(query),
+            // A search with no tab opens one, as open_tab does.
+            let told = match (tool, tab) {
+                (Some(_), Some(tab)) => Helper::On(tab),
+                (Some("open_tab" | tools::SEARCHED), None) => Helper::Opens,
                 _ => Helper::Calls,
             };
             Out::Helper {
@@ -299,8 +299,6 @@ pub struct Helpers {
     opens: Vec<Open>,
     /// The helpers whose lines asked for a page that no step has opened yet, oldest first.
     opening: VecDeque<usize>,
-    /// Each search a helper's line told, by its step's place in the task's trace and the helper.
-    searches: Vec<(usize, usize)>,
     /// How many its CLI said started since the user's last message.
     started: u32,
     /// What follows the end of the turn ilo interrupted for the limit, while that end is awaited.
@@ -408,9 +406,6 @@ impl Helpers {
         };
         let opened =
             |open: &&Open| open.key == key || (tab.is_some() && open.tab == tab && open.key < key);
-        if let Some(&(_, helper)) = self.searches.iter().find(|(at, _)| *at == key) {
-            return Some(helper).filter(|&helper| within(&self.seen[helper]));
-        }
         if let Some(open) = self.opens.iter().rev().find(opened) {
             return open.helper.filter(|&helper| within(&self.seen[helper]));
         }
@@ -627,10 +622,7 @@ impl Agents {
         };
         let named = |seen: &Seen| !id.is_empty() && seen.id == id;
         let helper = task.helpers.seen.iter().position(named);
-        let calls = matches!(
-            told,
-            Helper::On(_) | Helper::Opens | Helper::Calls | Helper::Searched(_)
-        );
+        let calls = matches!(told, Helper::On(_) | Helper::Opens | Helper::Calls);
         let started = helper.is_some_and(|helper| task.helpers.seen[helper].started.is_some());
         if calls && !started {
             return self.helper_not_allowed(agent, Limit::Kind, cx);
@@ -659,12 +651,6 @@ impl Agents {
             }),
             (Helper::On(tab), Some(helper)) => task.helpers.on(helper, tab),
             (Helper::Opens, Some(helper)) => task.helpers.opens(helper),
-            // Its search is a step of its own, under its line alone.
-            (Helper::Searched(query), Some(helper)) => {
-                task.helpers.searches.push((trace, helper));
-                task.trace.push(super::task::searched(&query, after));
-                self.count_search(agent);
-            }
             (Helper::Ended, Some(helper)) => {
                 task.helpers.seen[helper].ended.get_or_insert(trace);
                 task.helpers.opening.retain(|each| *each != helper);
