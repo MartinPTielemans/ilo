@@ -290,8 +290,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 new_window_bar
 send window 2
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+resting_key t "private window"
 send insert "${site}ad.html"
 send key return
 expect "^browser: loaded [0-9]* ${site}ad.html\$" "the private window didn't load the ad page"

@@ -64,6 +64,7 @@ fn launch() -> Launch {
             token: "secret".into(),
         },
         model: None,
+        effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
@@ -417,4 +418,32 @@ fn a_task_that_takes_no_reply_has_an_id_alone_in_the_file() {
     assert_eq!(kept.removing(|_| true).len(), 1);
     assert_eq!(rows(&kept), alone);
     assert_eq!(kept.listed().count(), 0);
+}
+
+/// A task's row carries the names of the places its runs left something running in, and nothing
+/// else of them: read again, it holds each, and drops what isn't a place's name. A sweep of one
+/// that came clean takes it off the row that carried it, once.
+#[test]
+fn a_row_carries_the_places_its_runs_left_by_name_alone() {
+    const PLACE: &str = "0123456789abcdef";
+    let root = profile("left").join(FOLDER);
+    let mut kept = Kept::default();
+    kept.hold("task-1", Cli::Claude, Id::new(), "Default", 7);
+    kept.of_mut("task-1").unwrap().left.push(PLACE.into());
+    kept.write(&root);
+    let saved = std::fs::read(root.join(INDEX)).unwrap();
+    let mut saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved[0]["left"], json!([PLACE]));
+    // As anything else could have written it.
+    let other = ["../../tmp", "0123", "ABCDEF0123456789"];
+    saved[0]["left"] = json!([PLACE, other[0], other[1], other[2], 5]);
+    std::fs::write(root.join(INDEX), saved.to_string()).unwrap();
+    let mut again = Kept::default();
+    assert!(again.read(&root));
+    for name in other {
+        assert_eq!(again.came_clean(name), None, "{name}");
+    }
+    assert_eq!(again.came_clean("fedcba9876543210"), None);
+    assert_eq!(again.came_clean(PLACE), Some(None));
+    assert_eq!(again.came_clean(PLACE), None);
 }

@@ -2,7 +2,7 @@ use super::*;
 use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
 use crate::tokens::palette::{LIGHT_TINT, TINT};
-use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST, LESS};
+use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -162,20 +162,19 @@ fn failures_over(
         against(&plated(SECTION_PLATE)),
         GLYPH,
     );
-    // The selected section's glyph, on the Library's column under Arc's selected plate (#371).
-    use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
-    let selected: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(over(at, ink, COLUMN), ink, LIBRARY_PLATE))
-        .collect();
-    let glyph = palette.section_glyph;
+    // The shown section's glyph, name and count, on the window under the selected plate, as the
+    // Library's column has no fill of its own.
+    let plate = Rgba::from(palette.selected(0.));
+    let shown_section: Vec<Rgba> = window.iter().map(|&at| over(at, plate, plate.a)).collect();
     check(
-        "selected Library section glyph",
-        selected
-            .iter()
-            .map(|&at| contrast(glyph, at))
-            .fold(f32::MAX, f32::min),
-        GLYPH,
+        "shown Library section",
+        on(palette.text(TEXT_PRIMARY), &shown_section),
+        TEXT,
+    );
+    check(
+        "shown Library section count",
+        on(palette.text(palette.secondary()), &shown_section),
+        gray,
     );
     let targets: Vec<Rgba> = plated(TARGET_PLATE)
         .iter()
@@ -346,29 +345,27 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
             .collect()
     };
     let white = |alpha: f32| Hsla::from(WHITE).opacity(alpha);
-    let column: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(at, ink, shell::library::COLUMN))
-        .collect();
     let (overlay, dialog) = (vec![palette.overlay], vec![palette.dialog]);
-    let sections = [
-        shell::library::SECTION_HOVERED,
-        shell::library::LIBRARY_PLATE,
-    ];
     let mut states = vec![
         // On the window.
-        // A section's plates are Arc's selected one and ours under it.
+        // A section's row, at rest, under the pointer and pressed; the shown one's apart.
         (
             "Library section label",
-            palette.gray(shell::library::SECTION_LABEL),
+            palette.text(TEXT_PRIMARY),
+            TEXT,
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
+        ),
+        (
+            "Library section count",
+            palette.text(palette.secondary()),
             gray,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library section glyph",
             palette.glyph(shell::library::SECTION_GLYPH_UNSELECTED),
             GLYPH,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library row title",
@@ -830,6 +827,67 @@ fn the_shown_spaces_icon_reads_on_the_footer_light_and_dark() {
     );
 }
 
+/// The Space shown's dot in the foot's switcher reads at 3:1 or more on the footer for every theme
+/// of the icon test's grid, light and dark, over a black and a white backdrop, its grain moving it
+/// toward the ink, wherever the window's height puts the footer on its gradient; it's never weaker
+/// there than the other Spaces' dots; and where its first colour `SPACE_DOT_TONE` of the way to the
+/// ink reads with room to spare, it's that tone (the lead, 25 Nov).
+#[test]
+fn the_shown_spaces_dot_reads_on_the_footer_and_keeps_its_tone_where_it_can() {
+    use crate::tokens::shell::SPACE_DOT_TONE;
+    let themes = grid(
+        &[0., 45., 90., 135., 180., 225., 270., 315.],
+        &[0., 0.4, 1.],
+        &[0., 0.3, 0.6, 1.],
+        &[0., 1.],
+    );
+    let (mut worst, mut kept, mut moved) = ((f32::MAX, String::new()), 0, 0);
+    for theme in themes
+        .iter()
+        .filter(|theme| theme.appearance != Appearance::Automatic)
+    {
+        let tone = if theme.appearance == Appearance::Light {
+            Tone::Light
+        } else {
+            Tone::Dark
+        };
+        let palette = Palette::of(Some(theme), tone);
+        let others = palette.tertiary().max(palette.glyph_floor);
+        let footer: Vec<Rgba> = (fine_window(&palette).into_iter())
+            .flat_map(|at| [at, over(at, palette.ink, GRAIN_SHIFT * theme.grain)])
+            .collect();
+        let dot = palette.space_dot;
+        for &at in &footer {
+            let ratio = contrast(dot, at);
+            if ratio < worst.0 {
+                worst = (ratio, theme.to_text());
+            }
+            // Where the other dots are the ink already, the shown one is too: equal, to a rounding.
+            let theirs = contrast(over(at, palette.ink, others), at);
+            assert!(
+                ratio >= theirs - 1e-4,
+                "{}: weaker than the other dots, {ratio:.2} against {theirs:.2}",
+                theme.to_text()
+            );
+        }
+        let toned = over(palette.swatch.main(), palette.ink, SPACE_DOT_TONE);
+        let holds = footer.iter().all(|&at| {
+            let ratio = contrast(toned, at);
+            ratio >= GLYPH + BETWEEN
+                && ratio >= contrast(over(at, palette.ink, others), at) + BETWEEN
+        });
+        if holds {
+            assert_eq!(dot, toned, "{} keeps its tone", theme.to_text());
+            kept += 1;
+        } else {
+            moved += 1;
+        }
+    }
+    eprintln!("{kept} kept their tone, {moved} moved toward the ink");
+    assert!(kept > 0 && moved > 0);
+    assert!(worst.0 >= GLYPH, "{:.2} on {}", worst.0, worst.1);
+}
+
 /// The themes that came out worst for each component in the design sweep, today's and v3's.
 #[test]
 fn the_design_sweeps_worst_themes_pass() {
@@ -1280,9 +1338,9 @@ fn least_on(
 }
 
 /// Each transparency level holds its rule over what the material makes of any page (#4090). Less
-/// holds the floor before levels, text at 0.6 of the ink at 4.5:1 over a white, grey and black
-/// page. Standard and More hold text at full strength at 4.5:1 and at 0.6 at 3:1 over all of them
-/// and a photo.
+/// holds the floor before levels, the look's quiet ink (0.6 of Paper, 0.65 of Ink: #4276) at 4.5:1
+/// over a white, grey and black page. Standard and More hold text at full strength at 4.5:1 and at
+/// 0.6 at 3:1 over all of them and a photo.
 #[test]
 fn each_transparency_level_holds_its_rule_over_any_page() {
     let mut failures = Vec::new();
@@ -1290,9 +1348,13 @@ fn each_transparency_level_holds_its_rule_over_any_page() {
         for tone in [Tone::Dark, Tone::Light] {
             // One drawn dark in both looks lies on the dark material.
             let grounds = material(surface.tone(tone));
+            let quiet = match surface.tone(tone) {
+                Tone::Dark => TEXT_SECONDARY,
+                Tone::Light => LIGHT_TEXT_SECONDARY,
+            };
             for level in Transparency::ALL {
                 let rules: &[(&[u32], f32, f32)] = match level {
-                    Transparency::Less => &[(&grounds[..3], 0.6, TEXT)],
+                    Transparency::Less => &[(&grounds[..3], quiet, TEXT)],
                     _ => &[(&grounds, 1., TEXT), (&grounds, 0.6, 3.)],
                 };
                 for &(on, strength, floor) in rules {
@@ -1434,10 +1496,11 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
     }
 }
 
-/// The selected row's plate reads apart from a hovered row's at every level, in either look,
+/// The selected row's plate reads apart from a hovered row's at every level on a dark window,
 /// shaded grounds and all: the lighter of the two by 1.15:1 at every point of the window. With no
 /// shade they're 1.18:1 apart at worst, at More over white, where a hovered plate shaded less than
-/// the selected one ended the lighter (#4090).
+/// the selected one ended the lighter (#4090). A light window's two are the ink at two strengths,
+/// the shown one the firmer (`a_light_windows_plates_are_the_ink_and_hold_their_floors`).
 ///
 /// A dark window at More is the one place it doesn't hold: there a plate under the pointer has
 /// to tell from a bright window at 1.2:1 and lets its title give, the selected one tells as much
@@ -1446,7 +1509,7 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
 #[test]
 fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
     const APART: f32 = 1.15;
-    for tone in [Tone::Dark, Tone::Light] {
+    for tone in [Tone::Dark] {
         for level in Transparency::ALL {
             set_transparency(level);
             let palette = Palette::of(None, tone);
@@ -1572,7 +1635,7 @@ const PAGE_PLATE_DARK_MORE: u32 = 0x706e69;
 /// Gray text on a plate in a dark window is one ink at every level, whatever alpha its place gives
 /// it off a plate, and holds text's 4.5:1 with the palette's margin on the shown card's plate as
 /// measured, where the state line's own gray read 3.39 to 4.28. A light window's is the gray it
-/// has off a plate.
+/// has off a plate, or its own lift where that is more (#4276).
 ///
 /// A test has no window material, so this knows the token's ink over the grounds measured on one
 /// desktop and one window behind it, and no others: what another backdrop makes of the plate is
@@ -1622,7 +1685,11 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
         );
         let light = Palette::of(None, Tone::Light);
         for alpha in places {
-            assert_eq!(light.gray_on_plate(alpha), light.gray(alpha), "{level:?}");
+            assert_eq!(
+                light.gray_on_plate(alpha),
+                light.gray(alpha.max(LIGHT_PLATE_GRAY)),
+                "{level:?}"
+            );
         }
     }
 }
@@ -1769,10 +1836,10 @@ fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
 /// A sidebar row's plate under the pointer on a dark window is the plate anything has under the
 /// pointer there, with a Space's colour and with none, at every level, so a row's and a card's at
 /// the sidebar's foot are one form and what the test above holds of one it holds of the other. A
-/// light window's row keeps the ink at its own fainter step.
+/// light window's row is the ink at the same step, with the shade a row's words ask.
 #[test]
 fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
-    use crate::tokens::shell::LIGHT_HOVERED;
+    use crate::tokens::shell::HOVERED;
     let themes = grid(
         &[0., 60., 120., 180., 240., 300.],
         &[0.4, 1.],
@@ -1791,7 +1858,7 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
             let light = Palette::of(theme, Tone::Light);
             assert_eq!(
                 light.hovered_row(),
-                light.ground_plate(Ground::Hovered, LIGHT_HOVERED),
+                light.ground_plate(Ground::Hovered, HOVERED),
                 "{level:?} {theme:?}"
             );
         }
@@ -1961,30 +2028,10 @@ fn gray_margin(palette: &Palette) -> f32 {
     worst - gray_text_at(palette.glass)
 }
 
-/// The sweep's one excused miss, by the lead's word (2026-11-25): the Library's section label on a
-/// dark window in a colour, where Less sits, reads just under gray's 4.5 there, in today's build
-/// too, which no coarser test saw. No colour moves at Less for it; P6 redraws the Library and
-/// takes this out. It fails the day the label reads 4.5 or more, or less than this.
-const LABEL_AT_LESS: f32 = 4.49;
-const LIBRARY_LABEL: &str = "Library section label, every state";
-
-/// The least the Library's section label reads on `palette`'s `window` in each state it takes.
-fn library_label_reads(palette: &Palette, window: &[Rgba], gray: f32) -> f32 {
-    let (_, label, _, grounds) = states(palette, window, gray)
-        .into_iter()
-        .find(|(name, ..)| format!("{name}, every state") == LIBRARY_LABEL)
-        .expect("the Library's section label is one of the states");
-    let label = Rgba::from(label);
-    (grounds.iter())
-        .map(|&at| contrast(over(at, label, label.a), at))
-        .fold(f32::MAX, f32::min)
-}
-
 /// A Space's glass anywhere on its bar keeps every floor of the window and what lies on it, gray
 /// text at the one where its glass sits, over a black and a white backdrop: a sweep from solid to
 /// clear in hundredths, in Dark and Light, with no colour and with one. The title on a plate under
-/// the pointer may read less past the bar's last stretch, as at today's More, and the Library's
-/// section label is excused at one point (`LABEL_AT_LESS`).
+/// the pointer may read less past the bar's last stretch, as at today's More.
 #[test]
 fn a_spaces_glass_holds_every_floor_across_its_bar() {
     let colored = Theme::at(0.3, -0.5);
@@ -1995,19 +2042,7 @@ fn a_spaces_glass_holds_every_floor_across_its_bar() {
                 let palette = Palette::at(theme, tone, glass);
                 let window = fine_window(&palette);
                 let gray = gray_text_at(glass);
-                let mut failures = failures_over(theme, &palette, &window, gray);
-                if tone == Tone::Dark && theme.is_some() && glass == LESS {
-                    let reads = library_label_reads(&palette, &window, gray);
-                    assert!(
-                        (LABEL_AT_LESS..gray).contains(&reads),
-                        "the Library's section label, Dark, coloured, where Less sits, reads \
-                         {reads:.4}: the miss it was excused for ({LABEL_AT_LESS} to under \
-                         {gray}) has gone or grown; take the exception out or stop"
-                    );
-                    let before = failures.len();
-                    failures.retain(|each| !each.starts_with(LIBRARY_LABEL));
-                    assert_eq!(before - failures.len(), 1, "{failures:#?}");
-                }
+                let failures = failures_over(theme, &palette, &window, gray);
                 let colour = if theme.is_some() { "coloured" } else { "none" };
                 failed.extend(
                     failures
@@ -2388,5 +2423,223 @@ fn the_foots_plates_tell_from_the_window_at_every_level() {
                 );
             }
         }
+    }
+}
+
+/// A dark window's palette as numbers a float's last bit can't move: each colour as it's drawn in
+/// 8 bits and each floor and shade in thousandths, at `glass`. A colour that is the palette's ink
+/// itself is written "ink", so the pin below holds what Dark solves and not what the ink is. What
+/// floats is left to `dark_floats`: the palette's own answer for it follows the host's material.
+fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
+    let palette = Palette::at(theme, Tone::Dark, glass);
+    let colour = |c: Rgba| match hex(c) == INK && c.a == 1. {
+        true => "ink".to_owned(),
+        false => format!("{:06x}{:02x}", hex(c), (c.a * 255.).round() as u8),
+    };
+    let colours = [
+        palette.tint,
+        palette.underlay,
+        palette.glow,
+        palette.far_glow,
+        palette.shown.unwrap_or(BLACK),
+        palette.ink,
+        palette.accent,
+        palette.accent_label,
+        palette.section_glyph,
+        palette.overlay,
+        palette.dialog,
+        palette.page,
+        palette.card,
+        palette.swatch.main(),
+    ]
+    .map(colour)
+    .join(" ");
+    let numbers = [
+        palette.layer_alpha,
+        palette.text_floor,
+        palette.glyph_floor,
+        palette.gray_floor,
+        palette.pointed_shade,
+    ]
+    .into_iter()
+    .chain(palette.ground_shades)
+    .map(|n| format!("{}", (n * 1000.).round() as i32))
+    .collect::<Vec<_>>()
+    .join(" ");
+    format!("{colours} | {numbers}")
+}
+
+/// How a dark window's ink reads on what floats, in thousandths: with no material under it, then
+/// at each level over one, whichever this host has.
+fn dark_floats() -> String {
+    [None]
+        .into_iter()
+        .chain(Transparency::ALL.map(Some))
+        .map(|level| {
+            let ink = float_ink(Tone::Dark, level);
+            [ink.rest[0], ink.rest[1], ink.text, ink.glyph]
+                .into_iter()
+                .chain(ink.shades)
+                .map(|n| format!("{}", (n * 1000.).round() as i32))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Light's pass (#4276) moves the palette's ink and Light's plates, and a dark window draws as it
+/// did before it: with no theme, each of the picker's swatches and the field's extremes, at the
+/// bar's two ends and its three old levels, and what floats at each level. Only where Dark draws
+/// the ink itself, as a label on a light accent, does it follow the ink.
+#[test]
+fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
+    let themes: Vec<Option<Theme>> = [
+        0xf0eae5, 0xe59eba, 0x9e749b, 0xe1676f, 0xef8c63, 0xf2d46c, 0x73e49b, 0x7eb6d5, 0x656786,
+        0x000000, 0xffffff, 0x808080, 0x00ff6a, 0xffff00, 0x0000ff,
+    ]
+    .into_iter()
+    .map(|color| Some(Theme::of_color(color)))
+    .chain([None])
+    .collect();
+    let glasses = [0., 1.].into_iter().chain(Transparency::ALL.map(of_level));
+    let mut all = dark_floats();
+    all.push('\n');
+    for glass in glasses {
+        for theme in &themes {
+            all.push_str(&dark_solved(theme.as_ref(), glass));
+            all.push('\n');
+        }
+    }
+    // FNV-1a, so the pin is one number and not eighty lines.
+    let pin = all.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    assert_eq!(
+        pin, 15_196_312_875_659_842_487,
+        "a dark window's palette moved:\n{all}"
+    );
+}
+
+/// What a light window's plates read (#4276), with no theme and on the picker's swatches, at every
+/// step of the Space's Transparency bar, on every point of the window over a black backdrop and a
+/// white one: `(what, the least it reads anywhere, the least over a white backdrop alone)`.
+fn light_plates_read() -> Vec<(&'static str, f32, f32)> {
+    let themes: Vec<Option<Theme>> = [
+        0xf0eae5, 0xe59eba, 0x9e749b, 0xe1676f, 0xef8c63, 0xf2d46c, 0x73e49b, 0x7eb6d5, 0x656786,
+    ]
+    .into_iter()
+    .map(|color| Some(Theme::of_color(color)))
+    .chain([None])
+    .collect();
+    let mut read = [
+        "the shown plate's title",
+        "the shown plate's gray",
+        "a pointed row's title",
+        "a pointed card's title",
+        "a pointed row from its ground",
+        "a pointed card from its ground",
+        "the ink's shown plate, darker than its ground",
+        "the ink's shown plate, darker than a pointed row",
+    ]
+    .map(|what| (what, f32::MAX, f32::MAX));
+    for glass in bar() {
+        for theme in &themes {
+            let palette = Palette::at(theme.as_ref(), Tone::Light, glass);
+            let shown = Rgba::from(palette.shown(0.));
+            let gray = Rgba::from(palette.gray_on_plate(palette.secondary()));
+            let title = Rgba::from(palette.text(1.));
+            let (row, card) = (
+                Rgba::from(palette.hovered_row()),
+                Rgba::from(palette.hovered_plate()),
+            );
+            // `window_at` gives each point over the black backdrop, then over the white one.
+            for (index, at) in fine_window(&palette).into_iter().enumerate() {
+                let on = |plate: Rgba| over(at, plate, plate.a);
+                let word = |ink: Rgba, ground: Rgba| contrast(over(ground, ink, ink.a), ground);
+                let reads = [
+                    word(title, on(shown)),
+                    word(gray, on(shown)),
+                    word(title, on(row)),
+                    word(title, on(card)),
+                    contrast(on(row), at),
+                    contrast(on(card), at),
+                    // Only a Space with no colour has the ink's plate; a colour's may be lighter.
+                    match theme {
+                        None => (luminance(at) + 0.05) / (luminance(on(shown)) + 0.05),
+                        Some(_) => f32::MAX,
+                    },
+                    match theme {
+                        None => (luminance(on(row)) + 0.05) / (luminance(on(shown)) + 0.05),
+                        Some(_) => f32::MAX,
+                    },
+                ];
+                for (kept, now) in read.iter_mut().zip(reads) {
+                    kept.1 = kept.1.min(now);
+                    if index % 2 == 1 {
+                        kept.2 = kept.2.min(now);
+                    }
+                }
+            }
+        }
+    }
+    read.to_vec()
+}
+
+/// A light window has no white plate: the shown plate is the ink, darker than the window under it
+/// everywhere, and what's written on a plate holds its floor all along the Space's Transparency
+/// bar (#4276). A title holds 4.5:1 on the shown plate and on a plate under the pointer, over a
+/// black backdrop as over a white one, so no light title needs the 4.2 a dark window's is let down
+/// to past the bar's `hovered-title-past`. Gray on the shown plate holds 4.5:1 with a white window
+/// behind, which takes the lift `light-plate-gray` on a Space's colour. A plate under the pointer
+/// tells from its ground at 1.2:1, and the shown plate is the firmer of the two beside it.
+#[test]
+fn a_light_windows_plates_are_the_ink_and_hold_their_floors() {
+    let read = light_plates_read();
+    println!("{read:#?}");
+    let floors = [TEXT, TEXT, TEXT, TEXT, TELLS, TELLS, 1., 1.];
+    let failed: Vec<String> = read
+        .iter()
+        .zip(floors)
+        .filter(|&(&(what, least, white), floor)| {
+            // Gray's floor is the one with a white window behind; the rest hold everywhere.
+            let held = match what {
+                "the shown plate's gray" => white,
+                _ => least,
+            };
+            held < floor
+        })
+        .map(|(&(what, least, white), floor)| {
+            format!("{what}: {least:.2}, {white:.2} over white, under {floor}")
+        })
+        .collect();
+    assert!(failed.is_empty(), "{failed:#?}\nall: {read:#?}");
+}
+
+/// The light look's red is for the words or the glyph of an action that destroys (#4276), so it
+/// holds text's 4.5:1 where such words lie: on the floating fill over the material at its worst
+/// for a dark ink, and on an own page all along the Transparency bar with a white window behind.
+#[test]
+fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
+    use crate::tokens::menu::LIGHT_DESTRUCTIVE;
+    let red = rgba(LIGHT_DESTRUCTIVE);
+    assert_eq!(red.a, 1.);
+    let floating = rgba(crate::tokens::floating::LIGHT_FILL);
+    let on_float = over(rgb(LIGHT_FLOAT_MATERIAL), floating, floating.a);
+    assert!(
+        contrast(red, on_float) >= TEXT,
+        "on what floats: {:.2}",
+        contrast(red, on_float)
+    );
+    let page = rgba(crate::tokens::settings::form::LIGHT_OWN_PAGE);
+    for glass in bar() {
+        let palette = Palette::at(None, Tone::Light, glass);
+        let [_, white] = palette.window_at(0., 0.);
+        let ground = over(white, page, page.a);
+        assert!(
+            contrast(red, ground) >= TEXT,
+            "on an own page at {glass}: {:.2}",
+            contrast(red, ground)
+        );
     }
 }

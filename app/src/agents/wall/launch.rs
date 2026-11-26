@@ -148,6 +148,7 @@ impl Wall {
             launcher: Some(Launcher { program, handoff }),
             tmp: None,
             place: None,
+            listener: None,
         })
     }
 

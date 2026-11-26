@@ -146,6 +146,7 @@ impl command_bar::Host for RestingBar {
         _: Option<(SharedString, SharedString)>,
         _: crate::agents::tier::Tier,
         _: Option<String>,
+        _: Option<&'static str>,
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));
@@ -156,11 +157,13 @@ impl command_bar::Host for RestingBar {
         text: &str,
         tier: crate::agents::tier::Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         _: &mut App,
     ) {
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
+        let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
         self.ask(format!(
-            "run task at rest {agent} {text} at {}{model}",
+            "run task at rest {agent} {text} at {}{model}{effort}",
             tier.id()
         ));
     }

@@ -24,7 +24,7 @@ use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{self, Sites, StartedWith, Stop, Tier};
+use super::tier::{self, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -163,8 +163,6 @@ pub struct Conversation {
     pub writing: bool,
     /// Its access, which the chip under the reply field shows and its menu changes.
     pub tier: Tier,
-    /// Whether it may go only to the sites of the pages the user added.
-    pub only_added: bool,
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
@@ -401,6 +399,9 @@ pub struct Task {
     /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
     /// own default; None for Settings' Model, read at each launch.
     pub(super) model_id: Option<String>,
+    /// The effort level the user picked for it, which each of its runs passes its CLI; None for
+    /// the CLI's own.
+    pub(super) effort: Option<String>,
     /// The addresses of the pages the user added to it, which its first message names.
     pub(super) added: Vec<String>,
     pub state: State,
@@ -435,8 +436,6 @@ pub struct Task {
     /// at, and comes down to an ended one's as it takes that one's page (`starting_tier`,
     /// `left_at`).
     pub tier: Tier,
-    /// The sites it may use.
-    pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
     /// The turns the user stopped, each by how many of their messages came before its answer: a
@@ -468,6 +467,12 @@ pub struct Task {
     /// the task's messages and steps, so its line stands where it happened: what its lines about
     /// them are written from, by the conversation's words table.
     pub(in crate::agents) rewalled: Vec<rewall::Came>,
+    /// What each walled run of its was given, by its process, until the sweep after its end
+    /// answers: what anything it left running could still reach, and its place's name, which a
+    /// kept task's row carries while that sweep isn't clean.
+    pub(super) ran_walled: Vec<(u32, Given, Option<String>)>,
+    /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
+    pub(super) restart: Option<rewall::Restart>,
     /// While ilo copies its attached files, before its assistant first starts: nothing starts or
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
@@ -620,12 +625,15 @@ pub struct Card {
     /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
     /// card's `Done · {time}`.
     pub ended_time: SharedString,
-    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
-    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
-    /// quit, which keeps no conversation.
+    /// Done, the first paragraph of its last answer as plain text (`finding`): from this run's
+    /// conversation, or after a quit the line its kept card read back. Empty when it isn't done,
+    /// ended with no answer, or came back with no line.
     pub finding: SharedString,
     /// Done, what a screen reader is told of its finding (`told`): empty with none.
     pub told: SharedString,
+    /// After a quit, the picture its kept card read back of its last page, which Latest tasks'
+    /// plate shows: None for a task of this run, whose plate is its conversation's.
+    pub kept_picture: Option<super::kept::cards::Plate>,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -747,14 +755,10 @@ pub enum TaskAction {
     TakeOver(u64),
     /// A Stopped line's step up: only the user's press sets a task's access.
     SetTier(Tier),
-    /// A Sites line's Any site.
-    AnySite,
     /// The level the user picked in the level's menu, which they opened: nothing moved under the
     /// pointer, so no guard holds it, and on a task that has ended it's the level its next reply
     /// starts at.
     PickTier(Tier),
-    /// The level's menu's Any site.
-    PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// The stopped line's Hand Back, on an outside agent's task: its pages are its client's
@@ -774,11 +778,12 @@ pub struct Start {
     pub tier: Tier,
     /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
     pub model: Option<String>,
+    /// The effort level picked for it on the composer's menu, one its CLI takes, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// The addresses of the pages the user added on the `+` menu, which the task opens in tabs of
     /// its own: never a tab of the user's, nor its title or anything of its state.
     pub pages: Vec<String>,
-    /// Only the sites you add: the task may go only to the sites of the pages added.
-    pub only_added: bool,
     /// The files and the folder picked on the `+` menu (#4101), given at the start alone.
     pub files: super::files::Picked,
 }
@@ -881,11 +886,19 @@ pub struct Tasks {
     pub tasks: Vec<Task>,
     /// The finished tasks' conversations ilo holds an id for (kept.rs).
     pub kept: super::kept::Kept,
+    /// Whether the launch has read the kept tasks an earlier run left (`take_old_kept`).
+    pub(super) kept_taken: bool,
+    /// The places the launch's cleanup swept clean, by name with how many each sweep ended, while
+    /// they wait on the kept tasks being read (rewall.rs `came_clean`).
+    pub(super) came_clean: Vec<(String, usize)>,
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
     pub(super) profiles: Vec<String>,
     /// The last picture each kept task's card could keep of its last page (pick_up.rs).
     card_tiles: HashMap<String, pick_up::CardTile>,
+    /// What each kept task a run before left read back of its card, until a reply takes it up or
+    /// it goes (pick_up.rs).
+    came_back: HashMap<String, super::kept::cards::Back>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1090,18 +1103,17 @@ impl Agents {
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
             // A Stopped line's step up and the level's menu: the user's own press, the one way a
-            // tier or a task's Sites change. A line's button isn't pressed for what was there
-            // before a refusal's line appeared, nor once its task has ended.
-            TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
+            // tier changes. A line's button isn't pressed for what was there before a refusal's
+            // line appeared, nor once its task has ended.
+            TaskAction::SetTier(_) if self.just_stopped(agent) => {}
             // Nor for what was there before the helpers' limit's line appeared.
-            TaskAction::SetTier(_) | TaskAction::AnySite
+            TaskAction::SetTier(_)
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(_) | TaskAction::AnySite
+            TaskAction::SetTier(_)
                 if (self.task(agent)).is_some_and(|task| task.ended.is_some()) => {}
             TaskAction::SetTier(tier) | TaskAction::PickTier(tier) => {
                 self.set_tier(agent, tier, cx)
             }
-            TaskAction::AnySite | TaskAction::PickAnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.helpers.settle(Some(tab));
@@ -1227,7 +1239,6 @@ impl Agents {
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
             // The chip under the reply field says the task's own level, the one its refusals read.
             tier: task.tier,
-            only_added: matches!(task.sites, Sites::Only(_)),
             folder: (task.ended.is_none() && task.files.folder.is_some())
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
@@ -1368,6 +1379,10 @@ impl Agents {
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
+        // A task a run before left, its card as it was: the line and picture read back of it.
+        let back = self.tasks.came_back.get(&task.agent);
+        let back_line: Option<SharedString> =
+            back.and_then(|back| back.line.clone()).map(Into::into);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1392,7 +1407,7 @@ impl Agents {
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
-                State::Done { result, .. } => first_line(result),
+                State::Done { result, .. } => first_line(result).or_else(|| back_line.clone()),
                 State::Stopped => last_finished(task),
                 _ => None,
             },
@@ -1405,13 +1420,17 @@ impl Agents {
                 .map(|at| super::local_time(seconds(at)).into())
                 .unwrap_or_default(),
             finding: match task.state {
-                State::Done { .. } => finding(&task.messages),
+                State::Done { .. } => {
+                    (back_line.clone()).unwrap_or_else(|| finding(&task.messages))
+                }
                 _ => SharedString::default(),
             },
-            told: match task.state {
-                State::Done { .. } => told(&task.messages),
+            told: match (&task.state, &back_line) {
+                (State::Done { .. }, Some(line)) => told_line(line).unwrap_or_default(),
+                (State::Done { .. }, None) => told(&task.messages),
                 _ => SharedString::default(),
             },
+            kept_picture: back.and_then(|back| back.plate.clone()),
             pages,
             tier: task.tier,
             question,
@@ -1510,6 +1529,11 @@ impl Agents {
     /// Models has it while the inside switch is off.
     pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.look_for(vec![cli], true, cx);
+    }
+
+    /// Whether a look for the assistants is under way, for the ring on a row the user clicked.
+    pub fn looking(&self) -> bool {
+        self.tasks.looking
     }
 
     /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
@@ -1707,10 +1731,12 @@ impl Agents {
         let Start {
             tier,
             model: picked,
+            effort,
             pages,
-            only_added,
             files: given,
         } = start.into();
+        // Only a level its CLI's own program offers is passed it.
+        let effort = effort.filter(|level| cli.efforts().contains(&level.as_str()));
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
         let pages: Vec<String> = (pages.iter())
@@ -1763,6 +1789,7 @@ impl Agents {
             title,
             model,
             model_id,
+            effort,
             added: pages.clone(),
             state: State::Working,
             ended: None,
@@ -1783,15 +1810,6 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: match only_added && !pages.is_empty() {
-                true => Sites::Only(
-                    pages
-                        .iter()
-                        .filter_map(|url| self.browser.url_site(url))
-                        .collect(),
-                ),
-                false => Sites::default(),
-            },
             stops: Vec::new(),
             stopped_turns: Vec::new(),
             picked_from: None,
@@ -1802,6 +1820,8 @@ impl Agents {
             names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
+            restart: None,
             copying: false,
         };
         self.tasks.tasks.push(task);
@@ -2038,11 +2058,7 @@ impl Agents {
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            self.fail(
-                agent,
-                Failure::Other(format!("{} isn't installed.", cli.name())),
-                cx,
-            );
+            self.fail(agent, Failure::NotInstalled, cx);
             return false;
         };
         let dir = self.tasks_dir();
@@ -2051,6 +2067,7 @@ impl Agents {
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = self.launch_model(agent, cli);
+        let effort = self.task(agent).and_then(|task| task.effort.clone());
         // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
         let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
@@ -2065,6 +2082,7 @@ impl Agents {
                 token: task.token.clone(),
             },
             model,
+            effort,
             instructions: match task.helpers.on {
                 true => format!(
                     "{}\n\n{}",
@@ -2081,6 +2099,10 @@ impl Agents {
         match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
+                    if process.walled() {
+                        let walled = (process.run(), task.files.clone(), process.place());
+                        task.ran_walled.push(walled);
+                    }
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
@@ -2140,11 +2162,19 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, run, out } = event;
+        // The sweep after a run's end answers for that run, whichever run is under way now.
+        if let Out::Swept(answer) = out {
+            return self.swept(&agent, run, answer, cx);
+        }
         // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
+        // Nor is one of a task whose start waits on the sweep of its run before: it has no run.
+        if self.task(&agent).is_some_and(|task| task.restart.is_some()) {
             return;
         }
         // Its assistant is inside its wall, which is no answer of the assistant's.
@@ -2227,6 +2257,7 @@ impl Agents {
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
             Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
+            Out::Swept(_) => {}
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -2329,8 +2360,8 @@ impl Agents {
                     assistant: true,
                 }
             }
-            Failure::Other(why) if why.contains("isn't installed") => State::Failed {
-                why: why.into(),
+            Failure::NotInstalled => State::Failed {
+                why: format!("{} isn't installed.", cli.name()).into(),
                 assistant: true,
             },
             Failure::Other(why) => State::Failed {
@@ -2384,6 +2415,10 @@ impl Agents {
             task.hold(text.to_string());
             return cx.notify();
         }
+        // A start waiting on a sweep (rewall.rs) is given the conversation with this in it.
+        if task.restart.is_some() {
+            return cx.notify();
+        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2433,6 +2468,8 @@ impl Agents {
         task.asking = None;
         task.writing = None;
         task.waiting = None;
+        // A start waiting on a sweep never happens.
+        task.restart = None;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -2721,9 +2758,26 @@ impl Agents {
             );
             self.browser.delete_space(space, cx);
         }
-        if let Some(dir) = &self.tasks.dir {
-            end_old_task_files(&dir.join("Tasks"));
-        }
+        let Some(dir) = &self.tasks.dir else {
+            return;
+        };
+        let Some((root, left)) = end_old_task_files(&dir.join("Tasks")) else {
+            return;
+        };
+        // A sweep walks every process, so the cleanup is off the UI thread.
+        let cleaned =
+            cx.background_spawn(async move { super::wall::leftovers::clean_up(&root, &left) });
+        cx.spawn(async move |agents, cx| {
+            let cleaned = cleaned.await;
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+            _ = agents.update(cx, |agents, cx| agents.came_clean(cleaned.clean, cx));
+        })
+        .detach();
     }
 
     fn remove_task_files(&self, agent: &str) {
@@ -3258,6 +3312,7 @@ impl Agents {
             page: None,
             model: SharedString::default(),
             model_id: None,
+            effort: None,
             added: Vec::new(),
             state: State::Working,
             ended: None,
@@ -3278,7 +3333,6 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
             picked_from: None,
@@ -3289,6 +3343,8 @@ impl Agents {
             names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
+            restart: None,
             copying: false,
         });
         cx.notify();
@@ -5276,15 +5332,17 @@ fn names_the_browser(name: &str) -> bool {
 }
 
 /// The files of the tasks a run before left, but for the places walled tasks left, which are swept
-/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
-/// thread, as a sweep walks every process.
-fn end_old_task_files(tasks: &std::path::Path) {
+/// first (leftovers.rs): those are listed here, before any task can make one, and given back with
+/// where they are, for the cleanup.
+fn end_old_task_files(
+    tasks: &std::path::Path,
+) -> Option<(PathBuf, Vec<super::wall::leftovers::Left>)> {
     use super::wall::leftovers;
     let root = tasks.join(leftovers::ROOT);
     let left = leftovers::left_in(&root);
     if left.is_empty() {
         _ = std::fs::remove_dir_all(tasks);
-        return;
+        return None;
     }
     for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
         if entry.file_name() == leftovers::ROOT {
@@ -5296,15 +5354,5 @@ fn end_old_task_files(tasks: &std::path::Path) {
             Err(_) => {}
         }
     }
-    _ = std::thread::Builder::new()
-        .name("task-leftovers".into())
-        .spawn(move || {
-            let cleaned = leftovers::clean_up(&root, &left);
-            log!(
-                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
-                cleaned.ended,
-                cleaned.removed,
-                cleaned.kept
-            );
-        });
+    Some((root, left))
 }

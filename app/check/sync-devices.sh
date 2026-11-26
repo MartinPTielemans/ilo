@@ -289,8 +289,7 @@ sent_all=
 synced_line="browser: synced today [0-9]* in space [0-9]* at [0-9]* unloaded ${site}login.html?today"
 device a
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open A's command bar"
+resting_key t "device A window"
 send insert "${site}login.html?today-1"
 had=$(grep -c "$synced_line-1\$" "$b_log" || true)
 a_had=$(wc -l < "$a_log")

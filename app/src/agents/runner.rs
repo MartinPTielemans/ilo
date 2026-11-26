@@ -42,6 +42,16 @@ impl Cli {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
     }
 
+    /// The effort levels its own program takes when ilo starts it, under the names its help gives
+    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
+    /// lists these; Codex's help names no effort option.
+    pub fn efforts(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Cli::Codex => &[],
+        }
+    }
+
     /// What the user calls it, in text only: agents have no maker's logo or colour.
     pub fn name(self) -> &'static str {
         match self {
@@ -105,6 +115,9 @@ pub struct Launch {
     pub server: Server,
     /// The model, or None for the CLI's default.
     pub model: Option<String>,
+    /// The effort level the user picked for the thread, one of `cli.efforts()`, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// What it's told about working in the browser, after its own system prompt.
     pub instructions: String,
     /// The tools it may call, as the server lists them.
@@ -147,6 +160,9 @@ pub enum Out {
     NotAllowed(super::task::ilo::HelpersLimit),
     /// A run's first line lists its kinds of helper: whether each is ilo's.
     Kinds { ours: bool },
+    /// What the sweep after a walled run's end found: everything its assistant started was
+    /// ended, or not. The run has ended, so this is the last of it and never its task's next.
+    Swept(Result<leftovers::Swept, leftovers::SweepFailed>),
 }
 
 /// What a task's output tells of one of its helpers, for its line in the conversation. A label:
@@ -176,6 +192,8 @@ pub enum Failure {
     /// says.
     Limit(Option<u64>),
     SignedOut,
+    /// The assistant's program isn't on this computer, so no run started.
+    NotInstalled,
     /// The CLI said why, in its words.
     Other(String),
 }
@@ -201,6 +219,8 @@ pub struct Process {
     rising: Arc<AtomicBool>,
     /// The wall of a walled start, whose group and leftovers its end ends.
     walled: Option<Arc<Wall>>,
+    /// Where a walled start's sweep answers: its task, on the channel its lines go on.
+    answer: Option<(String, UnboundedSender<Event>)>,
 }
 
 impl Process {
@@ -273,6 +293,7 @@ impl Process {
             codex: codex.clone(),
             rising: still_rising.clone(),
             walled: wall.clone(),
+            answer: walled.then(|| (agent.to_string(), events.clone())),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -368,6 +389,16 @@ impl Process {
         self.id
     }
 
+    /// Whether it started inside a wall, whose sweep answers after its end.
+    pub fn walled(&self) -> bool {
+        self.answer.is_some()
+    }
+
+    /// The name of its wall's place, for a walled start with one.
+    pub fn place(&self) -> Option<String> {
+        self.walled.as_deref().and_then(Wall::place_name)
+    }
+
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
         // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
@@ -407,15 +438,26 @@ impl Drop for Process {
                 leftovers::System::end_group(&leftovers::Os, self.id);
             }
             _ = child.kill();
+            let (run, answer) = (self.id, self.answer.take());
             _ = std::thread::Builder::new()
                 .name("task-reap".into())
                 .spawn(move || {
                     _ = child.wait();
-                    if let Some(wall) = walled {
-                        wall.sweep_after();
-                    }
+                    reaped(walled.as_deref(), run, answer);
                 });
         }
+    }
+}
+
+/// After a run's end and its reap: the sweep of what its wall still holds, answered to its task.
+/// A run with no wall has nothing to sweep and says nothing.
+fn reaped(walled: Option<&Wall>, run: u32, answer: Option<(String, UnboundedSender<Event>)>) {
+    let Some(swept) = walled.and_then(Wall::sweep_after) else {
+        return;
+    };
+    if let Some((agent, events)) = answer {
+        let out = Out::Swept(swept);
+        _ = events.unbounded_send(Event { agent, run, out });
     }
 }
 
@@ -457,6 +499,14 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    // Inside a wall the listener is the only proxy anything reads: nothing exempt from it, and
+    // no lower-case name of the browser's own naming another, which curl reads first. Cleared
+    // before the start's own are set, since on Windows a name in any case is the same variable.
+    if launch.wall.is_some() {
+        for name in PROXY_CLEARED {
+            command.env_remove(name);
+        }
+    }
     command.envs(sets(launch));
 }
 
@@ -485,6 +535,12 @@ pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
             sets.push((CLAUDE_TMP, tmp.into()));
         }
     }
+    // Inside a wall either assistant reaches its own service through the wall's listener, the
+    // one port its network may reach (#4101).
+    if let Some(port) = (launch.wall.as_ref()).and_then(|wall| wall.port()) {
+        let proxy = format!("http://127.0.0.1:{port}");
+        sets.extend(PROXY.map(|name| (name, proxy.as_str().into())));
+    }
     sets
 }
 
@@ -499,6 +555,16 @@ pub(crate) const CLAUDE_WALLED: [&str; 5] = [
 ];
 /// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
 const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+/// What a walled start names its listener with, for either assistant.
+const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+/// What a walled start clears of the browser's own environment.
+const PROXY_CLEARED: [&str; 5] = [
+    "NO_PROXY",
+    "no_proxy",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+];
 
 /// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
 /// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
@@ -508,9 +574,15 @@ pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
         Cli::Claude => {
             let helpers = super::helpers::ENV.map(|(name, _)| name);
-            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+            [
+                &[PATH, CLAUDE_TMP][..],
+                &CLAUDE_WALLED[..],
+                &helpers[..],
+                &PROXY[..],
+            ]
+            .concat()
         }
-        Cli::Codex => vec![PATH, super::bridge::TOKEN],
+        Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }
 
@@ -597,6 +669,9 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     args.push(allowed.join(","));
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
+    }
+    if let Some(effort) = (launch.effort.as_deref()).filter(|e| Cli::Claude.efforts().contains(e)) {
+        args.extend(["--effort".into(), effort.to_string()]);
     }
     args.extend([
         "--append-system-prompt-file".into(),

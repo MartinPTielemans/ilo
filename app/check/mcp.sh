@@ -990,7 +990,6 @@ ilo_press() {
   case "$1" in
     "Take Over") ilo_button=TakeOver ;;
     "Give Full access") ilo_button='Raise(Full)' ;;
-    "Any site") ilo_button=AnySite ;;
     "Hand Back") ilo_button=HandBack ;;
     "Show Page") ilo_button=ShowPage ;;
     "Not Now") ilo_button=NotNow ;;

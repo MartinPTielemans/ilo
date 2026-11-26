@@ -189,8 +189,6 @@ pub enum IloButton {
     TakeOver,
     /// The task's access goes up to this one.
     Raise(Tier),
-    /// The task may go to any site.
-    AnySite,
     /// The tab goes back to the agent.
     HandBack,
     /// The pages of an outside agent's task the user stopped are its client's again.
@@ -209,10 +207,7 @@ impl IloButton {
     /// Whether it widens what the agent may do, and so takes no press until its line has stood
     /// still for a moment: an agent decides when such a line comes.
     pub fn widens(self) -> bool {
-        matches!(
-            self,
-            IloButton::Raise(_) | IloButton::AnySite | IloButton::PagesBack
-        )
+        matches!(self, IloButton::Raise(_) | IloButton::PagesBack)
     }
 }
 
@@ -228,10 +223,6 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
             why: Why::Fenced | Why::Never,
             ..
         } => vec![IloButton::TakeOver],
-        IloKind::Stopped {
-            why: Why::OtherSite,
-            ..
-        } => vec![IloButton::TakeOver, IloButton::AnySite],
         // A step up only where it would let the act through.
         IloKind::Stopped { tier, why, .. } => std::iter::once(IloButton::TakeOver)
             .chain(tier.lifting(*why).map(IloButton::Raise))
@@ -335,7 +326,7 @@ mod tests {
     }
 
     /// Each line's buttons, from its kind: a refusal offers the one step up, none from Full access
-    /// and none past the user's own Off limits list; Sites offers Any site; a settled line none.
+    /// and none past the user's own Off limits list; a settled line none.
     #[test]
     fn a_lines_buttons_come_from_its_kind() {
         use IloButton::*;
@@ -355,7 +346,6 @@ mod tests {
                 vec![TakeOver, Raise(Tier::Full)],
             ),
             (stopped(Why::Fenced, Tier::Work), vec![TakeOver]),
-            (stopped(Why::OtherSite, Tier::Full), vec![TakeOver, AnySite]),
             (
                 IloLine {
                     settled: true,

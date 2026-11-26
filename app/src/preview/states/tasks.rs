@@ -227,6 +227,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         pages: (task_pages((at - FIRST_TASK) as usize).iter())
             .map(|&(tab, ..)| tab)
             .collect(),
+        kept_picture: None,
         tier: Default::default(),
         question: None,
         open: match dot {
@@ -425,7 +426,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
-        only_added: false,
         folder: None,
     };
     group_talk(&mut talk, &items);

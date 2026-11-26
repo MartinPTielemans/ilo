@@ -263,6 +263,9 @@ pub struct Record {
     /// The user's replies that took the task up again, each by how many messages of theirs came
     /// before it and the access it came back at: ilo's line goes over each.
     pub resumed: Vec<(usize, Tier)>,
+    /// The names of the places its runs left something running in, each until a later launch's
+    /// sweep of it comes clean: a place's name alone, never its mark, a process or a path.
+    pub left: Vec<String>,
     /// Its removal is under way.
     removing: bool,
     /// Its removal failed: it's still there, for the user to try again.
@@ -333,6 +336,7 @@ impl Kept {
             nowhere: None,
             gone: false,
             resumed: Vec::new(),
+            left: Vec::new(),
             removing: false,
             stuck: false,
         });
@@ -403,6 +407,15 @@ impl Kept {
             .collect()
     }
 
+    /// The sweep of `place` came clean: the row that carried its name no longer does. None if no
+    /// row did; else that row's task, if it has one.
+    pub fn came_clean(&mut self, place: &str) -> Option<Option<String>> {
+        let record = (self.records.iter_mut())
+            .find(|record| record.left.iter().any(|each| each == place))?;
+        record.left.retain(|each| each != place);
+        Some(record.task.clone())
+    }
+
     /// A removal ended: the id goes if the conversation did, else it stays, marked.
     pub fn removed(&mut self, id: &Id, removed: bool) {
         match removed {
@@ -451,6 +464,15 @@ impl Kept {
                     .take(TITLE)
                     .collect();
                 record.past = Some(Past { title, end, at });
+                // Names a place is made with, and nothing else.
+                let left = (each
+                    .get("left")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten())
+                .filter_map(Value::as_str)
+                .filter(|name| super::wall::leftovers::is_name(name));
+                record.left = left.map(String::from).collect();
             }
         }
         true
@@ -476,6 +498,9 @@ impl Kept {
                     row["ended"] = json!(past.at);
                     row["profile"] = json!(record.profile);
                     row["card"] = json!(record.card.as_str());
+                    if !record.left.is_empty() {
+                        row["left"] = json!(record.left);
+                    }
                 }
                 row
             })

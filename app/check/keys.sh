@@ -773,7 +773,9 @@ settings_drew Shortcuts
 # what's typed a task; off, it doesn't. It goes off again after.
 send clickkey $(drawn "toolbar Threads")
 settings_drew Threads
-click_in_sight "switch agents"
+# The search above drew this switch among its rows, far down the card, and a section's "drew"
+# line comes before its frame's places: only a place drawn since Threads drew is its own.
+click_in_sight "switch agents" clickkey '^browser: settings drew Threads$'
 expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
 send key w cmd
@@ -929,9 +931,13 @@ send clickkey $(drawn "search")
 send type sidebar
 expect '^browser: settings search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
-# Tabs & Sidebar's hidden sidebar row comes first, before the commands.
-grep -q "^browser: settings search \"sidebar\" finds \(.*, \)\{0,1\}$found\$" "$log" ||
+# The search finds every page's rows: Window's Sidebar position first, then the commands, then Tabs
+# & Spaces' rows for the hidden sidebar, with Restore an earlier sidebar once the core has backed the
+# sidebar up, which it does as it saves the Spaces.
+alone_key=⌥
+[ "$(uname)" = Darwin ] || alone_key=Alt
+found="Sidebar position, Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar, Show the hidden sidebar at the window's edge, Show the hidden sidebar when $alone_key is pressed alone"
+grep -q "^browser: settings search \"sidebar\" finds $found\(, Restore an earlier sidebar\)\{0,1\}\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
 send type pinned tabs
@@ -1401,8 +1407,7 @@ page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the page from its bar"
 new_window_bar
 send window "$(grep -c '^browser: window opened ' "$log")"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in a window with no page didn't open the command bar"
+resting_key t "new window"
 send insert 'data:text/html,<title>first</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \

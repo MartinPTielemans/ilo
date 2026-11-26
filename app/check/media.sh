@@ -688,8 +688,7 @@ new_window_bar
 send window 2
 # private_page <name>: opens the call page named <name> in the private window, as $p.
 private_page() {
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  resting_key t "private window"
   send insert "${site}call.html?$1"
   send key return
   expect "^browser: title [0-9]* $1\$" "the private window's $1 page didn't draw"

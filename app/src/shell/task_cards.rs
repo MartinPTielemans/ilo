@@ -380,8 +380,8 @@ pub(super) struct TaskList {
     /// The next ageing's wait.
     ageing: Option<gpui::Task<()>>,
     /// The task whose waiting card was clicked away from its home Space, whose conversation shows
-    /// once that Space does.
-    going: Option<SharedString>,
+    /// once that Space does, or the page it waits on where the click was its Show Page.
+    going: Option<(SharedString, bool)>,
     /// Each card as it fades in.
     coming: HashMap<SharedString, Ease>,
     /// The window has drawn its list, so what changes on it from now on moves.
@@ -720,19 +720,26 @@ impl Shell {
     }
 
     /// The Space shown changed: a click on a waiting card away from its home Space went there, and
-    /// its conversation shows now.
+    /// its conversation shows now, or its Show Page's page while the task still waits.
     pub(super) fn card_space_shown(&mut self, cx: &mut Context<Self>) {
         // ⌘T's slot is in the Space shown alone.
         if self.task_list.slot {
             self.place_cards(cx);
         }
-        let Some(agent) = self.task_list.going.take() else {
+        let Some((agent, page)) = self.task_list.going.take() else {
             return;
         };
-        let home = (self.task_cards.iter()).find(|card| card.agent == agent);
-        if home.is_some_and(|card| card.home == self.space)
-            && self.talk_agent() != Some(agent.clone())
-        {
+        let Some(card) = (self.task_cards.iter()).find(|card| card.agent == agent) else {
+            return;
+        };
+        if card.home != self.space {
+            return;
+        }
+        if page {
+            if card.dot == Dot::Waiting {
+                self.card_button(agent, cx);
+            }
+        } else if self.talk_agent() != Some(agent.clone()) {
             self.show_task(agent, cx);
         }
     }
@@ -876,7 +883,7 @@ impl Shell {
             .map(|card| card.home);
         if let Some(home) = home.filter(|&home| home != self.space) {
             log!("browser: task {agent} shown in its home space {home}");
-            self.task_list.going = Some(agent);
+            self.task_list.going = Some((agent, false));
             return self.show_space(home, cx);
         }
         if self.talk_agent().as_ref() == Some(&agent) && self.watched_task_page().is_some() {
@@ -891,6 +898,13 @@ impl Shell {
             return;
         };
         if card.dot == Dot::Waiting {
+            // Away from its home Space, the page shows there, as any page of another Space does.
+            if card.home != self.space {
+                let home = card.home;
+                log!("browser: task {agent} page shown in its home space {home}");
+                self.task_list.going = Some((agent, true));
+                return self.show_space(home, cx);
+            }
             if let Some(tab) = self.waiting_page(card) {
                 log!("browser: command show-page via task card");
                 if self.talk_agent().as_ref() != Some(&agent) {

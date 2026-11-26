@@ -20,6 +20,7 @@ fn launch(cli: Cli) -> Launch {
             token: "secret".into(),
         },
         model: Some("haiku".into()),
+        effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
@@ -172,6 +173,36 @@ fn a_task_starts_through_a_cmd_shim() {
         drop(process);
     }
     _ = std::fs::remove_dir_all(dir);
+}
+
+/// A level picked for the thread reaches Claude as its own `--effort`; with none picked, or one
+/// its program doesn't list, ilo passes nothing and Claude uses its own default.
+#[test]
+fn claude_gets_the_picked_effort_and_nothing_else() {
+    let mut launch = launch(Cli::Claude);
+    let effort = |launch: &Launch| {
+        let args = claude_args(launch);
+        let at = args.iter().position(|arg| arg == "--effort");
+        at.map(|at| args[at + 1].clone())
+    };
+    assert_eq!(effort(&launch), None, "an effort with nothing picked");
+    for level in Cli::Claude.efforts() {
+        launch.effort = Some(level.to_string());
+        assert_eq!(effort(&launch).as_deref(), Some(*level));
+    }
+    launch.effort = Some("turbo".into());
+    assert_eq!(effort(&launch), None, "a level Claude doesn't list");
+}
+
+/// The levels are Claude Code's `--effort` as its help prints them, in its order; Codex's help
+/// names no effort option, so it has none.
+#[test]
+fn only_claude_takes_an_effort() {
+    assert_eq!(
+        Cli::Claude.efforts(),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    assert!(Cli::Codex.efforts().is_empty());
 }
 
 #[test]
@@ -776,6 +807,83 @@ fn only_a_walled_claude_is_started_with_the_walls_knobs() {
     assert_eq!(set(&walled(Cli::Codex, None)), set(&launch(Cli::Codex)));
 }
 
+/// A start inside a wall whose listener is up, as put_up answers one.
+fn listening(cli: Cli) -> Launch {
+    Launch {
+        wall: Some(Arc::new(Wall::for_test_listening(cli))),
+        ..launch(cli)
+    }
+}
+
+/// Whether two names are one variable, as the started program reads them: on Windows in any case,
+/// where a name keeps the spelling it was first given on the command, so a proxy name cleared in
+/// lower case and then set in upper case is spelled in lower case.
+fn same_name(one: &str, other: &str) -> bool {
+    one == other || (cfg!(windows) && one.eq_ignore_ascii_case(other))
+}
+
+/// A walled start of either assistant names the wall's listener as its every proxy and clears
+/// what would exempt a host from it or name another; a start with no wall names none and clears
+/// nothing, as before.
+#[test]
+fn only_a_walled_start_names_the_listener_as_its_proxy() {
+    let proxies = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+    let cleared = [
+        "NO_PROXY",
+        "no_proxy",
+        "https_proxy",
+        "http_proxy",
+        "all_proxy",
+    ];
+    let removed = |launch: &Launch| -> Vec<String> {
+        let mut command = crate::child::command(&launch.program);
+        environment(&mut command, launch);
+        (command.get_envs())
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    };
+    for cli in Cli::ALL {
+        let inside = listening(cli);
+        let port = (inside.wall.as_ref()).and_then(|wall| wall.port()).unwrap();
+        let named = format!("http://127.0.0.1:{port}");
+        let has = set(&inside);
+        for name in proxies {
+            let at = (has.iter())
+                .find(|(set, _)| same_name(set, name))
+                .map(|(_, value)| value);
+            assert_eq!(at, Some(&named), "{cli:?}: {name}");
+        }
+        let gone = removed(&inside);
+        for name in cleared {
+            let reads_listener =
+                (has.iter()).any(|(set, value)| same_name(set, name) && *value == named);
+            assert!(
+                gone.iter().any(|gone| same_name(gone, name)) || reads_listener,
+                "{cli:?}: {name} isn't cleared"
+            );
+            assert!(
+                !has.iter()
+                    .any(|(set, value)| same_name(set, name) && *value != named),
+                "{cli:?}: {name} names something else"
+            );
+        }
+
+        let outside = launch(cli);
+        let has = set(&outside);
+        for name in proxies.iter().chain(&cleared) {
+            assert!(
+                !has.iter().any(|(set, _)| same_name(set, name)),
+                "{cli:?}: {name} is set"
+            );
+        }
+        assert!(
+            removed(&outside).is_empty(),
+            "{cli:?}: a start with no wall clears a name"
+        );
+    }
+}
+
 /// Every name a start sets on its process is one the wall's launcher is told to keep: the wall
 /// drops every other on the way, and nothing would say so. The list itself is one the launcher
 /// takes: no name twice, and no more than it reads.
@@ -797,10 +905,14 @@ fn every_name_a_start_sets_is_in_the_kept_list() {
             launch(cli),
             with_helpers,
             walled(cli, Some("/nonexistent/tmp")),
+            listening(cli),
         ];
         for start in starts {
             for (name, _) in set(&start) {
-                assert!(names.contains(&name.as_str()), "{name} is set and not kept");
+                assert!(
+                    names.iter().any(|kept| same_name(kept, &name)),
+                    "{name} is set and not kept"
+                );
             }
         }
     }
@@ -845,6 +957,27 @@ fn a_walled_start_carries_no_name_outside_the_list() {
     for (name, _) in set(&start) {
         assert!(has.contains(&name.as_str()), "{name} was set and lost");
     }
+}
+
+/// A walled run's reap sweeps its place and answers its task with what the sweep found, by the
+/// run's own process; a wall with no place, or a run with no wall, sweeps nothing and says
+/// nothing. Off the Mac nothing is inside a wall, so the sweep finds nothing in one walk.
+#[test]
+fn a_walled_runs_reap_answers_its_task_with_the_sweep() {
+    let root = std::env::temp_dir().join(format!("ilo-reaped-{}", std::process::id()));
+    let place = leftovers::Place::make(&root).unwrap();
+    let wall = Wall::for_test(None).in_place(Arc::new(place));
+    let (events, mut heard) = futures::channel::mpsc::unbounded();
+    let to = || Some(("task".to_string(), events.clone()));
+    reaped(Some(&wall), 7, to());
+    let event = heard.try_recv().unwrap();
+    let swept = leftovers::Swept { ended: 0, walks: 1 };
+    assert_eq!((event.agent.as_str(), event.run), ("task", 7));
+    assert_eq!(event.out, Out::Swept(Ok(swept)));
+    reaped(Some(&Wall::for_test(None)), 8, to());
+    reaped(None, 9, to());
+    assert!(heard.try_recv().is_err(), "nothing more was said");
+    _ = std::fs::remove_dir_all(&root);
 }
 
 /// Claude's start has its provider's search and never its fetch, walled or not. The wall's hosts

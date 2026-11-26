@@ -127,8 +127,13 @@ expect "^browser: page $a audible 1 muted 1\$" "the muted tab's sound didn't sho
 ../tools/window-screenshot.sh "$pid" "$out/muted.png" || fail "no window to capture"
 send key x
 expect "^browser: page $a audible 0 muted 1\$" "the tab's sound didn't stop"
-# The speaker is after the favicon, at the title's x, 43.
-send click 52 $(row 0 | cut -d' ' -f2)
+# The speaker sits at the line's end, before the row's button, which the pointer on the row brings
+# and which moves it, so it's clicked where its line says once the pointer rests on its row.
+await "^browser: speaker $a at " || fail "the muted tab's row logged no speaker"
+speaker_y=$(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f6)
+send move $(row 0 | cut -d' ' -f1) $speaker_y
+expect "^browser: speaker $a at " "the pointer on the muted tab's row didn't move its speaker"
+send click $(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f5-)
 expect '^browser: command toggle-mute via sidebar$' "a click on the speaker didn't reach the UI"
 expect "^browser: page $a audible 0 muted 0\$" "a click on the speaker didn't unmute the tab"
 open_from_bar example.com
@@ -1699,13 +1704,17 @@ FRAME
   # Alt+F4 in the bar closes the browser window under it, as in Chrome's address field, and the
   # bar's window, which every browser window shares, lives on to open over the next one: Ctrl+T
   # there opens the bar again (#1362). The windows over the page that have no Alt+F4 of the UI's,
-  # such as the dialog, close themselves on it (dialogs.sh).
+  # such as the dialog, close themselves on it (dialogs.sh). The sidebar's "+ New Tab" opens the bar
+  # over the second window, which shows no page, where Ctrl+T gives the Space's resting bar the
+  # keyboard instead (#4140).
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   new_window_bar
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send click 100 148
+  expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" in the second window didn't run New Tab"
+  expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar in the second window"
   post key f4 ctrl
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
   expect '^browser: command close-window via ui$' "Alt+F4 in the command bar didn't reach the UI"
