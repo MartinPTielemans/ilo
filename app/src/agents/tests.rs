@@ -8041,6 +8041,207 @@ mod tasks {
         heads_as_worked(live, head);
     }
 
+    /// Calls `tool` as the server does and leaves it unanswered, a step under way: its reply, which
+    /// a wait's answer comes on.
+    fn begun(
+        agents: &Entity<Agents>,
+        agent: &str,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 40);
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            agent: agent.into(),
+            connection: 1,
+            tool: tool.into(),
+            arguments,
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        cx.run_until_parked();
+        answer
+    }
+
+    /// The tool of each step a task's conversation shows as under way, which is what moves in
+    /// it, and "Thinking" for a turn's.
+    fn moving(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        agents.read_with(cx, |agents, cx| {
+            let trace = &agents.task(agent).unwrap().trace;
+            let tool = |step: &task::TraceStep| trace[step.key].did.tool.clone();
+            let lines = agents.conversation(agent, cx).unwrap().lines;
+            (lines.iter())
+                .flat_map(|line| match line {
+                    task::Line::Trace(trace) => (trace.items.iter())
+                        .filter_map(|item| match item {
+                            task::TraceItem::Step(step) if step.running => Some(tool(step)),
+                            _ => None,
+                        })
+                        .collect(),
+                    task::Line::Step(step) if step.running => vec![tool(step)],
+                    task::Line::Thinking { failed: None, .. } => vec!["Thinking".into()],
+                    _ => Vec::new(),
+                })
+                .collect()
+        })
+    }
+
+    /// `at_work`, after a refusal the user hasn't settled that its task carried on past, if
+    /// `refused`: a click at Look only, then a look at the page.
+    fn at_work_past(refused: bool, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, String) {
+        let (agents, browser, agent) = at_work(cx);
+        if refused {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&agent).unwrap().tier = Tier::Look
+            });
+            let click = json!({ "tab": 30, "ref": "e1" });
+            assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+            let look = json!({ "tab": 30 });
+            traced(
+                &agents,
+                &browser,
+                &agent,
+                "snapshot",
+                look,
+                Some(shop_tree()),
+                cx,
+            );
+            let (live, title, running) = stretch_head(&agents, &agent, cx);
+            assert_eq!(
+                (live, title.as_str(), running),
+                (task::Live::Refused, "Working", true),
+                "a task that carried on past a refusal heads as at work"
+            );
+        }
+        (agents, browser, agent)
+    }
+
+    /// The four waits on the user: the task's own hand-off of page 31, a sign-in its load of page
+    /// 30 met, its ask for page 30 back and its question. Gives the wait's call, unanswered.
+    fn waits_on_user(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        wait: &str,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        match wait {
+            "hand_off" => {
+                let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+                begun(agents, agent, "hand_off", reason, cx)
+            }
+            "sign-in" => {
+                let load = json!({ "tab": 30, "url": "shop.example/account" });
+                let loads = begun(agents, agent, "navigate", load, cx);
+                asks_for_sign_in(agents, browser, 30, "http://auth.example:8080", cx);
+                assert!(
+                    loads.try_recv().is_err(),
+                    "the load answered at the sign-in"
+                );
+                loads
+            }
+            "ask_for_tab" => {
+                agents.update(cx, |agents, cx| {
+                    agents.task_action(agent, TaskAction::TakeOver(30), cx)
+                });
+                let reason = json!({ "reason": "To go on", "tab": 30 });
+                begun(agents, agent, "ask_for_tab", reason, cx)
+            }
+            _ => {
+                let question = json!({ "question": "Which size?" });
+                begun(agents, agent, "ask", question, cx)
+            }
+        }
+    }
+
+    /// A wait on the user isn't work (#4320): while a task waits at its own hand_off, at a
+    /// sign-in its page met, at its ask for a tab back or at its question, with nothing else under
+    /// way, nothing of its conversation moves and its stretch heads as worked, whether or not it
+    /// carried on past a refusal before.
+    #[gpui::test]
+    fn nothing_moves_at_a_wait_on_the_user_whatever_was_refused_before(cx: &mut TestAppContext) {
+        for refused in [false, true] {
+            for wait in ["hand_off", "sign-in", "ask_for_tab", "ask"] {
+                let (agents, browser, agent) = at_work_past(refused, cx);
+                let _waits = waits_on_user(&agents, &browser, &agent, wait, cx);
+                let (live, title, running) = stretch_head(&agents, &agent, cx);
+                assert!(
+                    matches!(live, task::Live::Handed | task::Live::Asked),
+                    "{wait}, refused before {refused}: {live:?}"
+                );
+                assert!(
+                    title.starts_with("Worked for") && !running,
+                    "{wait}, refused before {refused}: headed {title:?}, under way {running}"
+                );
+                assert_eq!(
+                    moving(&agents, &agent, cx),
+                    [""; 0],
+                    "{wait}, refused before {refused}"
+                );
+            }
+        }
+    }
+
+    /// The one case that moves: a task that carries on in another of its pages through a wait.
+    /// That step alone moves, the waiting step never, whichever of the two began first, and the
+    /// stretch heads as at work. A step from before a question is in the stretch the question
+    /// closed, as one above any message is, so the question's wait has the one order.
+    #[gpui::test]
+    fn a_step_in_another_page_alone_moves_through_a_wait(cx: &mut TestAppContext) {
+        let orders = [
+            ("hand_off", false),
+            ("hand_off", true),
+            ("sign-in", false),
+            ("sign-in", true),
+            ("ask_for_tab", false),
+            ("ask_for_tab", true),
+            ("ask", false),
+        ];
+        for refused in [false, true] {
+            for (wait, step_first) in orders {
+                let (agents, browser, agent) = at_work_past(refused, cx);
+                let other = if wait == "hand_off" { 30 } else { 31 };
+                let looks = |cx: &mut TestAppContext| {
+                    begun(&agents, &agent, "snapshot", json!({ "tab": other }), cx)
+                };
+                let before = step_first.then(|| looks(cx));
+                let _waits = waits_on_user(&agents, &browser, &agent, wait, cx);
+                let _after = before.is_none().then(|| looks(cx));
+                let case = format!("{wait}, step first {step_first}, refused before {refused}");
+                let (live, title, running) = stretch_head(&agents, &agent, cx);
+                assert!(
+                    matches!(live, task::Live::Handed | task::Live::Asked),
+                    "{case}: {live:?}"
+                );
+                assert_eq!((title.as_str(), running), ("Working", true), "{case}");
+                assert_eq!(moving(&agents, &agent, cx), ["snapshot"], "{case}");
+            }
+        }
+    }
+
+    /// Once the user hands the page back the wait is over, and the next step moves as any does.
+    #[gpui::test]
+    fn the_next_step_moves_again_after_the_hand_back(cx: &mut TestAppContext) {
+        for refused in [false, true] {
+            let (agents, _browser, agent) = at_work_past(refused, cx);
+            let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+            let handed = begun(&agents, &agent, "hand_off", reason, cx);
+            assert_eq!(moving(&agents, &agent, cx), [""; 0]);
+            agents.update(cx, |agents, cx| agents.hand_back(31, cx));
+            cx.run_until_parked();
+            assert!(!handed.recv().unwrap().error);
+            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 31 }), cx);
+            assert_eq!(
+                moving(&agents, &agent, cx),
+                ["snapshot"],
+                "refused before {refused}"
+            );
+        }
+    }
+
     /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
     /// Thinking with no steps yet, then "Step N · <step>", "Needs you" ahead of what a handoff
     /// waits for, and "Stopped after N steps" once the user stops it. Only the count and "Needs

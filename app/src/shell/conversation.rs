@@ -3352,8 +3352,8 @@ impl Render for TalkView {
         // What changes once it has shown moves.
         self.motion.live = true;
         // What moves does only while it shows: what opens, folds or lands on the display's frames,
-        // and the shimmer, which moves all the while a step waits on the user, on the loading dots'
-        // clock, as each frame draws the whole window again (#1700).
+        // and the shimmer, which moves while a step is under way and never while one waits on the
+        // user, on the loading dots' clock, as each frame draws the whole window again (#1700).
         let shimmers = self.moving(still);
         if !self.folding.is_empty() || busy {
             window.request_animation_frame();
