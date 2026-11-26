@@ -301,13 +301,10 @@ pub fn starts_on<'a>(
     ready.find(|agent| Some(&agent.id) == picked).or(first)
 }
 
-/// The level menu, as each level it offers and its items: the levels, `current` checked, and the
-/// line every level holds to. Settings' `A new thread starts with` opens it too, without Full
-/// access (`full`), which is set for one thread and never where one starts.
-pub fn level_choices(current: Tier, full: bool) -> (Vec<Tier>, Vec<MenuEntry>) {
-    let tiers: Vec<Tier> = (Tier::ALL.into_iter())
-        .filter(|&tier| full || tier != Tier::Full)
-        .collect();
+/// The level menu, as each level it offers and its items: every level, `current` checked, and the
+/// line every level holds to. Settings' `A new thread starts with` opens it too, row for row.
+pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
+    let tiers: Vec<Tier> = Tier::ALL.to_vec();
     let mut items: Vec<MenuEntry> = (tiers.iter())
         .map(|&tier| MenuEntry {
             checked: tier == current,
@@ -2777,11 +2774,11 @@ impl CommandBar {
         self.show_choices(FOLDER, items, chosen, window, cx);
     }
 
-    /// The level trigger's menu, under it: `level_choices`, Full access among them. A pick holds
-    /// for this thread and is offered next time; Full access is never offered again by itself.
+    /// The level trigger's menu, under it: `level_choices`. A pick holds for this thread and is
+    /// where the next starts, Full access too, as Settings' Access is.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
-        let (tiers, items) = level_choices(ask.tier, true);
+        let (tiers, items) = level_choices(ask.tier);
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
         let chosen = Box::new(

@@ -164,11 +164,11 @@ pub fn claude_args(mut args: Vec<String>, keep: &Keep) -> Vec<String> {
     args
 }
 
-/// The access a task comes back at when the user replies after it ended at `ended`: where every
-/// task starts, or lower if the user had put it lower. Full access is never brought back. Only the
-/// app decides it, from what it kept itself.
+/// The access a task comes back at when the user replies after it ended at `ended`: the one it
+/// ended at, Full access too, which the user set and its chip shows. Only the app decides it, from
+/// what it kept itself.
 pub fn comes_back(ended: Tier) -> Tier {
-    ended.min(Tier::default())
+    ended
 }
 
 /// Whether what a run that went said, on its way out, is Claude Code finding no conversation

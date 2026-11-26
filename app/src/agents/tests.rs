@@ -11571,8 +11571,8 @@ mod tasks {
     }
 
     /// The composer opens in a profile with what it last started a thread with there: its level,
-    /// except Full access, which opens at the level every thread starts at, and its model. Each
-    /// profile keeps its own, with the effort Settings set there, and they're saved.
+    /// Full access too (#4360), and its model. Each profile keeps its own, with the effort
+    /// Settings set there, and they're saved.
     #[gpui::test]
     fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
         use crate::agents::task::Last;
@@ -11589,6 +11589,7 @@ mod tasks {
             agents.remember_composer(1, Tier::Look, haiku.clone());
             agents.remember_composer(2, Tier::Full, None);
         });
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Full, cx));
         let opens = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
             agents.read_with(cx, |agents, _| {
                 (agents.composer_last(1), agents.composer_last(2))
@@ -11600,12 +11601,24 @@ mod tasks {
             model: haiku.clone(),
             effort: Some("high"),
         };
-        assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
+        let full = Last {
+            tier: Tier::Full,
+            ..Last::default()
+        };
+        assert_eq!(opens(&agents, cx), (looked.clone(), full.clone()));
         let again = super::agents(&browser, &configs, Some(path.clone()), cx);
         let saved = std::fs::read_to_string(&path).unwrap();
-        assert!(!saved.contains("\"full\""), "Full access was kept: {saved}");
+        assert!(
+            saved.contains("\"full\""),
+            "Full access wasn't kept: {saved}"
+        );
         again.update(cx, |agents, cx| agents.load(&saved, cx));
-        assert_eq!(opens(&again, cx), (looked, Last::default()));
+        assert_eq!(opens(&again, cx), (looked, full));
+        // Other apps' Access is kept too, Full access included.
+        assert_eq!(
+            again.read_with(cx, |agents, _| agents.others_start()),
+            Tier::Full
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
@@ -12646,8 +12659,8 @@ mod sessions {
         assert_eq!(browser.pages.borrow().len(), pages, "the click went");
     }
 
-    /// Full access is never carried: a task at Full access ends, and the client's next starts
-    /// where every task does.
+    /// Full access isn't carried while Other apps' Access is below it: a task at Full access ends,
+    /// and the client's next starts at that level.
     #[gpui::test]
     fn full_access_isnt_carried_to_the_next_task(cx: &mut TestAppContext) {
         let (agents, _, first) = lowered(Tier::Full, cx);
@@ -12658,6 +12671,31 @@ mod sessions {
         let second = cards(&agents, cx)[0].agent.to_string();
         assert_ne!(first, second);
         assert_eq!(tier(&agents, &second, cx), Tier::Work);
+    }
+
+    /// Where the user set Other apps' Access to Full access (#4360), an app's next task starts
+    /// there, and setting it back lowers the task after.
+    #[gpui::test]
+    fn a_full_access_default_starts_the_next_task_at_full(cx: &mut TestAppContext) {
+        let (agents, browser, first) = lowered(Tier::Full, cx);
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Full, cx));
+        let said = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        answered(&agents, 4, cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+        assert_eq!(tier(&agents, &second, cx), Tier::Full);
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Work, cx));
+        let said = call_as(&agents, 6, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        answered(&agents, 6, cx);
+        call_as(&agents, 7, "snapshot", json!({ "tab": 20 }), cx);
+        let third = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(second, third);
+        assert_eq!(tier(&agents, &third, cx), Tier::Work);
     }
 
     /// A task under way that takes over a page an ended task of its client's held goes no higher

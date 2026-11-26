@@ -1213,10 +1213,8 @@ impl Agents {
             .flatten();
         self.tasks.last = (last.filter_map(|(profile, last)| {
             let tier = last.get("level").and_then(Value::as_str);
-            // Full access is never kept; a level this build doesn't know starts at the default.
-            let tier = tier
-                .and_then(tier::Tier::from_id)
-                .filter(|tier| *tier != tier::Tier::Full);
+            // A level this build doesn't know starts at the default.
+            let tier = tier.and_then(tier::Tier::from_id);
             let model = (last.get("model").and_then(Value::as_array)).and_then(|model| {
                 let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
                 Some((cli, model.get(1)?.as_str()?.to_string()))
@@ -1230,6 +1228,10 @@ impl Agents {
             Some((profile.clone(), last))
         }))
         .collect();
+        // A level this build doesn't know starts at the default.
+        self.tasks.others_start = (tasks.get("others_level").and_then(Value::as_str))
+            .and_then(tier::Tier::from_id)
+            .unwrap_or_default();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
@@ -5785,6 +5787,7 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
+            "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
         });
         let saved = json!({

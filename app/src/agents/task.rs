@@ -480,8 +480,8 @@ pub struct Task {
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
     asking: Option<(u64, mpsc::Sender<ToolResult>)>,
-    /// Its access, which only the user raises and which ends with it: never kept, so Full access
-    /// is never remembered. An outside client's starts at what the user left that client's others
+    /// Its access, which only the user raises or sets as where new threads start. An outside
+    /// client's starts at what the user left that client's others
     /// at, and comes down to an ended one's as it takes that one's page (`starting_tier`,
     /// `left_at`).
     pub tier: Tier,
@@ -1044,6 +1044,9 @@ pub struct Tasks {
     /// What the composer last started a thread with, by the folder's name of the profile it
     /// started in.
     pub(super) last: HashMap<String, Last>,
+    /// The level an outside app's next task starts at, Settings › Other apps' Access: the user's
+    /// alone to set, Full access too (#4360).
+    pub(super) others_start: Tier,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
     pub(super) events: Option<(
@@ -1080,18 +1083,14 @@ impl Agents {
     }
 
     /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
-    /// it opens there: its model, and its level unless that was Full access, which is set for one
-    /// thread and never remembered. The composer's start calls it, and Settings' `A new thread
-    /// starts with`, whose rows are this same memory: a pick there is a pick here.
+    /// it opens there: its model and its level, Full access too. The composer's start calls it,
+    /// and Settings' `A new thread starts with`, whose rows are this same memory: a pick there is
+    /// a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
             return;
         }
-        let tier = match tier {
-            Tier::Full => Tier::default(),
-            tier => tier,
-        };
         let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
         let last = Last {
             tier,
@@ -3312,12 +3311,28 @@ impl Agents {
     }
 
     /// The access a new task of the outside client `agent`'s starts at. A level the user lowered
-    /// outlives its task, for that client, until they pick again: it's the lowest of where every
-    /// task starts and of the tasks the client's are held to, so never Full access, which no
-    /// task is given but by the user. Only the tasks ilo holds say it: nothing is kept for it.
+    /// outlives its task, for that client, until they pick again: it's the lowest of the level
+    /// the user set in Settings › Other apps and of the tasks the client's are held to, so Full
+    /// access only where the user set it there. Only the tasks the app holds say the rest.
     pub(super) fn starting_tier(&self, agent: &str) -> Tier {
         let held = self.held_to(agent).map(|task| task.tier);
-        held.fold(Tier::default(), Tier::min)
+        held.fold(self.tasks.others_start, Tier::min)
+    }
+
+    /// Settings › Other apps' Access: the level an outside app's next task starts at.
+    pub fn others_start(&self) -> Tier {
+        self.tasks.others_start
+    }
+
+    /// Sets Settings › Other apps' Access, the user's pick alone. Tasks under way keep theirs.
+    pub fn set_others_start(&mut self, tier: Tier, cx: &mut Context<Self>) {
+        if tier == self.tasks.others_start {
+            return;
+        }
+        self.tasks.others_start = tier;
+        log!("browser: other apps start at {}", tier.id());
+        self.save();
+        cx.notify();
     }
 
     /// The access the session `key` takes the page `tab` at, if it's lower than its own: the
