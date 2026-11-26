@@ -13,12 +13,24 @@
 
 serve
 # Typing w in it keeps its renderer busy for 20 s, past Chrome's 15 s hang timeout, then the title
-# says so, counted, since a title that doesn't change logs nothing.
+# says so, counted, since a title that doesn't change logs nothing. b does the same from the page's
+# own script, once the key is answered, as a page's ads can, so no key of the user's waits on it.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
-let wakes = 0;
+let wakes = 0, busies = 0;
 onkeydown = e => {
+  if (e.key == "b") {
+    // After the key is answered, and titled first, so a key sent once the title shows finds the
+    // page already busy.
+    setTimeout(() => {
+      document.title = "busy " + ++busies;
+      const end = Date.now() + 20000;
+      while (Date.now() < end) {}
+      document.title = "idle " + busies;
+    });
+    return;
+  }
   if (e.key != "w") {
     return;
   }
@@ -33,7 +45,8 @@ rm -f "$saved" "$launch_frame"
 # DevTools' port takes the tab offline later, as a lost network would.
 ports="$(dirname "$saved")/DevToolsActivePort"
 rm -f "$ports"
-BROWSER_DRIVE=1 BROWSER_URL="${site}busy.html" "$browser" --remote-debugging-port=0 \
+# keys, for where a key a busy page holds went.
+BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_URL="${site}busy.html" "$browser" --remote-debugging-port=0 \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -145,6 +158,26 @@ send click $(row 1)
 expect "^browser: selected $tab in " "the first tab wasn't shown"
 expect "^browser: loaded $tab ${site}busy.html\$" "the tab behind didn't load once shown"
 none_since "trouble crashed" || fail "the tab behind showed the crash card"
+
+# ⌘L opens the command bar over a page whose own script keeps its renderer busy, as one whose ads
+# do, once the page has had it for the core's bound, kPageKeyBound's 200 ms, and the page's late
+# answer to it doesn't open the bar again (#3944).
+send click $page_point
+send key b
+expect "^browser: title $tab busy 1\$" "the busy page's script didn't start"
+send key l cmd
+unanswered="^browser: tab $tab page didn't answer a key, run "
+expect "$unanswered" "⌘L didn't run over a busy page that didn't answer it (#3944)"
+ran=$(sed -n "s/$unanswered\([0-9.]*\) ms after it had it, .*/\1/p" "$log" | tail -1)
+# Long before the page lets go, inside the second a second press has. The unit tests pin the bound
+# itself, which a loaded runner's timer can overrun.
+awk -v ran="$ran" 'BEGIN { exit !(ran + 0 > 0 && ran < 1000) }' ||
+  fail "⌘L ran $ran ms after the busy page had it, not within a second (#3944)"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar over a busy page (#3944)"
+send key escape
+expect '^browser: command bar hidden$' "Esc didn't close the command bar over the busy page"
+expect_hung "^browser: title $tab idle 1\$" "the busy page's script didn't end"
+none_since '^browser: command bar shown$' || fail "the busy page's late answer to ⌘L opened the command bar again"
 
 # A host that doesn't resolve shows the core's error page, with no card and no mark. Typed with its
 # scheme, a .invalid host, which never resolves, is an address the bar goes to, where Chrome's would

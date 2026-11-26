@@ -361,8 +361,18 @@ await_views 2 "after a resize"
 check_docked "after a resize"
 # F12 closes them, as Dia's and Chrome's does, and the page has the keyboard.
 send key f12
+f12=$step
 expect '^browser: command devtools via page$' "F12 with the page focused didn't reach the UI"
 await_views 1 "after F12"
+# Once: DevTools' page had the keyboard, whose answer the core's wait on the tab's page doesn't
+# hear, so the bound, kPageKeyBound's 200 ms, ran F12 again on top of its hand-back, opening them
+# again (#3946). What didn't happen is read, so the bound is waited out, with room for a loaded
+# runner's timer.
+sleep 1
+none_since "^browser: tab [0-9]* page didn't answer a key, run " "$f12" ||
+  fail "F12 in docked DevTools ran again at the core's bound (#3946)"
+[ "$(since "$f12" | grep -c '^browser: command devtools via ')" = 1 ] ||
+  fail "one F12 in docked DevTools ran devtools more than once (#3946)"
 send state
 in_browser RenderWidgetHostViewCocoa "after F12 closed DevTools"
 send menu "JavaScript Console"
@@ -442,6 +452,10 @@ console_keys docked
 # A command logs "command <name> via <where>"; the command bar's own lines aren't commands.
 sed -n "/^browser: drive $keys: /,\$p" "$log" | grep -qE '^browser: command .* via ' &&
   fail "⌘A, ⌘C or ⌘V in docked DevTools ran a command of the app's"
+# Nor did the core's bound run one of them against the page, as a key DevTools keep sends no
+# hand-back and their answer isn't the page's, which the core waits on (#3946).
+none_since "^browser: tab [0-9]* page didn't answer a key, run " "$keys" ||
+  fail "a key DevTools kept ran again at the core's bound (#3946)"
 send key 1 cmd
 expect "^browser: selected $second" "⌘1 didn't show the second tab"
 await_views 1 "on a tab without DevTools"

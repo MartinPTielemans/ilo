@@ -425,6 +425,7 @@ split_rests() {
     fail "the command bar opened from the page beside brought the resting alert live ($2)"
   stayed "the alert left its pane while the command bar was open beside it ($2)" "$at"
   send key 1 ctrl shift
+  live=$step
   expect "^browser: selected $page\( in .*\)\{0,1\}\$" \
     "⌃⇧1 from the page beside the resting alert didn't focus the alert's pane ($2): $(since | grep -e '^browser: drive' -e '^browser: key' -e '^browser: selected' | tail -6 | tr '\n' ' ')"
   expect '^browser: dialog live$' "⌃⇧1 from the page beside didn't bring the alert live ($2)"
@@ -433,6 +434,12 @@ split_rests() {
   send key 2 ctrl shift
   at=$step
   expect '^browser: dialog at rest$' "⌃⇧2 from the alert didn't rest it again ($2)"
+  # ⌃⇧1 ran once: its answer came by a way the core's wait on the page doesn't hear, so the bound,
+  # kPageKeyBound's 200 ms, ran it again after ⌃⇧2, bringing the alert back live (#3946). What
+  # didn't happen is read, so the bound is waited out, with room for a loaded runner's timer.
+  sleep 1
+  none_since "^browser: tab [0-9]* page didn't answer a key, run " "$live" ||
+    fail "⌃⇧1 beside the alert ran again at the core's bound, after ⌃⇧2 ($2) (#3946)"
   tone light
   send key 1 ctrl shift
   expect '^browser: dialog live$' "⌃⇧1 from the page beside didn't bring the alert live again ($2)"

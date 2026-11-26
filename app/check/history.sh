@@ -200,7 +200,14 @@ before=$(tls)
 page="$plain's page"
 [ "$major" -lt 157 ] || page="Chrome's warning before http"
 send key l cmd
+cmd_l=$step
 expect '^browser: command bar shown$' "⌘L on $page didn't open the command bar"
+# Once: a tab dialog's keys have no page behind them to answer, so the core's wait on the page
+# heard nothing, and the bound, kPageKeyBound's 200 ms, ran ⌘L again, opening the bar afresh over
+# what was typed (#3946). What didn't happen is read, so the bound is waited out, with room for a
+# loaded runner's timer.
+sleep 1
+none_since "^browser: tab [0-9]* page didn't answer a key, run " "$cmd_l" || fail "⌘L on $page ran again at the core's bound (#3946)"
 send type "$nearby:$port"
 send key return
 expect '^browser: command bar hidden$' "going to $nearby:$port didn't close the command bar"

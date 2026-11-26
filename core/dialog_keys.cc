@@ -261,6 +261,10 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
 }  // namespace
 
+bool Asking(const input::NativeWebKeyboardEvent& key) {
+  return &key == g_asking;
+}
+
 void KeyGate(const input::NativeWebKeyboardEvent& key, const char* why) {
   const int held = key.GetModifiers();
   if (!Driven() || &key != g_asking ||

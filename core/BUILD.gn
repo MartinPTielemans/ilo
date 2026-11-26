@@ -532,6 +532,16 @@ source_set("split_view") {
   ]
 }
 
+# A shortcut a busy page sits on runs once its bound passes, apart so browser_core_unittests tests
+# the rule alone (#3944).
+source_set("page_key_wait") {
+  sources = [
+    "page_key_wait.cc",
+    "page_key_wait.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # A page's pop-up's report to the app, held for the native ad blocker's pop-up filters, apart so
 # browser_core_unittests tests the hold alone.
 source_set("popup_hold") {
@@ -943,6 +953,7 @@ source_set("browser_core") {
     ":agent_file_field_rule",
     ":agent_splash_rule",
     ":agent_reply_limit",
+    ":page_key_wait",
     ":popup_hold",
     ":protected_move_rule",
     ":quit_stores_wait",
@@ -1300,6 +1311,7 @@ test("browser_core_unittests") {
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "overlay_lend_unittest.cc",
+    "page_key_wait_unittest.cc",
     "popup_hold_unittest.cc",
     "protected_move_rule_unittest.cc",
     "search_default_unittest.cc",
@@ -1361,6 +1373,7 @@ test("browser_core_unittests") {
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":page_key_wait",
     ":popup_hold",
     ":protected_move_rule",
     ":search_default",
