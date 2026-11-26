@@ -121,7 +121,7 @@ impl Shell {
     pub(super) fn press_card(&mut self, does: Does, cx: &mut Context<Self>) {
         match does {
             Does::Answer(answer) => self.answer_agent(answer, cx),
-            Does::Show(tab) => self.select(tab, cx),
+            Does::Show(tab) => self.show_handed(tab, cx),
             Does::HandBack(tab) => self.browser.hand_back(tab, cx),
             Does::Choose => self.choose_agent_file(cx),
         }

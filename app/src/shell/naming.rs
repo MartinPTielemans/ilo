@@ -703,6 +703,7 @@ impl Shell {
             self.page_took_keyboard(window, cx);
         } else {
             self.card_keys_window_left("app", cx);
+            self.handed_keys_left();
         }
     }
 
