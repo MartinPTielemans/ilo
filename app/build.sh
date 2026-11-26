@@ -225,11 +225,14 @@ fi
 plist=$app/Contents/Info.plist
 plutil -replace CFBundleExecutable -string Browser "$plist"
 plutil -replace CFBundleIdentifier -string "$id" "$plist"
-# The name and icon the user sees, from branding/ (icon.sh compiles the icon). Finder, the Dock
-# and ⌘-Tab name the app by its file, though, so this one shows as Browser there.
+# The name the user sees, the product's (branding/product): the menu bar's title, and what the
+# Window menu and Mission Control call the window. Finder, the Dock and ⌘-Tab name the app by its
+# file, though, so this one shows as Browser there. Its icon, its folder below and its files keep
+# branding/name (icon.sh compiles the icon).
+shown=$(cat branding/product)
 name=$(cat branding/name)
-plutil -replace CFBundleName -string "$name" "$plist"
-plutil -replace CFBundleDisplayName -string "$name" "$plist"
+plutil -replace CFBundleName -string "$shown" "$plist"
+plutil -replace CFBundleDisplayName -string "$shown" "$plist"
 # The prod profile's folder, ~/Library/Application Support/<name> (profile_dir in src/lib.rs, from
 # the same file), is Chromium's default by this key, "Chromium" without it: from Chromium 158 only
 # the default folder keeps the Keychain key its cookies and passwords were saved under.

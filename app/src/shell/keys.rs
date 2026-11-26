@@ -20,7 +20,7 @@ use super::commands::{
 /// main.rs binds, the Edit menu's, which reach the focused page or field, and the View menu's
 /// full screen.
 const SYSTEM_KEYS: &[(&str, &str)] = &[
-    ("cmd-h", concat!("Hide ", env!("APP_NAME"))),
+    ("cmd-h", concat!("Hide ", env!("PRODUCT_NAME"))),
     ("alt-cmd-h", "Hide Others"),
     ("cmd-m", "Minimize"),
     ("cmd-x", "Cut"),

@@ -93,8 +93,8 @@ The folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
 if [ "$(uname)" = Darwin ]; then
   flag=$(xattr -p com.apple.quarantine "$out/downloads/notes.txt" 2>&1) ||
     fail "the download has no quarantine flag: $flag"
-  [ "$(echo "$flag" | cut -d';' -f3)" = "$app_name" ] ||
-    fail "the download's quarantine flag names another app than $app_name: $flag"
+  [ "$(echo "$flag" | cut -d';' -f3)" = "$product" ] ||
+    fail "the download's quarantine flag names another app than $product: $flag"
 else
   echo "skip: the download's quarantine flag, which is macOS's alone."
 fi

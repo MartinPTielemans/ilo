@@ -140,11 +140,11 @@ updates_check() {
     echo "skip: updates. Browser wasn't the active app, so Sparkle's alert couldn't get the" \
       "keyboard."
   else
-    send menubar "$app_name"
-    expect "^browser: menu bar $app_name: About $app_name, Check for Updates…, Settings…" \
+    send menubar "$product"
+    expect "^browser: menu bar $product: About $product, Check for Updates…, Settings…" \
       "the app menu doesn't have Check for Updates… under About"
-    post openmenu "$app_name"
-    expect "^browser: menu tracked About $app_name, Check for Updates…, Settings…" \
+    post openmenu "$product"
+    expect "^browser: menu tracked About $product, Check for Updates…, Settings…" \
       "the app menu didn't open"
     ../tools/window-screenshot.sh "$pid" "$out/updates-menu.png" all || fail "no window to capture"
     send dismiss
@@ -288,8 +288,8 @@ about_updates() {
     done
     fail "$2: $(grep '^browser: update stage' "$log" | tr '\n' ';')"
   }
-  send menu "About $app_name"
-  expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings' About tab"
+  send menu "About $product"
+  expect '^browser: settings \(shown\|tab\|drew\) About$' "About $product didn't show Settings' About tab"
   expect '^browser: settings update check at ' "About's row had no Check for Updates"
   ../tools/window-screenshot.sh "$pid" "$out/updates-about-idle.png" all || fail "no window to capture"
   # With nothing newer in the feed, the check says so within 5 s, as one against the live feed

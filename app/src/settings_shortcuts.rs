@@ -197,7 +197,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
         ],
     ),
     (
-        env!("APP_NAME"),
+        env!("PRODUCT_NAME"),
         &[
             of(Command::About),
             of(Command::CheckForUpdates),
@@ -207,7 +207,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             of(Command::Passwords),
             of(Command::SiteSearchSettings),
             // main.rs binds these.
-            (concat!("Hide ", env!("APP_NAME")), Keys::Fixed("cmd-h")),
+            (concat!("Hide ", env!("PRODUCT_NAME")), Keys::Fixed("cmd-h")),
             ("Hide Others", Keys::Fixed("alt-cmd-h")),
             ("Minimize", Keys::Fixed("cmd-m")),
             of(Command::Quit),
