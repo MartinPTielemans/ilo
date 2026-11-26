@@ -107,38 +107,38 @@ impl Listed {
 /// Where a real path is, as the path floor found it, before the level is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum At {
-    /// On the never list: no level reaches it (F1).
+    /// On the never list: no level reaches it.
     Never,
-    /// A place the system guards with a prompt of its own, outside every folder the user picked
-    /// (F3). Never reached, so the system never asks.
+    /// A place the system guards with a prompt of its own, outside every folder the user picked,
+    /// whose refusal asks for its folder. Never reached, so the system never asks.
     Guarded,
     Attached,
     Folder(Row),
     Outside,
 }
 
-/// Why a file act wasn't done, one for each of the table's refusals (F1–F10).
+/// Why a file act wasn't done, one for each refusal the words table has a line for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused {
     Never,
     Guarded,
-    /// The thread's level doesn't allow it there; the lowest that would allow or ask it (F6).
+    /// The thread's level doesn't allow it there; the lowest that would allow or ask it.
     Needs(Tier),
-    /// A change to one of ilo's copies of the attached files, which are only read (F6b).
+    /// A change to one of ilo's copies of the attached files, which are only read.
     Attached,
-    /// A change, delete or move of a file with another name, which would reach it there too (F7).
+    /// A change, delete or move of a file with another name, which would reach it there too.
     OtherNames,
-    /// The file isn't the one the user was asked about (F2), found at the act.
+    /// The file isn't the one the user was asked about, found at the act.
     Changed,
-    /// The path didn't resolve: a folder on the way is gone, or a file stands for one (F8).
+    /// The path didn't resolve: a folder on the way is gone, or a file stands for one.
     Gone,
-    /// A pipe, device or socket, or too many links in a row, never opened (F8b).
+    /// A pipe, device or socket, or too many links in a row, never opened.
     NotOpened,
-    /// A file only in the cloud, which a read never downloads (F9).
+    /// A file only in the cloud, which a read never downloads.
     Cloud,
-    /// A write over the cap (F10).
+    /// A write over the cap.
     TooLarge,
-    /// read_file on a file that isn't text (F10b).
+    /// read_file on a file that isn't text.
     NotText,
 }
 
@@ -417,7 +417,7 @@ impl Never {
         match folder {
             Some(folder) => At::Folder(folder.row),
             // iCloud Drive and the cloud drives are in `~/Library`, guarded by the system, and
-            // reached by a folder the user adds there (F3), so the rest of it is never.
+            // reached by a folder the user adds there, so the rest of it is never.
             None if self.guarded.iter().any(|place| folded_in(place)) => At::Guarded,
             None if folded_in(&self.library()) => At::Never,
             None => At::Outside,
@@ -812,7 +812,7 @@ pub mod words {
     pub const ADD_FILES: &str = "Add Files…";
     pub const ADD_FOLDER: &str = "Add Folder…";
 
-    /// X2, the attached files' chip on the quiet line.
+    /// The attached files' chip on the quiet line.
     pub fn files(count: usize) -> String {
         match count {
             1 => "1 file".into(),
@@ -820,12 +820,12 @@ pub mod words {
         }
     }
 
-    /// X3, the folder's one act, the same word as Settings'.
+    /// The folder's one act, the same word as Settings'.
     pub const REVOKE: &str = "Revoke";
 
     /// Settings › Agents' heading for files and folders, which pairs with the level's "On the web".
     pub const ON_THIS_COMPUTER: &str = "On this computer";
-    /// X9, under it on a system that can't wall a task in with them.
+    /// Under it on a system that can't wall a task in with them.
     pub const NOT_AVAILABLE: &str = "Files and folders aren't available on this system.";
     /// Settings › Agents' group of every folder a live task holds.
     pub const FOLDERS_IN_USE: &str = "Folders in use";
@@ -833,18 +833,7 @@ pub mod words {
     use super::{Op, Refused};
     use crate::product::PRODUCT;
 
-    /// The verb a file step's words name an act by.
-    pub fn verb(op: Op) -> &'static str {
-        match op {
-            Op::Read | Op::Search => "read",
-            Op::Make => "make",
-            Op::Change => "change",
-            Op::Delete => "delete",
-            Op::Move | Op::Replace => "move",
-        }
-    }
-
-    /// A file's name as a step names it (TS2): in quotes, cut in the middle past 32 characters.
+    /// A file's name as a step names it: in quotes, cut in the middle past 32 characters.
     pub fn quoted(name: &str) -> String {
         const MOST: usize = 32;
         let chars: Vec<char> = name.chars().collect();
@@ -860,49 +849,66 @@ pub mod words {
         format!("\u{201c}{name}\u{201d}")
     }
 
-    /// F1–F10, a refused act's line in the thread's trace (TS2's form). Only F3's has a button,
-    /// `ADD_FOLDER`, which opens the system's folder panel at the file's folder.
-    pub fn refused(op: Op, file: &str, why: Refused) -> String {
+    /// A refused step's line in the thread's trace, its failed line and the reason. Only the
+    /// line asking for the file's folder has a button, `ADD_FOLDER`, which opens the system's
+    /// folder panel at that folder.
+    pub fn refused(step: Step, why: Refused) -> String {
+        let makes = matches!(step, Step::MakeFile(_) | Step::MakeFolder(_));
         let reason = match why {
             Refused::Never => format!("{PRODUCT} keeps it from threads"),
             Refused::Changed => format!("it changed after {PRODUCT} asked you"),
             Refused::Guarded => "add its folder first".into(),
             Refused::Needs(level) => format!("needs {}", level.label()),
-            Refused::Attached => "attached files are only read".into(),
-            Refused::OtherNames => "it's also saved in another place".into(),
+            Refused::Attached => "attached files can only be read".into(),
+            Refused::OtherNames => "it's linked to another file".into(),
+            // What's made isn't there yet, so what's missing is the folder it goes in.
+            Refused::Gone if makes => "its folder isn't there".into(),
             Refused::Gone => "it isn't there".into(),
             Refused::NotOpened => format!("{PRODUCT} doesn't open this kind of file"),
             Refused::Cloud => "it isn't downloaded".into(),
             Refused::TooLarge => "it's over 1 MB".into(),
             Refused::NotText => "it isn't text".into(),
         };
-        format!("{}: {reason}", failed(op, file))
+        format!("{}: {reason}", failed(step))
     }
 
-    /// F12's failed line with no reason the table names.
-    pub fn failed(op: Op, file: &str) -> String {
-        format!("Couldn't {} {}", verb(op), quoted(file))
+    /// A step's failed line, with no reason the table names.
+    pub fn failed(step: Step) -> String {
+        let q = quoted;
+        match step {
+            Step::Read(file) => format!("Couldn't read {}", q(file)),
+            Step::List(folder) => format!("Couldn't look in {}", q(folder)),
+            Step::Search(folder) => format!("Couldn't search in {}", q(folder)),
+            Step::MakeFile(name) | Step::MakeFolder(name) => format!("Couldn't make {}", q(name)),
+            Step::Change(file) => format!("Couldn't change {}", q(file)),
+            Step::Move { file, .. } => format!("Couldn't move {}", q(file)),
+            Step::Rename { old, .. } => format!("Couldn't rename {}", q(old)),
+            Step::Trash(file) => format!("Couldn't delete {}", q(file)),
+        }
     }
 
-    /// F1a–F10c, what the assistant is told of a refused act; `folder` is the file's folder's
-    /// name, which F3a names.
-    pub fn told(why: Refused, folder: &str) -> String {
+    /// What the assistant is told of a refused act. It never names a level: only the user
+    /// changes it.
+    pub fn told(op: Op, why: Refused) -> String {
         match why {
             Refused::Never => {
                 format!("Not done: {PRODUCT} never gives this path to a task. Go on without it.")
             }
+            Refused::Changed if matches!(op, Op::Read | Op::Search) => {
+                "Not done: the file changed after the user was asked. Try reading it again if \
+                 you still need it."
+                    .into()
+            }
             Refused::Changed => "Not done: the file changed after the user was asked. Read it \
-                                 again before you ask again."
+                                 again before trying again."
                 .into(),
-            Refused::Guarded => format!(
-                "Not done: the user has to add this file's folder to the thread first. Go on \
-                 without it, or ask them to add \u{201c}{folder}\u{201d}."
-            ),
-            Refused::Needs(level) => format!(
-                "Not done: this needs {}, which only the user can set. Go on without it, or tell \
-                 them why you need it.",
-                level.label()
-            ),
+            Refused::Guarded => "Not done: the user has to add this file's folder to the task \
+                                 first. Go on without it, or ask them to add it."
+                .into(),
+            Refused::Needs(_) => "Not done: this needs more access than this task has, and only \
+                                  the user can change it. Say what you couldn't do and carry on \
+                                  without it."
+                .into(),
             Refused::Attached => {
                 "Not done: an attached file is only for reading. Go on without changing it.".into()
             }
@@ -927,14 +933,14 @@ pub mod words {
         }
     }
 
-    /// F11, a list cut at its 500 entries: the done line's tail, and what's added to the answer.
+    /// A list cut at its 500 entries: the done line's tail, and what's added to the answer.
     pub fn listed_first(folder: &str) -> String {
         format!("Looked in {} \u{b7} first 500", quoted(folder))
     }
     pub const LISTED_FIRST_TOLD: &str =
         "Only the first 500 entries are listed. Search the folder to find something specific.";
 
-    /// F11b, a search stopped at its limit.
+    /// A search stopped at its limit.
     pub fn searched_early(folder: &str) -> String {
         format!("Searched in {} \u{b7} stopped early", quoted(folder))
     }
@@ -942,7 +948,7 @@ pub mod words {
                                            whole folder. Search a smaller folder or a narrower \
                                            pattern.";
 
-    /// What a file tool's step did, by the names F12's lines take.
+    /// What a file tool's step did, by the names its lines take.
     #[derive(Clone, Copy, Debug)]
     pub enum Step<'a> {
         Read(&'a str),
@@ -965,8 +971,8 @@ pub mod words {
         Trash(&'a str),
     }
 
-    /// F12, a file tool's step line while it's doing and once it's done; a failed one is
-    /// `failed` or `refused`.
+    /// A file tool's step line while it's doing and once it's done; a failed one is `failed` or
+    /// `refused`.
     pub fn step(step: Step, done: bool) -> String {
         let q = quoted;
         match (step, done) {
@@ -980,34 +986,28 @@ pub mod words {
             (Step::MakeFile(name) | Step::MakeFolder(name), true) => format!("Made {}", q(name)),
             (Step::Change(file), false) => format!("Changing {}", q(file)),
             (Step::Change(file), true) => format!("Changed {}", q(file)),
-            (Step::Move { file, .. }, false) | (Step::Rename { old: file, .. }, false) => {
-                format!("Moving {}", q(file))
-            }
+            (Step::Move { file, .. }, false) => format!("Moving {}", q(file)),
             (Step::Move { file, to }, true) => format!("Moved {} to {}", q(file), q(to)),
+            (Step::Rename { old, .. }, false) => format!("Renaming {}", q(old)),
             (Step::Rename { old, new }, true) => format!("Renamed {} to {}", q(old), q(new)),
             (Step::Trash(file), false) => format!("Moving {} to the {TRASH}", q(file)),
-            // XT1.
             (Step::Trash(file), true) => format!("Moved {} to the {TRASH}", q(file)),
         }
     }
 
-    /// Where a delete goes, as each system names it (XT1).
+    /// Where a delete goes, as each system names it.
     const TRASH: &str = match cfg!(windows) {
         true => "Recycle Bin",
         false => "Trash",
     };
 
-    /// F5, a change past the undo's cap: its account says it can't be undone.
-    pub fn past_undo(op: Op, file: &str) -> String {
-        let done = match op {
-            Op::Delete => "Deleted",
-            Op::Move | Op::Replace => "Moved",
-            _ => "Changed",
-        };
-        format!("{done} {} \u{b7} can't be undone", quoted(file))
+    /// A change past the undo's cap: its done line says it can't be undone. A delete has none,
+    /// since it goes to the Trash.
+    pub fn past_undo(step: Step) -> String {
+        format!("{} \u{b7} can't be undone", self::step(step, true))
     }
 
-    /// X4, where the panel gave a folder ilo never gives.
+    /// Where the panel gave a folder ilo never gives.
     pub fn never_given(folder: &str) -> String {
         format!(
             "ilo doesn't give \u{201c}{folder}\u{201d} to a task. Choose a folder that holds only \
@@ -1645,11 +1645,8 @@ mod tests {
             (Refused::Guarded, "add its folder first".into()),
             (Refused::Needs(Tier::Work), "needs Work on pages".into()),
             (Refused::Needs(Tier::Full), "needs Full access".into()),
-            (Refused::Attached, "attached files are only read".into()),
-            (
-                Refused::OtherNames,
-                "it's also saved in another place".into(),
-            ),
+            (Refused::Attached, "attached files can only be read".into()),
+            (Refused::OtherNames, "it's linked to another file".into()),
             (Refused::Gone, "it isn't there".into()),
             (
                 Refused::NotOpened,
@@ -1659,23 +1656,38 @@ mod tests {
             (Refused::TooLarge, "it's over 1 MB".into()),
             (Refused::NotText, "it isn't text".into()),
         ] {
-            let line = refused(Op::Change, "plan.md", why);
+            let line = refused(Step::Change("plan.md"), why);
             assert_eq!(
                 line,
                 format!("Couldn't change \u{201c}plan.md\u{201d}: {reason}")
             );
-            let told = told(why, "Trip");
-            assert!(told.starts_with("Not done: "), "{told}");
+            for op in [Op::Read, Op::Change, Op::Make] {
+                let told = told(op, why);
+                assert!(told.starts_with("Not done: "), "{told}");
+                // Only the user changes the level, so the assistant is never told one.
+                for level in Tier::ALL {
+                    assert!(!told.contains(level.label()), "{told}");
+                }
+            }
         }
-        assert!(told(Refused::Guarded, "Trip").contains("\u{201c}Trip\u{201d}"));
-        assert!(told(Refused::Needs(Tier::Full), "Trip").contains("needs Full access,"));
         assert_eq!(
-            refused(Op::Move, "plan.md", Refused::Guarded),
-            "Couldn't move \u{201c}plan.md\u{201d}: add its folder first"
+            refused(Step::MakeFile("plan.md"), Refused::Gone),
+            "Couldn't make \u{201c}plan.md\u{201d}: its folder isn't there"
         );
         assert_eq!(
-            past_undo(Op::Delete, "plan.md"),
-            "Deleted \u{201c}plan.md\u{201d} \u{b7} can't be undone"
+            refused(Step::Search("Trip"), Refused::Guarded),
+            "Couldn't search in \u{201c}Trip\u{201d}: add its folder first"
+        );
+        let changed = |op| told(op, Refused::Changed);
+        assert!(changed(Op::Read).contains("Try reading it again"));
+        assert!(changed(Op::Change).contains("Read it again before trying again"));
+        assert_eq!(changed(Op::Make), changed(Op::Change));
+        assert_eq!(
+            past_undo(Step::Move {
+                file: "plan.md",
+                to: "Trip"
+            }),
+            "Moved \u{201c}plan.md\u{201d} to \u{201c}Trip\u{201d} \u{b7} can't be undone"
         );
         assert_eq!(
             listed_first("Trip"),
@@ -1687,10 +1699,10 @@ mod tests {
         );
     }
 
-    /// F12: each tool's line while doing and done, a search kept apart from the web's by `in`.
+    /// Each tool's line while doing, done and failed, a search kept apart from the web's by `in`.
     #[test]
     fn each_file_tools_step_says_what_it_does_and_did() {
-        use super::words::{Step, step};
+        use super::words::{Step, failed, step};
         let q = |name: &str| format!("\u{201c}{name}\u{201d}");
         let (plan, trip) = (q("plan.md"), q("Trip"));
         for (each, doing, done) in [
@@ -1737,12 +1749,28 @@ mod tests {
                     old: "plan.md",
                     new: "old.md",
                 },
-                format!("Moving {plan}"),
+                format!("Renaming {plan}"),
                 format!("Renamed {plan} to {}", q("old.md")),
             ),
         ] {
             assert_eq!(step(each, false), doing);
             assert_eq!(step(each, true), done);
+        }
+        for (each, line) in [
+            (Step::Read("plan.md"), format!("Couldn't read {plan}")),
+            (Step::List("Trip"), format!("Couldn't look in {trip}")),
+            (Step::Search("Trip"), format!("Couldn't search in {trip}")),
+            (Step::MakeFolder("Trip"), format!("Couldn't make {trip}")),
+            (
+                Step::Rename {
+                    old: "plan.md",
+                    new: "old.md",
+                },
+                format!("Couldn't rename {plan}"),
+            ),
+            (Step::Trash("plan.md"), format!("Couldn't delete {plan}")),
+        ] {
+            assert_eq!(failed(each), line);
         }
         #[cfg(not(windows))]
         {

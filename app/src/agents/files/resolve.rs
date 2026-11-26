@@ -78,7 +78,7 @@ impl std::fmt::Debug for Resolved {
 
 impl Resolved {
     /// Whether its name still names what the resolve holds, by the held folder: false once a file
-    /// was put in its place (F2), or one was made where nothing was.
+    /// was put in its place, or one was made where nothing was.
     pub fn still_named(&self) -> bool {
         let Ok(name) = c_string(&self.name) else {
             return false;
