@@ -1078,3 +1078,21 @@ fn the_panels_own_form_sets_its_parts_where_they_were() {
     assert_eq!(PANEL.track().1 - 2., 270.);
     assert!(PANEL.note);
 }
+
+#[test]
+fn the_panels_pad_keeps_its_own_ink_on_either_sheet() {
+    // The window's panel: the plus and the value field in its own second ink, light or dark.
+    let theme = layout::palette_theme(1, None);
+    for tone in [Tone::Light, Tone::Dark] {
+        let palette = Palette::of(theme.as_ref(), tone);
+        let own = palette.on_overlay(palette.secondary());
+        assert_eq!(pad_ink(&palette, theme.as_ref(), false), own, "{tone:?}");
+    }
+    // Drawn inline on a light sheet, the pad stays dark, so its ink is the dark sheet's.
+    let light = Palette::of(theme.as_ref(), Tone::Light);
+    let dark = Palette::of(theme.as_ref(), Tone::Dark);
+    assert_eq!(
+        pad_ink(&light, theme.as_ref(), true),
+        dark.on_overlay(dark.secondary())
+    );
+}

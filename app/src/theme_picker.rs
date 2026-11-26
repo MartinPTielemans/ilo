@@ -288,6 +288,18 @@ pub fn inline(
     })
 }
 
+/// The ink of what's on the pad, its chips' plus and the value field: the panel's own second ink,
+/// and drawn inline on a light sheet, where the pad stays dark, the dark sheet's.
+fn pad_ink(palette: &Palette, theme: Option<&Theme>, inline: bool) -> Hsla {
+    match inline {
+        true => {
+            let dark = Palette::of(theme, Tone::Dark);
+            dark.on_overlay(dark.secondary())
+        }
+        false => palette.on_overlay(palette.secondary()),
+    }
+}
+
 /// Where the panel opens in the browser window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum At {
@@ -1384,7 +1396,8 @@ impl Render for ThemePicker {
         let a11y = window.is_a11y_active();
         let picker = div()
             .id("theme-picker")
-            .when(a11y, |picker| {
+            // Inline it's part of the view it's drawn in, which names itself.
+            .when(a11y && self.rest.is_none(), |picker| {
                 picker.role(Role::Dialog).aria_label("Space Theme")
             })
             .key_context("ThemePicker")
@@ -1446,9 +1459,7 @@ impl Render for ThemePicker {
         let text = palette.on_overlay(1.);
         let text_2 = palette.on_overlay(palette.secondary());
         let text_3 = palette.on_overlay(palette.tertiary());
-        // The pad is dark on a light sheet too, so what's on it keeps the dark sheet's ink.
-        let dark = Palette::of(theme.as_ref(), Tone::Dark);
-        let pad_text = dark.on_overlay(dark.secondary());
+        let pad_text = pad_ink(&palette, theme.as_ref(), inline);
         let ring_color = palette.plate(KEYED);
         // The keyboard's ring, as Focus Sidebar's, `RING_GAP` round what it rings, `width` by
         // `height` about `x`, `y`.
