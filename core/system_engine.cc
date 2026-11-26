@@ -21,6 +21,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -32,6 +33,7 @@
 #include "browser_core/session.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
+#include "browser_core/system_engine_cookies.h"
 #include "browser_core/system_stores.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -373,6 +375,18 @@ size_t ItemsIn(const platform::StorageByOrigin& storage) {
   return items;
 }
 
+// The cookies of |site| in |all|, Chromium's: a cookie kept for the site inside another one's pages
+// stays, as WebKit keeps none that way.
+std::vector<net::CanonicalCookie> SiteCookies(const net::CookieList& all, const std::string& site) {
+  std::vector<net::CanonicalCookie> of_site;
+  for (const net::CanonicalCookie& cookie : all) {
+    if (!cookie.IsPartitioned() && platform::HostOfSite(cookie.DomainWithoutDot(), site)) {
+      of_site.push_back(cookie);
+    }
+  }
+  return of_site;
+}
+
 // Reads a site's cookies and localStorage from a profile's Chromium store, then deletes itself.
 // What the store doesn't answer, as when its service or its profile goes, comes back empty.
 class ChromiumReader {
@@ -395,12 +409,7 @@ class ChromiumReader {
   }
 
   void GotCookies(const net::CookieList& all) {
-    for (const net::CanonicalCookie& cookie : all) {
-      // A cookie kept for the site inside another one's pages stays: WebKit keeps none that way.
-      if (!cookie.IsPartitioned() && platform::HostOfSite(cookie.DomainWithoutDot(), site_)) {
-        cookies_.push_back(cookie);
-      }
-    }
+    cookies_ = SiteCookies(all, site_);
     storage::mojom::LocalStorageControl* control = Control();
     if (!control) {
       Finish();
@@ -562,6 +571,64 @@ class ChromiumWriter {
   base::WeakPtrFactory<ChromiumWriter> weak_factory_{this};
 };
 
+// The end of CopyToAgentPage: |system|'s cookies into Chromium's store, but those |all| has newer.
+void WriteToAgentPage(base::WeakPtr<Profile> profile,
+                      const std::string& site,
+                      base::OnceClosure done,
+                      std::vector<net::CanonicalCookie> system,
+                      const net::CookieList& all) {
+  if (!profile) {
+    std::move(done).Run();
+    return;
+  }
+  const size_t read = system.size();
+  const std::vector<net::CanonicalCookie> newer =
+      Newer(std::move(system), Store::kSystem, SiteCookies(all, site));
+  ChromiumWriter::Run(
+      profile->GetDefaultStoragePartition(), newer, {},
+      base::BindOnce(
+          [](const std::string& site, size_t kept, base::OnceClosure done, size_t cookies, size_t) {
+            // check.sh reads this line. Counts only: never a name or a value.
+            fprintf(stderr,
+                    "browser: copied %zu cookies for %s into an agent's page, %zu newer there "
+                    "kept\n",
+                    cookies, site.c_str(), kept);
+            std::move(done).Run();
+          },
+          site, read - newer.size(), std::move(done)));
+}
+
+// Copies |profile|'s cookies of |site| from its system store into Chromium's, each but those
+// Chromium has newer (system_engine_cookies.h), and then runs |done|, posted. For an agent's page
+// at a site the profile keeps for the system's engine, which Allowed never shows there: the user's
+// session goes with it, and the agent reads none of it. Nothing for a private profile or one with
+// no store.
+void CopyToAgentPage(Profile* profile, const std::string& site, base::OnceClosure done) {
+  // Posted however it ends, as a navigation throttle may not resume inside its own check.
+  done = base::BindPostTaskToCurrentDefault(std::move(done));
+  if (profile->IsOffTheRecord() || !StoreUsed(profile)) {
+    std::move(done).Run();
+    return;
+  }
+  platform::SystemPage::GetCookies(
+      StoreOf(profile), site,
+      base::BindOnce(
+          [](base::WeakPtr<Profile> profile, const std::string& site, base::OnceClosure done,
+             std::vector<net::CanonicalCookie> system) {
+            if (!profile || system.empty()) {
+              std::move(done).Run();
+              return;
+            }
+            profile->GetDefaultStoragePartition()
+                ->GetCookieManagerForBrowserProcess()
+                ->GetAllCookies(mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+                    base::BindOnce(&WriteToAgentPage, profile, site, std::move(done),
+                                   std::move(system)),
+                    net::CookieList()));
+          },
+          profile->GetWeakPtr(), site, std::move(done)));
+}
+
 // Whether a tab of |profile| shows a page of |site| in the system's engine.
 bool ShowsSite(Profile* profile, const std::string& site) {
   return std::ranges::any_of(Tab::Pages(), [&](content::WebContents* each) {
@@ -593,6 +660,34 @@ void HandBack(base::WeakPtr<Profile> profile,
       tab->UseChromium(page->url());
     }
   }
+}
+
+// Writes |cookies| of |site| into |store|, says how many it took and how many newer ones there it
+// |kept|, and runs |done| with |storage|, for the page's first load.
+void WriteToSystemEngine(const platform::SystemStore& store,
+                         const std::string& site,
+                         std::vector<net::CanonicalCookie> cookies,
+                         size_t kept,
+                         base::OnceCallback<void(platform::StorageByOrigin)> done,
+                         platform::StorageByOrigin storage) {
+  platform::SystemPage::SetCookies(
+      store, cookies,
+      base::BindOnce(
+          [](const std::string& site, size_t kept,
+             base::OnceCallback<void(platform::StorageByOrigin)> done,
+             platform::StorageByOrigin storage, size_t copied) {
+            // check.sh reads these lines. Counts only: never a name or a value.
+            fprintf(stderr,
+                    "browser: copied %zu cookies and %zu storage items for %s into the system's "
+                    "engine\n",
+                    copied, ItemsIn(storage), site.c_str());
+            if (kept) {
+              fprintf(stderr, "browser: kept %zu newer cookies for %s in the system's engine\n",
+                      kept, site.c_str());
+            }
+            std::move(done).Run(std::move(storage));
+          },
+          site, kept, std::move(done), std::move(storage)));
 }
 
 class Throttle : public content::NavigationThrottle {
@@ -641,6 +736,10 @@ class Throttle : public content::NavigationThrottle {
     content::WebContents* contents = navigation_handle()->GetWebContents();
     Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr;
     const ThrottleCheckResult result = tab ? Decide(tab) : PROCEED;
+    // The copy into an agent's page resumes it.
+    if (result.action() == DEFER) {
+      return;
+    }
     if (result.action() == PROCEED) {
       Resume();
     } else {
@@ -661,8 +760,11 @@ class Throttle : public content::NavigationThrottle {
       return CANCEL_AND_IGNORE;
     }
     content::WebContents* contents = navigation_handle()->GetWebContents();
-    if (!Kept() || !Allowed(Tab::IdOf(contents)) || Previewing(Tab::IdOf(contents))) {
+    if (!Kept() || Previewing(Tab::IdOf(contents))) {
       return PROCEED;
+    }
+    if (!Allowed(Tab::IdOf(contents))) {
+      return ForAgent(contents);
     }
     // Posted: the navigation is part way through.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -676,6 +778,31 @@ class Throttle : public content::NavigationThrottle {
     return CANCEL_AND_IGNORE;
   }
 
+  // An agent's page arriving at a site kept for the system's engine, which loads in Chromium: its
+  // first request waits for the user's session there, from the system's store. Once a visit: a
+  // load within the site, or a redirect through it again, keeps what the page has since.
+  ThrottleCheckResult ForAgent(content::WebContents* contents) {
+    const Space* space = Window::SpaceOf(contents);
+    if (!space) {
+      space = Space::Holding(Tab::IdOf(contents));
+    }
+    if (!space || !space->agent()) {
+      return PROCEED;
+    }
+    const std::string site = SiteOf(navigation_handle()->GetURL());
+    if (site == copied_ || SiteOf(contents->GetLastCommittedURL()) == site) {
+      return PROCEED;
+    }
+    copied_ = site;
+    CopyToAgentPage(Profile::FromBrowserContext(contents->GetBrowserContext()), site,
+                    base::BindOnce(&Throttle::Copied, weak_factory_.GetWeakPtr()));
+    return DEFER;
+  }
+
+  void Copied() { Resume(); }
+
+  // The site this navigation copied the session of, so its redirects copy it once.
+  std::string copied_;
   base::WeakPtrFactory<Throttle> weak_factory_{this};
 };
 
@@ -831,20 +958,27 @@ void CopyToSystemEngine(Profile* profile,
             if (!profile) {
               return;
             }
-            platform::SystemPage::SetCookies(
-                store, cookies,
+            // A store never made holds nothing to keep, and the read would load WebKit for it.
+            if (cookies.empty() || !StoreUsed(profile.get())) {
+              WriteToSystemEngine(store, site, std::move(cookies), 0, std::move(done),
+                                  std::move(storage));
+              return;
+            }
+            platform::SystemPage::GetCookies(
+                store, site,
                 base::BindOnce(
-                    [](const std::string& site,
+                    [](const platform::SystemStore& store, const std::string& site,
+                       std::vector<net::CanonicalCookie> cookies,
                        base::OnceCallback<void(platform::StorageByOrigin)> done,
-                       platform::StorageByOrigin storage, size_t copied) {
-                      // check.sh reads this line. Counts only: never a name or a value.
-                      fprintf(stderr,
-                              "browser: copied %zu cookies and %zu storage items for %s into "
-                              "the system's engine\n",
-                              copied, ItemsIn(storage), site.c_str());
-                      std::move(done).Run(std::move(storage));
+                       platform::StorageByOrigin storage, std::vector<net::CanonicalCookie> held) {
+                      const size_t read = cookies.size();
+                      std::vector<net::CanonicalCookie> newer =
+                          Newer(std::move(cookies), Store::kChromium, held);
+                      const size_t kept = read - newer.size();
+                      WriteToSystemEngine(store, site, std::move(newer), kept, std::move(done),
+                                          std::move(storage));
                     },
-                    site, std::move(done), std::move(storage)));
+                    store, site, std::move(cookies), std::move(done), std::move(storage)));
           },
           profile->GetWeakPtr(), StoreOf(profile), site, std::move(done)));
 }

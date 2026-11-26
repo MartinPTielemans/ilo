@@ -789,6 +789,8 @@ browser_core::handed_give_rule::Tab GiveFacts(bc_id tab,
       .stands_in = browser_core::handed::KeepsATile(tab),
       .web_page = page && !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
                   (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
+      .system_page =
+          page && page->system_page() && page->system_page()->url().SchemeIsHTTPOrHTTPS(),
       .camera = captures.camera,
       .microphone = captures.microphone,
       .screen = captures.screen,
@@ -849,6 +851,15 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
       });
   if (!moved) {
     return false;
+  }
+  // A page in the system's engine goes on in Chromium's, at the page it was on, as no agent's Space
+  // shows the system's. Moved first, so its load is the agent's page's, which waits for the user's
+  // session from the system's store (system_engine.h). Its history there stays behind, as it does
+  // when the user turns the site off.
+  if (browser_core::Tab* given = contents ? browser_core::Tab::FromWebContents(contents) : nullptr;
+      given && given->system_page()) {
+    const GURL url = given->system_page()->url();
+    given->UseChromium(url);
   }
   // A card's video ends with the give, and only with one that happened, and a Picture in Picture
   // window closes with it: a page in an agent's Space has neither (agent_space_rule.h).

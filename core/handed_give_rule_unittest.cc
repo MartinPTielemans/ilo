@@ -52,10 +52,21 @@ TEST(HandedGiveRuleTest, ATabKeepingAHandedFavoritesTileIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-// A new tab's page, a file, an extension's page, or a page in the system's engine.
+// A new tab's page, a file, an extension's page, or one of those in the system's engine.
 TEST(HandedGiveRuleTest, APageThatIsntHttpOrHttpsIsRefused) {
   Tab tab = Fit();
   tab.web_page = false;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+// An http or https page in the system's engine is given, and goes on in Chromium's (#4356).
+TEST(HandedGiveRuleTest, AWebPageInTheSystemsEngineIsGiven) {
+  Tab tab = Fit();
+  tab.web_page = false;
+  tab.system_page = true;
+  EXPECT_TRUE(MayGive(tab));
+  // Whatever else would refuse it still does.
+  tab.dialog = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
