@@ -294,25 +294,40 @@ impl Trace {
     /// What its line says folded, by kinds and counts alone, never a title or the assistant's
     /// words: each kind once, in the order it first came, with how many steps of it; a row
     /// that's the same step on several tabs counts each. A step that failed, and a look with its
-    /// picture, is never counted in: each stands apart, by its key, as its own line.
+    /// picture, is never counted in: each stands apart, by its key, as its own line. The pages
+    /// read are counted by page, and one it opened too counts once, as opened (TS1).
     pub fn folded(&self) -> Folded {
+        let steps = (self.items.iter()).flat_map(|item| match item {
+            TraceItem::Step(step) => match &step.opens {
+                Opens::Steps(tabs) if !tabs.is_empty() => tabs.iter().collect(),
+                _ => vec![step],
+            },
+            TraceItem::Said(_) | TraceItem::Helper { .. } => Vec::new(),
+        });
         let mut folded = Folded::default();
-        let mut count = |step: &TraceStep| {
+        let (mut opened, mut read) = (Vec::new(), Vec::new());
+        for step in steps {
             if step.failed || matches!(step.opens, Opens::Picture(_)) {
-                return folded.apart.push(step.key);
+                folded.apart.push(step.key);
+                continue;
             }
             match (folded.kinds.iter_mut()).find(|(kind, _)| *kind == step.kind) {
                 Some((_, count)) => *count += 1,
                 None => folded.kinds.push((step.kind, 1)),
             }
-        };
-        for item in &self.items {
-            match item {
-                TraceItem::Step(step) => match &step.opens {
-                    Opens::Steps(tabs) if !tabs.is_empty() => tabs.iter().for_each(&mut count),
-                    _ => count(step),
-                },
-                TraceItem::Said(_) | TraceItem::Helper { .. } => {}
+            let Some(page) = step.page.as_ref() else {
+                folded.read += usize::from(step.kind == tools::StepKind::Read);
+                continue;
+            };
+            match step.kind {
+                tools::StepKind::Opened => opened.push(page),
+                tools::StepKind::Read
+                    if !(opened.iter().chain(&read)).any(|was| page.same(was)) =>
+                {
+                    read.push(page);
+                    folded.read += 1;
+                }
+                _ => {}
             }
         }
         folded
@@ -327,6 +342,8 @@ pub struct Folded {
     /// The keys of its steps that stand as lines of their own: one that failed, a look with its
     /// picture.
     pub apart: Vec<usize>,
+    /// The pages it read that it didn't open.
+    pub read: usize,
 }
 
 /// A stretch's summary line, its title and description: one that `took` its time, or one under
@@ -405,6 +422,15 @@ pub struct OnPage {
     /// Whether the step went to it: opened it or navigated to it, which starts a page's steps
     /// and has no line of its own unless it failed or is under way.
     pub went: bool,
+}
+
+impl OnPage {
+    /// Whether it's the page `other` is: the same site, on the same tab where both name one, as
+    /// a page's steps are grouped (`pages::paged`).
+    fn same(&self, other: &OnPage) -> bool {
+        self.site == other.site
+            && (self.tab.is_none() || other.tab.is_none() || self.tab == other.tab)
+    }
 }
 
 /// What a trace's line opens to.
@@ -5868,7 +5894,52 @@ mod finished_tests {
             Folded {
                 kinds: vec![(Searched, 2), (Opened, 2)],
                 apart: vec![5, 7, 8],
+                read: 0,
             }
+        );
+    }
+
+    /// A page read counts once, and one the stretch opened counts as opened alone (TS1): its
+    /// own steps on it are read, never opened twice.
+    #[test]
+    fn a_fold_counts_the_pages_read_once_and_an_opened_one_as_opened() {
+        let step = |key, kind, tab, site: &str| TraceStep {
+            key,
+            glyph: "icons/globe.svg",
+            kind,
+            title: "".into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Nothing,
+            under: "".into(),
+            page: Some(OnPage {
+                tab,
+                site: site.to_string().into(),
+                went: kind == tools::StepKind::Opened,
+            }),
+            says: tools::Note::default(),
+        };
+        use tools::StepKind::*;
+        let items = [
+            step(1, Opened, None, "a.example"),
+            step(2, Read, Some(30), "a.example"),
+            step(3, Read, Some(31), "b.example"),
+            step(4, Read, Some(31), "b.example"),
+            step(5, Read, Some(32), "b.example"),
+        ];
+        let trace = Trace {
+            key: 1,
+            running: false,
+            took: Some(9),
+            started: None,
+            items: items.into_iter().map(TraceItem::Step).collect(),
+        };
+        let folded = trace.folded();
+        assert_eq!(folded.kinds, [(Opened, 1), (Read, 4)]);
+        assert_eq!(
+            folded.read, 2,
+            "a.example was opened; b.example is read on two tabs"
         );
     }
 

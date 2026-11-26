@@ -69,7 +69,7 @@ pub(super) fn card() -> Card {
 }
 
 /// A step of a trace, under way or done.
-fn step(key: usize, title: &str, running: bool) -> TraceStep {
+pub(super) fn step(key: usize, title: &str, running: bool) -> TraceStep {
     TraceStep {
         kind: Default::default(),
         key,
@@ -3089,11 +3089,11 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
-/// A stretch's fold says Z14's words, the one place the weaving pair stands: at work its word and
-/// the time so far from its first step, done the time it took. It counts no steps or strands and
-/// has no dot, whatever the card says. A step's line has no dot before its note.
+/// A stretch's fold says Z14's words while it works, its word and the time so far from its first
+/// step; done, its summary is the whole line, with no time (TS1a), a split leading it. It has no
+/// dot, whatever the card says. A step's line has no dot before its note.
 #[test]
-fn a_stretchs_fold_says_weaving_then_woven_in() {
+fn a_stretchs_fold_says_weaving_then_what_it_did() {
     use super::{TraceLine, summary_line};
     for helpers in [0, 1, 4] {
         let mut talk = with_helpers(helpers);
@@ -3103,7 +3103,11 @@ fn a_stretchs_fold_says_weaving_then_woven_in() {
         assert_eq!(summary_line(trace, now).text(), "Weaving 1 min 12 s");
         (trace.running, trace.took) = (false, Some(41));
         let drawn = summary_line(trace, now).text();
-        assert_eq!(drawn, "Woven in 41 s");
+        let summary = match helpers {
+            4 => "Split into 4 strands",
+            _ => "Ran 1 step",
+        };
+        assert_eq!(drawn, summary);
         assert!(!drawn.contains('\u{b7}'), "{drawn}");
     }
     let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
@@ -3470,6 +3474,66 @@ fn a_stretch_at_work_stands_open_with_its_steps_flat(cx: &mut TestAppContext) {
         flat,
         "opened again, it isn't the same five lines"
     );
+}
+
+/// TS1 and TS1a: a done stretch's summary leads with its split into strands, then a clause for
+/// each of its searches, pages opened and pages read, in the order each came, at most three in
+/// all, in sentence case, joined with commas, from its counts alone; with none of those, how many
+/// steps it ran, a thought being none, or for thoughts alone how long it took.
+#[test]
+fn a_stretchs_summary_is_its_searches_and_pages_or_how_many_steps_it_ran() {
+    use crate::agents::task::Folded;
+    use crate::agents::tools::StepKind::*;
+    let split = |helpers, kinds: Vec<_>, read| {
+        let folded = Folded {
+            kinds,
+            apart: Vec::new(),
+            read,
+        };
+        super::words::summary(&folded, helpers, 75)
+    };
+    let summary = |kinds, read| split(0, kinds, read);
+    assert_eq!(
+        summary(vec![(Searched, 1)], 0).as_deref(),
+        Some("Searched the web")
+    );
+    assert_eq!(
+        summary(vec![(Searched, 2), (Clicked, 4), (Opened, 3), (Read, 5)], 2).as_deref(),
+        Some("Searched the web 2 times, opened 3 pages, read 2 pages")
+    );
+    assert_eq!(
+        summary(vec![(Read, 1), (Opened, 1)], 1).as_deref(),
+        Some("Read 1 page, opened 1 page"),
+        "in the order each came"
+    );
+    assert_eq!(
+        summary(vec![(Opened, 1), (Read, 2)], 0).as_deref(),
+        Some("Opened 1 page"),
+        "a page opened and read counts as opened"
+    );
+    assert_eq!(
+        summary(vec![(Clicked, 2), (Thought, 3), (Typed, 1)], 0).as_deref(),
+        Some("Ran 3 steps")
+    );
+    assert_eq!(
+        summary(vec![(Clicked, 1), (Thought, 2)], 0).as_deref(),
+        Some("Ran 1 step")
+    );
+    assert_eq!(
+        summary(vec![(Thought, 2)], 0).as_deref(),
+        Some("Thought for 1 min 15 s"),
+        "thoughts alone say how long the stretch took"
+    );
+    assert_eq!(
+        split(2, vec![(Read, 2)], 2).as_deref(),
+        Some("Split into 2 strands, read 2 pages")
+    );
+    assert_eq!(
+        split(3, vec![(Searched, 1), (Opened, 2), (Read, 3)], 1).as_deref(),
+        Some("Split into 3 strands, searched the web, opened 2 pages"),
+        "the split counts toward the three"
+    );
+    assert_eq!(summary(Vec::new(), 0), None);
 }
 
 /// The button under an answer copies the answer's plain text, its marks taken out, and the time it

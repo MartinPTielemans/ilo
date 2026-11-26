@@ -9018,6 +9018,7 @@ mod tasks {
                     (StepKind::Clicked, 1)
                 ],
                 apart: vec![],
+                read: 1,
             }
         );
         assert_eq!(folded(["", "Just checking the basket"]), first);

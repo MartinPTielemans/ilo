@@ -7,7 +7,7 @@ use std::rc::Rc;
 use gpui::accesskit::{Live, Role};
 use gpui::{Entity, SharedString, TestAppContext, VisualTestContext};
 
-use super::tests::{card, conversation, ilo_words, shown, stopped_at_order, watch_page};
+use super::tests::{card, conversation, ilo_words, shown, step, stopped_at_order, watch_page};
 use super::{TalkView, words};
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
@@ -308,6 +308,67 @@ fn steps_and_the_live_line_are_never_told(cx: &mut TestAppContext) {
             .count()
             >= 2,
         "the step under way, on its line and on the live line: {read:?}"
+    );
+}
+
+/// A stretch that's over is read as its summary by what it counts (TS1), never its steps' titles,
+/// with a step that failed under it as a line of its own; its other steps are read once the user
+/// opens it.
+#[gpui::test]
+fn an_over_stretch_reads_its_summary_and_a_failed_step_on_its_own(cx: &mut TestAppContext) {
+    use super::Fold;
+    use crate::agents::task::{Trace, TraceItem, TraceStep};
+    use crate::agents::tools::StepKind;
+    let (shell, _host, cx) = shown(cx);
+    reader(&shell, cx);
+    let at = |key, kind, title: &str, failed| {
+        TraceItem::Step(TraceStep {
+            kind,
+            failed,
+            ..step(key, title, false)
+        })
+    };
+    let mut over = conversation(1);
+    over.lines = vec![Line::Trace(Trace {
+        key: 0,
+        running: false,
+        took: Some(12),
+        started: None,
+        items: vec![
+            at(
+                0,
+                StepKind::Searched,
+                "Searched for flights to Lisbon",
+                false,
+            ),
+            at(1, StepKind::Opened, "Opened skyscanner.net", false),
+            at(2, StepKind::Read, "Read skyscanner.net", false),
+            at(3, StepKind::Clicked, "Couldn't click on the page", true),
+        ],
+    })];
+    talk(&shell, over, cx);
+    drawn(&shell, cx);
+    let read = named(Role::Label, cx);
+    let has = |read: &[String], name: &str| read.iter().any(|each| each == name);
+    assert!(
+        has(&read, "Searched the web, opened 1 page, read 1 page"),
+        "the stretch isn't read as its summary: {read:?}"
+    );
+    assert!(
+        has(&read, "Couldn't click on the page"),
+        "the failed step isn't read on its own line: {read:?}"
+    );
+    assert!(
+        !has(&read, "Read skyscanner.net"),
+        "a step was read with the stretch closed: {read:?}"
+    );
+
+    view(&shell, cx).update(cx, |view, cx| view.toggle(Fold::Trace(0), false, cx));
+    drawn(&shell, cx);
+    let read = named(Role::Label, cx);
+    assert!(
+        has(&read, "Read skyscanner.net"),
+        "opened, the stretch didn't read its steps: {read:?}"
     );
 }
 

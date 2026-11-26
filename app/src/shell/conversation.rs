@@ -2392,12 +2392,24 @@ impl TalkView {
         }
         let summary = trace_line(look, line)
             .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, running, cx)));
+        // Closed, a step that failed and a look with its picture still stand, each as its own
+        // line under the stretch's: never folded into its words (Q12).
+        let apart: Vec<_> = match open {
+            true => Vec::new(),
+            false => {
+                let apart = trace.folded().apart;
+                (trace_steps(trace).filter(|step| apart.contains(&step.key)))
+                    .flat_map(|step| self.step(step, true, look, cx))
+                    .collect()
+            }
+        };
         div()
             .flex()
             .flex_col()
             .items_start()
             .mb(px(TRACE_BELOW))
             .child(summary)
+            .children(apart)
             .children(self.unfolding(fold, open, nest.w_full(), look))
             .into_any_element()
     }
@@ -3908,13 +3920,32 @@ fn summary_line(trace: &Trace, now: Instant) -> TraceLine {
 }
 
 /// A stretch's fold's words at `now`: at work its word and the time so far, from its first step,
-/// counted on the frames its running ring draws; done, the time it took.
+/// counted on the frames its running ring draws; done, what it did by kind (TS1), the whole line
+/// with no time (TS1a), or the time it took for a stretch with nothing in it.
 fn fold_words(trace: &Trace, now: Instant) -> (SharedString, SharedString) {
+    let summary =
+        (trace.took).and_then(|took| words::summary(&trace.folded(), trace.helpers(), took));
+    if let Some(summary) = summary {
+        return (summary.into(), "".into());
+    }
     let so_far = (trace.started).map_or(0, |started| {
         now.saturating_duration_since(started).as_secs()
     });
     let (title, note) = words::fold(trace.took, so_far.max(1));
     (title.into(), note.into())
+}
+
+/// Each step of `trace`, a helper's line's too, and each tab's of a step on several.
+fn trace_steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
+    (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
+            TraceItem::Said(_) => None,
+        })
+        .flat_map(|step| match &step.opens {
+            Opens::Steps(tabs) => std::iter::once(step).chain(tabs.iter()).collect(),
+            _ => vec![step],
+        })
 }
 
 /// Which line a `TraceLine` is: a trace's, which folds, or one of ilo's.

@@ -3,11 +3,12 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::Live;
 use crate::agents::task::ilo::{
     HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
 };
+use crate::agents::task::{Folded, Live};
 use crate::agents::tier::{self, Tier, Why};
+use crate::agents::tools::StepKind;
 use crate::product::PRODUCT;
 
 /// The product's name, before each of its lines' words.
@@ -32,6 +33,56 @@ pub const COPY_ANSWER: &str = "Copy Answer";
 /// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
 pub fn split(strands: usize) -> Option<String> {
     (strands > 1).then(|| format!("Split into {strands} strands"))
+}
+
+/// The summary over a stretch that's over (TS1, TS1a), from what it counts alone: that it split
+/// into `helpers` strands first, then a clause for each of its searches, pages opened and pages
+/// read, in the order each first came, at most three, the first in sentence case, joined with
+/// commas, no period; with none of those, how many steps it ran, or for thoughts alone how long
+/// it `took`. A thought is no step, as the card's count leaves it out. None for a stretch with
+/// nothing in it.
+pub fn summary(folded: &Folded, helpers: usize, took: u64) -> Option<String> {
+    use crate::agents::task::duration;
+    let clause = |&(kind, count): &(StepKind, usize)| match (kind, count) {
+        (StepKind::Searched, 1) => Some("Searched the web".to_string()),
+        (StepKind::Searched, n) => Some(format!("Searched the web {n} times")),
+        (StepKind::Opened, 1) => Some("Opened 1 page".to_string()),
+        (StepKind::Opened, n) => Some(format!("Opened {n} pages")),
+        (StepKind::Read, _) => match folded.read {
+            0 => None,
+            1 => Some("Read 1 page".to_string()),
+            n => Some(format!("Read {n} pages")),
+        },
+        _ => None,
+    };
+    let clauses: Vec<String> = (split(helpers).into_iter())
+        .chain(folded.kinds.iter().filter_map(clause))
+        .take(3)
+        .collect();
+    let Some((first, rest)) = clauses.split_first() else {
+        let thought = |kind: &StepKind| *kind == StepKind::Thought;
+        let steps: usize = (folded.kinds.iter())
+            .filter(|(kind, _)| !thought(kind))
+            .map(|(_, count)| count)
+            .sum();
+        return match steps {
+            0 if folded.kinds.is_empty() => None,
+            0 => Some(format!("Thought for {}", duration(took.max(1)))),
+            1 => Some("Ran 1 step".to_string()),
+            steps => Some(format!("Ran {steps} steps")),
+        };
+    };
+    let rest = rest.iter().map(|clause| {
+        let mut chars = clause.chars();
+        let lead = chars.next().map(|lead| lead.to_lowercase().to_string());
+        lead.unwrap_or_default() + chars.as_str()
+    });
+    Some(
+        std::iter::once(first.clone())
+            .chain(rest)
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 /// The fold over a stretch of work (Z14), the one place the weaving pair stands: at work, its word

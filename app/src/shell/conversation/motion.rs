@@ -390,7 +390,7 @@ impl Motion {
                 self.came.insert(Key::Aside(trace.key, index), now);
             }
         }
-        // Its fold's words crossfade as its stretch ends, from Weaving to Woven in.
+        // Its fold's words crossfade as its stretch ends, from Weaving to what it did.
         if was.took != trace.took {
             let (title, note) = super::fold_words(was, now);
             self.swaps.insert(

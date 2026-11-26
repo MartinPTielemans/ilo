@@ -392,9 +392,14 @@ pub(crate) fn bench_ended() -> Option<&'static str> {
 /// the step under way, on four pages, so it opens on Pages.
 pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     let (title, _, _) = TASKS[0];
-    // Every step is on the tickets page: the first went to it, so it heads the page's line.
+    // Every step is on the tickets page: the first went to it, and its kind, as the glyph says,
+    // is what the done stretch's fold counts.
     let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
-        kind: Default::default(),
+        kind: match glyph {
+            "icons/globe.svg" => browser::agents::tools::StepKind::Opened,
+            "icons/text-align-start.svg" => browser::agents::tools::StepKind::Read,
+            _ => browser::agents::tools::StepKind::Clicked,
+        },
         key,
         glyph,
         title: title.into(),
