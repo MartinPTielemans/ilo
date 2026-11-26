@@ -1,13 +1,13 @@
 //! ilo's own context menu's window (src/menu.rs) on Linux, as mac/menu_window.mm is on the Mac:
 //! GPUI's Linux platform shows it over the window it opened for as one of its overlays
-//! (overlays.rs), with the keyboard, and the menu's own window takes its pointer events. A press
-//! outside, the keyboard going elsewhere or the window resizing is the user leaving it.
+//! (overlays.rs), with the keyboard, and the menu's own window takes its pointer events. GPUI asks
+//! the menu of each pointer event in its other windows first (`gpui_linux::set_menu_pointer`), as
+//! the Mac's local monitor and Windows' hook do, and does as it answers: a press outside closes it
+//! and goes no further, and a right press goes on, to open what it's on's own menu in its place.
+//! The keyboard going elsewhere or the window resizing is the user leaving it.
 //!
-//! A right-click elsewhere in the UI opens that menu in its place, as the press reaches the UI
-//! before GPUI tells the menu it was left, and a leaving is told only to the showing it left.
-//!
-//! shortcut: the pointer isn't the menu's first, so a press outside closes it and lands where it
-//! was pressed too. It stays inside its window, which it can't go past under Wayland.
+//! shortcut: a press on a page, which Chromium hears before GPUI, still lands there too (#4165).
+//! The menu stays inside its window, which it can't go past under Wayland.
 //!
 //! From the Linux driver's branch (feat/linux-drive, a566b45), which shows it the same way.
 
@@ -38,11 +38,12 @@ thread_local! {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_menu_window(
     view: *mut c_void,
-    _pointer: extern "C" fn(kind: i32, x: f64, y: f64) -> bool,
+    pointer: extern "C" fn(kind: i32, x: f64, y: f64) -> bool,
     dismissed: extern "C" fn(),
     choose: extern "C" fn(*const c_char) -> bool,
 ) {
     gpui_linux::set_overlay_menu(view);
+    gpui_linux::set_menu_pointer(pointer);
     MENU.set(Some(Box::leak(Box::new(Menu {
         view,
         dismissed,
