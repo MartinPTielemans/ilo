@@ -1026,6 +1026,9 @@ struct Held {
     /// Whether the browser handed the tab off for its page's sign-in, which the agent's call
     /// that met it waits on (`sign_in_hand_off`), so its answer says why.
     sign_in: bool,
+    /// Whether the user took the tab over (`take_over`), never handed it by the agent or held for
+    /// a page's passkey.
+    taken: bool,
 }
 
 impl Held {
@@ -1727,6 +1730,7 @@ impl Agents {
                 reply: None,
                 timer: None,
                 sign_in: false,
+                taken: false,
             };
             self.hold(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
@@ -2260,6 +2264,7 @@ impl Agents {
                     reply: Some(reply),
                     timer: None,
                     sign_in: false,
+                    taken: false,
                 };
                 self.hold(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -3036,6 +3041,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: true,
+            taken: false,
         };
         self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -3103,11 +3109,19 @@ impl Agents {
             reply: None,
             timer: None,
             sign_in: false,
+            taken: true,
         };
         self.hold(tab, held);
         // The core ends the agent's session there, which logs it.
         self.carry(tab, held::Event::TakeOver, life, actions, cx);
         cx.notify();
+    }
+
+    /// Whether the user took `tab` over and nothing of its agent's waits on it: a page whose row
+    /// in the panel says it's theirs, with Hand Back. A hand-off's, a passkey's or an ask for the
+    /// tab back has its own line with its own button.
+    pub(crate) fn taken_over(&self, tab: u64) -> bool {
+        (self.held.get(&tab)).is_some_and(|held| held.taken && held.life() == held::Life::Held)
     }
 
     /// The tabs of the agent's Space the user doesn't hold.
@@ -3838,6 +3852,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: false,
+            taken: false,
         };
         self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);

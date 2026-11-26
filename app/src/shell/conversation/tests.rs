@@ -3653,21 +3653,20 @@ fn row_buttons_drawn(
     })
 }
 
-/// The row of the page stood on is decided by that page: one the user took over is theirs, with
-/// Hand Back, while the thread works on another of its pages, and the press hands that page back
-/// by the strip's own road.
-#[gpui::test]
-fn the_panels_page_row_is_yours_on_a_page_held_while_the_thread_works_on_another(
-    cx: &mut TestAppContext,
-) {
+/// Standing on page 30, which the user took over, while the thread's line is `live` about another
+/// of its pages (31, the one it's `on` if any): the row is theirs, with the line's words for a
+/// page held, Hand Back is drawn and Take Over isn't, and the press hands that page back by the
+/// strip's own road.
+fn yours_on_a_held_page(live: Live, on: Option<u64>, cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let tabs: Vec<(u64, gpui::SharedString)> =
         vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())];
     let split = Conversation {
         tabs: tabs.clone(),
-        on: Some(31),
+        on,
         held: vec![30],
+        live: live.clone(),
         ..conversation(3)
     };
     shell.update(cx, |shell, cx| shell.set_conversation(Some(split), cx));
@@ -3675,16 +3674,73 @@ fn the_panels_page_row_is_yours_on_a_page_held_while_the_thread_works_on_another
     let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
     let yours = crate::agents::task::yours(30, &tabs);
     let said = super::words::live(&yours).expect("words for a page the user has");
-    assert_eq!(row.case, Some(super::RowCase::Yours(said.into())));
+    assert_eq!(
+        row.case,
+        Some(super::RowCase::Yours(said.into())),
+        "{live:?}"
+    );
     let (take_over, hand_back) = row_buttons_drawn(&view, cx);
-    assert!(take_over.is_empty(), "Take Over on a page the user has");
+    assert!(
+        take_over.is_empty(),
+        "Take Over on a page the user has: {live:?}"
+    );
     let hand_back = hand_back.expect("no Hand Back in the page's row");
     host.take();
     cx.simulate_click(hand_back.center(), Modifiers::none());
-    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"], "{live:?}");
     let stop = shell.read_with(cx, |shell, cx| shell.page_row_shown(30, cx));
     let stop = stop.case.map(|case| case.button());
     assert_eq!(stop, Some(crate::shell::page_ends::StripStop::HandBack));
+}
+
+/// A page the user took over is theirs on its row while the thread works on another.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_the_thread_works_on_another(
+    cx: &mut TestAppContext,
+) {
+    yours_on_a_held_page(Live::Working, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while another page's hand-off waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_another_is_handed(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Handed, Some(31), cx);
+}
+
+/// A page the user took over is theirs on its row while the thread's question waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_question_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Asked, None, cx);
+}
+
+/// A page the user took over is theirs on its row while a refused step on another waits.
+#[gpui::test]
+fn the_panels_page_row_is_yours_on_a_page_held_while_a_refusal_waits(cx: &mut TestAppContext) {
+    yours_on_a_held_page(Live::Refused, Some(31), cx);
+}
+
+/// Standing on the page an agent handed the user, the hand-off's own line has its Hand Back and
+/// the row draws none: it isn't a page the user took over.
+#[gpui::test]
+fn a_hand_offs_own_page_draws_no_second_hand_back(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let handed = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        on: Some(30),
+        held: Vec::new(),
+        live: Live::Handed,
+        ..conversation(3)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(handed), cx));
+    watch_page(&shell, cx);
+    let row = view.read_with(cx, |view, _| view.page_row_for(30, None));
+    assert!(
+        !matches!(row.case, Some(super::RowCase::Yours(_))),
+        "{:?}",
+        row.case
+    );
+    assert_eq!(row_buttons_drawn(&view, cx).1, None, "a second Hand Back");
 }
 
 /// Standing on a page the user doesn't hold, while they hold another of the thread's, the row

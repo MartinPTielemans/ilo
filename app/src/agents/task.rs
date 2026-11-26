@@ -149,8 +149,8 @@ pub struct Conversation {
     pub tabs: Vec<(u64, SharedString)>,
     /// The tab the agent is on while it works, whose picture has the Signal ring.
     pub on: Option<u64>,
-    /// Those of its pages the user holds, each theirs on its own row in the panel whichever page
-    /// the agent works on.
+    /// Those of its pages the user took over, with nothing of the agent's waiting on them: each
+    /// theirs on its own row in the panel, whatever the live line is about.
     pub held: Vec<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
@@ -1348,7 +1348,7 @@ impl Agents {
         let finished = finished(&task.messages, &lines);
         let held = (tabs.iter())
             .map(|(tab, _)| *tab)
-            .filter(|tab| self.held.contains_key(tab))
+            .filter(|tab| self.taken_over(*tab))
             .collect();
         Some(Conversation {
             agent: task.agent.clone().into(),
