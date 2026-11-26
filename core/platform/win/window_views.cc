@@ -215,7 +215,7 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   }
 
   // ui::HWNDMessageFilter:
-  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM, LRESULT*) override {
+  bool FilterMessage(HWND, UINT message, WPARAM w_param, LPARAM, LRESULT*) override {
     ui::InputMethod* input_method = widget_->GetInputMethod();
     if (message == WM_SETFOCUS) {
       took_keyboard_.Run();
@@ -532,7 +532,8 @@ class EdgeStrips : public ui::HWNDMessageFilter {
   EdgeStrips& operator=(const EdgeStrips&) = delete;
   ~EdgeStrips() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
 
-  // Answers for |pane| and the windows in it on this thread, from now, A
+  // Answers for |pane| and the windows in it on this thread, from now, and for each window content
+  // makes in them after, which tell the window holding them as they appear (WM_PARENTNOTIFY). A
   // window's filters are a set, so a window already answered for stays as it is.
   void Watch(HWND pane) {
     Add(pane);
@@ -540,8 +541,13 @@ class EdgeStrips : public ui::HWNDMessageFilter {
   }
 
   // ui::HWNDMessageFilter:
-  bool FilterMessage(HWND hwnd, UINT message, WPARAM, LPARAM l_param,
+  bool FilterMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param,
                      LRESULT* result) override {
+    if (message == WM_PARENTNOTIFY && LOWORD(w_param) == WM_CREATE) {
+      // Never an answer: the window still takes the message, and its parent hears it in turn.
+      Add(reinterpret_cast<HWND>(l_param));
+      return false;
+    }
     if (message != WM_NCHITTEST) {
       return false;
     }
@@ -823,7 +829,8 @@ class WindowViews : public views::WidgetObserver,
     HWND hwnd = views::HWNDForWidget(slot.widget.get());
     SetWindowPos(hwnd, HWND_TOP, pixels.x(), pixels.y(), pixels.width(), pixels.height(),
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    // Here, as the page content made its window for is in the slot by now.
+    // Here, as the page content made its window for is in the slot by now; its later windows join
+    // as they appear.
     edge_strips_.Watch(hwnd);
     // The pages fill the slot in its own DIPs, which Windows' Text size makes fewer than the app's
     // points: in those the page ran past the window by the text scale (#3621).
