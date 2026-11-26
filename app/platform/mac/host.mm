@@ -2153,6 +2153,11 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  // The window first run held comes on at its frame whole, with none of AppKit's motion for a
+  // window ordered in: first run's card has just grown to that frame, or faded where it stood.
+  if (browser->held) {
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
+  }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
   if (browser->sidebar_right) {
