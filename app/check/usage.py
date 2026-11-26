@@ -10,6 +10,8 @@ every process of the browser.
   usage.py peak FILE KIND    prints the most memory any process of KIND took in its life, in MiB,
                              or nothing where the snapshot read none, as on the Mac
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
+  usage.py wake-kinds A B     prints the wakeups a second from snapshot A to B by kind of process,
+                             the most first
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
 
@@ -199,6 +201,15 @@ def main():
             was = a["procs"].get(pid, [now[0], 0, 0, 0])
             totals[now[0]] = totals.get(now[0], 0) + max(now[1] - was[1], 0) * 100 / secs
         print(", ".join(f"{kind} {pct:.2f}" for kind, pct in sorted(totals.items(), key=lambda t: -t[1])))
+    elif command == "wake-kinds":
+        # As idle counts them: a process new since A counted whole, none below zero.
+        a, b = read(sys.argv[2]), read(sys.argv[3])
+        secs = b["time"] - a["time"]
+        totals = {}
+        for pid, now in b["procs"].items():
+            was = a["procs"].get(pid, [now[0], 0, 0, 0])
+            totals[now[0]] = totals.get(now[0], 0) + max(now[2] - was[2], 0) / secs
+        print(", ".join(f"{kind} {rate:.1f}" for kind, rate in sorted(totals.items(), key=lambda t: -t[1])))
     elif command == "idle":
         snaps = [read(path) for path in sys.argv[2:]]
         for a, b in zip(snaps, snaps[1:]):
