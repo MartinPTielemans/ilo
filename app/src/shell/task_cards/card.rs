@@ -21,10 +21,11 @@ use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, COUNT_LINE, DONE_LINE, DOT, FILL, GAP,
-    GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_AROUND, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT,
-    OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3,
-    TEXT_3_LIGHT, TITLE_LINE, UNDER, UNVISITED,
+    BUTTON_HEIGHT, BUTTON_LINE, BUTTON_RADIUS, BUTTON_X, COUNT_LINE, DONE_LINE, DOT, FILL,
+    FROM_INK, FROM_LINE, FROM_MARK, FROM_MARK_GAP, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP,
+    LINE_AROUND, LINE_X, LIVE_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING,
+    RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
+    UNVISITED,
 };
 use crate::tokens::shell::{DIVIDER, FAVICON_DRAWN};
 use crate::tokens::text;
@@ -95,6 +96,15 @@ pub(super) struct Look {
     pub(super) rim: bool,
     pub(super) button: bool,
     pub(super) dot: bool,
+    /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
+    pub(super) from: bool,
+}
+
+/// Whether `card` is an outside app's session rather than a thread: from the kind of its connection
+/// alone, a session with no task's token, which is also why the user doesn't reply to it here.
+/// Nothing the app says, its name included, decides it.
+pub(super) fn outside(card: &Card) -> bool {
+    !card.replies
 }
 
 /// What `card` in `form` shows of its task's state. An ended task has today's glyph, which isn't a
@@ -105,6 +115,7 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
         rim: form == Form::Waits,
         button: form == Form::Waits && !card.pages.is_empty(),
         dot: form == Form::DoneUnseen,
+        from: outside(card),
     }
 }
 
@@ -255,7 +266,16 @@ impl Shell {
                 UNDER
             };
         let agent = card.agent.clone();
-        let name: SharedString = format!("{}, {}", card.title, self.said(card, placed.form)).into();
+        // An outside app's name, after the title, then what the card says of its state.
+        let from = outside(card).then(|| format!("{}, ", card.name));
+        let name: SharedString = format!(
+            "{}, {}{}",
+            card.title,
+            from.unwrap_or_default(),
+            self.said(card, placed.form)
+        )
+        .into();
+        let tip = (outside(card) && placed.form.line()).then(|| card.name.clone());
         let frame = div()
             .id(("task-plate", n))
             .relative()
@@ -290,6 +310,16 @@ impl Shell {
             .child(drawn)
             .child(body)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .when_some(tip, |frame, tip| {
+                frame.on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                    let drawn = shell.task_list.plates_drawn.borrow().get(&n).copied();
+                    let tip = drawn.filter(|_| *hovered).map(|frame| {
+                        let anchor = crate::tooltip::Anchor::under(frame, shell.viewport);
+                        (crate::tooltip::Tip::named(tip.clone()), anchor)
+                    });
+                    shell.hover_tip(tip, cx);
+                }))
+            })
             .on_click(cx.listener(move |shell, _, _, cx| {
                 log!("browser: command show-task via task card");
                 shell.show_group(agent.clone(), cx)
@@ -348,6 +378,46 @@ impl Shell {
             .bg(self.palette.plate(TILE).opacity(fill))
             .children(dashes)
             .child(drawn)
+    }
+
+    /// The product's mark for an outside app's session, in the ink at `from-ink`.
+    fn from_mark(&self) -> impl IntoElement + use<> {
+        let colour = Hsla::from(self.palette.ink).opacity(FROM_INK);
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| glyph::paint_from_mark(bounds, colour, window),
+        )
+        .flex_none()
+        .size(px(FROM_MARK))
+    }
+
+    /// An outside app's line over a whole card's first row: the product's mark in the glyph's
+    /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
+    /// an ellipsis.
+    fn from_line(&self, card: &Card, text_3: Hsla) -> impl IntoElement + use<> {
+        div()
+            .h(px(FROM_LINE))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(GLYPH))
+                    .flex()
+                    .justify_center()
+                    .child(self.from_mark()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .ml(px(GLYPH_GAP))
+                    .truncate()
+                    .text_size(px(text::SMALL))
+                    .line_height(px(FROM_LINE))
+                    .text_color(text_3)
+                    .child(card.name.clone()),
+            )
     }
 
     /// A card's title on its line: one line, cut with an ellipsis.
@@ -428,12 +498,14 @@ impl Shell {
             }
         };
         let third = self.card_third(card, form, text_3, cx);
+        let from = outside(card).then(|| self.from_line(card, text_3));
         div()
             .size_full()
             .p(px(PADDING - width))
             .flex()
             .flex_col()
             .gap(px(GAP))
+            .children(from)
             .child(first)
             .child(div().pl(px(GLYPH + GLYPH_GAP)).child(second))
             .children(third.map(|third| div().pl(px(GLYPH + GLYPH_GAP)).child(third)))
@@ -601,6 +673,18 @@ impl Shell {
             .then(|| self.working_page(card))
             .flatten()
             .map(|tab| self.card_icon(tab, 1.));
+        // An outside app's mark at the right, before the page's icon; its name is the line's
+        // tooltip and spoken label, not drawn.
+        let from = outside(card).then(|| self.from_mark());
+        let end = (from.is_some() || on.is_some()).then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(FROM_MARK_GAP))
+                .children(from)
+                .children(on)
+        });
         div()
             .size_full()
             .px(px(LINE_X - OUTLINE_WIDTH))
@@ -609,7 +693,7 @@ impl Shell {
             .gap(px(GLYPH_GAP))
             .child(self.card_mark(card.dot, false))
             .child(self.card_title(card, weight))
-            .children(on)
+            .children(end)
             .into_any_element()
     }
 

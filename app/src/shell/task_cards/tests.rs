@@ -12,6 +12,7 @@ use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, 
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
+use crate::tokens::shell::task_card::{FROM_LINE, GAP};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
@@ -312,6 +313,70 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
 }
 
+/// An outside app's card has its line from the kind of its connection alone, a session with no
+/// task's token, and a task's never does, whatever either is named. The name, however long or made
+/// of whatever state words, moves nothing and changes no rim, mark or button.
+#[test]
+fn an_outside_apps_line_comes_from_its_connection_alone() {
+    let long = "Flights ".repeat(25);
+    let names = [
+        "Flights",
+        "Needs you",
+        "Done · 13:31",
+        "Working",
+        "Claude",
+        "",
+        long.as_str(),
+    ];
+    let forms = [
+        Form::Working,
+        Form::Waits,
+        Form::DoneUnseen,
+        Form::Ended,
+        Form::WorkingLine,
+        Form::DoneLine,
+        Form::EndedLine,
+    ];
+    for name in names {
+        for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
+            let task = Card {
+                name: name.into(),
+                ..paged(1, dot, &[30])
+            };
+            let session = Card {
+                replies: false,
+                ..task.clone()
+            };
+            let short = Card {
+                name: "Flights".into(),
+                ..session.clone()
+            };
+            for form in forms {
+                let (theirs, ours) = (look(&task, form, true), look(&session, form, true));
+                assert!(!theirs.from && ours.from, "{name:?} {form:?}");
+                assert_eq!(
+                    Look {
+                        from: false,
+                        ..ours
+                    },
+                    theirs,
+                    "{name:?} {form:?}"
+                );
+                assert_eq!(
+                    super::room(&session, form, 1),
+                    super::room(&short, form, 1),
+                    "{form:?}"
+                );
+                // A whole card makes room for the line over its first row; a folded one carries
+                // only the mark, in its one line.
+                let more = super::room(&session, form, 1) - super::room(&task, form, 1);
+                let line = FROM_LINE + GAP;
+                assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
+            }
+        }
+    }
+}
+
 /// Whether a card's line says its status in its word's place is a fact its maker set, never read
 /// off the status: words that begin as ilo's own fuller forms do, a session's client named as a
 /// state among them, leave the line at the word.
@@ -364,6 +429,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -374,6 +440,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: true,
                 button: true,
                 dot: false,
+                from: false,
             },
             "{status}"
         );
@@ -387,6 +454,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
                 rim: false,
                 button: false,
                 dot: true,
+                from: false,
             },
             "{status}"
         );
