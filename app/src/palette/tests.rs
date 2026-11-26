@@ -707,8 +707,8 @@ fn a_themed_window_has_the_glass_of_one_without() {
     set_transparency(Transparency::Standard);
 }
 
-/// The pickers' card takes the least step from Arc's measured grey toward the dark overlay at
-/// which its text reads, four on the HUD window's material, over the black Space as with no theme,
+/// The pickers' card takes the least step from the floating fill toward its colour, opaque, at
+/// which its text reads, none on the HUD window's material, over the black Space as with no theme,
 /// as a theme leaves the window's glass as it is (#4090), and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
 /// secondary colour, at 3:1, and its field's words, in the label's, as text on the field's tint of
 /// the line colour.
@@ -717,14 +717,14 @@ fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
         (hex(black.card), black.card.a),
-        (0x403f3e, 0.65176475),
-        "four steps from the measured grey over the black Space"
+        (0x303036, 0.92156863),
+        "the floating fill over the black Space"
     );
     let none = Palette::of(None, Tone::Dark).card;
     assert_eq!(
         (hex(none), none.a),
-        (0x403f3e, 0.65176475),
-        "four steps from the measured grey with no theme"
+        (0x303036, 0.92156863),
+        "the floating fill with no theme"
     );
     let lay = |at: Rgba, colour: u32| over(at, rgb(colour >> 8), (colour & 0xff) as f32 / 255.);
     for light in [false, true] {
@@ -1136,7 +1136,9 @@ fn full_sweep() {
     let palettes: Vec<Palette> = (themes.iter())
         .flat_map(|t| [Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(t), tone)))
         .collect();
-    let card = palettes.iter().filter(|p| p.card != rgba(CARD)).count();
+    let card = (palettes.iter())
+        .filter(|p| p.card != Float::Picker.card())
+        .count();
     let faded = (themes.iter().flat_map(|t| [t, t]))
         .zip(&palettes)
         .filter(|(t, p)| p.layer_alpha < layer_alpha(t, p.tone) - 1e-6)
@@ -1301,7 +1303,7 @@ fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
             );
             assert_eq!(
                 opaque,
-                over(rgb(OVERLAY_DARK), palette.card, palette.card.a)
+                over(Float::Picker.colour(tone), palette.card, palette.card.a)
             );
         }
     }
@@ -1458,12 +1460,22 @@ fn each_transparency_level_holds_its_rule_over_any_page() {
 }
 
 /// Each level shows more of what's behind than the one before, and the dark and light fills step
-/// together, so the user's choice reads the same in both looks.
+/// together, so the user's choice reads the same in both looks. What wears the floating fill, a
+/// menu and the pickers' card, keeps its own alpha at every level: the level is the window's glass.
 #[test]
 fn each_transparency_level_shows_more_than_the_one_before() {
+    use crate::tokens::floating::{FILL, LIGHT_FILL};
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
             let alphas = Transparency::ALL.map(|level| surface.fill_at(tone, Some(level)).a);
+            if surface.fill_index() == 2 {
+                let floating = match surface.tone(tone) {
+                    Tone::Dark => rgba(FILL),
+                    Tone::Light => rgba(LIGHT_FILL),
+                };
+                assert_eq!(alphas, [floating.a; 3], "{surface:?} {tone:?}");
+                continue;
+            }
             assert!(
                 alphas.windows(2).all(|pair| pair[0] > pair[1]),
                 "{surface:?} {tone:?}: {alphas:?}"
@@ -2447,7 +2459,7 @@ fn the_pickers_hint_and_labels_read_on_their_card_at_every_level() {
 #[test]
 fn off_the_material_the_plate_under_the_pointer_takes_no_shade() {
     for tone in [Tone::Dark, Tone::Light] {
-        assert_eq!(float_ink(tone, None).shades, [0.; 2], "{tone:?}");
+        assert_eq!(float_ink(tone, None).shades, [0.; 3], "{tone:?}");
     }
 }
 
@@ -2459,7 +2471,7 @@ fn a_float_over_the_material_is_never_grayer_than_it_is_opaque() {
         for level in FLOAT_LEVELS {
             let float = float_ink(tone, level);
             assert!(float.text >= opaque.text && float.glyph >= opaque.glyph);
-            for fill in 0..2 {
+            for fill in 0..3 {
                 assert!(float.rest[fill] <= float.text, "{tone:?} at {level:?}");
             }
         }
@@ -2594,7 +2606,7 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     assert_eq!(
-        pin, 3_194_029_282_505_469_213,
+        pin, 12_704_512_350_845_494_042,
         "a dark window's palette moved:\n{all}"
     );
 }
@@ -2702,7 +2714,7 @@ fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
     use crate::tokens::menu::LIGHT_DESTRUCTIVE;
     let red = rgba(LIGHT_DESTRUCTIVE);
     assert_eq!(red.a, 1.);
-    let floating = rgba(crate::tokens::shell::recent_downloads::LIGHT_FILL);
+    let floating = rgba(crate::tokens::floating::LIGHT_FILL);
     let on_float = over(rgb(LIGHT_FLOAT_MATERIAL), floating, floating.a);
     assert!(
         contrast(red, on_float) >= TEXT,

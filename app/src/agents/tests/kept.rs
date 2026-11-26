@@ -269,9 +269,6 @@ fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppC
     run.ran(2);
     run.finish(&second, cx);
     assert_eq!(run.kept(cx), (2, 0));
-    let saved = std::fs::read_to_string(run.profile.join("agents.json")).unwrap();
-    let saved: Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(saved["tasks"]["keep"], json!(true));
 }
 
 /// A reply to a task that ended takes it up: at Work on pages though it ended at Full access,
@@ -469,42 +466,176 @@ fn a_reply_to_a_run_that_still_waits_takes_the_task_up_on_it(cx: &mut TestAppCon
     assert_eq!(run.ilo_lines(&agent, cx), []);
 }
 
-/// Settings › Agents' switch off: a task's run keeps nothing, ilo holds no id and makes no folder,
-/// and the task, once done, says its assistant didn't keep the conversation where its reply field
-/// was, with Start Again: not that it no longer has one, which is for one that was kept.
+/// What the profile's settings file says of keeping, if anything.
 #[cfg(unix)]
-#[gpui::test]
-fn with_the_switch_off_a_run_keeps_nothing(cx: &mut TestAppContext) {
-    let run = Run::new("off", cx);
-    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(false, cx));
-    let agent = run.start(Cli::Claude, cx);
-    let (args, _) = run.ran(1);
-    assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
-    assert!(!args.iter().any(|arg| arg == "--session-id"));
-    assert_eq!(run.kept(cx), (0, 0));
-    assert!(!run.profile.join(kept::FOLDER).exists());
-    assert_eq!(run.ran_in(1), run.profile.join("Tasks").join(&agent));
-    run.finish(&agent, cx);
-    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::NotKept]);
-    let talk = run.talk(&agent, cx);
-    let Some(Line::Ilo(last)) = talk.lines.last() else {
-        panic!("ilo's line isn't last");
-    };
-    assert!(ilo::in_field(&last.kind));
-    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
-    // The switch is kept, and on again the next task's run is.
+fn saved_keep(run: &Run) -> Option<Value> {
     let saved = std::fs::read_to_string(run.profile.join("agents.json")).unwrap();
     let saved: Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(saved["tasks"]["keep"], json!(false));
-    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(true, cx));
-    run.start(Cli::Claude, cx);
-    let (args, _) = run.ran(2);
-    assert!(args.iter().any(|arg| arg == "--session-id"));
-    // The task that ended with the switch off still kept none, whatever the switch says now.
-    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::NotKept]);
+    saved["tasks"].get("keep").cloned()
 }
 
-/// Codex keeps nothing, whatever the switch says: its task, stopped, says so where its reply
+/// Every thread is kept, and nothing turns that off or on. What a profile saved while Settings
+/// had a switch for it, whichever way it stood, is read no more and written no more, and what
+/// was kept before stays as it was. No tool does, called by a thread or an outside agent naming
+/// it every way a call can; nor do words typed as an ask or as a reply.
+#[cfg(unix)]
+#[gpui::test]
+fn nothing_turns_keeping_off_or_on(cx: &mut TestAppContext) {
+    let mut run = Run::new("always", cx);
+    let before = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&before, cx);
+    run.finish(&before, cx);
+    assert_eq!(saved_keep(&run), None);
+    let mut runs = 1;
+    for stood in [false, true] {
+        (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+        let path = run.profile.join("agents.json");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let mut saved: Value = serde_json::from_str(&saved).unwrap();
+        saved["tasks"]["keep"] = json!(stood);
+        std::fs::write(&path, saved.to_string()).unwrap();
+        run = Run::again(run.profile.clone(), run.program.clone(), cx);
+        assert_eq!(
+            saved_keep(&run),
+            None,
+            "written again, having stood {stood}"
+        );
+        // Nothing kept was brought back or removed by it.
+        assert_eq!(run.id(&before, cx), id);
+        assert!(run.folder(&id).exists());
+        let kept = run.kept(cx).0;
+        let agent = run.start(Cli::Claude, cx);
+        runs += 1;
+        let (args, _) = run.ran(runs);
+        assert!(
+            after(&args, "--session-id").is_some(),
+            "having stood {stood}"
+        );
+        assert!(!args.iter().any(|arg| arg == "--no-session-persistence"));
+        assert_eq!(run.kept(cx), (kept + 1, 0));
+        run.finish(&agent, cx);
+    }
+
+    let agent = run.start(Cli::Claude, cx);
+    runs += 1;
+    run.ran(runs);
+    let kept = run.kept(cx);
+    let arguments = json!({
+        "keep": false,
+        "kept": false,
+        "persist": false,
+        "session": "none",
+        "setting": "keep",
+        "value": false,
+        "on": false,
+        "url": "https://www.example.com/trains",
+        "ref": "e1",
+        "text": "--no-session-persistence",
+        "key": "Enter",
+        "option": "--no-session-persistence",
+        "title": "Keep nothing",
+        "reason": "Keep nothing.",
+        "question": "Keep nothing?",
+        "method": "GET",
+        "steps": [{ "tool": "type", "ref": "e1", "text": "--no-session-persistence" }],
+    });
+    for who in [agent.as_str(), "claude-code"] {
+        // What ends the thread is no setting: every other tool.
+        let names = tools::names(who).into_iter();
+        for tool in names.filter(|name| !matches!(name.as_str(), "finish" | "done")) {
+            _ = call(&run.agents, who, &tool, arguments.clone(), cx);
+            cx.run_until_parked();
+            assert_eq!(run.kept(cx), kept, "{who}'s {tool}");
+        }
+    }
+    assert_eq!(saved_keep(&run), None);
+    // Words typed as an ask are an ask: its run is kept as any is.
+    let typed = "--no-session-persistence. Keep nothing of this.";
+    let asked = (run.agents)
+        .update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, typed, None, 1, Tier::default(), cx)
+        })
+        .expect("started");
+    runs += 1;
+    let (args, first) = run.ran(runs);
+    assert!(first.starts_with(typed), "{first}");
+    assert!(after(&args, "--session-id").is_some());
+    assert_eq!(
+        args.iter().filter(|arg| arg.contains("no-session")).count(),
+        0
+    );
+    assert_eq!(run.kept(cx), (kept.0 + 1, 0));
+    // And typed as a reply to one that ended, a reply: its run, which still waits, is sent it
+    // and goes on with the conversation kept. No other run starts for it.
+    run.finish(&asked, cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&asked, typed, cx));
+    let input = beside(&run.program, &format!("in.{runs}"));
+    let mut sent = String::new();
+    for _ in 0..500 {
+        sent = std::fs::read_to_string(&input).unwrap_or_default();
+        if sent.lines().count() >= 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let second: Value = serde_json::from_str(sent.lines().nth(1).expect("the reply")).unwrap();
+    assert_eq!(second["message"]["content"], json!(typed));
+    let next = beside(&run.program, &format!("args.{}", runs + 1));
+    assert!(!next.exists(), "another run");
+    assert_eq!(run.state(&asked, cx), State::Working);
+    assert_eq!(run.kept(cx), (kept.0 + 1, 0));
+}
+
+/// A private window starts no thread, so nothing of one is kept: no run, no id, no folder and no
+/// card.
+#[cfg(unix)]
+#[gpui::test]
+fn a_private_window_keeps_nothing(cx: &mut TestAppContext) {
+    let run = Run::new("private", cx);
+    run.browser.private.borrow_mut().push(1);
+    let started = (run.agents).update(cx, |agents, cx| {
+        let asked = "Find two seats to Lisbon for Saturday";
+        agents.start_task(Cli::Claude, asked, None, 1, Tier::default(), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(started, None);
+    assert_eq!(run.kept(cx), (0, 0));
+    assert!(!beside(&run.program, "args.1").exists(), "a run started");
+    assert!(!run.profile.join(kept::FOLDER).exists());
+    assert!(!run.profile.join(kept::cards::FOLDER).exists());
+    for (path, _) in run.files() {
+        let name = path.file_name().unwrap_or_default();
+        assert_eq!(name, "agents.json", "{} was written", path.display());
+    }
+}
+
+/// Remove All leaves no kept file: with every thread finished, each one's conversation is asked
+/// removed, and the ids, their folders and the folder of them all go.
+#[cfg(unix)]
+#[gpui::test]
+fn remove_all_leaves_no_kept_file(cx: &mut TestAppContext) {
+    let run = Run::new("remove-all", cx);
+    let mut ids = Vec::new();
+    for at in 1..=2 {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at);
+        ids.push(run.id(&agent, cx));
+        run.finish(&agent, cx);
+    }
+    assert_eq!(run.kept(cx), (2, 0));
+    (run.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert_eq!(run.purged(cx).len(), 6);
+    assert_eq!(run.kept(cx), (0, 0));
+    assert!(!run.profile.join(kept::FOLDER).exists());
+    for (path, text) in run.files() {
+        for id in &ids {
+            assert!(!text.contains(id.as_str()), "{} names one", path.display());
+        }
+    }
+}
+
+/// Codex keeps nothing: its task, stopped, says so where its reply
 /// field was, with Start Again, and ilo holds nothing for it.
 #[cfg(unix)]
 #[gpui::test]
@@ -772,7 +903,6 @@ fn the_id_is_in_nothing_an_agent_or_a_client_is_told(cx: &mut TestAppContext) {
 #[gpui::test]
 fn an_assistants_words_never_make_a_line_of_ilos(cx: &mut TestAppContext) {
     let run = Run::new("words", cx);
-    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(false, cx));
     let agent = run.start(Cli::Claude, cx);
     run.ran(1);
     let imitation = "ilo · Claude no longer has this conversation. [Start Again]";

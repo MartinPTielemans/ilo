@@ -254,9 +254,9 @@ grep -q '^browser: scroll bars always$' "$log" && legacy=1
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
-send resize 1000 340
+send resize 1000 310
 # The list scrolls as far as the last frame drawn has it.
-expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
+expect '^browser: drawn at 1000x310$' "the window didn't draw at its new size"
 # Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
 # The overlay knob holds 0.8 s after the last scroll, less than a still can take to be captured,
@@ -272,8 +272,8 @@ fi
 recorded
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
 # Near each row's top, as Windows' capture is a row taller than the window.
-edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))
-gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 185.2 / 340 }'))
+edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 170.2 / 310 }'))
+gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 168.2 / 310 }'))
 # A light sidebar, as an opaque window's is, draws its edge darker.
 brighter "$edge" "$gap" || brighter "$gap" "$edge" ||
   fail "the edge is $edge over the sidebar's $gap"
@@ -294,10 +294,10 @@ recorded
 switch "2 cmd" "$c"
 none_since '^browser: list scrolled' || fail "showing a tab in view scrolled the list"
 # Shown again in a window short enough that, with the list scrolled back to its top, the last tab's
-# row is wholly under its bottom (at 340 its top still shows), a sliver of its plate marks it there,
+# row is wholly under its bottom (at 310 its top still shows), a sliver of its plate marks it there,
 # through the rest of the scroll; a click on that scrolls the list back to the row.
-send resize 1000 300
-expect '^browser: drawn at 1000x300$' "the window didn't draw at its new size"
+send resize 1000 280
+expect '^browser: drawn at 1000x280$' "the window didn't draw at its new size"
 switch "9 cmd" "$b"
 expect "^browser: list scrolled to [1-9][0-9.]* for $b\$" \
   "showing a tab under the list's bottom didn't scroll to its row"

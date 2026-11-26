@@ -1,6 +1,8 @@
 //! A task's card and its conversation in the page area, on a host that records what the shell asks
 //! of the core.
 
+use gpui::EntityInputHandler as _;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
@@ -10,17 +12,25 @@ use gpui::{
 
 use super::Fold;
 
+use crate::agents::Status;
 use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::{
-    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+    Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use crate::agents::tier::{Tier, Why};
+use crate::command_bar::choices;
 use crate::product::PRODUCT;
+use crate::shell::MenuEntry;
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::text_input::TextInput;
 use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
-use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
+use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, STRETCH_GAP, TRACE_LINE};
+
+/// How tall `lines` of a stretch stand, one over the next with the log's gap between.
+fn lines_high(lines: f32) -> f32 {
+    lines * TRACE_LINE + (lines - 1.) * STRETCH_GAP
+}
 use crate::tokens::shell::task_area::BESIDE;
 use crate::tokens::text;
 use crate::tooltip::text_width;
@@ -51,6 +61,7 @@ pub(super) fn card() -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -67,6 +78,8 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         failed: false,
         opens: Opens::Nothing,
         under: "".into(),
+        page: None,
+        says: "".into(),
     }
 }
 
@@ -86,6 +99,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
             key: 0,
             running: true,
             took: None,
+            started: None,
             items,
         })],
         tabs: vec![(30, "skyscanner.net".into())],
@@ -96,7 +110,9 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        finished: Vec::new(),
         folder: None,
+        model: None,
     }
 }
 
@@ -301,6 +317,42 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
     );
     assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
     assert!(host.take().contains(&"task task-1 Stop".to_string()));
+}
+
+/// ↩ that ends a Japanese composition in the reply field is the input method's: it commits the
+/// text and sends nothing, and the next ↩ sends what was committed.
+#[gpui::test]
+fn return_committing_japanese_in_the_reply_field_sends_nothing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    host.take();
+    cx.update(|window, cx| {
+        reply.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "にほんご", None, window, cx)
+        })
+    });
+    assert!(reply.read_with(cx, |input, _| input.composing()));
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.contains("Reply")),
+        "↩ while composing sent: {calls:?}"
+    );
+    cx.update(|window, cx| {
+        reply.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "日本語", window, cx)
+        })
+    });
+    assert!(!reply.read_with(cx, |input, _| input.composing()));
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&r#"task task-1 Reply("日本語")"#.to_string())
+    );
 }
 
 /// An outside agent's session shows its steps one by one, with no ask, and in the reply field's
@@ -695,10 +747,10 @@ fn a_needs_you_page_opens_once_the_page_left_is_back(cx: &mut TestAppContext) {
     );
 }
 
-/// A page ilo would open by itself over the reply field doesn't open while the user types there:
-/// the field keeps the keyboard and its text, and the tile that needs them is in sight.
+/// A page ilo opens by itself while the user types in the reply field opens beside the panel, which
+/// keeps the field: the field keeps the keyboard and its text.
 #[gpui::test]
-fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext) {
+fn a_needs_you_page_opens_beside_the_reply_field_in_use(cx: &mut TestAppContext) {
     let reply = needs_you_beside_typing(
         |reply, window, cx| reply.set_text("Two seats".into(), 9, window, cx),
         cx,
@@ -706,10 +758,10 @@ fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext)
     assert_eq!(reply, "Two seats");
 }
 
-/// A composition under way is typing too, before the input method commits a word of it: a page
-/// opening then would take the keyboard mid-word. The field holds the marked text in its text.
+/// A composition under way is typing too, before the input method commits a word of it: the page
+/// opening beside it takes no keyboard mid-word. The field holds the marked text in its text.
 #[gpui::test]
-fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext) {
+fn a_needs_you_page_keeps_a_composition_under_way(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler;
     let reply = needs_you_beside_typing(
         |reply, window, cx| reply.replace_and_mark_text_in_range(None, "か", None, window, cx),
@@ -719,7 +771,7 @@ fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext
 }
 
 /// Types into the focused reply field with `type_in`, turns a tile to Needs you, checks ilo
-/// opened no page over the field and left it the keyboard, and gives back the field's text.
+/// opened the page beside the panel and left the field the keyboard, and gives back its text.
 fn needs_you_beside_typing(
     type_in: impl FnOnce(&mut TextInput, &mut gpui::Window, &mut gpui::Context<TextInput>),
     cx: &mut TestAppContext,
@@ -770,9 +822,9 @@ fn needs_you_beside_typing(
         cx.run_until_parked();
     }
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watched_task_page()),
-        None,
-        "the page covered the reply field the user types in"
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(31),
+        "the page that needs the user didn't open beside the panel"
     );
     let calls = host.take();
     assert!(!calls.iter().any(|call| call == "focus page"), "{calls:?}");
@@ -924,9 +976,12 @@ fn under_a_page_going_back_only_the_pictures_take_a_press(cx: &mut TestAppContex
     );
 
     cx.simulate_click(seatmap.center(), Modifiers::none());
+    let calls = host.take();
     assert!(
-        host.take().contains(&"select 31".to_string()),
-        "the picture under the page didn't watch it"
+        calls.contains(&"select 31".to_string()),
+        "the picture under the page didn't watch it: {calls:?}, {seatmap:?} now {:?}, {:?}",
+        picture(31, cx),
+        shell.read_with(cx, |shell, _| shell.task_shown()),
     );
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
@@ -962,7 +1017,6 @@ fn a_trace_is_open_while_it_works_unless_the_user_says_otherwise(cx: &mut TestAp
 /// (#1476).
 #[gpui::test]
 fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
-    use crate::tokens::shell::conversation::TRACE_LINE;
     let (shell, _, cx) = shown(cx);
     let tabs = (0..10)
         .map(|key| TraceStep {
@@ -988,6 +1042,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
         key: 0,
         running: true,
         took: None,
+        started: None,
         items,
     })];
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -1009,7 +1064,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(
         height(Fold::Group(0), cx),
-        Some(10. * TRACE_LINE),
+        Some(lines_high(10.)),
         "it didn't open to ten lines"
     );
     assert_eq!(
@@ -1026,7 +1081,7 @@ fn a_step_on_many_tabs_opens_to_each_tabs_line(cx: &mut TestAppContext) {
     );
     let opened = height(Fold::Group(0), cx).unwrap();
     assert!(
-        opened > 10. * TRACE_LINE,
+        opened > lines_high(10.),
         "why it failed shows under its tab: {opened}"
     );
 }
@@ -1094,6 +1149,7 @@ fn a_sent_reply_thinks_until_the_first_step(cx: &mut TestAppContext) {
         key: 1,
         running: true,
         took: None,
+        started: None,
         items: vec![TraceItem::Step(step(1, "Reading the page", true))],
     };
     talk.lines.push(Line::Trace(first));
@@ -1244,7 +1300,7 @@ fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
     );
 }
 
-/// The reply field's "Reply to …" follows a switch between light and dark while the conversation
+/// The reply field's placeholder follows a switch between light and dark while the conversation
 /// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
 #[gpui::test]
 fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
@@ -1273,6 +1329,54 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
         "light and dark drew the same placeholder"
     );
     assert_eq!(colours[0], colours[2]);
+}
+
+/// The reply field says what typing there does (Z-who): `Steer it, or ask` while the thread is at
+/// work, `Reply` while it waits on the user and once it can't be stopped, as when it's done.
+#[gpui::test]
+fn the_reply_field_says_steer_while_at_work_and_reply_otherwise(cx: &mut TestAppContext) {
+    use crate::agents::task::Live;
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    let mut said = Vec::new();
+    for (live, stoppable) in [
+        (Live::Working, true),
+        (Live::Asked, true),
+        (Live::Working, false),
+        (Live::Working, true),
+    ] {
+        talk.live = live;
+        talk.stoppable = stoppable;
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        cx.run_until_parked();
+        said.push(shell.read_with(cx, |shell, cx| {
+            let talk = shell.talk.as_ref().expect("the conversation");
+            talk.view.read(cx).reply.read(cx).placeholder().to_string()
+        }));
+    }
+    let (steer, reply) = (super::words::STEER, super::words::REPLY);
+    assert_eq!(said, [steer, reply, reply, steer]);
+}
+
+/// The line in the reply field's place says where to reply on an outside app's session, and that
+/// threads are off while they are, and nothing on a thread that takes a reply; the note under Full
+/// access says how long it lasts: the words table's C1 to C3, word for word.
+#[test]
+fn the_reply_fields_place_and_full_accesss_note_say_their_rows() {
+    use super::words::{in_reply_place, note};
+    let session = Some("Reply in Claude Code.".to_string());
+    assert_eq!(in_reply_place(false, false, "Claude Code"), session);
+    assert_eq!(in_reply_place(false, true, "Claude Code"), session);
+    let off = Some("Threads are off in Settings › Threads.".to_string());
+    assert_eq!(in_reply_place(true, true, "Claude Code"), off);
+    assert_eq!(in_reply_place(true, false, "Claude Code"), None);
+    assert_eq!(
+        note(&[IloButton::Raise(Tier::Full)]),
+        Some("For this thread only")
+    );
+    assert_eq!(note(&[IloButton::Raise(Tier::Work)]), None);
 }
 
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
@@ -2043,79 +2147,51 @@ fn on_an_ilo_button(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) 
     })
 }
 
-/// Over a page of the task's watched from its conversation the Focus command keys no line, whose
-/// buttons aren't in sight: with the keyboard the window's it goes back to the conversation, to
-/// its reply field, and rings nothing, and the command again, with the line drawn, is what rings
-/// a button.
+/// Beside a page of the task's watched, the Focus command keys the newest line in the panel, never
+/// the page, and the page stays watched; the command again gives the keyboard back.
 #[gpui::test]
-fn the_focus_command_over_a_page_watched_goes_back_and_keys_no_line(cx: &mut TestAppContext) {
+fn the_focus_command_beside_a_page_watched_keys_the_panels_line(cx: &mut TestAppContext) {
     let (shell, host, view, cx) = stopped_at_order(cx);
     watch_page(&shell, cx);
     host.take();
     focus_command(&shell, "ui", cx);
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
-        Some((3, None)),
-        "the key didn't go back to the conversation"
+        Some((3, Some(30))),
+        "the key left the page"
     );
-    assert!(
-        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
-        "the key over a page watched keyed a line"
-    );
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
     let calls = host.take();
     assert!(
         !calls.iter().any(|call| call == "focus page"),
         "the key gave a page the keyboard: {calls:?}"
     );
-    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
-    assert!(
-        cx.update(|window, _| reply.is_focused(window)),
-        "the reply field hasn't the keyboard"
-    );
-    cx.simulate_keystrokes("enter space");
-    assert!(
-        !host
-            .take()
-            .iter()
-            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
-        "a key after it pressed an ilo line's button"
-    );
     focus_command(&shell, "ui", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key again kept the keys"
+    );
 }
 
-/// A page the user has keeps the view and the key: one they hold from its agent, as a sign-in
-/// handed to them or one taken over, whoever has the keyboard, and one with the keyboard. The
-/// key from the page stays the page's.
+/// A page the user has stays watched whatever the Focus command does, from the UI's keys or the
+/// page's: one they hold from its agent, as a sign-in handed to them, and one with the keyboard.
 #[gpui::test]
-fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext) {
+fn the_focus_command_never_leaves_a_page_the_user_has(cx: &mut TestAppContext) {
     use crate::agents::Status;
-    let (shell, host, view, cx) = stopped_at_order(cx);
+    let (shell, host, _, cx) = stopped_at_order(cx);
     watch_page(&shell, cx);
-    let nothing = |why: &str, cx: &mut VisualTestContext| {
-        host.take();
+    let stays = |why: &str, cx: &mut VisualTestContext| {
         focus_command(&shell, "ui", cx);
         focus_command(&shell, "page", cx);
-        assert_eq!(host.take(), Vec::<String>::new(), "{why}");
         assert_eq!(
             shell.read_with(cx, |shell, _| shell.task_shown()),
             Some((3, Some(30))),
             "{why}: the page was left"
         );
-        assert!(
-            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
-            "{why}: a line was keyed"
-        );
-        for key in ["alt-shift-cmd-a", "ctrl-shift-a"] {
-            assert!(
-                !shell.update(cx, |shell, cx| shell.run_ilo_page_key(key, false, cx)),
-                "{why}: the key was kept from the page"
-            );
-        }
     };
     // The page has the keyboard, as after a click in it.
     host.page_keys.set(Some(true));
-    nothing("the page has the keyboard", cx);
+    stays("the page has the keyboard", cx);
     // The user holds it, with the keyboard in the UI, as after a click in the sidebar.
     host.page_keys.set(Some(false));
     let held = Status {
@@ -2127,13 +2203,12 @@ fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     cx.run_until_parked();
-    nothing("the user holds the page", cx);
+    stays("the user holds the page", cx);
 }
 
-/// The keys on a line end the moment its conversation is no longer what the area draws, under a
-/// page watched over it or with the area closed, and never come back by themselves: drawn again,
-/// no button is ringed and no key presses one until the Focus command, whose guard counts from
-/// then.
+/// The keys on a line end the moment its conversation is no longer what the area draws, as with
+/// the area closed, and never come back by themselves: drawn again, no button is ringed and no key
+/// presses one until the Focus command, whose guard counts from then.
 #[gpui::test]
 fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
     let (shell, host, view, cx) = stopped_at_order(cx);
@@ -2161,13 +2236,15 @@ fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
     };
     focus_command(&shell, "ui", cx);
     assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
-    watch_page(&shell, cx);
-    unkeyed("a page watched over it", cx);
-    // Back at the conversation, long after: nothing is keyed, and no key presses.
-    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    // The area closes with the keys on the line, and shows the conversation again.
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    unkeyed("the area closed", cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
-    unkeyed("drawn again", cx);
+    unkeyed("shown again", cx);
+    // Long after, no key presses.
     stood(&view, cx);
     host.take();
     cx.simulate_keystrokes("enter space");
@@ -2181,19 +2258,6 @@ fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
         Vec::<String>::new(),
         "the guard didn't count"
     );
-
-    // The area closes with the keys on the line, and shows the conversation again.
-    shell.update(cx, |shell, cx| shell.close_task(cx));
-    cx.run_until_parked();
-    unkeyed("the area closed", cx);
-    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
-    cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
-    unkeyed("shown again", cx);
-    stood(&view, cx);
-    host.take();
-    cx.simulate_keystrokes("enter space");
-    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
 }
 
 /// Keys that end as a window of the app's own takes the keyboard, as the command bar opened over
@@ -2670,7 +2734,6 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     let (shell, _host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(ended(kind)), cx);
     });
     view.update(cx, |_, cx| cx.notify());
@@ -2678,16 +2741,59 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     view.read_with(cx, |view, _| view.level_drawn.get().is_some())
 }
 
-/// The chip under the reply field says the task's own level, at Look only and at Full access,
-/// and a click on it opens the level's menu: names only, that level checked, where it may go and
-/// Settings. A pick there is the user's press on the task, the one way its level changes.
+/// A thread's model whose program can't take another for the next message is its words alone: a
+/// click on them opens no menu and doesn't wear a plate.
 #[gpui::test]
-fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContext) {
+fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
+    type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let shown_menu: Shown = Rc::default();
+    let into = shown_menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
+        )))
+    });
+    shell.update(cx, |shell, cx| {
+        let talk = Conversation {
+            model: Some((
+                "icons/terminal.svg",
+                "Claude Code \u{b7} Opus".into(),
+                false,
+            )),
+            ..conversation(1)
+        };
+        shell.set_conversation(Some(talk), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let words = view.read_with(cx, |view, _| view.model_drawn.get());
+    let words = words.expect("the model's words drawn");
+    cx.simulate_click(words.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(shown_menu.borrow().is_none(), "a menu showed");
+    assert_eq!(view.read_with(cx, |view, _| view.menu_open), None);
+}
+
+/// The composer's level trigger says the thread's own level, at Look only and at Full access,
+/// and a click on it opens the bar's own level menu (choices.rs) under it, that level checked,
+/// wearing its plate while it's open. A pick there is the user's press on the thread, the one way
+/// its level changes. Last is the words table's `Settings…`, which opens Settings › Agents at Access.
+#[gpui::test]
+fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut TestAppContext) {
+    type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    for tier in [Tier::Look, Tier::Full] {
+    let shown_menu: Shown = Rc::default();
+    let into = shown_menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
+        )))
+    });
+    for tier in [Tier::Look, Tier::Full, Tier::Work] {
         shell.update(cx, |shell, cx| {
-            shell.set_talk_beside(true, cx);
             shell.set_conversation(
                 Some(Conversation {
                     tier,
@@ -2698,43 +2804,45 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
         });
         view.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
-        let chip = view.read_with(cx, |view, _| view.level_drawn.get());
-        let chip = chip.expect("the level chip drawn");
-        host.take();
-        cx.simulate_click(chip.center(), Modifiers::none());
+        let trigger = view.read_with(cx, |view, _| view.level_drawn.get());
+        let trigger = trigger.expect("the level trigger drawn");
+        cx.simulate_click(trigger.center(), Modifiers::none());
         cx.run_until_parked();
-        let rows: Vec<(String, bool)> = (host.menus.borrow().last().cloned())
-            .expect("a click on the chip showed no menu")
-            .into_iter()
-            .map(|(title, enabled)| (title.to_string(), enabled))
+        let (items, chosen) = (shown_menu.borrow_mut().take()).expect("no menu showed");
+        let rows: Vec<(String, bool, bool)> = (items.iter())
+            .map(|item| (item.title.to_string(), item.enabled, item.checked))
             .collect();
-        let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+        let mut expected: Vec<(String, bool, bool)> = (choices::level_entries(tier).iter())
+            .map(|item| (item.title.to_string(), item.enabled, item.checked))
+            .collect();
+        expected.extend([
+            (String::new(), false, false),
+            ("Settings…".into(), true, false),
+        ]);
+        assert_eq!(rows, expected, "the level menu's rows at {tier:?}");
         assert_eq!(
-            rows,
-            vec![
-                row("Look only", true),
-                row("Work on pages", true),
-                row("Full access", true),
-                row("", false),
-                row("Settings…", true),
-            ],
-            "the level menu's rows at {tier:?}"
+            view.read_with(cx, |view, _| view.menu_open),
+            Some("conversation-level"),
+            "the trigger wears its plate while its menu is open"
         );
-        let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
-        let at = |each: Tier| tier == each;
+        host.take();
+        let (pick, pressed) = match tier {
+            Tier::Full => (expected.len() - 1, "agent access"),
+            _ => (1, "task task-1 PickTier(Work)"),
+        };
+        cx.update(|window, cx| chosen(crate::menu::Closed::Chose(pick), window, cx));
+        cx.run_until_parked();
         assert_eq!(
-            checked,
-            [at(Tier::Look), at(Tier::Work), at(Tier::Full), false, false],
-            "the menu checks {tier:?}, the task's own level"
+            host.take(),
+            vec![pressed.to_string()],
+            "the pick is the user's press"
+        );
+        assert_eq!(
+            view.read_with(cx, |view, _| view.menu_open),
+            None,
+            "its plate went"
         );
     }
-    host.take();
-    cx.update(|_, cx| host.choose("Work on pages", cx));
-    assert_eq!(
-        host.take(),
-        vec!["task task-1 PickTier(Work)".to_string()],
-        "the pick is the user's press on the task"
-    );
 }
 
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.
@@ -2849,6 +2957,7 @@ fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
         key: 1,
         running: true,
         took: None,
+        started: None,
         items: vec![helper(began.clone()), helper(began)],
     };
     assert_eq!(trace.helpers(), 2);
@@ -2871,6 +2980,7 @@ fn with_helpers(helpers: usize) -> Conversation {
         key: 0,
         running: true,
         took: None,
+        started: None,
         items: items.collect(),
     })];
     talk
@@ -2884,20 +2994,22 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
-/// A stretch's summary line draws the one string its task's card writes, its dot between how long
-/// it worked and what it counts: under way and over, steps and helpers, one and several. A step's
-/// line has no dot before its note.
+/// A stretch's fold says Z14's words, the one place the weaving pair stands: at work its word and
+/// the time so far from its first step, done the time it took. It counts no steps or strands and
+/// has no dot, whatever the card says. A step's line has no dot before its note.
 #[test]
-fn a_stretchs_summary_line_draws_the_cards_string() {
+fn a_stretchs_fold_says_weaving_then_woven_in() {
     use super::{TraceLine, summary_line};
     for helpers in [0, 1, 4] {
         let mut talk = with_helpers(helpers);
         let trace = its_trace(&mut talk);
-        assert_eq!(summary_line(trace).text(), trace.line().as_ref());
+        let now = std::time::Instant::now();
+        trace.started = Some(now - std::time::Duration::from_secs(72));
+        assert_eq!(summary_line(trace, now).text(), "Weaving 1 min 12 s");
         (trace.running, trace.took) = (false, Some(41));
-        let drawn = summary_line(trace).text();
-        assert_eq!(drawn, trace.line().as_ref());
-        assert!(drawn.contains(" \u{b7} "), "{drawn}");
+        let drawn = summary_line(trace, now).text();
+        assert_eq!(drawn, "Woven in 41 s");
+        assert!(!drawn.contains('\u{b7}'), "{drawn}");
     }
     let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
     assert_eq!(step.text(), "Read shop.example");
@@ -2928,8 +3040,9 @@ fn a_working_line_counts_the_tasks_helpers() {
     assert_eq!(summary(&mut talk), "Worked for 41 s · 4 strands");
 }
 
-/// Opened, as it is while it works, the Working line lists a line for each helper with the task's
-/// own steps, and folds them away with a press, as any trace's.
+/// Opened, as it is while it works, the Working line lists a line for each helper under the line
+/// that says the work split, with the task's own steps, and folds them away with a press, as any
+/// trace's.
 #[gpui::test]
 fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     let (shell, _, cx) = shown(cx);
@@ -2950,8 +3063,8 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(
         listed(cx),
-        Some(5. * TRACE_LINE),
-        "four helpers' lines and the task's own step"
+        Some(lines_high(6.)),
+        "the split's line, four helpers' lines and the task's own step"
     );
 
     // A fifth line as a helper comes, and none goes as one finishes.
@@ -2959,45 +3072,56 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     its_trace(&mut talk).items[0] = helper(step(10, "Read shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
-    assert_eq!(listed(cx), Some(6. * TRACE_LINE));
+    assert_eq!(listed(cx), Some(lines_high(7.)));
 
     view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);
     assert_eq!(listed(cx), None, "folded, it still listed them");
 }
 
-/// In the one view the live line stands over the reply field with Take Over at its end, and
-/// names the step under way only: once that step has ended, as at Hand Back, or was refused, it
-/// says the assistant is working, until the next step starts (c, h).
+/// The stage shows no page, so no page's row stands over its composer: the step under way is the
+/// log's last line, and a tile is the way to a page and its Take Over. Whether the thread works on
+/// a page or the user took it over, the stage draws neither Take Over nor Hand Back there.
 #[gpui::test]
-fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppContext) {
-    let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(3)), cx)
-    });
+fn the_stage_has_no_page_row_over_its_composer(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    let draw = |cx: &mut VisualTestContext| {
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| view.take_over_drawn.borrow().clone())
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
     };
-    let chips = draw(cx);
-    assert_eq!(
-        chips.len(),
-        1,
-        "Take Over stands once, on the live line: {chips:?}"
-    );
-    let reply = view
-        .read_with(cx, |view, _| view.reply_drawn.get())
-        .expect("the reply field");
-    assert!(
-        chips[0].bottom() <= reply.top(),
-        "the live line isn't over the reply field: {chips:?} {reply:?}"
-    );
-    host.take();
-    cx.simulate_click(chips[0].center(), Modifiers::none());
-    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+    for live in [Live::Working, yours] {
+        let talk = Conversation {
+            live: live.clone(),
+            ..conversation(3)
+        };
+        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
+        assert_eq!(talk.on, Some(30), "the thread isn't on a page");
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |view, cx| {
+            view.take_over_drawn.borrow_mut().clear();
+            view.hand_back_drawn.set(None);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+        assert_eq!(
+            chips, 0,
+            "Take Over stood over the stage's composer at {live:?}"
+        );
+        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
+        assert_eq!(
+            hand_back, None,
+            "Hand Back stood over the stage's composer at {live:?}"
+        );
+    }
+}
 
+/// The panel's page row names the step under way only: once that step has ended, as at Hand
+/// Back, or was refused, none is; while the task waits on the user it says nothing, and on a page
+/// the user took over that they're driving.
+#[test]
+fn the_page_row_names_only_the_step_under_way() {
     let said = |talk: &Conversation| super::under_way(&talk.lines).map(|step| step.title.clone());
     assert_eq!(
         said(&conversation(3)).as_deref(),
@@ -3013,49 +3137,10 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
     row.failed = true;
     its_trace(&mut refused).items[2] = TraceItem::Step(row);
     assert_eq!(said(&refused), None);
-    assert_eq!(super::words::working("Claude"), "Claude is working");
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(refused), cx));
-    assert_eq!(
-        draw(cx).len(),
-        1,
-        "Take Over left the live line between steps"
-    );
-}
-
-/// While the task waits at a refused or a handed step, or on its own question, no live line
-/// stands, as ilo's line with its own buttons is the last over the field; on a page the user took
-/// over it says they're driving, with Hand Back, which goes as the ilo line's does. Never Take
-/// Over or working then, whatever step its trace has under way.
-#[gpui::test]
-fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
-    use crate::agents::task::Live;
-    let (shell, host, cx) = shown(cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(3)), cx)
-    });
-    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let yours = |site: Option<&str>| Live::Yours {
         tab: 30,
         site: site.map(Into::into),
     };
-    for live in [Live::Refused, Live::Handed, Live::Asked, yours(None)] {
-        let talk = Conversation {
-            live: live.clone(),
-            ..conversation(3)
-        };
-        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
-        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
-        assert_eq!(chips, 0, "Take Over stood on the live line at {live:?}");
-        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
-        assert_eq!(
-            hand_back.is_some(),
-            matches!(live, Live::Yours { .. }),
-            "{live:?}"
-        );
-    }
     assert_eq!(super::words::live(&Live::Refused), None);
     assert_eq!(super::words::live(&Live::Handed), None);
     assert_eq!(
@@ -3066,21 +3151,17 @@ fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestA
         super::words::live(&yours(Some("maat.pt"))).as_deref(),
         Some("You're driving maat.pt")
     );
-    let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get().unwrap());
-    host.take();
-    cx.simulate_click(hand_back.center(), Modifiers::none());
-    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
 }
 
-/// Beside its page, Take Over stands once on the lines, on the task's own step under way, which
-/// is on the page it takes: a helper's line under way has none, as its page is another.
+/// Take Over is drawn once, in the panel's page row, for the task's own step under way on the page
+/// it takes, never on a line: a helper's line under way has none, as its page is another.
 #[gpui::test]
 fn a_helpers_line_has_no_take_over(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(with_helpers(4)), cx);
     });
+    watch_page(&shell, cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -3145,7 +3226,6 @@ fn folder_chip_with(
     let (shell, host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     shell.update(cx, |shell, cx| {
-        shell.set_talk_beside(true, cx);
         shell.set_conversation(Some(talk), cx);
     });
     view.update(cx, |_, cx| cx.notify());
@@ -3235,6 +3315,897 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(held, 0, "a picture no card shows is still held");
 }
 
+/// While a stretch works, the page the assistant is on stands open with its steps and a page it
+/// left is one line; a click on the left page brings its steps back and leaves the other as it
+/// was. Going to a page has no line of its own under it.
+#[gpui::test]
+fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
+    use crate::agents::task::OnPage;
+    let (shell, _, cx) = shown(cx);
+    let on = |key: usize, tab: Option<u64>, site: &str, went: bool, running: bool| {
+        TraceItem::Step(TraceStep {
+            page: Some(OnPage {
+                tab,
+                site: site.to_string().into(),
+                went,
+            }),
+            ..step(key, &format!("step {key}"), running)
+        })
+    };
+    let mut talk = conversation(1);
+    talk.lines = vec![Line::Trace(Trace {
+        key: 0,
+        running: true,
+        took: None,
+        started: None,
+        items: vec![
+            on(0, None, "a.example", true, false),
+            on(1, Some(30), "a.example", false, false),
+            on(2, Some(30), "a.example", false, false),
+            on(3, Some(30), "b.example", true, false),
+            on(4, Some(30), "b.example", false, true),
+        ],
+    })];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    let height = |fold: Fold, current: bool, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            (view.is_open(fold, current)).then(|| view.heights.borrow().get(&fold).copied())
+        })
+    };
+    draw(cx);
+    assert_eq!(
+        height(Fold::Page(3), true, cx),
+        Some(Some(lines_high(1.))),
+        "the page it's on isn't open to its one step, without the step that went to it"
+    );
+    assert_eq!(
+        height(Fold::Page(0), false, cx),
+        None,
+        "the left page stood open"
+    );
+
+    view.update(cx, |view, cx| view.toggle(Fold::Page(0), false, cx));
+    draw(cx);
+    assert_eq!(
+        height(Fold::Page(0), false, cx),
+        Some(Some(lines_high(2.))),
+        "the left page didn't bring back its two steps"
+    );
+    assert!(
+        height(Fold::Page(3), true, cx).is_some(),
+        "opening the left page folded the one it's on"
+    );
+}
+
+/// The button under an answer copies the answer's plain text, its marks taken out, and the time it
+/// finished stands beside it.
+#[gpui::test]
+fn the_copy_button_copies_the_answers_plain_text(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.lines.push(Line::Said(
+        "**Two** shows at [MAAT](https://maat.pt)".into(),
+    ));
+    talk.finished = vec![(1, "18:00".into())];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |view, cx| view.copy_answer(1, cx));
+    let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(
+        copied.as_deref(),
+        Some("Two shows at MAAT (https://maat.pt)")
+    );
+}
+
+/// Copying an answer keeps every link's address after its words, once, and a bare address alone.
+#[test]
+fn a_copied_answer_keeps_its_links_addresses() {
+    let copied = super::plain(
+        "See [the agenda](https://ccb.pt/agenda) and https://maat.pt\n- [MAAT](https://maat.pt)",
+    );
+    assert_eq!(
+        copied,
+        "See the agenda (https://ccb.pt/agenda) and https://maat.pt\n\u{2022} MAAT (https://maat.pt)"
+    );
+}
+
+/// An answer's link to one of the thread's pages shows that page; one to anywhere else on the web
+/// opens a tab of the user's Space, as a link always has; any other address is plain words.
+#[test]
+fn an_answers_link_shows_its_page_or_opens_the_web() {
+    use super::Linked;
+    let pages = [(30, "https://maat.pt/".into())];
+    let to = |url: &str| super::linked_to(&pages, &url.into());
+    assert_eq!(to("https://maat.pt"), Some(Linked::Page(30)));
+    assert_eq!(
+        to("https://elsewhere.example/a"),
+        Some(Linked::Web("https://elsewhere.example/a".into()))
+    );
+    assert_eq!(
+        to("http://elsewhere.example/"),
+        Some(Linked::Web("http://elsewhere.example/".into()))
+    );
+    assert_eq!(to("file:///etc/hosts"), None);
+    assert_eq!(to("javascript:alert(1)"), None);
+}
+
+/// A web link's click asks the core for a tab of the user's Space and nothing of the thread. No
+/// log line says the address.
+#[gpui::test]
+fn a_web_links_click_opens_a_tab_of_the_users_space(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    cx.run_until_parked();
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.open_link("https://elsewhere.example/a", cx)
+    });
+    assert_eq!(
+        host.opened_pages.borrow().as_slice(),
+        ["https://elsewhere.example/a"]
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("task")),
+        "the thread was asked something: {calls:?}"
+    );
+}
+
+/// Where a link's words are themselves an address on another host than the link's, the link's
+/// real address is drawn in the words' place, and copied so; words on the same host, or not an
+/// address, stay.
+#[test]
+fn a_link_whose_words_name_another_host_draws_its_real_address() {
+    let drawn = |source: &str| match super::markdown::blocks(source).remove(0) {
+        super::markdown::Block::Paragraph(text) => super::honest(text),
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    let swapped = drawn("Pay at **[bank.example](https://evil.example/pay)** now");
+    assert_eq!(swapped.text, "Pay at https://evil.example/pay now");
+    assert_eq!(swapped.links.len(), 1);
+    let (range, url) = &swapped.links[0];
+    assert_eq!(&swapped.text[range.clone()], url.as_ref());
+    assert!(
+        swapped
+            .styled
+            .iter()
+            .any(|(each, _)| &swapped.text[each.clone()] == url.as_ref())
+    );
+    let same = drawn("[www.maat.pt](https://maat.pt/agenda)");
+    assert_eq!(same.text, "www.maat.pt");
+    let words = drawn("[the agenda](https://ccb.pt/agenda)");
+    assert_eq!(words.text, "the agenda");
+    assert_eq!(
+        super::plain("[bank.example](https://evil.example/pay)"),
+        "https://evil.example/pay"
+    );
+}
+
+/// An address with a `user:pass@` part opens and is drawn without it: the link's address loses
+/// it, words that hold it are drawn as the address without it, and Copy keeps neither.
+#[test]
+fn a_links_sign_in_part_is_never_opened_or_drawn() {
+    let drawn = |source: &str| match super::markdown::blocks(source).remove(0) {
+        super::markdown::Block::Paragraph(text) => super::honest(text),
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    let words = drawn("[the shop](https://me:hunter2@shop.example/a)");
+    assert_eq!(words.text, "the shop");
+    assert_eq!(words.links[0].1.as_ref(), "https://shop.example/a");
+    let pages = [(30, "https://shop.example/b".into())];
+    assert!(matches!(
+        super::linked_to(&pages, &words.links[0].1),
+        Some(super::Linked::Web(url)) if url.as_ref() == "https://shop.example/a"
+    ));
+    let address = drawn("[https://me:hunter2@shop.example/a](https://me:hunter2@shop.example/a)");
+    assert_eq!(address.text, "https://shop.example/a");
+    let (range, url) = &address.links[0];
+    assert_eq!(&address.text[range.clone()], url.as_ref());
+    let copied = super::plain("See [the shop](https://me:hunter2@shop.example/a).");
+    assert!(
+        !copied.contains("hunter2") && !copied.contains("me:"),
+        "{copied}"
+    );
+    let (host, rest) = super::link_tip("https://me:hunter2@shop.example/a").unwrap();
+    assert!(!format!("{host}{rest}").contains("hunter2"));
+}
+
+/// A web link's tooltip says its host, then the rest of its address, each as plain text cut in the
+/// middle, a host in capitals as any.
+#[test]
+fn a_web_links_tooltip_is_its_address_plain_and_cut() {
+    let (host, rest) = super::link_tip("https://maat.pt/agenda?day=sat").unwrap();
+    assert_eq!(
+        (host.as_ref(), rest.as_ref()),
+        ("maat.pt", "/agenda?day=sat")
+    );
+    let long = format!("https://maat.pt/{}", "a".repeat(30) + &"z".repeat(30));
+    let (_, rest) = super::link_tip(&long).unwrap();
+    assert_eq!(rest.chars().count(), 48);
+    assert!(
+        rest.starts_with("/aaa") && rest.ends_with("zzz") && rest.contains('\u{2026}'),
+        "{rest}"
+    );
+    // A host in capitals has its tooltip too, the host as it is found.
+    let (host, rest) = super::link_tip("https://MAAT.PT/Agenda").unwrap();
+    assert_eq!((host.as_ref(), rest.as_ref()), ("maat.pt", "/Agenda"));
+    // A host past the cap is cut as the rest is.
+    let long = format!("https://{}.example/", "h".repeat(80));
+    let (host, _) = super::link_tip(&long).unwrap();
+    assert_eq!(host.chars().count(), 48);
+    assert!(
+        host.ends_with("h.example") && host.contains('\u{2026}'),
+        "{host}"
+    );
+}
+
+/// An answer's link is one only to a page of its thread, the same address but for a closing slash
+/// or fragment; an address anywhere else isn't a link.
+#[test]
+fn the_answers_links_go_only_to_the_threads_pages() {
+    let pages = [
+        (30, "https://maat.pt/".into()),
+        (31, "https://ccb.pt/agenda".into()),
+    ];
+    assert_eq!(super::thread_tab(&pages, "https://maat.pt"), Some(30));
+    assert_eq!(
+        super::thread_tab(&pages, "https://ccb.pt/agenda#today"),
+        Some(31)
+    );
+    assert_eq!(super::thread_tab(&pages, "https://ccb.pt/"), None);
+    assert_eq!(
+        super::thread_tab(&pages, "https://elsewhere.example/"),
+        None
+    );
+}
+
+/// Standing on the page the thread works on, the panel's row over the reply field has the step
+/// under way with Take Over, which takes that page; on a page the user took over it says so with
+/// Hand Back; with the agent on no page of the user's, or nothing under way, there's no row.
+#[gpui::test]
+fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx);
+    });
+    watch_page(&shell, cx);
+    let drawn = |cx: &mut VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.take_over_drawn.borrow_mut().clear();
+            view.hand_back_drawn.set(None);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            (
+                view.take_over_drawn.borrow().clone(),
+                view.hand_back_drawn.get(),
+            )
+        })
+    };
+    let (take_over, hand_back) = drawn(cx);
+    assert_eq!(take_over.len(), 1, "no Take Over in the page's row");
+    assert_eq!(hand_back, None);
+    host.take();
+    cx.simulate_click(take_over[0].center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+
+    let mut taken = conversation(3);
+    taken.live = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(taken), cx));
+    let (take_over, hand_back) = drawn(cx);
+    assert!(take_over.is_empty(), "Take Over on a page the user has");
+    let hand_back = hand_back.expect("no Hand Back in the page's row");
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
+
+    let mut elsewhere = conversation(3);
+    elsewhere.on = None;
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(elsewhere), cx));
+    assert_eq!(
+        drawn(cx),
+        (Vec::new(), None),
+        "a row for a page it isn't on"
+    );
+    let mut done = conversation(3);
+    done.stoppable = false;
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(done), cx));
+    assert_eq!(
+        drawn(cx),
+        (Vec::new(), None),
+        "a row with nothing under way"
+    );
+}
+
+/// A thread's `primary`, under the round Stop and the held step's first button, is the same in
+/// every Space's colour, one per look, its words readable on it: never the Space's accent, so no
+/// control is green.
+#[test]
+fn a_threads_primary_is_never_the_spaces_colour() {
+    use crate::palette::{Palette, Tone, contrast};
+    use crate::theme::{Appearance, Theme};
+    for tone in [Tone::Dark, Tone::Light] {
+        let first = super::primary(Palette::of(None, tone));
+        for appearance in Appearance::ALL {
+            for (x, y) in [(0.7, 0.), (-0.7, 0.), (0., 0.7), (0., -0.7), (0.5, 0.5)] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(x, y)
+                };
+                let palette = Palette::of(Some(&theme), tone);
+                let (fill, ink) = super::primary(palette);
+                assert_eq!((fill, ink), first, "{tone:?} {x},{y}");
+                assert_ne!(fill, gpui::Hsla::from(palette.accent), "{tone:?} {x},{y}");
+                let ratio = contrast(gpui::Rgba::from(ink), gpui::Rgba::from(fill));
+                assert!(ratio >= 4.5, "{ratio:.2}:1");
+            }
+        }
+    }
+}
+
+/// What came of a step sits at the column's right edge, its words filling the line between; a
+/// fold's head, a page's line and a line read as one string keep theirs after their words.
+#[test]
+fn what_came_of_a_step_sits_at_the_columns_right() {
+    use super::TraceLine;
+    let line = |fold| TraceLine::new(fold, "Opened tickets.example".into(), "2 s".into());
+    assert!(line(Fold::Step(1)).note_at_right());
+    let mut head = line(Fold::Trace(0));
+    head.head = Some(true);
+    let mut page = line(Fold::Page(2));
+    page.page = Some(false);
+    let mut joined = line(Fold::Trace(0));
+    joined.joined = true;
+    for kept in [head, page, joined] {
+        assert!(!kept.note_at_right());
+    }
+}
+
+/// The assistant's words said between steps are in the text's ink, as the answer's are, and read
+/// on the stage in either look: never the quiet ink a thought and a step's past are in.
+#[test]
+fn said_words_between_steps_are_in_the_texts_ink() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let ink = super::said_ink(&palette);
+        assert_ne!(ink, palette.gray(crate::shell::SECONDARY), "{tone:?}");
+        let quiet = crate::tokens::shell::conversation::TRACE_NOTE;
+        assert_ne!(ink, palette.gray(quiet), "{tone:?}");
+        let ground = gpui::Rgba {
+            a: 1.,
+            ..super::stage_fill(&palette)
+        };
+        let ink = gpui::Rgba::from(ink);
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(ratio >= 7., "{tone:?} {ratio:.2}:1");
+    }
+}
+
+/// The user's message wraps inside the panel's column beside a page, never wider than it, so none
+/// of it leaves the panel; the stage's measure wouldn't fit there.
+#[test]
+fn a_users_message_in_the_panel_fits_its_column() {
+    use crate::tokens::shell::conversation::panel::BODY_X;
+    use crate::tokens::shell::task_area::BESIDE;
+    let column = BESIDE - 2. * BODY_X;
+    let (panel, stage) = (super::Bubble::of(true), super::Bubble::of(false));
+    assert!(
+        panel.most <= column,
+        "{panel:?} is wider than the panel's {column}"
+    );
+    assert!(
+        stage.most > column,
+        "the stage's {stage:?} would fit the panel"
+    );
+    assert!(panel.text < stage.text && panel.line < stage.line);
+}
+
+/// Task-1's card `card` and conversation `talk`, standing on tab 30 with the panel beside it.
+fn standing_with(
+    card: Card,
+    talk: Conversation,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    Rc<Recorder>,
+    Entity<super::TalkView>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown_with(card, cx);
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    watch_page(&shell, cx);
+    // The core shows the task's Space and its page, as once the page is in place.
+    shell.update(cx, |shell, cx| {
+        shell.set_space(3, cx);
+        shell.set_selected(30, cx);
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    redraw(&shell, &view, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    (shell, host, view, cx)
+}
+
+fn redraw(shell: &Entity<Shell>, view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    view.update(cx, |_, cx| cx.notify());
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// The ring's stops once round from the window's Tab, the task's header left out, each checked as
+/// drawn where it rings: a page the user holds is gone into and left again, as the user's is.
+fn ring_round(
+    shell: &Entity<Shell>,
+    view: &Entity<super::TalkView>,
+    host: &Recorder,
+    cx: &mut VisualTestContext,
+) -> Vec<String> {
+    use crate::shell::page_ends::STOPS_DRAWN;
+    assert!(
+        shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)),
+        "Tab from the window rang nothing"
+    );
+    let mut rung = Vec::new();
+    for _ in 0..8 {
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        redraw(shell, view, cx);
+        let Some(stop) = shell.read_with(cx, |shell, _| shell.keyed_strip) else {
+            panic!("the ring left the page's stops after {rung:?}");
+        };
+        let name = format!("{stop:?}");
+        if rung.contains(&name) {
+            break;
+        }
+        assert!(
+            STOPS_DRAWN.with(|drawn| drawn.borrow().contains_key(&stop)),
+            "the ring is on {stop:?}, which isn't drawn"
+        );
+        rung.push(name);
+        host.take();
+        shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+        if shell.read_with(cx, |shell, _| shell.keyed_strip).is_none() {
+            assert_eq!(host.take(), ["focus page first"], "after {stop:?}");
+            rung.push("into the page".into());
+            // Later than the press that went in, which a page with nothing to focus hands back.
+            assert!(shell.update(cx, |shell, cx| {
+                shell.page_ends.entered = None;
+                shell.tab_focus_leaving(30, false, cx)
+            }));
+        }
+    }
+    rung.retain(|stop| !stop.starts_with("Header"));
+    rung
+}
+
+/// The page row in each of its cases, and an outside app's panel, which has no composer: what the
+/// ring goes round, and that Return on the row's button does what a click on it does. The thread
+/// works on the page shown: its words and Take Over. The user holds it, taken over or handed to
+/// them: the page itself, and Hand Back where the row has it. The thread ended with the page to
+/// move: Open alone, with ilo's line in the field's place too. An outside app's session: its
+/// words, Take Over and Stop, or Hand Back and Stop on a page its user holds. Waiting on the user
+/// for a refused step or its question, at work on another page or between steps, the row holds
+/// nothing and the page is the agent's, which the ring never enters.
+#[gpui::test]
+fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::STOPS_DRAWN;
+    let (session, session_talk) = session_panel();
+    for case in row_cases() {
+        let name = case.name;
+        // Only a held page's status changes the row; the agent at work is left out, as before.
+        let status = case.status.clone().filter(|status| !status.held.is_empty());
+        let calls = |pressed: bool, cx: &mut TestAppContext| {
+            let (shell, host, view, cx) = standing_with(case.card.clone(), case.talk.clone(), cx);
+            if let Some(status) = status.clone() {
+                shell.update(cx, |shell, cx| shell.set_agent_status(vec![status], cx));
+                redraw(&shell, &view, cx);
+            }
+            let went = ring_round(&shell, &view, &host, cx);
+            assert_eq!(went, case.ring, "{name}: the ring's round");
+            let button = case.button?;
+            shell.update(cx, |shell, cx| shell.leave_strip("test", cx));
+            STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+            redraw(&shell, &view, cx);
+            let at = STOPS_DRAWN.with(|drawn| drawn.borrow().get(&button).copied());
+            let at = at.unwrap_or_else(|| panic!("{name}: {button:?} isn't drawn"));
+            host.take();
+            match pressed {
+                true => shell.update(cx, |shell, cx| shell.key_strip_show(button, cx)),
+                false => cx.simulate_click(at.center(), Modifiers::none()),
+            }
+            cx.run_until_parked();
+            let calls: Vec<String> = (host.take().into_iter())
+                .filter(|call| !call.starts_with("focus") && !call.starts_with("picture"))
+                .collect();
+            assert!(!calls.is_empty(), "{name}: {button:?} did nothing");
+            Some(calls)
+        };
+        assert_eq!(
+            calls(true, cx),
+            calls(false, cx),
+            "{name}: Return on {:?} didn't do what its click does",
+            case.button
+        );
+    }
+
+    // An outside app's panel has no composer, where a task's has one.
+    let (_, _, view, _) = standing_with(session, session_talk, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.reply_drawn.get()), None);
+    let (_, _, view, _) = standing_with(card(), conversation(3), cx);
+    assert!(
+        view.read_with(cx, |view, _| view.reply_drawn.get())
+            .is_some()
+    );
+}
+
+/// One of the page row's cases, standing on tab 30.
+#[derive(Clone)]
+struct RowCaseShown {
+    name: &'static str,
+    card: Card,
+    talk: Conversation,
+    /// What the agents say of it.
+    status: Option<Status>,
+    /// The ring's stops once round, the task's header left out.
+    ring: Vec<&'static str>,
+    /// The row's last button, if it has one.
+    button: Option<crate::shell::page_ends::StripStop>,
+    /// What ⌘↩ from the page asks of the core: Take Over or Hand Back, where the case has one.
+    command: Option<&'static str>,
+    /// Whether ⌘. from the page stops the work.
+    stops: bool,
+}
+
+/// The page row's cases, each standing on tab 30, and an outside app's panels.
+fn row_cases() -> Vec<RowCaseShown> {
+    use crate::shell::page_ends::StripStop;
+    let at_work = |agent: &str, name: &str| Status {
+        agent: agent.into(),
+        name: name.into(),
+        space: 3,
+        doing: "Searching flights".into(),
+        held: Vec::new(),
+    };
+    let held = |agent: &str, name: &str, why: &str| Status {
+        held: vec![(30, why.into())],
+        doing: "".into(),
+        ..at_work(agent, name)
+    };
+    let live = |live: Live| Conversation {
+        live,
+        ..conversation(3)
+    };
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    let waits = Card {
+        dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
+        ..card()
+    };
+    let done = Card {
+        dot: Dot::Done,
+        word: Word::for_dot(Dot::Done),
+        open: vec![(30, "skyscanner.net".into())],
+        ..card()
+    };
+    let ended = Conversation {
+        stoppable: false,
+        ..conversation(3)
+    };
+    // The task has gone: ilo's line says so in the field's place.
+    let gone = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 4,
+            kind: IloKind::Gone,
+            settled: false,
+        })],
+        ..ended.clone()
+    };
+    let between = Conversation {
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            started: None,
+            items: vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))],
+        })],
+        ..conversation(1)
+    };
+    let elsewhere = Conversation {
+        tabs: vec![(30, "skyscanner.net".into()), (31, "maat.pt".into())],
+        on: Some(31),
+        ..conversation(3)
+    };
+    let (session, session_talk) = session_panel();
+    let session_held = Conversation {
+        live: yours.clone(),
+        ..session_talk.clone()
+    };
+    let case = |name, card: &Card, talk: Conversation, status: Option<Status>| RowCaseShown {
+        name,
+        card: card.clone(),
+        talk,
+        status,
+        ring: Vec::new(),
+        button: None,
+        command: None,
+        stops: true,
+    };
+    let task_take_over = Some("take over task-1 30");
+    vec![
+        RowCaseShown {
+            ring: vec!["Page", "TakeOver"],
+            button: Some(StripStop::TakeOver),
+            command: task_take_over,
+            ..case(
+                "working",
+                &card(),
+                conversation(3),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["into the page", "HandBack"],
+            button: Some(StripStop::HandBack),
+            command: Some("hand back 30"),
+            ..case(
+                "yours",
+                &card(),
+                live(yours.clone()),
+                Some(held("task-1", "Claude", "")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["into the page"],
+            command: Some("hand back 30"),
+            ..case(
+                "handed",
+                &waits,
+                live(Live::Handed),
+                Some(held("task-1", "Claude", "Sign in")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "refused",
+                &waits,
+                live(Live::Refused),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "asked",
+                &waits,
+                live(Live::Asked),
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "elsewhere",
+                &card(),
+                elsewhere,
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            command: task_take_over,
+            ..case(
+                "between steps",
+                &card(),
+                between,
+                Some(at_work("task-1", "Claude")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["Open"],
+            button: Some(StripStop::Open),
+            stops: false,
+            ..case("ended", &done, ended, None)
+        },
+        RowCaseShown {
+            ring: vec!["Open"],
+            button: Some(StripStop::Open),
+            stops: false,
+            ..case("gone", &done, gone, None)
+        },
+        RowCaseShown {
+            ring: vec!["Page", "TakeOver", "Stop"],
+            button: Some(StripStop::Stop),
+            command: Some("take over session-1 30"),
+            ..case(
+                "session",
+                &session,
+                session_talk,
+                Some(at_work("session-1", "Claude Code")),
+            )
+        },
+        RowCaseShown {
+            ring: vec!["into the page", "HandBack", "Stop"],
+            button: Some(StripStop::HandBack),
+            command: Some("hand back 30"),
+            ..case(
+                "session held",
+                &session,
+                session_held,
+                Some(held("session-1", "Claude Code", "")),
+            )
+        },
+    ]
+}
+
+/// An outside app's session, standing on tab 30: its card, with no composer, and its step lines.
+fn session_panel() -> (Card, Conversation) {
+    let session = Card {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        replies: false,
+        ..card()
+    };
+    let talk = Conversation {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        lines: vec![
+            Line::Step(step(0, "Read the page", false)),
+            Line::Step(step(1, "Clicking “Tickets”", true)),
+        ],
+        ..conversation(0)
+    };
+    (session, talk)
+}
+
+/// With the keyboard in the page, in each of the page row's cases and an outside app's panel: ⌘↩
+/// and ⌘. are the browser's own commands and answer as they do with the keyboard in the UI, Take
+/// Over or Hand Back and Stop, where the case has one; ↩ and Space reach the page and press nothing
+/// of ours, even with the ring last on the row's button.
+#[gpui::test]
+fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut TestAppContext) {
+    for case in row_cases() {
+        let name = case.name;
+        let (shell, host, view, cx) = standing_with(case.card, case.talk, cx);
+        if let Some(status) = case.status {
+            shell.update(cx, |shell, cx| {
+                shell.agent_acted(status.agent.clone(), 30, cx);
+                shell.set_agent_status(vec![status], cx)
+            });
+            redraw(&shell, &view, cx);
+        }
+        // The ring was last on the row's button, and the page took the keyboard.
+        if let Some(button) = case.button {
+            shell.update(cx, |shell, cx| shell.key_strip(button, cx));
+        }
+        shell.update(cx, |shell, cx| shell.leave_strip("page", cx));
+        host.page_keys.set(Some(true));
+        host.take();
+        let from_page = |key: &str, cx: &mut VisualTestContext| {
+            let kept = shell.update(cx, |shell, cx| {
+                shell.run_agent_page_key(key, cx) || shell.run_ilo_page_key(key, false, cx)
+            });
+            cx.run_until_parked();
+            (kept, host.take())
+        };
+        for key in ["enter", "space"] {
+            let (kept, calls) = from_page(key, cx);
+            assert!(!kept, "{name}: {key} from the page was kept from it");
+            assert_eq!(
+                calls,
+                Vec::<String>::new(),
+                "{name}: {key} from the page pressed"
+            );
+        }
+        let (kept, calls) = from_page("cmd-enter", cx);
+        match case.command {
+            Some(command) => assert!(
+                kept && calls.iter().any(|call| call == command),
+                "{name}: ⌘↩ from the page didn't ask {command}: {calls:?}"
+            ),
+            None => assert!(!kept && calls.is_empty(), "{name}: ⌘↩ answered: {calls:?}"),
+        }
+        let (kept, calls) = from_page("cmd-.", cx);
+        match case.stops {
+            false => assert!(!kept && calls.is_empty(), "{name}: ⌘. answered: {calls:?}"),
+            true => assert!(
+                kept && calls
+                    .iter()
+                    .any(|call| call.contains("Stop") || call.starts_with("stop")),
+                "{name}: ⌘. from the page didn't stop: {calls:?}"
+            ),
+        }
+    }
+}
+
+/// The page row has one button at a time, by what the thread is doing on the page shown, and
+/// none for a page the thread isn't on; an outside app's session adds its Stop while it works.
+#[gpui::test]
+fn the_page_row_holds_one_case_at_a_time(cx: &mut TestAppContext) {
+    use super::{PageRow, RowCase};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let row = |talk: Conversation, open: Option<&str>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.read_with(cx, |view, _| {
+            view.page_row_for(30, open.map(str::to_string))
+        })
+    };
+    let working = row(conversation(3), None, cx);
+    assert!(
+        matches!(working.case, Some(RowCase::Working(_))),
+        "{working:?}"
+    );
+    assert!(!working.stop);
+    let held = Conversation {
+        live: Live::Yours {
+            tab: 30,
+            site: None,
+        },
+        ..conversation(3)
+    };
+    assert!(matches!(row(held, None, cx).case, Some(RowCase::Yours(_))));
+    let elsewhere = Conversation {
+        on: Some(31),
+        ..conversation(3)
+    };
+    assert_eq!(
+        row(elsewhere, None, cx),
+        PageRow::default(),
+        "a row for a page it isn't on"
+    );
+    let ended = Conversation {
+        stoppable: false,
+        ..conversation(3)
+    };
+    assert_eq!(
+        row(ended.clone(), Some("Open skyscanner.net"), cx).case,
+        Some(RowCase::Ended("Open skyscanner.net".into()))
+    );
+    assert_eq!(row(ended, None, cx), PageRow::default());
+}
+
+/// The panel's head has the page shown's speaker only while the page plays or is muted, and its
+/// click mutes or unmutes the page as a row's does.
+#[gpui::test]
+fn the_panels_speaker_is_there_while_the_page_plays_or_is_muted(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = standing_with(card(), conversation(3), cx);
+    let speaker = |cx: &mut VisualTestContext| {
+        redraw(&shell, &view, cx);
+        view.read_with(cx, |view, _| view.speaker_drawn.get())
+    };
+    assert_eq!(speaker(cx), None, "a silent page has a speaker");
+    let playing = Page {
+        url: "https://skyscanner.net/".into(),
+        audible: true,
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, playing.clone(), cx));
+    let at = speaker(cx).expect("a playing page has no speaker");
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert_eq!(*host.muted.borrow(), [(30, true)]);
+    let muted = Page {
+        audible: false,
+        muted: true,
+        ..playing
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, muted, cx));
+    assert!(speaker(cx).is_some(), "a muted page has no speaker");
+}
+
 /// After a quit, a kept card's plate in Latest tasks shows the picture its card read back; a card
 /// with none has no plate.
 #[gpui::test]
@@ -3255,6 +4226,47 @@ fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
     };
     assert_eq!(size(&kept, cx), Some((3., 2.)));
     assert_eq!(size(&card(), cx), None, "a plate with no picture");
+}
+
+/// A kept card's picture that came back goes to the pass that frees pictures from the window's
+/// atlas once no card holds it: when its task is replied to and runs again, or when the card is
+/// removed. Every window is given the cards, so every window that drew it lets it go.
+#[gpui::test]
+fn a_kept_cards_picture_goes_when_its_card_does(cx: &mut TestAppContext) {
+    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+    let plate = crate::agents::kept::cards::Plate {
+        image: image.clone(),
+        size: (3, 2),
+    };
+    let kept = Card {
+        kept_picture: Some(plate),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(kept.clone(), cx);
+    // What the cards' change hands on, read before the next frame lets it go.
+    let freed = |cards: Vec<Card>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.stale_pictures.clear();
+            shell.set_task_cards(cards, cx);
+            (shell.stale_pictures.iter()).any(|stale| std::sync::Arc::ptr_eq(stale, &image))
+        })
+    };
+    let retitled = Card {
+        title: "Still kept".into(),
+        ..kept.clone()
+    };
+    assert!(
+        !freed(vec![retitled.clone()], cx),
+        "a card that still holds it"
+    );
+    let replied = Card {
+        kept_picture: None,
+        ..retitled.clone()
+    };
+    assert!(freed(vec![replied], cx), "a reply");
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![retitled], cx));
+    assert!(freed(Vec::new(), cx), "Remove or Remove All");
 }
 
 /// A picture the conversation takes goes to its task's kept card only if it could have been

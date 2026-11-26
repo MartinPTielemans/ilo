@@ -689,7 +689,7 @@ fn back_from_the_words(cx: &mut TestAppContext) {
     assert_eq!(tab.host.take(), ["request pairing"]);
 }
 
-/// Signed in, the devices are listed, this one marked and the others with Remove.
+/// Signed in, the devices are listed, this one marked and the others with a ✕ that removes it.
 #[gpui::test]
 fn the_devices_and_remove(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);

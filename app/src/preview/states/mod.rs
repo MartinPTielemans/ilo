@@ -62,7 +62,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_MODEL_MENU", values: "<claude|codex>[,<model>]", shows: "Settings › Agents' Model menu" },
     State { name: "PREVIEW_ONBOARDING", values: "1, light, dark", shows: "the onboarding over the welcome" },
     State { name: "PREVIEW_ONBOARDING_ASSISTANTS", values: "checking, start, signed-in", shows: "the onboarding's assistants' step with its rows in that state" },
-    State { name: "PREVIEW_ONBOARDING_STEP", values: "transparency, <step from 1>", shows: "the onboarding at that step" },
+    State { name: "PREVIEW_ONBOARDING_STEP", values: "1 to 7, 3b", shows: "the onboarding at that step" },
     State { name: "PREVIEW_PAGE", values: "<rrggbb>[,<tab>]", shows: "the page of the tab shown, or of that tab, shown, in that colour, which its line takes" },
     State { name: "PREVIEW_PAGE_MENU", values: "<link|image|text|field>,<x>,<y>[,<key>…]", shows: "a page's menu there" },
     State { name: "PREVIEW_PAIR", values: "pin, confirm, passkey", shows: "a Bluetooth device the first tab's page pairs with" },
@@ -170,5 +170,74 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), STATES.len(), "a state has two rows");
+    }
+
+    /// The working task's steps each name the page they acted on, the first going to it, so its
+    /// log draws a page's line with its steps under it, and its done fold the page's icon, as
+    /// the app's do.
+    #[test]
+    fn the_working_tasks_steps_are_on_its_page() {
+        use browser::agents::task::{Line, TraceItem};
+        let talk = super::tasks::task_conversation("claude".into());
+        let Some(Line::Trace(trace)) = talk.lines.first() else {
+            panic!("the working conversation starts with its trace");
+        };
+        let steps: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step),
+                _ => None,
+            })
+            .collect();
+        let pages: Vec<_> = steps.iter().map(|step| step.page.as_ref()).collect();
+        assert!(
+            pages.iter().all(Option::is_some),
+            "a step has no page: {pages:?}"
+        );
+        let went: Vec<bool> = pages.iter().flatten().map(|page| page.went).collect();
+        assert!(
+            went[0] && !went[1..].contains(&true),
+            "only the first goes to it: {went:?}"
+        );
+        for page in pages.iter().flatten().skip(1) {
+            assert_eq!(
+                page.tab, talk.on,
+                "a step after the first is on the task's tab"
+            );
+        }
+    }
+
+    /// A done task's answer has its finish time under it, so its conversation draws the row with
+    /// Copy and the time, as the app's does.
+    #[test]
+    fn a_done_tasks_answer_says_when_it_finished() {
+        use browser::agents::task::{Line, Word};
+        let cards = super::tasks::task_cards(0);
+        let done: Vec<_> = cards
+            .iter()
+            .filter(|card| card.word == Word::Done)
+            .collect();
+        assert!(!done.is_empty(), "the preview has no done task");
+        for card in done {
+            let talk = super::tasks::task_conversation(card.agent.clone());
+            let answer = (talk.lines.iter()).position(|line| matches!(line, Line::Said(_)));
+            let Some(answer) = answer else {
+                panic!("{}'s conversation has no answer", card.title);
+            };
+            let timed = talk.finished.iter().any(|(at, _)| *at == answer);
+            assert!(timed, "{}'s answer has no finish time", card.title);
+        }
+    }
+
+    /// The working task has a model to show, as a thread the user started does, so its composer's
+    /// row of choices carries it beside the level: its CLI's mark and its name, as the app says it.
+    #[test]
+    fn the_working_task_has_a_model_for_its_row() {
+        use browser::agents::runner::Cli;
+        let talk = super::tasks::task_conversation("claude".into());
+        let Some((mark, said, _)) = talk.model else {
+            panic!("the preview's thread has no model, so its row shows the level alone");
+        };
+        assert_eq!(mark, Cli::Claude.glyph());
+        assert!(said.starts_with(Cli::Claude.name()), "{said}");
     }
 }

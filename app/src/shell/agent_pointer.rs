@@ -14,8 +14,8 @@ use gpui::{
 
 use super::{Shell, panes::pane_frames};
 use crate::tokens::shell::agent_pointer::{
-    COLOR, LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, POINTER, RING, RING_OUTSET, RING_RADIUS,
-    TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE, TEXT,
+    LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, LIGHT_ON_PRIMARY, LIGHT_PRIMARY, ON_PRIMARY, POINTER,
+    PRIMARY, RING, RING_OUTSET, RING_RADIUS, TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE,
 };
 
 /// How long the pointer takes to glide to the element, and the ring to come in once it's there,
@@ -150,6 +150,7 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
+        let (primary, on_primary) = pointer_inks(&self.palette);
         let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = crate::motion::still(cx);
@@ -178,9 +179,9 @@ impl Shell {
                 .flex()
                 .items_center()
                 .rounded(px(radius))
-                .bg(rgb(COLOR))
+                .bg(rgb(primary))
                 .text_size(px(size))
-                .text_color(rgb(TEXT))
+                .text_color(rgb(on_primary))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .whitespace_nowrap()
                 .child(text)
@@ -203,7 +204,7 @@ impl Shell {
                     .h(ring.size.height)
                     .rounded(px(RING_RADIUS))
                     .border(px(RING))
-                    .border_color(rgb(COLOR))
+                    .border_color(rgb(primary))
                     .opacity(ring_in),
             )
             .child(
@@ -218,14 +219,21 @@ impl Shell {
                 .top(tag_top)
                 .opacity(ring_in),
             )
-            .child(
-                svg()
-                    .absolute()
-                    .left(tip.x - pointer_box * TIP)
-                    .top(tip.y - pointer_box * TIP)
-                    .size(pointer_box)
-                    .path("icons/mouse-pointer-2.svg")
-                    .text_color(rgb(COLOR)),
+            // The pointer over a wider stroke of itself in on-primary, its outline on any page.
+            .children(
+                [
+                    ("icons/mouse-pointer-2-outline.svg", on_primary),
+                    ("icons/mouse-pointer-2.svg", primary),
+                ]
+                .map(|(glyph, ink)| {
+                    svg()
+                        .absolute()
+                        .left(tip.x - pointer_box * TIP)
+                        .top(tip.y - pointer_box * TIP)
+                        .size(pointer_box)
+                        .path(glyph)
+                        .text_color(rgb(ink))
+                }),
             )
             .when(!name.is_empty(), |page| {
                 page.child(
@@ -242,6 +250,15 @@ impl Shell {
             });
         Some(page.into_any_element())
     }
+}
+
+/// The pointer's and its rings' ink, `primary`, and the ink that reads on it, `on-primary`, in
+/// `palette`'s tone.
+pub(super) fn pointer_inks(palette: &super::Palette) -> (u32, u32) {
+    (
+        palette.toned(PRIMARY, LIGHT_PRIMARY),
+        palette.toned(ON_PRIMARY, LIGHT_ON_PRIMARY),
+    )
 }
 
 fn ease_out(progress: f32) -> f32 {

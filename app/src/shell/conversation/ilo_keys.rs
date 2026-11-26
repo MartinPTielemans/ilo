@@ -446,10 +446,10 @@ impl super::super::Shell {
     /// draws, or with the keyboard on it already, back where it was. A held key's repeats do
     /// nothing, where the host can tell them, as the key would otherwise go back and forth.
     ///
-    /// With a page of the task's watched over the conversation, no button is in sight to ring:
-    /// while the window has the keyboard the key goes back to the conversation as the strip's
-    /// Back does, to its reply field, and rings nothing; a page the user has, held from its agent
-    /// or with the keyboard, keeps the view and every key.
+    /// Beside a page watched it keys the panel's line. With a page over the conversation, full
+    /// screen or on its way back, no button is in sight to ring: while the window has the keyboard
+    /// the key goes back to the conversation, to its reply field, and rings nothing; a page the
+    /// user has, held from its agent or with the keyboard, keeps the view and every key.
     pub(in crate::shell) fn focus_agent_question(&mut self, from: &str, cx: &mut Context<Self>) {
         if from == "ui" && self.browser.key_repeated() {
             return;

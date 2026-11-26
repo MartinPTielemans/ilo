@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use gpui::{Context, Role, SharedString, Stateful, div, prelude::*, px};
 
-use super::{Shell, agent_bar::Bar, sidebar_keys::NEW_TAB, task_area::StripChip};
+use super::{Shell, agent_bar::Bar, sidebar_keys::NEW_TAB};
 use crate::tokens::shell::{KEYED, KEYED_RING};
 
 /// A stop of the ring off the list's rows: at the sidebar's foot, or of the strip under a task's
@@ -27,8 +27,8 @@ pub(super) enum StripStop {
     Header(u64),
     /// The button on a task's card, Show Page or an ended task's chip, by its task's number.
     Chip(u64),
-    Back,
-    /// The page: the strip's words for an agent's page, the page itself for one the user holds.
+    /// The page: the panel's page row's words for an agent's page, the page itself for one the
+    /// user holds.
     Page,
     TakeOver,
     HandBack,
@@ -100,7 +100,7 @@ impl Shell {
             }
             return true;
         }
-        let stops = self.ring_stops();
+        let stops = self.ring_stops(cx);
         let at = stops.iter().position(|&stop| stop == Some(StripStop::Page));
         let next = at.map(|at| match reverse {
             false => stops[(at + 1) % stops.len()],
@@ -121,7 +121,7 @@ impl Shell {
             (None, Some(stop)) => Some(stop),
             (None, None) => return cx.propagate(),
         };
-        let stops = self.ring_stops();
+        let stops = self.ring_stops(cx);
         // From a stop of the foot's that isn't the ring's own, Tab goes on from the header of the
         // task whose page is watched, and with none watched to the list's row.
         let header = || {
@@ -155,7 +155,7 @@ impl Shell {
         if !self.ring_reaches(tab) {
             return false;
         }
-        let stops = self.ring_stops();
+        let stops = self.ring_stops(cx);
         let stop = match reverse {
             false => stops.first(),
             true => stops.last(),
@@ -174,15 +174,21 @@ impl Shell {
     pub(super) fn key_strip_show(&mut self, stop: StripStop, cx: &mut Context<Self>) {
         match stop {
             StripStop::Header(_) | StripStop::Chip(_) => self.key_card_show(stop, cx),
-            StripStop::Back => {
-                self.leave_strip("back", cx);
-                self.task_page_back(cx);
-            }
             StripStop::Page => {}
             StripStop::TakeOver | StripStop::HandBack => {
+                let (Some(agent), Some((_, tab))) =
+                    (self.task_strip_agent(), self.watched_task_page())
+                else {
+                    return;
+                };
                 log!("browser: command take-over-or-hand-back via strip keys");
                 self.leave_strip("strip", cx);
-                self.agent_bar_primary(cx);
+                // What the page row's button does.
+                let action = match stop {
+                    StripStop::TakeOver => crate::agents::task::TaskAction::TakeOver(tab),
+                    _ => crate::agents::task::TaskAction::HandBack(tab),
+                };
+                self.browser.task(agent, action, cx);
             }
             StripStop::Stop => {
                 if let Some(agent) = self.task_strip_agent() {
@@ -205,21 +211,19 @@ impl Shell {
     }
 
     /// The ring's stops in order, a row's as None: with a task's page watched, the task's header,
-    /// the strip's back, the page and the strip's chips; otherwise the row and the page.
-    pub(super) fn ring_stops(&self) -> Vec<Option<StripStop>> {
+    /// then the page where the row's words stand for it or the user holds it, the row's button
+    /// and an outside app's Stop; otherwise the row and the page.
+    pub(super) fn ring_stops(&self, cx: &gpui::App) -> Vec<Option<StripStop>> {
         let Some((_, tab)) = self.watched_task_page() else {
             return vec![None, Some(StripStop::Page)];
         };
-        let held = self.strip_held();
-        let dot = self.task_strip_dot();
-        let open = self.task_strip_open(tab).is_some();
-        let chips =
-            (self.strip_shows(held, dot, open, true).into_iter()).map(|(chip, _)| match chip {
-                StripChip::TakeOver => StripStop::TakeOver,
-                StripChip::HandBack => StripStop::HandBack,
-                StripChip::Stop => StripStop::Stop,
-                StripChip::Open => StripStop::Open,
-            });
+        let row = self.page_row_shown(tab, cx);
+        // The page is a stop where the row's words stand for it, and wherever the user holds it,
+        // as a page handed to them is with no words on the row, so the ring goes into it.
+        let said = (row.case.as_ref()).and_then(|case| case.said()).is_some();
+        let page = (said || self.strip_held()).then_some(StripStop::Page);
+        let button = row.case.as_ref().map(|case| case.button());
+        let stop = row.stop.then_some(StripStop::Stop);
         // The card while the list draws it, so the ring never sits where it can't be seen.
         let header = self
             .task_strip_agent()
@@ -227,8 +231,9 @@ impl Shell {
             .map(|agent| StripStop::Header(super::task_cards::number(&agent)));
         header
             .into_iter()
-            .chain([StripStop::Back, StripStop::Page])
-            .chain(chips)
+            .chain(page)
+            .chain(button)
+            .chain(stop)
             .map(Some)
             .collect()
     }
@@ -275,25 +280,6 @@ impl Shell {
                     .aria_label(name)
                     .when(keyed, |element| element.aria_active_descendant())
             })
-    }
-
-    /// What a screen reader says of the page's stop: whose page it is, its title and, for an
-    /// agent's, that the agent has it and how to take it. It's the one thing that tells someone
-    /// who can't see the strip that the page is there and isn't theirs.
-    pub(super) fn strip_page_name(&self, tab: u64, title: &str, detail: &str) -> SharedString {
-        let page = self.title(tab);
-        let said = [title, detail]
-            .into_iter()
-            .filter(|words| !words.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ");
-        match (self.strip_held(), self.agent_bar()) {
-            (true, _) => format!("Your page, {page}. {said}").into(),
-            (false, Some(Bar::Working { name, .. })) => {
-                format!("{name}'s page, {page}. {said}. Take Over to use it yourself.").into()
-            }
-            (false, _) => format!("The agent's page, {page}. {said}").into(),
-        }
     }
 
     /// Whether Tab leaving `tab`'s page has a stop to ring: the page is the one the window shows,
@@ -370,7 +356,6 @@ fn strip_stop_name(stop: StripStop) -> &'static str {
     match stop {
         StripStop::Header(_) => "header",
         StripStop::Chip(_) => "chip",
-        StripStop::Back => "back",
         StripStop::Page => "page",
         StripStop::TakeOver => "take-over",
         StripStop::HandBack => "hand-back",

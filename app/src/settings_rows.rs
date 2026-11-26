@@ -1141,6 +1141,17 @@ pub fn sent_part(
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }
 
+/// The name of the row for the `kept` threads, which is their count (table KT1), and whether it
+/// has Remove All…: not with none, where there is nothing to remove.
+pub fn kept_row(kept: usize) -> (String, bool) {
+    let name = match kept {
+        0 => "No threads on this computer".to_string(),
+        1 => "1 thread on this computer".to_string(),
+        kept => format!("{kept} threads on this computer"),
+    };
+    (name, kept > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1417,6 +1428,24 @@ mod tests {
                 darker(signal, ACCENT_PRESSED)
             )
         );
+    }
+
+    /// The row for the threads kept is named by how many there are, in a form of its own for
+    /// none, for one and for more, and offers Remove All… only where there is one to remove.
+    #[test]
+    fn the_kept_row_is_named_by_its_count_and_removes_only_what_there_is() {
+        let (none, one, two, many) = (kept_row(0), kept_row(1), kept_row(2), kept_row(12));
+        assert!(!none.1, "Remove All… with nothing kept");
+        assert!(one.1 && two.1 && many.1);
+        // None is said in words, one is one thread, and more are counted.
+        assert!(!none.0.contains(|c: char| c.is_ascii_digit()), "{}", none.0);
+        assert!(one.0.starts_with("1 thread ") && !one.0.contains("threads"));
+        assert!(two.0.starts_with("2 threads ") && many.0.starts_with("12 threads "));
+        // Where they are is said the same way in each.
+        let (_, place) = one.0.split_once("thread").unwrap();
+        for name in [&none.0, &two.0, &many.0] {
+            assert!(name.ends_with(place), "{name}");
+        }
     }
 }
 

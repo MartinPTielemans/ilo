@@ -227,6 +227,14 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/database.svg"),
     ),
     (
+        "icons/device-laptop.svg",
+        include_bytes!("../../assets/icons/device-laptop.svg"),
+    ),
+    (
+        "icons/device-phone.svg",
+        include_bytes!("../../assets/icons/device-phone.svg"),
+    ),
+    (
         "icons/download.svg",
         include_bytes!("../../assets/icons/download.svg"),
     ),
@@ -473,6 +481,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/moon.svg",
         include_bytes!("../../assets/icons/moon.svg"),
+    ),
+    (
+        "icons/mouse-pointer-2-outline.svg",
+        include_bytes!("../../assets/icons/mouse-pointer-2-outline.svg"),
     ),
     (
         "icons/mouse-pointer-2.svg",
@@ -921,6 +933,9 @@ impl AssetSource for Assets {
         if let Some(angle) = angle.and_then(|angle| angle.parse::<f32>().ok()) {
             return Ok(Some(Cow::Owned(bars_svg(angle).into_bytes())));
         }
+        if let Some(drawn) = crate::product::drawn_mark(path) {
+            return Ok(Some(Cow::Owned(drawn.into_bytes())));
+        }
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)
@@ -965,12 +980,19 @@ mod tests {
     }
 
     /// The glyphs that keep their own stroke: Arc's measured nav glyphs, the window buttons' and
-    /// the loading ring, the Library's cards, which has one solid, and a folder's on its line.
+    /// the loading ring, the Library's cards, which has one solid, a folder's on its line, and the
+    /// agent's pointer's outline, a wider stroke drawn under the pointer.
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
             || name.starts_with(ROW_FOLDER)
-            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
+            || [
+                "loading.svg",
+                "spaces.svg",
+                "working.svg",
+                "mouse-pointer-2-outline.svg",
+            ]
+            .contains(&name)
     }
 
     /// What the names of a folder's drawings on its line start with.

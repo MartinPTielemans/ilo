@@ -65,6 +65,7 @@ fn card() -> Card {
         fix: None,
         visited: Vec::new(),
         ended_time: Default::default(),
+        fuller: false,
         finding: Default::default(),
         told: Default::default(),
     }
@@ -312,11 +313,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
     assert!(items(&shell, cx).is_empty());
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.empty_line(Section::Archive, true)),
-        concat!(
-            "Finished threads stay here until ",
-            env!("PRODUCT_NAME"),
-            " quits."
-        )
+        "Archived threads show here."
     );
     filter(cx);
     cx.update(|_, cx| host.choose("Little Window", cx));

@@ -893,9 +893,9 @@ since() {
 none_since() {
   ! since "${2:-}" | grep -q "$1"
 }
-# Clicks first run's Skip, or Skip Setup at its welcome, where step $1 last said it's drawn: each
-# step logs where once it has settled, in the frame after the line saying so. Esc is Back there, so
-# a check going on through the steps clicks this.
+# Clicks first run's Skip, which only the import (3) and the favorites (3b) have, where step $1
+# last said it's drawn: each step logs where once it has settled, in the frame after the line
+# saying so.
 skip_step() {
   local at=
   for _ in $(seq 100); do
@@ -908,6 +908,77 @@ skip_step() {
   done
   [ -n "$at" ] || fail "the $1 step didn't say where its Skip is"
   send click $at
+}
+# The steps first run's card shows this time, by number, as it said when it last started.
+onboarding_steps() {
+  await '^browser: onboarding steps ' || fail "first run's card didn't say its steps"
+  grep '^browser: onboarding steps ' "$log" | tail -1 | cut -d' ' -f4-
+}
+# Waits up to 30 s for first run's step $1 to settle since the card last started or last left a
+# step, which a step that settles before any command, as the first does, needs, and fails with $2.
+step_settled() {
+  local line="browser: onboarding step $1 settled"
+  wait_begins
+  for _ in $(seq 300); do
+    awk -v want="$line" '
+      $0 == "browser: onboarding started" || index($0, "browser: onboarding left ") == 1 { seen = 0 }
+      $0 == want { seen = 1 }
+      END { exit !seen }' "$log" && return 0
+    kill -0 "$pid" 2>/dev/null || {
+      ran_out "^$line\$" "" exited
+      fail "the app exited: $2"
+    }
+    sleep 0.1
+  done
+  ran_out "^$line\$" ""
+  fail "$2"
+}
+# Leaves first run's step $1, settled with the keyboard where it rests, the way that takes nothing
+# it offers, and checks the step was left, $2 starting each failure: the line says its number
+# alone, never what was picked. A bare button with the
+# keyboard takes ↩ as its own press. The Welcome (1) rests on Continue, whose ↩ signs in, so ⇥ to
+# Not Now; the import (3) and the favorites (3b) have Skip; the rest, ↩ for their main button. The
+# assistants' (2) have none with nobody signed in, where ↩ does nothing and the step rests on its
+# dialog, from which ⇧⇥ comes to Just the Browser, the last of its stops.
+pass_step() {
+  local how=return from
+  case $1 in
+    1)
+      send key tab
+      send key return
+      how=not-now
+      ;;
+    2)
+      send key return
+      from=$step
+      # Handled after the key, so by its end ↩ has done what it does.
+      send state
+      if ! logged '^browser: onboarding left 2$' "$from"; then
+        send key tab shift
+        send key return
+        how=just-the-browser
+      fi
+      ;;
+    3 | 3b)
+      skip_step "$1"
+      how=skip
+      ;;
+    *) send key return ;;
+  esac
+  [ -n "${from:-}" ] && [ "$how" = return ] || from=$step
+  expect "^browser: onboarding left $1\$" "${2:-}$how didn't leave first run's step $1" "$from"
+}
+# Goes through first run's card from its first step, each left by pass_step, until step $1 has
+# settled, or with no $1 until the card has ended; $2 starts each failure, saying which run.
+walk_steps() {
+  local each
+  for each in $(onboarding_steps); do
+    step_settled "$each" "${2:-}first run's step $each didn't come"
+    [ "$each" = "${1:-}" ] && return 0
+    pass_step "$each" "${2:-}"
+  done
+  [ -z "${1:-}" ] || fail "${2:-}first run's card showed no step $1, only $(onboarding_steps)"
+  expect '^browser: onboarding done$' "${2:-}first run's card didn't end after its last step"
 }
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
