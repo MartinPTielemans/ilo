@@ -2291,7 +2291,8 @@ key-reach = 4.0
 [shell.library]
 # Where the card's left edge goes while the Library is open: the Library's right edge, which is
 # this for every section but Spaces, which takes `spaces_width`. As drawn, 644: the 228 column and a
-# 416 list beside it, with no line between them (the lead, 25 Nov).
+# 416 list beside it, with no line between them (the lead, 25 Nov), the list narrower in a narrow
+# window (archive-least).
 library-width = 644.0
 # The Library's colours are alphas of the palette's ink (palette.rs), plates in Paper's terms.
 # The column of sections, as wide as the sidebar it takes (the drawing's 228), with no fill or edge
@@ -2402,6 +2403,13 @@ filter-chevron-gap = 6.0
 # The list, beside the column: the library's width less the column's.
 archive-top = 56.0
 archive-width = 416.0
+# In a narrow window the list gives way, down to this, so the page keeps page-least beside the
+# Library; the column never does, so the Library is never under 532 (the lead, 26 Nov). The
+# window has no least width today.
+archive-least = 304.0
+# What the page keeps beside the Library before the list gives way. Proposed: [shell.task-area]
+# page-least's 320, the least a page lays out in usably.
+page-least = 320.0
 # A day's heading is a row of 36, as drawn, after rows as at the list's top: its small semibold
 # line, 14, at the row's foot, 8 over the rows under it.
 heading-x = 12.0

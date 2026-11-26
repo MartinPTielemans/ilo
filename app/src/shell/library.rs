@@ -47,6 +47,7 @@ use crate::{
     tooltip::{Anchor, Tip},
 };
 
+#[cfg(test)]
 use crate::tokens::shell::library::LIBRARY_WIDTH;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
@@ -144,6 +145,7 @@ use crate::tokens::shell::library::{
     FILTER_CHEVRON, FILTER_CHEVRON_GAP, FILTER_GAP, FILTER_PAD_LEFT, FILTER_PAD_RIGHT,
 };
 
+use crate::tokens::shell::library::ARCHIVE_LEAST;
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
 use crate::tokens::shell::library::ARCHIVED_FAVICON_X;
@@ -159,11 +161,21 @@ use crate::tokens::shell::library::HEADING_TOP;
 use crate::tokens::shell::library::HEADING_X;
 use crate::tokens::shell::library::MEDIA_GAP;
 use crate::tokens::shell::library::MEDIA_RADIUS;
-/// Media's tiles a row, and each one's side, as the rows' width holds them.
+use crate::tokens::shell::library::PAGE_LEAST;
+/// Media's tiles a row.
 const MEDIA_COLUMNS: usize = 3;
-const MEDIA_TILE: f32 =
-    (ARCHIVE_WIDTH - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
-        / MEDIA_COLUMNS as f32;
+
+/// Each of Media's tiles' side, as a list `list` wide holds them.
+const fn media_tile(list: f32) -> f32 {
+    (list - ARCHIVED_LEFT - ARCHIVED_RIGHT - (MEDIA_COLUMNS as f32 - 1.) * MEDIA_GAP)
+        / MEDIA_COLUMNS as f32
+}
+
+/// How wide the list beside the column is in a window `window` wide: as drawn, unless the page
+/// would keep less than page-least beside the Library, when it gives way down to its least.
+pub(super) fn list_width(window: f32) -> f32 {
+    (window - PAGE_LEAST - COLUMN_WIDTH).clamp(ARCHIVE_LEAST, ARCHIVE_WIDTH)
+}
 /// The file's own icon in a tile without a picture of it.
 const MEDIA_ICON: f32 = 32.;
 /// Set in the preview ids of captures, which downloads' ids never reach.
@@ -778,8 +790,13 @@ impl Shell {
     pub(super) fn section_width(&self, section: Section) -> f32 {
         match section {
             Section::Spaces => spaces_width(self.spaces.len(), f32::from(self.viewport.width)),
-            _ => LIBRARY_WIDTH,
+            _ => COLUMN_WIDTH + self.list_width(),
         }
+    }
+
+    /// How wide the list beside the column is in this window.
+    pub(super) fn list_width(&self) -> f32 {
+        list_width(f32::from(self.viewport.width))
     }
 
     /// How wide the Library is: its section's, and on its way to another's after a click on it, or
@@ -2086,6 +2103,7 @@ impl Shell {
             .opacity(Shell::library_opacity(sidebar_opacity))
             .child(column);
         let panel = self.with_stops(panel, cx);
+        let list = self.list_width();
         let panel = match spaces {
             true => panel.child(self.space_cards(cx)),
             false => panel
@@ -2094,7 +2112,7 @@ impl Shell {
                         .absolute()
                         .left(px(list_x(COLUMN_WIDTH + SEARCH_X)))
                         .top(px(SEARCH_TOP))
-                        .w(px(ARCHIVE_WIDTH - SEARCH_X - SEARCH_RIGHT))
+                        .w(px(list - SEARCH_X - SEARCH_RIGHT))
                         .flex()
                         .gap(px(FILTER_GAP))
                         .child(field)
@@ -2106,7 +2124,7 @@ impl Shell {
                         .left(px(list_x(COLUMN_WIDTH)))
                         .top(px(ARCHIVE_TOP))
                         .bottom_0()
-                        .w(px(ARCHIVE_WIDTH))
+                        .w(px(list))
                         .child(archive),
                 )
                 .child(self.download_press_listeners(cx)),
@@ -3660,7 +3678,7 @@ impl Shell {
             .map(|tile| self.library_row(tile, line, column, MEDIA_RADIUS))
             .relative()
             .flex_none()
-            .size(px(MEDIA_TILE))
+            .size(px(media_tile(self.list_width())))
             .flex()
             .items_center()
             .justify_center()
@@ -3715,7 +3733,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         if !self.media_videos.contains_key(&id) {
-            let side = (MEDIA_TILE * window.scale_factor()).ceil() as u32;
+            let side = (media_tile(self.list_width()) * window.scale_factor()).ceil() as u32;
             if !self.browser.open_video(id, path, side, cx) {
                 return None;
             }
@@ -4562,13 +4580,14 @@ mod task_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
-        COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
-        FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X,
-        Item, LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_RIGHT,
-        SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, day_heading,
-        download_menu_items, downloads_progress, history_list, library_band, panel_at_rest,
-        past_end, plus_x, receded_opacity, spaces_width,
+        ARCHIVE_LEAST, ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived,
+        CARD_WIDTH, COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice,
+        DownloadState, FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT,
+        HEADING_TOP, HEADING_X, Item, LIBRARY_BAND, Line, MEDIA_GAP, Medium, PAGE_LEAST,
+        SEARCH_HEIGHT, SEARCH_RIGHT, SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space,
+        bar_drawn, card_x, day_heading, download_menu_items, downloads_progress, history_list,
+        library_band, list_width, media_tile, panel_at_rest, past_end, plus_x, receded_opacity,
+        spaces_width,
     };
     use std::rc::Rc;
 
@@ -4599,6 +4618,44 @@ mod tests {
             peeked: Vec::new(),
             live_rooms: Default::default(),
             placed: Vec::new(),
+        }
+    }
+
+    /// Media's tiles in the list as drawn, at the tests' window's width.
+    const MEDIA_TILE: f32 = media_tile(ARCHIVE_WIDTH);
+
+    /// The list is as drawn in a wide window and gives way, so the page keeps page-least beside
+    /// the Library, down to its least, from where the page takes what's left; the column is the
+    /// same at every width (the lead, 26 Nov).
+    #[gpui::test]
+    fn the_list_gives_way_in_a_narrow_window_and_the_column_never(cx: &mut TestAppContext) {
+        let reaches_least = COLUMN_WIDTH + ARCHIVE_LEAST + PAGE_LEAST;
+        assert_eq!(list_width(reaches_least + 400.), ARCHIVE_WIDTH);
+        assert_eq!(list_width(reaches_least + 20.), ARCHIVE_LEAST + 20.);
+        assert_eq!(list_width(reaches_least), ARCHIVE_LEAST);
+        assert_eq!(list_width(640.), ARCHIVE_LEAST);
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        for width in [
+            640.,
+            reaches_least,
+            reaches_least + 20.,
+            reaches_least + 400.,
+        ] {
+            let (library, list) = shell.update(cx, |shell, _| {
+                shell.viewport = gpui::size(px(width), px(800.));
+                (shell.section_width(Section::Archive), shell.list_width())
+            });
+            assert_eq!(
+                library - list,
+                COLUMN_WIDTH,
+                "the column in a window {width} wide"
+            );
+            assert!(
+                library >= COLUMN_WIDTH + ARCHIVE_LEAST,
+                "a window {width} wide"
+            );
         }
     }
 
