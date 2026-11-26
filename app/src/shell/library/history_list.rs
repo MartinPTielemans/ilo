@@ -536,6 +536,10 @@ impl Shell {
         };
         let day = visit.day;
         let pointed = library.history.pointed == Some(Pointed::Visited(index));
+        // Where the row is, by its line alone as the page is the user's: a day's heading can come
+        // between rows, so a walk down them by their pitch can land on one (#4154).
+        let drawn =
+            crate::settings_rows::drawn(format!("library visited {index}"), library.drawn.clone());
         if !self.page_favicons.contains_key(&url) {
             self.page_favicons.insert(url.clone(), None);
             self.browser.page_favicon(&url, cx);
@@ -566,7 +570,8 @@ impl Shell {
                 cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
                     shell.visited_menu(menu.clone(), day, event.position, cx)
                 }),
-            );
+            )
+            .child(drawn);
         let mut end = vec![self.history_end_words(when.into())];
         end.extend(trash.map(IntoElement::into_any_element));
         self.history_row(plate, Item::Visit(index), icon, title, end, pointed)

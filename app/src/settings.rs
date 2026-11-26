@@ -6179,6 +6179,9 @@ impl Render for Settings {
             // check.sh waits for this line, the section each show or switch draws, whichever
             // window was key.
             log!("browser: settings drew {}", self.section.name());
+            // Its places come after it, as frames drawn before the window was on screen logged
+            // them before (#3841).
+            self.drawn_logged.borrow_mut().clear();
         }
         let size = window.viewport_size();
         let size = (

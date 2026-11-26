@@ -1378,7 +1378,7 @@ impl Shell {
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
         let length = onboarding.exit_length(still);
-        let ended = exiting.is_some_and(|at| at >= length);
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still, viewport));
         if ended {
             // A grown card stays drawn on the frame it ends on. First run's window, the size of
             // the browser's by now, is on screen until the browser window is, and a frame of it
@@ -1404,14 +1404,15 @@ impl Shell {
                 self.show_hint(cx);
             }
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| {
-                    if let Some(handle) = first_run {
-                        shell.browser.end_first_run(handle.into(), cx);
-                    }
-                    if !quit {
-                        shell.run(Command::NewTab, "onboarding", cx);
-                    }
-                })
+                // Outside the shell's update, as the host draws the browser window, and with it
+                // the shell, before putting it on screen.
+                if let Some(handle) = first_run {
+                    let browser = shell.read(cx).browser.clone();
+                    browser.end_first_run(handle.into(), cx);
+                }
+                if !quit {
+                    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
+                }
             });
             #[cfg(test)]
             exit::DRAWN.with_borrow_mut(|drawn| {

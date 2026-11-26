@@ -2761,11 +2761,13 @@ way-copied = 1.2
 # First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing
 # fades the card's content over `content`, then the card grows to the window over `grow` on
 # ARRIVE, its `corners` from the card's to the window's, its fill crossing over `material` to the
-# window's tint with the pages' card over it. The last step's knot fades with the content. Where it
-# can't, and with Reduce Motion, the card cross-fades over `cross-fade`. The Mac's host grows it;
-# no other does yet.
+# window's tint with the pages' card over it. The exit ends once the card is within `rest` points
+# of the window on every side, as ARRIVE's tail moves it less than that. The last step's knot fades
+# with the content. Where it can't, and with Reduce Motion, the card cross-fades over `cross-fade`.
+# The Mac's host grows it; no other does yet.
 content = 0.12
 grow = 0.52
+rest = 0.5
 corners = [20.0, 12.0]
 material = 0.3
 cross-fade = 0.22

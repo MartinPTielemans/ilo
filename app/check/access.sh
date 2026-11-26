@@ -324,9 +324,9 @@ else
 fi
 # A new profile's onboarding, read as the reader reads it (#3151): each step a dialog called by its
 # title, the first whichever the card lists first, with its main button where it has one, and Your
-# first Space (4) with Next and no Skip, its swatches a radio group called Color, a radio button a
-# colour, none picked until → picks the first. Its import home is empty, so the import step is left
-# out.
+# first Space (4) with Next and no Skip, its palettes a radio group called Palettes, the drawn one,
+# Dusk, picked until → picks the next: the step rests on Next and its arrows go along the palettes.
+# Its import home is empty, so the import step is left out.
 if ! grep -q '^accessibility: skipped' "$tree"; then
   log="$out/access-onboarding.log"
   step=0
@@ -365,25 +365,27 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
     fail "the Welcome's Not Now isn't a button: $intro"
   walk_steps 4
   colour="$out/access-colour.txt"
-  read_tree "$radio_group \"Color\"" > "$colour"
+  read_tree "$radio_group \"Palettes\"" > "$colour"
   grep -q " $dialog \"Your first Space\"" "$colour" ||
     fail "Your first Space isn't a dialog called by its title: $colour"
   [ "$(grep -c " $dialog \"" "$colour")" = 1 ] ||
     fail "the step it left is still a dialog: $colour"
   grep -q " $button \"Next\"" "$colour" || fail "Next isn't a button: $colour"
   ! grep -q " $button \"Skip\"" "$colour" || fail "Your first Space has a Skip, which it never shows: $colour"
-  swatches=$(under "$radio_group \"Color\"" "$colour" | grep " $radio \"[^\"]")
-  [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Color: $colour"
-  ! echo "$swatches" | grep -q " $picked" || fail "a colour reads as picked before any is: $colour"
-  first=$(echo "$swatches" | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/')
+  palettes=$(under "$radio_group \"Palettes\"" "$colour" | grep " $radio \"[^\"]" || true)
+  [ "$(echo "$palettes" | grep -c .)" -ge 2 ] || fail "the palettes aren't radio buttons in Palettes: $colour"
+  echo "$palettes" | grep -q " $radio \"Dusk\" $picked" ||
+    fail "the drawn palette, Dusk, isn't read as picked: $colour"
+  next=$(echo "$palettes" | grep -A1 " $radio \"Dusk\"" | sed -n '2s/^[^"]*"\([^"]*\)".*/\1/p')
+  [ -n "$next" ] || fail "no palette after Dusk: $colour"
   send key right
   picked_tree="$out/access-colour-picked.txt"
-  read_tree "$radio \"$first\" $picked" > "$picked_tree"
-  grep -q " $radio \"$first\" $picked" "$picked_tree" ||
-    fail "→ didn't read as picking the first colour, $first: $picked_tree"
+  read_tree "$radio \"$next\" $picked" > "$picked_tree"
+  grep -q " $radio \"$next\" $picked" "$picked_tree" ||
+    fail "→ didn't read as picking the palette after Dusk, $next: $picked_tree"
   exec 3>&-
   quit
-  echo "ok: $screen_reader reads the onboarding's first step, $first_step, as a dialog called by its title, $title${main:+, with its $main button}, Your first Space as a dialog called by its title with Next and no Skip, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Color, $first picked by →. Trees: $intro, $colour, $picked_tree"
+  echo "ok: $screen_reader reads the onboarding's first step, $first_step, as a dialog called by its title, $title${main:+, with its $main button}, Your first Space as a dialog called by its title with Next and no Skip, and its $(echo "$palettes" | grep -c .) palettes as radio buttons in Palettes, $next picked by →. Trees: $intro, $colour, $picked_tree"
 fi
 # The run's buses go with it.
 [ -z "${buses:-}" ] || kill $buses 2> /dev/null || true
