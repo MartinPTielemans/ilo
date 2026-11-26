@@ -9,11 +9,12 @@
 # Chrome on Linux), never the Mac's own browsers, with what comes from it as chips, which a click
 # leaves out and another brings back, and Skip; Your favorites (3b), once an import offers sites;
 # Your first Space (4), whose → picks a swatch; Tidy tabs (5) while the core has the profile's
-# time; Other apps (6) while an agent program is found, whose switch the dark pass turns on and off
-# again; and step 7, always last, whose Help improve the dark pass turns on and off
-# from the keyboard, and whose Start Browsing leaves the card for the first Space with the command
-# bar up. ↩ presses a step's main button; ⌘[ goes back a step, which the dark pass checks at the
-# last; Esc and ⌘W leave the step as it is. Make Default makes ilo the default for a moment only on
+# time; Other apps (6) while an agent program is found, whose command switch a launch in a made-up
+# home turns on and off, writing ilo's skill there and taking it away; and step 7, always last,
+# whose Help improve the dark pass turns on and off from the keyboard, and whose Start Browsing
+# leaves the card for the first Space with the command bar up. ↩ presses a step's main button; ⌘[
+# goes back a step, which the dark pass checks at the last; Esc and ⌘W leave the step as it is.
+# Make Default makes ilo the default for a moment only on
 # a Linux CI VM, so the run never changes a desk's. Help › Welcome to ilo plays it again in first
 # run's window, whether the browser's shows a page or not. A launch that brings Spaces back never
 # starts it. Every other run sets BROWSER_ONBOARDING=skip (check.sh); this one sets the appearance
@@ -234,14 +235,9 @@ for each in $steps; do
         fail "dark: Esc and ⌘W at Your first Space moved the card: $(last_move)"
       ;;
     6)
+      # Either switch here would write into the run's own home, so only the skill launch below,
+      # in a made-up one, clicks them.
       capture_step dark-6
-      # Settings' own switch, set at once, so it goes back off before the step is left.
-      await '^browser: onboarding other-apps at ' || fail "dark: Other apps didn't draw its switch"
-      send click $(grep '^browser: onboarding other-apps at ' "$log" | tail -1 | cut -d' ' -f5-6)
-      expect '^browser: onboarding switch slid$' "dark: a click on Other apps' switch didn't turn it"
-      capture_step dark-6-on
-      send click $(grep '^browser: onboarding other-apps at ' "$log" | tail -1 | cut -d' ' -f5-6)
-      expect '^browser: onboarding switch slid$' "dark: a second click on Other apps' switch didn't turn it back"
       ;;
     7)
       capture_step dark-7
@@ -379,6 +375,63 @@ expect '^browser: command bar shown$' "the replay over a page didn't end with th
 exec 3>&-
 quit
 
+# The command's skill (first run's step 6), on the Mac and Linux, where the command's Add writes
+# one: a new profile in a made-up home of the run's own, with only Claude Code's folder, which the
+# app gets by HOME, as it does the command it links. The left switch, command, writes ilo's skill
+# there, only the user's to read, and turned off takes it and the skills folder it made away again.
+# The right switch, mcp, isn't clicked. Nothing looks into the run's own home.
+if ! windows; then
+  skill_home="$PWD/$out/onboarding-skill-home"
+  rm -rf "$skill_home"
+  mkdir -p "$skill_home/.claude"
+  skill_file="$skill_home/.claude/skills/ilo/SKILL.md"
+  # Waits up to 30 s for the skill's file to be $1, there or gone.
+  skill_is() {
+    for _ in $(seq 300); do
+      case $1 in
+        there) [ -f "$skill_file" ] && return 0 ;;
+        gone) [ ! -e "$skill_file" ] && return 0 ;;
+      esac
+      kill -0 "$pid" 2>/dev/null || return 1
+      sleep 0.1
+    done
+    return 1
+  }
+  log="$out/onboarding-skill.log"
+  step=0
+  rm -f "$saved" "$profile_dir/Account"
+  HOME="$skill_home" BROWSER_IMPORT_HOME="$import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: onboarding started$' || fail "skill: the first launch didn't start the onboarding"
+  walk_steps 6 "skill: "
+  await '^browser: onboarding command at ' || fail "skill: Other apps didn't draw the command's switch"
+  [ ! -e "$skill_home/.claude/skills" ] || fail "skill: .claude/skills was there before a click"
+  send click $(grep '^browser: onboarding command at ' "$log" | tail -1 | cut -d' ' -f5-6)
+  expect '^browser: onboarding switch slid$' "skill: a click on the command's switch didn't turn it"
+  expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' \
+    "skill: the command's switch didn't finish adding the command"
+  logged '^browser: agent ilo-command connected$' || fail "skill: the command's switch didn't add the command"
+  skill_is there || fail "skill: the command's switch wrote no .claude/skills/ilo/SKILL.md"
+  mode=$(stat -c %a "$skill_file" 2>/dev/null || stat -f %Lp "$skill_file")
+  [ "$mode" = 600 ] || fail "skill: .claude/skills/ilo/SKILL.md is mode $mode, not 600"
+  grep -q '^name: ilo$' "$skill_file" || fail "skill: .claude/skills/ilo/SKILL.md names no ilo"
+  capture_step skill-6-on
+  send click $(grep '^browser: onboarding command at ' "$log" | tail -1 | cut -d' ' -f5-6)
+  expect '^browser: onboarding switch slid$' "skill: a second click on the command's switch didn't turn it back"
+  skill_is gone || fail "skill: turning the command's switch off left .claude/skills/ilo/SKILL.md"
+  for _ in $(seq 300); do
+    [ -e "$skill_home/.claude/skills" ] || break
+    sleep 0.1
+  done
+  [ ! -e "$skill_home/.claude/skills" ] || fail "skill: turning the switch off left the .claude/skills it made"
+  [ -d "$skill_home/.claude" ] || fail "skill: turning the switch off took .claude away"
+  exec 3>&-
+  quit
+  rm -rf "$skill_home"
+fi
+
 # Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
 # sites three times and more, brings them in with ↩ at the browser, and the step after the import
 # is Your favorites, offering those two, ticked.
@@ -464,4 +517,4 @@ expect '^browser: appearance automatic$' \
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking a swatch and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
+echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking a swatch and Esc and ⌘W leaving it as it is, Tidy tabs and Other apps where they come, the command's switch writing ilo's skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
