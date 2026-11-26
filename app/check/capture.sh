@@ -279,8 +279,10 @@ expect '^browser: library section media$' "View Media… didn't open the Library
 expect '^browser: library captures [1-9][0-9]*$' "Media didn't list the capture saved"
 expect '^browser: library shown$' "the Library didn't settle open on Media"
 ../tools/window-screenshot.sh "$pid" "$out/library-media.png" || fail "no window to capture"
-# Rows from 112 + 8 across and 56 + 27 down, the heading over them; tiles 93.7 square.
-send click $((112 + 8 + 47)) $((56 + 27 + 47))
+# Rows from the Library's column, 228, + 8 across and 92 down, the heading over them; tiles 131
+# square at the window's 1280. The app logs no tile's frame, so the point is reckoned.
+tile="$((228 + 8 + 47)) $((92 + 47))"
+send click $tile
 expect "^browser: open media $named\$" "a click on the capture's tile didn't open it"
 expect '^browser: library hidden$' "opening the capture didn't close the Library"
 expect '^browser: loaded [0-9]* file://.*\.png$' "the capture's tab didn't load it"
@@ -290,7 +292,7 @@ media=$(sed -n 's|^browser: loaded \([0-9]*\) file://.*\.png$|\1|p' "$log" | tai
 # downloads' Move to Trash does, and out of Media.
 send menu 'View Media…'
 expect '^browser: library shown$' "View Media… didn't open the Library again"
-post rightclick $((112 + 8 + 47)) $((56 + 27 + 47))
+post rightclick $tile
 expect "^browser: menu shown $(cased 'Open, Delete')\$" \
   "a right-click on the capture's tile didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/media-menu.png" || fail "no window to capture"
@@ -318,7 +320,7 @@ if [ "${listed:-0}" -gt 0 ]; then
 fi
 left=$(grep '^browser: library captures ' "$log" | tail -1 | cut -d' ' -f4)
 while [ "$left" -gt 0 ]; do
-  post rightclick $((112 + 8 + 47)) $((56 + 27 + 47))
+  post rightclick $tile
   expect "^browser: menu shown $(cased 'Open, Delete')\$" \
     "a right-click on a capture left in Media didn't show its menu"
   send choose Delete

@@ -42,13 +42,27 @@ expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the Blank Window didn't loa
 first=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}notes.txt\$|\1|p" "$log" | tail -1)
 expect "^browser: window $blank shows $first\$" "the Blank Window didn't show its page"
 expect "^browser: today \(.* \)\{0,1\}$first\( .*\)\{0,1\}\$" "the Blank Window's tab isn't in its own Today"
-../tools/window-screenshot.sh "$pid" "$out/blank.png" || fail "no window to capture"
+# Both windows are the same size, so which of them is "the" window would be the system's pick: the
+# picture takes both, and the Blank Window is read where the frames the app logged put it in it.
+../tools/window-screenshot.sh "$pid" "$out/blank.png" all || fail "no window to capture"
+frame_of() {
+  grep "^browser: window $1 frame " "$log" | tail -1 | cut -d' ' -f5-
+}
+set -- $(frame_of "$main") $(frame_of "$blank")
+[ $# -eq 8 ] || fail "the app didn't log both windows' frames"
+if [ "$(uname)" = Linux ]; then
+  # There "all" is the whole screen, from its corner, at the frames' own scale.
+  across=0 at_x=$5 at_y=$6
+else
+  # Elsewhere it's the two windows' frames together.
+  from_x=$(($1 < $5 ? $1 : $5))
+  from_y=$(($2 < $6 ? $2 : $6))
+  across=$(($1 + $3 > $5 + $7 ? $1 + $3 - from_x : $5 + $7 - from_x))
+  at_x=$(($5 - from_x)) at_y=$(($6 - from_y))
+fi
 # Its name row's words start on the tab titles' column, within 1 pt, the square glyph before them
-# where a Space's icon goes (#669): the first ink of the name, at y 104–120, and of New Tab's, on the
-# titles' column at y 160–176, both straight-stemmed capitals, from x 36, against each row's ground.
-send layout
-content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
-  sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+# where a Space's icon goes (#669): the first ink of the name, at y 98–114, and of New Tab's, on the
+# titles' column at y 142–158, both straight-stemmed capitals, from x 36, against each row's ground.
 if windows; then
   to_bmp "$out/blank.png" "$out/blank.bmp" || fail "PowerShell couldn't read $out/blank.png"
 elif [ "$(uname)" = Linux ]; then
@@ -56,14 +70,16 @@ elif [ "$(uname)" = Linux ]; then
 else
   sips -s format bmp "$out/blank.png" --out "$out/blank.bmp" > /dev/null || fail "sips couldn't read $out/blank.png"
 fi
-inks=$(python3 -I - "$out/blank.bmp" "$content" << 'PY'
+inks=$(python3 -I - "$out/blank.bmp" "$across" "$at_x" "$at_y" << 'PY'
 import struct, sys
 data = open(sys.argv[1], "rb").read()
 offset, = struct.unpack_from("<I", data, 10)
 width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
-scale = width / float(sys.argv[2])
+across, at_x, at_y = (float(arg) for arg in sys.argv[2:5])
+scale = width / across if across else 1.0
 stride = (bits * width + 31) // 32 * 4
 def at(x, y):
+    x, y = x + int(at_x * scale), y + int(at_y * scale)
     row = y if height < 0 else abs(height) - 1 - y
     start = offset + row * stride + x * bits // 8
     b, g, r = data[start:start + 3]
@@ -75,7 +91,7 @@ def first_ink(top, bottom):
         if any(abs(at(x, y) - ground) > 150 for y in ys):
             return x / scale
     return -1
-print("%.1f %.1f" % (first_ink(104, 120), first_ink(160, 176)))
+print("%.1f %.1f" % (first_ink(98, 114), first_ink(142, 158)))
 PY
 )
 set -- $inks
