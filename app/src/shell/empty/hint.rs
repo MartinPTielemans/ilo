@@ -62,6 +62,21 @@ impl Shell {
         )
     }
 
+    /// The hint on the welcome, a card whose top is `card_top` and `width` across: under ⌘T's
+    /// bar's field, so only while the bar is over the card. Without it the hint stood alone beside
+    /// the welcome's mark, on the frame between first run's end and the bar.
+    pub(in crate::shell) fn welcome_hint(
+        &self,
+        card_top: f32,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        if !self.bar_over_card {
+            return None;
+        }
+        self.landing_hint(self.opened_bar_top(card_top), width, cx)
+    }
+
     /// Where ⌘T's bar's field sits on the card when the card doesn't rest on its own: its top, in
     /// the card's frame whose top is `card_top`.
     pub(in crate::shell) fn opened_bar_top(&self, card_top: f32) -> f32 {
