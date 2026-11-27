@@ -188,6 +188,8 @@ struct ClosedTab {
   // The id it had.
   bc_id id = 0;
   bc_id space = 0;
+  // The node of that Space, which finds it after a relaunch, when |space| is 0.
+  base::Uuid space_node;
   // Its place in the Space's Today tabs.
   size_t index = 0;
   SavedTab saved;
@@ -262,7 +264,7 @@ std::set<bc_id>& DeletingSpaces() {
   return *deleting;
 }
 
-// Newest last, each for as long as the archive keeps it (ArchiveHolds), which ReopenClosedTab
+// Each for as long as the archive keeps its history (ArchiveWithHistory), which ReopenClosedTab
 // reads them by.
 std::vector<ClosedTab>& ClosedTabs() {
   static base::NoDestructor<std::vector<ClosedTab>> closed;
@@ -357,8 +359,17 @@ void KeepClosed(bc_id id) {
                           .split_icon = space->SplitIcon(id),
                           .little = space->little(),
                           .profile = space->profile()});
-  // As long as its row, or the Delete that took the row, which ⌘Z puts back with its history.
-  std::erase_if(ClosedTabs(), [](const ClosedTab& closed) { return !ArchiveHolds(closed.id); });
+  // As long as its row, or the Delete that took the row, which ⌘Z puts back with its history. Of
+  // the user's, only the newest 25, as Chrome's: the rest come back at their page.
+  const std::vector<bc_id> with_history = ArchiveWithHistory();
+  std::erase_if(ClosedTabs(), [&with_history](const ClosedTab& closed) {
+    if (!ArchiveHolds(closed.id)) {
+      return true;
+    }
+    auto row = std::ranges::find(Archived(), closed.id, &ArchivedTab::tab);
+    return row != Archived().end() && row->reopens &&
+           !std::ranges::contains(with_history, closed.id);
+  });
 }
 
 // The closed tab |id|, taken from those ReopenClosedTab brings back, and from the archive.
@@ -1708,6 +1719,26 @@ void Window::ClosingKept(bc_id tab) {
   UserClosing().Stayed(tab);
   // Its page kept it, so the user's close next is the user's.
   TimerClosing().erase(tab);
+}
+
+// static
+const SavedTab* Window::ClosedHistory(bc_id tab, size_t* index) {
+  auto closed = std::ranges::find(ClosedTabs(), tab, &ClosedTab::id);
+  if (closed == ClosedTabs().end()) {
+    return nullptr;
+  }
+  *index = closed->index;
+  return &closed->saved;
+}
+
+// static
+void Window::LoadClosedHistory(const ArchivedTab& row, size_t index, SavedTab saved) {
+  ClosedTabs().push_back({.id = row.tab,
+                          .space_node = row.space,
+                          .index = index,
+                          .saved = std::move(saved),
+                          .little = row.little,
+                          .profile = row.profile});
 }
 
 // static
@@ -3087,8 +3118,11 @@ bc_id Window::ReopenClosed(bc_id id, bool show) {
   }
   const ClosedTab closed = std::move(*taken);
   // In this Little ilo window's Space, not the one it closed in, which may still be open.
+  // After a relaunch its Space has a new id, which its node finds.
+  const Space* by_node = closed.space ? nullptr : Space::WithNode(closed.space_node);
   const bc_id tab = own_space_ ? Reopen(space_, 0, closed.saved)
-                               : Reopen(closed.space, closed.index, closed.saved);
+                               : Reopen(by_node ? by_node->id() : closed.space, closed.index,
+                                        closed.saved);
   if (!tab) {
     return 0;
   }

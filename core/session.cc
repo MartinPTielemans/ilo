@@ -87,6 +87,13 @@ struct SavedWindow {
   bool maximized = false;
 };
 
+// The history of an archived tab the user closed, one of the newest 25 (ArchiveWithHistory), and
+// its place in its Space's Today tabs, which ⇧⌘T brings back after a relaunch (#4408).
+struct ArchivedHistory {
+  size_t index = 0;
+  SavedTab tab;
+};
+
 struct Saved {
   // Left to right.
   std::vector<SavedTab> favorites;
@@ -94,6 +101,8 @@ struct Saved {
   // Front to back, which is the order they were last active in.
   std::vector<SavedWindow> windows;
   std::vector<ArchivedTab> archive;
+  // One for each of |archive|, with the history it keeps, if any.
+  std::vector<std::optional<ArchivedHistory>> archive_history;
   // Newest first.
   std::vector<ClosedWindow> closed_windows;
   Settings settings;
@@ -492,6 +501,16 @@ Saved Collect() {
         });
   }
   saved.archive = Archived();
+  const std::vector<bc_id> with_history = ArchiveWithHistory();
+  for (const ArchivedTab& row : saved.archive) {
+    size_t index = 0;
+    const SavedTab* tab = std::ranges::contains(with_history, row.tab)
+                              ? Window::ClosedHistory(row.tab, &index)
+                              : nullptr;
+    saved.archive_history.push_back(
+        tab ? std::optional<ArchivedHistory>(ArchivedHistory{.index = index, .tab = *tab})
+            : std::nullopt);
+  }
   saved.closed_windows = ClosedWindows();
   return saved;
 }
@@ -669,7 +688,8 @@ std::optional<std::string> ToJson(const Saved& saved) {
   }
   root.Set("windows", std::move(windows));
   base::ListValue archive;
-  for (const ArchivedTab& tab : saved.archive) {
+  for (size_t at = 0; at < saved.archive.size(); ++at) {
+    const ArchivedTab& tab = saved.archive[at];
     archive.Append(base::DictValue()
                        .Set("url", tab.url.spec())
                        .Set("title", tab.title)
@@ -679,35 +699,18 @@ std::optional<std::string> ToJson(const Saved& saved) {
       archive.back().GetDict().Set("space", tab.space.AsLowercaseString());
     }
     closed_rule::Save({.profile = tab.profile, .by_user = tab.reopens}, archive.back().GetDict());
+    // Written as a Space's Today tab is.
+    if (at < saved.archive_history.size() && saved.archive_history[at]) {
+      const std::optional<ArchivedHistory>& history = saved.archive_history[at];
+      base::ListValue written = to_list({history->tab});
+      archive.back().GetDict().Set("saved", std::move(written.front()));
+      archive.back().GetDict().Set("index", static_cast<int>(history->index));
+    }
   }
   root.Set("archive", std::move(archive));
   base::ListValue closed_windows;
   for (const ClosedWindow& window : saved.closed_windows) {
-    base::DictValue dict =
-        base::DictValue()
-            .Set("closed", window.closed.InMillisecondsFSinceUnixEpochIgnoringNull())
-            .Set("space", window.space.AsLowercaseString());
-    if (window.tab.is_valid()) {
-      dict.Set("tab", window.tab.AsLowercaseString());
-    }
-    if (!window.bounds.IsEmpty()) {
-      dict.Set("bounds", base::ListValue()
-                             .Append(window.bounds.x())
-                             .Append(window.bounds.y())
-                             .Append(window.bounds.width())
-                             .Append(window.bounds.height()));
-    }
-    if (window.sidebar_width > 0) {
-      dict.Set("sidebar_width", window.sidebar_width);
-    }
-    if (window.fullscreen) {
-      dict.Set("fullscreen", true);
-    }
-    if (window.maximized) {
-      dict.Set("maximized", true);
-    }
-    closed_rule::Save({.profile = window.profile, .by_user = true}, dict);
-    closed_windows.Append(std::move(dict));
+    closed_windows.Append(closed_rule::SaveWindow(window));
   }
   root.Set("closed_windows", std::move(closed_windows));
   // A string, as JSON's numbers can't hold every id.
@@ -1013,35 +1016,23 @@ std::optional<Saved> Read(const base::FilePath& path) {
              .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid(),
              .reopens = closed.by_user,
              .profile = std::move(closed.profile)});
+        const base::Value* written = tab->Find("saved");
+        std::optional<SavedTab> kept = written ? ReadTab(*written) : std::nullopt;
+        const int index = std::max(0, tab->FindInt("index").value_or(0));
+        saved.archive_history.push_back(
+            kept ? std::optional<ArchivedHistory>(ArchivedHistory{
+                       .index = static_cast<size_t>(index), .tab = std::move(*kept)})
+                 : std::nullopt);
       }
     }
   }
   if (const base::ListValue* closed_windows = root->FindList("closed_windows")) {
     for (const base::Value& value : *closed_windows) {
-      const base::DictValue* window = value.GetIfDict();
-      const std::string* space = window ? window->FindString("space") : nullptr;
-      std::optional<double> closed = window ? window->FindDouble("closed") : std::nullopt;
-      if (!space || !closed) {
-        continue;
+      const base::DictValue* dict = value.GetIfDict();
+      std::optional<ClosedWindow> window = dict ? closed_rule::LoadWindow(*dict) : std::nullopt;
+      if (window) {
+        saved.closed_windows.push_back(std::move(*window));
       }
-      ClosedWindow& to = saved.closed_windows.emplace_back();
-      to.closed = base::Time::FromMillisecondsSinceUnixEpoch(*closed);
-      to.space = base::Uuid::ParseLowercase(*space);
-      if (const std::string* tab = window->FindString("tab")) {
-        to.tab = base::Uuid::ParseLowercase(*tab);
-      }
-      const base::ListValue* bounds = window->FindList("bounds");
-      if (bounds && bounds->size() == 4 &&
-          std::ranges::all_of(*bounds, [](const base::Value& each) { return each.is_int(); })) {
-        to.bounds = gfx::Rect((*bounds)[0].GetInt(), (*bounds)[1].GetInt(), (*bounds)[2].GetInt(),
-                              (*bounds)[3].GetInt());
-      }
-      to.sidebar_width = window->FindDouble("sidebar_width").value_or(0);
-      to.fullscreen = window->FindBool("fullscreen").value_or(false);
-      to.maximized = window->FindBool("maximized").value_or(false);
-      closed_rule::Closed who;
-      closed_rule::Load(*window, who);
-      to.profile = std::move(who.profile);
     }
   }
   if (const std::string* last_id = root->FindString("last_id")) {
@@ -1448,7 +1439,22 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
       StartIdsAfter(saved->last_id);
     }
     if (saved) {
+      // The tabs that kept their history get ids again, as tabs closed since the start have, and
+      // their history waits for ⇧⌘T as before the quit.
+      std::vector<std::pair<bc_id, ArchivedHistory>> histories;
+      for (size_t at = 0; at < saved->archive_history.size(); ++at) {
+        if (std::optional<ArchivedHistory>& history = saved->archive_history[at]) {
+          saved->archive[at].tab = NewId();
+          histories.emplace_back(saved->archive[at].tab, std::move(*history));
+        }
+      }
       LoadArchive(std::exchange(saved->archive, {}));
+      for (auto& [tab, history] : histories) {
+        auto row = std::ranges::find(Archived(), tab, &ArchivedTab::tab);
+        if (row != Archived().end()) {
+          Window::LoadClosedHistory(*row, history.index, std::move(history.tab));
+        }
+      }
       LoadClosedWindows(std::exchange(saved->closed_windows, {}));
       UserSettings() = saved->settings;
       LoadedWindows() = std::exchange(saved->windows, {});

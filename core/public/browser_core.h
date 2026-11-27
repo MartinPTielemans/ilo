@@ -3040,13 +3040,13 @@ BC_EXPORT bool bc_window_restore_sidebar(bc_id window, double time);
 
 // Reopens what the user closed last in the profile of the Space the window shows, as the archive
 // keeps it, so after a relaunch too: a Today tab, or a regular window closed while another stayed
-// open. Not what auto-archive took, which only the Library brings back (#4408). A tab closed since
-// the browser started comes back with its history at its place in its Space's Today tabs, else at
-// the top of the Space the window shows; one closed from a split view goes back to its place in it,
-// if a tab of the split is open and it has room. One closed before the browser started comes back
-// at its page, at the top of its Space. The window shows it, and its Space, and it leaves the
-// archive. A tab deleted from the archive (bc_archive_remove, bc_archive_clear) doesn't come back,
-// until bc_archive_undo_remove puts it back.
+// open. Not what auto-archive took, which only the Library brings back (#4408). One of the newest
+// 25 tabs the user closed comes back with its history at its place in its Space's Today tabs, else
+// at the top of the Space the window shows, after a relaunch too; one closed from a split view
+// since the browser started goes back to its place in it, if a tab of the split is open and it has
+// room. An older one comes back at its page, at the top of its Space. The window shows it, and its
+// Space, and it leaves the archive. A tab deleted from the archive (bc_archive_remove,
+// bc_archive_clear) doesn't come back, until bc_archive_undo_remove puts it back.
 // Tabs that close with their window or as the browser quits come back at the next launch instead,
 // but a Little ilo window's, which closes into the archive with its window. When the tab closed
 // last was a Little ilo window's, it comes back in a new one: this returns 0, and

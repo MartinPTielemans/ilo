@@ -1,11 +1,13 @@
 #include "browser_core/closed_rule.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/uuid.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_core::closed_rule {
@@ -136,6 +138,57 @@ TEST(ClosedRule, TheListFollowsTheWindowsProfile) {
   EXPECT_EQ(NextId(archive, "Default"), 1u);
   EXPECT_EQ(NextId(archive, "Profile 1"), 2u);
   EXPECT_EQ(NextId(archive, "Profile 2"), 0u);
+}
+
+TEST(ClosedRule, TheTwentySixthCloseDropsTheOldestsHistoryAndKeepsItsPage) {
+  // 26 the user closed, newest first, with the timer's among them, which don't count.
+  std::vector<Closed> archive;
+  for (int minute = 26; minute >= 1; --minute) {
+    archive.push_back(Tab(minute, minute, true));
+    archive.push_back(Tab(100 + minute, minute, false));
+  }
+  const std::vector<uint64_t> with_history = WithHistory(archive);
+  EXPECT_EQ(with_history.size(), kWithHistory);
+  EXPECT_FALSE(std::ranges::contains(with_history, 1u)) << "the oldest kept its history";
+  EXPECT_TRUE(std::ranges::contains(with_history, 2u));
+  EXPECT_TRUE(std::ranges::contains(with_history, 26u));
+  // Its row stays, so once the 25 are back ⇧⌘T brings it back too, at its page.
+  for (size_t reopened = 0; reopened < kWithHistory; ++reopened) {
+    archive.erase(archive.begin() + *Next(archive, "Default"));
+  }
+  EXPECT_EQ(NextId(archive), 1u);
+}
+
+TEST(ClosedRule, AClosedWindowsRecordOutlastsARelaunch) {
+  const ClosedWindow closed{.id = 7,
+                            .closed = kStart,
+                            .bounds = gfx::Rect(40, 60, 1200, 800),
+                            .maximized = true,
+                            .fullscreen = true,
+                            .sidebar_width = 260,
+                            .space = base::Uuid::GenerateRandomV4(),
+                            .tab = base::Uuid::GenerateRandomV4(),
+                            .profile = "Profile 1"};
+  std::optional<std::string> json = base::WriteJson(SaveWindow(closed));
+  ASSERT_TRUE(json);
+  std::optional<base::Value> read = base::JSONReader::Read(*json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(read && read->is_dict());
+  std::optional<ClosedWindow> back = LoadWindow(read->GetDict());
+  ASSERT_TRUE(back);
+  // A launch gives it a new id.
+  EXPECT_EQ(back->id, 0u);
+  EXPECT_EQ(back->closed, kStart);
+  EXPECT_EQ(back->bounds, closed.bounds);
+  EXPECT_TRUE(back->maximized);
+  EXPECT_TRUE(back->fullscreen);
+  EXPECT_EQ(back->sidebar_width, 260.0);
+  EXPECT_EQ(back->space, closed.space);
+  EXPECT_EQ(back->tab, closed.tab);
+  EXPECT_EQ(back->profile, "Profile 1");
+  // One with no Space to show is none.
+  base::DictValue spaceless = SaveWindow(closed);
+  ASSERT_TRUE(spaceless.Remove("space"));
+  EXPECT_FALSE(LoadWindow(spaceless));
 }
 
 }  // namespace

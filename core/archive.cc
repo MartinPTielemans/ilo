@@ -6,6 +6,7 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/closed_rule.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 
@@ -125,6 +126,17 @@ bool ArchiveHolds(bc_id tab) {
            return std::ranges::any_of(removal.tabs,
                                       [tab](const auto& each) { return each.second.tab == tab; });
          });
+}
+
+std::vector<bc_id> ArchiveWithHistory() {
+  std::vector<closed_rule::Closed> rows;
+  rows.reserve(Tabs().size());
+  for (const ArchivedTab& row : Tabs()) {
+    rows.push_back({.id = row.tab, .at = row.archived, .by_user = row.reopens});
+  }
+  std::vector<bc_id> tabs = closed_rule::WithHistory(rows);
+  std::erase(tabs, 0);
+  return tabs;
 }
 
 void Unarchive(bc_id tab) {

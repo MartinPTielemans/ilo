@@ -326,7 +326,10 @@ source_set("closed_rule") {
     "closed_rule.cc",
     "closed_rule.h",
   ]
-  deps = [ "//base" ]
+  deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
 }
 
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule

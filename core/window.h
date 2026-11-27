@@ -54,6 +54,7 @@ class WidgetDelegate;
 
 namespace browser_core {
 
+struct ArchivedTab;
 class SidePanel;
 class Space;
 class Suggestions;
@@ -213,6 +214,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Closes |tab| as CloseTab does, for auto-archive's timer: it goes in the archive but isn't among
   // the tabs ReopenClosedTab reopens, which are the ones the user closed (#4408).
   static void CloseForArchive(bc_id tab);
+  // The history of the closed tab |tab| while it keeps it (ArchiveWithHistory), and its place in
+  // its Space's Today tabs in |index|, for the session file to keep, or null.
+  static const SavedTab* ClosedHistory(bc_id tab, size_t* index);
+  // Gives the archive's |row|, which a relaunch brought back, the history the session file kept,
+  // |saved|, at |index|, so ⇧⌘T brings it back as before the quit.
+  static void LoadClosedHistory(const ArchivedTab& row, size_t index, SavedTab saved);
   // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
   // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
   static void ForgetPage(bc_id tab, const GURL& url);

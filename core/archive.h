@@ -54,6 +54,10 @@ void Archive(bc_id tab,
 // Whether the archive keeps the closed tab |tab|, or a Delete or Clear its Undo can put back does:
 // its history is kept as long (ReopenClosedTab).
 bool ArchiveHolds(bc_id tab);
+// The closed tabs whose history the archive keeps of those the user closed, by their |tab|: the
+// newest 25 (closed_rule::WithHistory), which the session file keeps with their rows. The rest
+// come back at their page.
+std::vector<bc_id> ArchiveWithHistory();
 
 // Takes |tab|, a closed tab that has come back, out of the archive. Then archive_changed.
 void Unarchive(bc_id tab);

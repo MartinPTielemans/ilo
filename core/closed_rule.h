@@ -10,9 +10,37 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "base/values.h"
+#include "ui/gfx/geometry/rect.h"
+
+namespace browser_core {
+
+// A regular window the user closed while another stayed open, which ⇧⌘T opens again
+// (closed_windows.h). Here so the unittests read and write it as the session file does.
+struct ClosedWindow {
+  // Its own id, for the app (window_reopen, bc_window_open_closed): a bc_id, new each launch.
+  uint64_t id = 0;
+  base::Time closed;
+  // Its frame out of full screen and maximized, and whether it was either, as the session keeps a
+  // window's (bc_saved_window_frames). Never maximized on the Mac.
+  gfx::Rect bounds;
+  bool maximized = false;
+  bool fullscreen = false;
+  double sidebar_width = 0;
+  // The node of the Space it showed, and of the pinned or Today tab it showed there, if any.
+  base::Uuid space;
+  base::Uuid tab;
+  // The directory of that Space's profile, whose windows' ⇧⌘T bring it back.
+  std::string profile;
+};
+
+}  // namespace browser_core
 
 namespace browser_core::closed_rule {
+
+// How many of the tabs the user closed keep their history, as Chrome's recently closed keeps it.
+inline constexpr size_t kWithHistory = 25;
 
 // A Today tab the archive keeps, or a regular window that closed while another stayed open.
 struct Closed {
@@ -39,6 +67,15 @@ std::optional<size_t> Next(const std::vector<Closed>& newest_first, const std::s
 // they were kept reads as the timer's, which ⇧⌘T leaves alone.
 void Save(const Closed& closed, base::DictValue& dict);
 void Load(const base::DictValue& dict, Closed& closed);
+
+// The ids of those in |newest_first| that keep their history, back and forward: the newest
+// kWithHistory the user closed, in any profile. The rest come back at their page (#4408).
+std::vector<uint64_t> WithHistory(const std::vector<Closed>& newest_first);
+
+// |window| as the session file keeps it, and back, with no id: none outlasts a launch. A record
+// without its time or Space reads as none.
+base::DictValue SaveWindow(const ClosedWindow& window);
+std::optional<ClosedWindow> LoadWindow(const base::DictValue& dict);
 
 }  // namespace browser_core::closed_rule
 
