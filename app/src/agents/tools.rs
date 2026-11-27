@@ -250,13 +250,13 @@ fn read_file_tool() -> Value {
     json!({
         "name": "read_file",
         "title": "Read a file",
-        "description": format!("Read one of the user's files: a text file's numbered lines, a PDF's pages as text with a picture of each page that has almost no text, as a scan, or a PNG, JPEG, GIF or WebP picture to look at. A relative path is taken from the task's first folder. Each read is checked against the task's folders and access, and some places are never read. A PDF gives at most {} pages a read, from pages; a text file {} lines from offset. The answer says where to read on.", super::files::read::MOST_PAGES, super::files::tool::LINES),
+        "description": format!("Read one of the user's files: a text file's numbered lines, a PDF's pages as text with a picture of each page that has almost no text, as a scan, or a PNG, JPEG, GIF or WebP picture to look at. A relative path is taken from the task's first folder. Each read is checked against the task's folders and access, and some places are never read. A PDF gives at most {} pages a read, from pages; a text file {} lines from offset. The answer says where to read on.", super::files::read::MOST_PAGES, super::files::read::LINES),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "The file's path, full or from the task's first folder." },
                 "offset": { "type": "integer", "minimum": 1, "description": "A text file's first line to read, from 1." },
-                "limit": { "type": "integer", "minimum": 1, "description": format!("How many lines of a text file to read, {} at most.", super::files::tool::LINES) },
+                "limit": { "type": "integer", "minimum": 1, "description": format!("How many lines of a text file to read, {} at most.", super::files::read::LINES) },
                 "pages": { "type": "string", "description": format!("A PDF's pages to read, as \"31-60\" or \"5\", {} at most. The first {} if not given.", super::files::read::MOST_PAGES, super::files::read::MOST_PAGES) },
             },
             "required": ["path"],

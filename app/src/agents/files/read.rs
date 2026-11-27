@@ -147,6 +147,8 @@ fn on_white(image: &DynamicImage) -> RgbImage {
     })
 }
 
+/// The lines a text file's read gives when it's asked for none, and at most.
+pub const LINES: usize = 2000;
 /// The most pages one read gives, as the core reads at most these (BC_PDF_MOST_PAGES).
 pub const MOST_PAGES: usize = 30;
 /// The most page pictures one answer carries, so a scanned PDF's answer stays one a model reads.

@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::give::{self, Reach};
 use super::read::{self, Kind, Picture, TEXT_ROOM, Unread};
 pub use super::read::{
-    MOST_PAGES, MOST_PICTURES, PDF_BROKEN, PDF_LOCKED, PDF_READ, Pdf, PdfRead, pdf_answer,
+    LINES, MOST_PAGES, MOST_PICTURES, PDF_BROKEN, PDF_LOCKED, PDF_READ, Pdf, PdfRead, pdf_answer,
 };
 use super::words::{self, Step, Unopened};
 use super::{Listed, Op, Refused, shown_name};
@@ -20,8 +20,6 @@ use crate::product::PRODUCT;
 
 /// The most bytes of a text file read_file reads.
 pub const MOST_TEXT_BYTES: u64 = 1 << 20;
-/// The lines a read gives when it's asked for none.
-pub const LINES: usize = 2000;
 
 /// What read_file was asked: the file, and which of its lines or pages.
 #[derive(Clone, Debug, PartialEq, Eq)]
