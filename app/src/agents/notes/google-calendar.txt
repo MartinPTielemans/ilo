@@ -1,6 +1,6 @@
 source: https://support.google.com/calendar/answer/37034
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 ? lists every key and / puts the cursor in search.

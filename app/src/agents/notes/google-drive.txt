@@ -1,6 +1,6 @@
 source: https://support.google.com/drive/answer/2563044
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 ⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key, and / puts the cursor in search.

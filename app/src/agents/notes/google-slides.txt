@@ -1,6 +1,6 @@
 source: https://support.google.com/docs/answer/1696717
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 On a Mac: ⌘+/ lists every key and Option+/ finds any menu command by its name. Ctrl+M adds a slide and ⌘+D duplicates the one selected. ⌘+Up and ⌘+Down move a slide in the filmstrip. ⌘+Option+Shift+S shows the speaker notes. ⌘+Enter presents from this slide and ⌘+Shift+Enter from the first. ⌘+Option+G groups and ⌘+Option+Shift+G ungroups.

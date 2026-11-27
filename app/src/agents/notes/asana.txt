@@ -2,7 +2,7 @@ source: https://help.asana.com/s/article/save-time-in-asana
 source: https://help.asana.com/s/article/asana-overview-for-screen-reader-users
 source: https://help.asana.com/s/article/task-actions
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 ⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key. Most of Asana's keys are Tab and then a letter.

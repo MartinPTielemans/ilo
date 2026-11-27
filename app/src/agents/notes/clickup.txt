@@ -1,6 +1,6 @@
 source: https://help.clickup.com/hc/en-us/articles/6309030550167-Use-keyboard-shortcuts
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 ⌘+K on a Mac, Ctrl+K elsewhere, searches everything. Shift+? lists the keys. s searches too, t makes a task and r a reminder.

@@ -1,6 +1,6 @@
 source: https://support.google.com/docs/answer/181110
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 On a Mac: ⌘+/ lists every key and Option+/ finds any menu command by its name. Ctrl+G goes to a range. Ctrl+Space selects the column and Shift+Space the row. ⌘+D fills down and ⌘+R right. ⌘+; puts in today's date and ⌘+Shift+; the time. ⌘+Shift+V pastes values alone. Ctrl+~ shows every formula. With rows selected, ⌘+Option+= adds as many above and ⌘+Option+- deletes them. Shift+Fn+F11 adds a sheet, and Option+Down and Option+Up move to the next sheet and the one before, Option+Right and Option+Left on a MacBook.

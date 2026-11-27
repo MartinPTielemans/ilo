@@ -6,7 +6,7 @@ source: https://linear.app/docs/filters
 landmark: https://linear.app/docs/search | Search
 landmark: https://linear.app/docs/inbox | snooze
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Keys beat clicks
 / opens search, which finds issues, projects and documents by ID, title, description or comments. An ID such as LIN-123 finds that issue, and words in quotes an exact term. o then i searches issue titles alone.

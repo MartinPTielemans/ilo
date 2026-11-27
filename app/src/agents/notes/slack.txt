@@ -1,7 +1,7 @@
 source: https://slack.com/help/articles/201374536-Slack-keyboard-shortcuts
 source: https://slack.com/help/articles/202528808-Search-in-Slack
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Go straight there
 Search takes in:CHANNEL or in:NAME, from:NAME, with:NAME, before:, after: and on: a date, during: a month or a year, has:pin, is:saved and is:thread. Quotes find a phrase, a minus leaves out a word or an in: or from:, and a * after three letters or more finds words starting with them.

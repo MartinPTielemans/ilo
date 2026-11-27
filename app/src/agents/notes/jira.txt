@@ -1,7 +1,7 @@
 source: https://support.atlassian.com/jira-software-cloud/docs/use-keyboard-shortcuts/
 source: https://support.atlassian.com/jira-software-cloud/docs/what-is-advanced-search-in-jira-cloud/
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Go straight there
 Search at the top, or /, then View all work items, then JQL beside the search icon, takes a query such as project = "KEY" AND assignee = currentUser() AND status IN ("To Do", "In Progress") ORDER BY created. ~ finds words in a text field such as the summary or the comments, IN stands for several ORs, and parentheses group.

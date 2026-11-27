@@ -1,7 +1,7 @@
 source: https://support.discord.com/hc/en-us/articles/31232432266647-Discord-Commands-Shortcuts-and-Navigation-Guide
 source: https://support.discord.com/hc/en-us/articles/115000468588-How-to-Use-Search-on-Discord
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Go straight there
 Search takes from:NAME, in:CHANNEL, mentions:NAME and has:, and its menu offers dates before and after.

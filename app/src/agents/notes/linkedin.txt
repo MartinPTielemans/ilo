@@ -3,7 +3,7 @@ source: https://www.linkedin.com/help/linkedin/answer/a523136
 source: https://www.linkedin.com/help/linkedin/answer/a564264
 landmark: https://www.linkedin.com/help/linkedin/answer/a524335 | Boolean
 checked: 2026-11-27
-holds: addresses, search words, where things are
+holds: addresses, search filters, where things are
 ---
 Go straight there
 /messaging/ holds the user's messages.

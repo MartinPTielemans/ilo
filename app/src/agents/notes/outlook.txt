@@ -1,7 +1,7 @@
 source: https://support.microsoft.com/en-us/office/keyboard-shortcuts-for-outlook-3cdeb221-7ae5-4c1d-8c1d-9e63216c1efd
 source: https://support.microsoft.com/en-us/office/search-mail-and-people-in-outlook-com-88108edf-028e-4306-b87e-7400bbb40aa7
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Go straight there
 Search takes from:NAME, to:NAME, subject:WORD, HasAttachment:yes and received:MM/DD/YYYY, two dots between two dates for the days between, and words such as today or last week. Quotes find a phrase, AND and OR join terms, a minus before one leaves it out, and no space follows a colon.

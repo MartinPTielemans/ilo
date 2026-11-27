@@ -2,7 +2,7 @@ source: https://developers.google.com/maps/documentation/urls/get-started
 source: https://support.google.com/maps/answer/6396990
 landmark: https://www.google.com/maps/search/?api=1&query=Copenhagen | Copenhagen
 checked: 2026-11-27
-holds: addresses, keys
+holds: addresses, shortcuts
 ---
 Go straight there
 /maps/search/?api=1&query=WORDS searches for a place or an address.

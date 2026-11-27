@@ -3,7 +3,7 @@ source: https://docs.github.com/en/search-github/searching-on-github/searching-i
 source: https://docs.github.com/en/subscriptions-and-notifications/how-tos/viewing-and-triaging-notifications/managing-notifications-from-your-inbox
 landmark: https://github.com/rust-lang/rust | Issues; Pull requests; Actions
 checked: 2026-11-27
-holds: addresses, search words, keys
+holds: addresses, search filters, shortcuts
 ---
 Go straight there
 /notifications is the user's inbox. Its filter box takes is:unread, is:read, is:saved, is:done and repo:owner/name.

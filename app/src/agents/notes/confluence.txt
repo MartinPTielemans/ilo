@@ -1,6 +1,6 @@
 source: https://support.atlassian.com/confluence-cloud/docs/keyboard-shortcuts-markdown-and-autocomplete/
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 Viewing a page, Shift+? lists the keys, and editing one, ⌘+/. e edits the page. Ctrl+Option+Z searches, ⌘+Option+H goes home and ⌘+Option+O opens the notifications.

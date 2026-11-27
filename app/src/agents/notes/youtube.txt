@@ -1,7 +1,7 @@
 source: https://support.google.com/youtube/answer/7631406
 landmark: https://www.youtube.com/ | Search
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 / puts the cursor in the search box, and Shift+? lists every key.

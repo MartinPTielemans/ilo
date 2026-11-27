@@ -1,7 +1,7 @@
 source: https://support.reddithelp.com/hc/en-us/articles/19696541895316-Available-search-features
 source: https://support.reddithelp.com/hc/en-us/articles/19695706914196-What-filters-and-sorts-are-available
 checked: 2026-11-27
-holds: search words
+holds: search filters
 ---
 Go straight there
 Search takes subreddit:NAME, author:NAME, title:WORDS, selftext:WORDS, site:DOMAIN, url:WORDS, flair:WORDS and self:true for text posts alone. AND, OR and NOT, in capitals, join them, and parentheses group.

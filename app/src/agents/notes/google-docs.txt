@@ -1,6 +1,6 @@
 source: https://support.google.com/docs/answer/179738
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 On a Mac: ⌘+/ lists every key. Option+/ finds any menu command by its name, faster than opening menus. ⌘+F finds and ⌘+Shift+H finds and replaces. ⌘+Option+1 to 6 make a heading and ⌘+Option+0 plain text again. ⌘+K adds a link and ⌘+Option+M a comment. Holding Ctrl+⌘, n then h moves to the next heading, and p then h to the one before. ⌘+Shift+C counts words. ⌘+Option+Shift+H opens the version history.

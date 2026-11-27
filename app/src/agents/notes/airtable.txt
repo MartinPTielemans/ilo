@@ -1,6 +1,6 @@
 source: https://support.airtable.com/docs/airtable-keyboard-shortcuts
 checked: 2026-11-27
-holds: keys
+holds: shortcuts
 ---
 Keys beat clicks
 ⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key, and Ctrl stands for ⌘ in the rest. ⌘+K switches to another base and ⌘+J to another table. ⌘+F finds in the view, and ⌘+Shift+F opens its filters.

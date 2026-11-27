@@ -1,7 +1,7 @@
 source: https://help.x.com/en/using-x/how-to-post
 source: https://help.x.com/en/using-x/advanced-postdeck-features
 checked: 2026-11-27
-holds: search words, keys
+holds: search filters, shortcuts
 ---
 Go straight there
 Search takes from:NAME, to:NAME, since:2026-01-31 and until:2026-02-28, min_faves:10, min_replies:100, filter:media and filter:replies, quotes for a phrase, OR for either and a minus to leave a word out.

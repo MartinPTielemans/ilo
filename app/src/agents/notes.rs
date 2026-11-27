@@ -120,8 +120,8 @@ pub static NOTES: [Note; 30] = [
 /// product's name until the brand sweep.
 const FRAME: &str = concat!(env!("PRODUCT_NAME"), "'s notes for ");
 
-/// Settings › Agents' heading over the list, its switch and the sentence under it: the words
-/// table's SKS1 to SKS3, a person's word for notes being skills.
+/// Settings › Agents' heading over the list, its switch and the sentence under it, a person's word
+/// for notes being skills.
 pub const HEADING: &str = "Skills";
 pub const SWITCH_LINE: &str = concat!(
     "A thread gets what ",
@@ -130,13 +130,18 @@ pub const SWITCH_LINE: &str = concat!(
 );
 pub const SWITCH_OFF_LINE: &str = "Off: threads find their way on every site by reading it.";
 pub const FOOT: &str = concat!(
-    "Skills are part of ",
+    "Skills come with ",
     env!("PRODUCT_NAME"),
-    ": written by us, shipped in the app, never fetched. Each is plain text you can read here."
+    ", never downloaded from the web. Each is plain text you can read here."
 );
-/// What a note may hold, as its record's `holds:` names them and a row in Settings says them, in
-/// this order: the words table's SKS6, its rule for a skill's line under its name.
-pub const HOLDS: [&str; 4] = ["addresses", "search words", "keys", "where things are"];
+/// What a note may hold, as its record's `holds:` names them and a row in Settings says them under
+/// the skill's name, in this order.
+pub const HOLDS: [&str; 4] = [
+    "addresses",
+    "search filters",
+    "shortcuts",
+    "where things are",
+];
 /// A row's button, closed and open.
 pub const READ: &str = "Read";
 pub const CLOSE: &str = "Close";
@@ -221,15 +226,16 @@ impl Note {
         })
     }
 
-    /// The line under a thread's step whose answer carried it, the words table's SKS4.
+    /// The line under a thread's step whose answer carried it: "Included the GitHub skill".
     pub fn with(&self) -> String {
-        format!("Used the {} skill", self.name)
+        format!("Included the {} skill", self.name)
     }
 }
 
-/// An activity entry's title, for a call whose answer carried a note, by the words table's SKS5.
+/// An activity entry's title, for a call whose answer carried a note: "Read the page · with a
+/// skill".
 pub fn logged(title: &str) -> String {
-    format!("{title}, with a skill")
+    format!("{title} · with a skill")
 }
 
 /// The notes each task has been given, by the task's own key: kept while the task is, in memory
@@ -263,23 +269,25 @@ mod tests {
         note_for(url).map(|note| note.name)
     }
 
-    /// The line under a step whose answer carried a note names the site's skill.
+    /// The line under a step whose answer carried a note names the site's skill, and the
+    /// activity entry's title says it came with one.
     #[test]
     fn a_notes_line_under_its_step_names_the_site() {
         let github = note_for("https://github.com/").expect("GitHub's note");
-        assert_eq!(github.with(), "Used the GitHub skill");
+        assert_eq!(github.with(), "Included the GitHub skill");
+        assert_eq!(logged("Read the page"), "Read the page · with a skill");
     }
 
     /// A note's line in Settings names what it holds, in the rule's order, the first word
-    /// capitalised, and keys only where it has its keys part.
+    /// capitalised, and shortcuts only where it has its part on keys.
     #[test]
     fn a_notes_line_in_settings_names_what_it_holds() {
         let about = |url| note_for(url).unwrap().about();
         assert_eq!(
             about("https://github.com/"),
-            "Addresses, search words, keys"
+            "Addresses, search filters, shortcuts"
         );
-        assert_eq!(about("https://www.youtube.com/"), "Keys");
+        assert_eq!(about("https://www.youtube.com/"), "Shortcuts");
         assert_eq!(about("https://docs.google.com/forms"), "Where things are");
         for note in &NOTES {
             for held in note.record("holds").flat_map(|holds| holds.split(", ")) {
@@ -287,7 +295,7 @@ mod tests {
             }
             let keys = note.text().lines().any(|line| line == PARTS[1]);
             assert_eq!(
-                note.about().to_lowercase().contains("keys"),
+                note.about().to_lowercase().contains("shortcuts"),
                 keys,
                 "{}",
                 note.name
