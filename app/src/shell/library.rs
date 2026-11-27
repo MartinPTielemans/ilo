@@ -2286,8 +2286,7 @@ impl Shell {
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
-        let height = f32::from(self.viewport.height);
-        let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
+        let tint = self.space_tint_layer(id, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
                 let clear = clear_label(&palette, palette.tertiary());
@@ -2398,7 +2397,7 @@ impl Shell {
             .overflow_hidden()
             .rounded(px(CARD_RADIUS))
             .bg(palette.underlay)
-            .child(glow)
+            .child(tint)
             .shadow(Level::Resting.shadow())
             .block_mouse_except_scroll()
             .on_click(cx.listener(move |shell, _, _, cx| shell.pick_space(id, cx)))
@@ -2709,7 +2708,7 @@ impl Shell {
     fn card_ghost(&self, dragged: CardTab) -> AnyElement {
         let CardTab { tab, space, depth } = dragged;
         let palette = self.palette_of(space);
-        let behind = Hsla::from(self.space_color_at(space, 0.5, 0.));
+        let behind = Hsla::from(self.space_color_of(space));
         let behind = Hsla::from(palette.underlay).blend(behind);
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
@@ -5832,12 +5831,7 @@ mod tests {
             set_transparency(level);
             for tone in [Tone::Dark, Tone::Light] {
                 let palette = Palette::of(None, tone);
-                let mut window = Vec::new();
-                for foot in 0..=4 {
-                    for far in 0..=4 {
-                        window.extend(palette.window_at(foot as f32 / 4., far as f32 / 4.));
-                    }
-                }
+                let window = palette.window();
                 let red = gpui::Rgba::from(
                     palette.toned(gpui::rgba(DARK_DESTRUCTIVE), gpui::rgba(LIGHT_DESTRUCTIVE)),
                 );

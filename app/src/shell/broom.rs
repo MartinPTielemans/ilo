@@ -132,9 +132,17 @@ impl Shell {
                 cx.stop_propagation();
                 // What the browser says now, which a sort begun since the draw has changed.
                 if shell.browser.broom().is_some_and(Broom::sorts) {
-                    shell.browser.start_broom(cx)
+                    shell.start_broom(cx)
                 }
             }))
+    }
+
+    /// Asks the browser to start a sort once this turn with the Shell has ended: its start reads
+    /// the Shell back for the Space to sort, which the click's listener and a command run inside
+    /// that turn can't allow (#4397).
+    pub(super) fn start_broom(&self, cx: &mut Context<Self>) {
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.start_broom(cx));
     }
 
     /// The pointer has come onto the broom or left it: it lights up as Clear does where a click

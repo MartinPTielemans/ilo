@@ -1630,7 +1630,7 @@ impl Shell {
             // What the browser says now, as the broom's click reads it.
             Command::SortIntoFolders => {
                 if self.browser.broom().is_some_and(super::Broom::sorts) {
-                    self.browser.start_broom(cx);
+                    self.start_broom(cx);
                 }
                 return;
             }

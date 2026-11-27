@@ -2927,7 +2927,7 @@ impl TalkView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
-        let mark = knot::knot(SIGN_SIZE, &look.palette, gap);
+        let mark = knot::knot(SIGN_SIZE, &look.palette, sign, gap);
         let (drawn, composer) = (self.sign_drawn.clone(), self.composer_drawn.clone());
         div()
             .relative()

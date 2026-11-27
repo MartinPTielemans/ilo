@@ -157,7 +157,7 @@ impl Shell {
                     shell.edge_knot_pressed(cx);
                 }),
             )
-            .child(knot::knot(MARK, &palette, gap));
+            .child(knot::knot(MARK, &palette, Some(Knot::Waiting), gap));
         // Square and rimless where it meets the window's edge, and the knot as far past the middle
         // the other way.
         let tab = match self.right {

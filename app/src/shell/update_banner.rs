@@ -377,7 +377,7 @@ impl Shell {
                 .rounded(px(PLATE_RADIUS))
                 .overflow_hidden()
                 // Opaque, so the rows it opens over don't show through, under the plate's ink.
-                .bg(self.window_fill_at(1.))
+                .bg(self.window_fill())
                 // Rounded too, as a clip keeps a child's square corners.
                 .child(
                     div()

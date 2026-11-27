@@ -198,6 +198,8 @@ pub(super) enum Mark {
 pub(super) struct MarkInks {
     pub(super) ink: Hsla,
     pub(super) on_primary: Hsla,
+    /// A waiting task's, amber (#4402).
+    pub(super) needs_you: Hsla,
 }
 
 /// Paints `mark` in `bounds`, the card's glyph box.
@@ -269,7 +271,7 @@ pub(super) fn paint_mark(mark: Mark, bounds: Bounds<Pixels>, inks: MarkInks, win
             stroke(&points, CHECK_STROKE, inks.ink, window);
         }
         Mark::Pause => {
-            dot(centre, PAUSE, inks.ink, window);
+            dot(centre, PAUSE, inks.needs_you, window);
             for x in [PAUSE_LEFT, PAUSE_RIGHT] {
                 let bar = [at(x, PAUSE_TOP), at(x, PAUSE_BOTTOM)];
                 stroke(&bar, PAUSE_STROKE, inks.on_primary, window);

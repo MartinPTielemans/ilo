@@ -16,8 +16,8 @@ use super::tier::Why;
 /// The list in Settings, beside Off limits: the words table's SS3, SS5 and SS6.
 pub const HEADING: &str = "Sensitive sites";
 pub const NONE: &str = "No sites";
-pub const NONE_LINE: &str =
-    "Sites you mark, and sites you sign in to with a bank or government ID, show here.";
+pub const NONE_LINE: &str = "Sites you mark in a site's menu, and sites you sign in to with a bank \
+                             or government ID, show here.";
 pub const FOOT: &str = "Agents use these sites only at Full access.";
 
 /// A row of the list, SS7: the site, and its profile with two or more.
