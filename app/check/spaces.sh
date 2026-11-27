@@ -844,13 +844,15 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # In a window 700 wide the two cards and the + don't fit: the section leaves the page its room,
 # and its cards scroll across under two fingers, give past their last and spring back to it once
 # let go, as far along as they're wider than the section, the Library staying open (Arc 1.171,
-# #1401).
+# #1401). The fingers go 20 a step until they're past the last by 100 or more, as the cards only
+# spring back from past it.
 narrow_room=$((cards_full - 700 + $(token shell.library spaces-page)))
+narrow_steps=$(((narrow_room + 100) / 20 + 1))
 if [ -n "$fingers" ]; then
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
-  send swipe 500 $((${content#*x} / 2)) -20 0 10
+  send swipe 500 $((${content#*x} / 2)) -20 0 $narrow_steps
   expect '^browser: swipe cards$' "two fingers over the cards that don't fit didn't scroll them"
   expect "^browser: library cards at $narrow_room\$" "the cards let go past their last didn't spring back to it, $narrow_room along"
   recorded
