@@ -34,6 +34,7 @@ pub mod request;
 pub mod runner;
 pub mod saved_read;
 pub mod scripts;
+pub mod sensitive;
 mod server;
 pub mod sign_in;
 pub mod skill;
@@ -900,6 +901,8 @@ pub struct Agents {
     grants: HashMap<String, HashMap<String, bool>>,
     /// The hosts the user fenced, where agents always ask first (fence.rs), as they added them.
     fenced: Vec<String>,
+    /// Each profile's sensitive sites, and the sign-ins under way that mark them (sensitive.rs).
+    sensitive: sensitive::Sensitive,
     /// The tabs the user let stay under a fence's entry, by tab, until their page is off it.
     cleared: HashMap<u64, Cleared>,
     /// What each agent did last, as the log says it.
@@ -1121,6 +1124,7 @@ impl Agents {
             downloading: HashMap::new(),
             grants: HashMap::new(),
             fenced: Vec::new(),
+            sensitive: sensitive::Sensitive::default(),
             cleared: HashMap::new(),
             doing: HashMap::new(),
             pins: HashMap::new(),
@@ -1185,6 +1189,7 @@ impl Agents {
                 self.fenced.push(host);
             }
         }
+        self.sensitive.load(saved.get("sensitive"));
         let tasks = saved.get("tasks").unwrap_or(&Value::Null);
         self.tasks.default = tasks
             .get("default")
@@ -2335,7 +2340,7 @@ impl Agents {
                     let refused = Refused::of(tools::Kind::NotWebPage, WEB_ONLY);
                     return self.refuse(act, &host, refused, cx);
                 }
-                let risk = self.opening(&mut act, &host);
+                let risk = self.opening(&mut act, &host, cx);
                 self.check(act, host, risk, cx);
             }
             "navigate" | "snapshot" | "click" | "type" | "select" | "press_key" | "scroll"
@@ -3394,6 +3399,7 @@ impl Agents {
         self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
+        self.sensitive_closed(tab);
         self.left(tab, Gone::Closed);
         self.let_go(tab, held::Event::Closed, cx);
     }
@@ -3700,6 +3706,8 @@ impl Agents {
         let mut risk = None;
         // Whether it may click, choose or send on the page, which asks on a fenced site.
         let mut sends = false;
+        // On a sensitive site, sending or moving money is an order (sensitive.rs).
+        let sensitive = self.sensitive_why(&act, &host, cx).is_some();
         match tool {
             "navigate" => {
                 act.show = show.whole();
@@ -3731,7 +3739,7 @@ impl Agents {
                             return self.refuse(act, &to, refused, cx);
                         }
                         // What asks is the site it goes to.
-                        let risk = self.opening(&mut act, &to);
+                        let risk = self.opening(&mut act, &to, cx);
                         return self.check(act, to, risk, cx);
                     }
                 }
@@ -3758,7 +3766,10 @@ impl Agents {
                 act.say(&host, |on| format!("click {}{on}", label(element)));
                 let outline = self.outlines.get(&tab);
                 let message = outline.is_some_and(|outline| outline.sends_message(element.form));
-                risk = page::risk(&host, &element.name, message);
+                risk = match page::moves_money(outline, element) {
+                    true => Some(page::ORDER),
+                    false => page::risk(&host, &element.name, message, sensitive),
+                };
             }
             "type" => {
                 let (Some(element), Some(text)) = (&element, string("text")) else {
@@ -3795,8 +3806,9 @@ impl Agents {
                     && outline.is_some_and(|outline| outline.is_editor(element.node));
                 let enter = submit || broken;
                 sends = enter;
-                let pressing = (enter
-                    .then(|| page::pressing_risk(&host, outline, "Enter", Some(element))))
+                let pressing = (enter.then(|| {
+                    page::pressing_risk(&host, sensitive, outline, "Enter", Some(element))
+                }))
                 .flatten();
                 risk = match pressing {
                     Some(pressing) => {
@@ -3814,7 +3826,7 @@ impl Agents {
                         });
                         Some(pressing.why)
                     }
-                    None => enter.then(|| page::risk(&host, "send", false)).flatten(),
+                    None => (enter.then(|| page::risk(&host, "send", false, sensitive))).flatten(),
                 };
                 self.unshown(&mut act, element, tab);
                 act.text = text;
@@ -3844,8 +3856,8 @@ impl Agents {
                 // As a click on the field or the option would.
                 let outline = self.outlines.get(&tab);
                 let message = outline.is_some_and(|outline| outline.sends_message(element.form));
-                risk = page::risk(&host, &element.name, message)
-                    .or_else(|| page::risk(&host, &option, message));
+                risk = page::risk(&host, &element.name, message, sensitive)
+                    .or_else(|| page::risk(&host, &option, message, sensitive));
                 self.unshown(&mut act, element, tab);
                 act.text = option;
             }
@@ -3868,7 +3880,7 @@ impl Agents {
                 // What the key activates asks as a click on it would (GHSA-hqw3-jp9p-3rhj), and
                 // Enter else as a message sent.
                 let outline = self.outlines.get(&tab);
-                risk = match page::pressing_risk(&host, outline, &key, None) {
+                risk = match page::pressing_risk(&host, sensitive, outline, &key, None) {
                     Some(pressing) => {
                         let control = label(&pressing.control);
                         act.say(&host, |on| match pressing.surely {
@@ -3878,7 +3890,7 @@ impl Agents {
                         Some(pressing.why)
                     }
                     None => (key == "Enter")
-                        .then(|| page::risk(&host, "send", false))
+                        .then(|| page::risk(&host, "send", false, sensitive))
                         .flatten(),
                 };
                 act.text = key;
@@ -3913,13 +3925,13 @@ impl Agents {
 
     /// What an open of `site` asks: on a site the user fenced, always, and once allowed its tab
     /// may stay there (#3724); elsewhere as the site's kind says.
-    fn opening(&self, act: &mut Act, site: &str) -> Option<&'static str> {
+    fn opening(&self, act: &mut Act, site: &str, cx: &App) -> Option<&'static str> {
         match self.fence_of(site) {
             Some(entry) => {
                 act.fenced = Fenced::Open(entry);
                 Some(FENCED)
             }
-            None => page::opening_risk(site),
+            None => (self.sensitive_why(act, site, cx)).map(|_| page::SENSITIVE),
         }
     }
 
@@ -3951,7 +3963,8 @@ impl Agents {
         let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
-        let why = Self::why_of(&act, &site, why).map(|why| match why {
+        let sensitive = self.sensitive_why(&act, &site, cx);
+        let why = Self::why_of(&act, sensitive, why).map(|why| match why {
             tier::Why::Fenced => why,
             _ if self.said_never(&act.agent, &site) => tier::Why::Never,
             _ => why,
@@ -4452,6 +4465,7 @@ impl Agents {
     /// its Space, behind, and its action's answer names it (#1470). In an agent's Space it's quiet,
     /// as the agent's own tabs are, until the user wants to hear it (#1080).
     pub fn tab_opened(&mut self, tab: u64, opener: u64, cx: &App) {
+        self.sensitive_opened(tab, opener);
         if let Some(acting) = self.acting.values_mut().find(|acting| acting.tab == opener) {
             acting.opened_tabs.push(tab);
         }
@@ -5793,6 +5807,7 @@ impl Agents {
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,
+            "sensitive": self.sensitive.saved(),
             "tasks": tasks,
             "scripts": self.scripts,
             "notes": !self.notes_off,
@@ -5951,7 +5966,10 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 /// nothing (tabs::tab_state_changed).
 pub fn tab_at(tab: u64, url: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
-        agents.update(cx, |agents, _| agents.tab_at(tab, url));
+        agents.update(cx, |agents, cx| {
+            agents.tab_at(tab, url);
+            agents.sensitive_at(tab, url, cx);
+        });
     }
 }
 

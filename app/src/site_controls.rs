@@ -230,6 +230,10 @@ pub struct Site {
     /// Whether a pinned tab's or favorite's card on the site shows what's recent there (#3074), on
     /// or not, none where it shows none: another site, or with Settings' switch off.
     pub recent: Option<bool>,
+    /// Whether agents keep the site as a sensitive one in the tab's profile (#4369), which the "…"
+    /// menu's mark says and turns, none where it can't be: a page that isn't http(s), or a
+    /// private window.
+    pub sensitive: Option<bool>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -348,6 +352,8 @@ pub enum Run {
     OpenInProfile(u64),
     /// New Space's form, its Space in the profile, for one none of the user's Spaces is in.
     NewSpaceInProfile(u64),
+    /// Marks the site sensitive for agents in the tab's profile, or with false takes it off.
+    Sensitive(bool),
 }
 
 /// The tab's profile and the user's others, for the footer's chip, while there's more than one
@@ -1156,8 +1162,9 @@ fn lock_label(site: &Site) -> SharedString {
     }
 }
 
-/// The "…" menu: Arc's, its Boost items where the page can have one, and ours to turn Developer
-/// Mode on, whose switch shows only while it's on (#2334).
+/// The "…" menu: Arc's, its Boost items where the page can have one, ours to turn Developer
+/// Mode on, whose switch shows only while it's on (#2334), and the site's mark as sensitive for
+/// agents, checked while it is (#4369).
 fn more_items(site: &Site) -> Vec<(MenuEntry, Option<Run>)> {
     let item = |title: &'static str, run: Run| (MenuEntry::new(title, true), Some(run));
     let mut items = vec![
@@ -1172,6 +1179,14 @@ fn more_items(site: &Site) -> Vec<(MenuEntry, Option<Run>)> {
             "Turn On Developer Mode",
             Run::Command(Command::ToggleDeveloperMode),
         ));
+    }
+    if let Some(on) = site.sensitive {
+        // The words table's SS3.
+        let mark = MenuEntry {
+            checked: on,
+            ..MenuEntry::new("Sensitive Site", true)
+        };
+        items.push((mark, Some(Run::Sensitive(!on))));
     }
     if site.boostable {
         let boost = match site.boost {
