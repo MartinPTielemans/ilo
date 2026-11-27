@@ -644,7 +644,8 @@ fn the_chrome_has_no_warm_grey_and_no_colour_but_amber() {
                 "the site colours are back"
             );
         } else if table != "[board]" && !line.starts_with('#') {
-            let lower = line.to_ascii_lowercase();
+            // A value's digits, without the underscores that group them, as `0xf3f0_e8eb`.
+            let lower = line.to_ascii_lowercase().replace('_', "");
             if warm.iter().any(|grey| lower.contains(grey)) || line.starts_with("status-agent") {
                 found.push(format!("{table} {line}"));
             }

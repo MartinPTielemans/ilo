@@ -2667,3 +2667,25 @@ fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
         );
     }
 }
+
+/// The main button (#4401), filled with the ink, keeps its label, the other look's ink, readable at
+/// rest, under the pointer and pressed, in both looks.
+#[test]
+fn the_main_buttons_label_reads_on_its_ink_in_every_state() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let label = palette.other_ink();
+        let (hovered, pressed) = ink_states(palette.ink, label);
+        for (state, fill) in [
+            ("rest", palette.ink),
+            ("hovered", hovered),
+            ("pressed", pressed),
+        ] {
+            assert!(
+                contrast(label, fill) >= 4.5,
+                "{tone:?} {state}: {:.2}",
+                contrast(label, fill)
+            );
+        }
+    }
+}

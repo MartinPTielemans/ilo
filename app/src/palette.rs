@@ -1289,6 +1289,21 @@ impl Palette {
         composite(foot, far)
     }
 
+    /// The other look's ink: Ink on a dark window and Paper on a light one, the main button's
+    /// label on its fill of the ink (#4401).
+    pub fn other_ink(&self) -> Rgba {
+        match self.tone {
+            Tone::Dark => rgb(INK),
+            Tone::Light => rgb(PAPER),
+        }
+    }
+
+    /// What the keyboard is on, a row in the command bar, the tab switcher, a menu or Settings'
+    /// list: the flat plate of the ink, a step weaker on a light window (#4401).
+    pub fn flat_plate(&self) -> Hsla {
+        self.plate(self.toned(STATE_SELECTED, LIGHT_STATE_SELECTED))
+    }
+
     /// A plate under a row or a field, the ink at `alpha`.
     pub fn plate(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha)

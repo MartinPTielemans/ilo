@@ -2483,7 +2483,7 @@ fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppCo
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "the input row, before it shows"
     );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
@@ -2513,22 +2513,22 @@ fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppCo
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "after the taller panel"
     );
     bar.edit(url, None);
-    assert_eq!(bar.last_show(), (Level::Modal, Some(height(0))));
+    assert_eq!(bar.last_show(), (Level::Popover, Some(height(0))));
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "after the centred one"
     );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
 }
 
 /// Over the URL field the panel is a row tall, and its shadow can't be seen a row below it. The
-/// centred bar's modal shadow, 24 down at a 64 blur, reached twice that, and over a light page
+/// modal level's shadow, 24 down at a 64 blur, reached twice that, and over a light page
 /// read as a blank grey bar under the panel (#1306).
 #[gpui::test]
 fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppContext) {
@@ -2544,8 +2544,8 @@ fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppC
     bar.edit("https://example.com/", None);
     assert_eq!(
         bar.last_show().0,
-        Level::Modal,
-        "the centred bar keeps its modal shadow"
+        Level::Popover,
+        "the centred bar floats as menus do (#4402)"
     );
 }
 

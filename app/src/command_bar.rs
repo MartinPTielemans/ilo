@@ -93,13 +93,14 @@ use crate::tokens::command_bar::{
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
-/// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
-/// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
-const FIELD_LEVEL: Level = Level::Popover;
+/// The bar's level wherever it is, centred, at rest or over the field: floating (#4402), as menus
+/// and the switcher are. Over the field it hangs as the Site Controls do, where the window's
+/// shadow, 24 down at a 64 blur, fell mostly below a panel only 50 tall (#1306).
+const BAR_LEVEL: Level = Level::Popover;
 /// The level whose shadow the bar's window keeps room for round the bar where it draws its own
-/// shadow (#2988): the modal's, which reaches past the popover's, so the bar keeps one margin as it
-/// moves between the centre and the field.
-pub const ROOM: Level = Level::Modal;
+/// shadow (#2988), the same at the centre and over the field, so the bar keeps one margin as it
+/// moves between them.
+pub const ROOM: Level = BAR_LEVEL;
 use crate::elevation::Level;
 use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::ARROW_TILE;
@@ -119,7 +120,6 @@ use crate::tokens::command_bar::{
     FOOT_TEXT, PLUS,
 };
 use crate::tokens::command_bar::{CHOSEN_KIND, LIGHT_CHOSEN_KIND};
-use crate::tokens::selected::plate::{DARK as CHOSEN, LIGHT as LIGHT_CHOSEN};
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
@@ -452,11 +452,8 @@ const SEARCH_MODELS: &str = "Search models";
 pub const DEFAULT_ROW: &str = "Default";
 /// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
 fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
-    let (plate, kind) = match palette.tone {
-        palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
-        palette::Tone::Light => (LIGHT_CHOSEN, LIGHT_CHOSEN_KIND),
-    };
-    (palette.plate(plate), palette.on_overlay(kind))
+    let kind = palette.toned(CHOSEN_KIND, LIGHT_CHOSEN_KIND);
+    (palette.flat_plate(), palette.on_overlay(kind))
 }
 
 /// The composer's triggers, by their elements' ids.
@@ -1303,10 +1300,10 @@ pub fn show(
                 top,
                 FIELD_WIDTH,
                 FIELD_RADIUS,
-                FIELD_LEVEL,
+                BAR_LEVEL,
             );
         }
-        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
+        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, BAR_LEVEL),
     }
 }
 
@@ -1348,7 +1345,7 @@ pub fn show_in(
     log!("browser: command bar opens inside the window");
     if let Some(host) = reset(target, text, shown, tabs, false, cx) {
         let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
-        host.show(false, left, top, width, RADIUS, Level::Modal);
+        host.show(false, left, top, width, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1372,7 +1369,7 @@ pub fn show_spaces(spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut A
         cx,
     ) {
         let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
-        host.show(false, left, top, width, FIELD_RADIUS, FIELD_LEVEL);
+        host.show(false, left, top, width, FIELD_RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1394,7 +1391,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
         false,
         cx,
     ) {
-        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
+        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1418,7 +1415,7 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
         // The card is as far in from the window's bottom as from its top.
         let window = f32::from(card.top() + card.bottom());
         let top = centered_top(window) + f32::from(pane.top() - card.top());
-        host.show(false, left.into(), top, WIDTH, RADIUS, Level::Modal);
+        host.show(false, left.into(), top, WIDTH, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -4546,10 +4543,10 @@ impl Render for CommandBar {
                 crate::tokens::radius::PANEL,
                 REST_HEIGHT,
                 LIST_TOP,
-                Level::Modal,
+                BAR_LEVEL,
             ),
-            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
-            (false, false) => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
+            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., BAR_LEVEL),
+            (false, false) => (RADIUS, HEIGHT, LIST_TOP, BAR_LEVEL),
         };
         // Over the field the input's icon and text are in the rows' columns.
         let (icon_x, icon, text_x, text_size) = match (in_place, self.over_field) {
@@ -4648,14 +4645,14 @@ impl Render for CommandBar {
                         .child(self.foot(cx))
                 })
                 .children(self.a11y.then(|| self.announcer()))
-                // The modal level's rim in the palette's ink; its outline and shadow are the host's,
+                // The floating level's rim in the palette's ink; its outline and shadow are the host's,
                 // round the window, or on Windows round it in the window.
                 .child(edge(
                     0.,
                     1.,
                     match bare {
                         true => Level::Resting.rim_in(&palette),
-                        false => Level::Modal.rim_in(&palette),
+                        false => BAR_LEVEL.rim_in(&palette),
                     },
                 ));
         // At rest no window is round it: it casts the level's shadow on its page itself, and is
@@ -4665,7 +4662,7 @@ impl Render for CommandBar {
                 .w_full()
                 .h(px(self.drawn_height()))
                 .font_family(crate::face::UI)
-                .child(panel.when(!bare, |panel| panel.shadow(Level::Modal.shadow())))
+                .child(panel.when(!bare, |panel| panel.shadow(BAR_LEVEL.shadow())))
                 .into_any_element();
         }
         // The browser's shortcuts work here too, below the bar's own keys.

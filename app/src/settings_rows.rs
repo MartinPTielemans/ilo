@@ -14,23 +14,21 @@ use gpui::{
 
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
-use crate::palette::{
-    CARD_PLATE, FIELD_PLATE, INK, OVERLAY_DARK, PAPER, TEXT_SECONDARY, darker, ink_states,
-};
+use crate::palette::{FIELD_PLATE, INK, OVERLAY_DARK, PAPER, TEXT_SECONDARY, darker, ink_states};
 use crate::text_input::Colors;
+use crate::tokens::group;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
 use crate::tokens::radius;
-use crate::tokens::settings::form::{LIGHT_PAGE_LINE, PAGE_LINE};
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
     CHEVRONS_END, CHEVRONS_GAP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT,
     CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT,
     CONTROL_HOVERED, CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED,
     CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL_LINE, DETAIL_SIZE, DETAIL_TOP, END_GAP, GLYPH,
-    GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, KNOB, KNOB_INSET, LINE,
-    LINE_ROW_HEIGHT, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED,
-    ON_SWITCH_OFF, PADDING, POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM,
-    STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUND_KNOB, KNOB,
+    KNOB_INSET, LINE_ROW_HEIGHT, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
+    ON_PRESSED, ON_SWITCH_OFF, PADDING, POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X,
+    SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{
     FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, PRIMARY,
@@ -367,8 +365,8 @@ pub struct Look {
 impl Look {
     /// Settings' own, on its card, as drawn (spec-settings.md › Shared controls): the paper over
     /// the overlay's fill in dark, the ink over the dialog's in light, as the window's other text
-    /// is. Its groups are the palette's card plate of the ink in both looks, with the page's inner
-    /// line. Its controls are neutral: a switch that's on is the text colour with the other look's
+    /// is. Its groups are filled plates of the ink in both looks, [group]'s, with a hairline between
+    /// rows and no outline (#4402). Its controls are neutral: a switch that's on is the text colour with the other look's
     /// ink for its knob, and one that's off the shown plate with a knob of the text colour. Its
     /// one main action is the text colour too, as the app's window isn't a Space's (#319).
     pub fn settings(dark: bool) -> Look {
@@ -377,14 +375,14 @@ impl Look {
             false => (rgb(DIALOG_LIGHT), rgb(INK), rgb(PAPER)),
         };
         let pick = |dark_alpha: f32, light_alpha: f32| if dark { dark_alpha } else { light_alpha };
-        let surface = card.blend(base.opacity(CARD_PLATE));
+        let surface = card.blend(base.opacity(group::FILL));
         let mix = |amount: f32| surface.blend(base.opacity(amount));
         let ink = mix(NAME);
         let (primary_hovered, primary_pressed) = ink_states(mix(PRIMARY), other);
         Look {
             surface,
             ink,
-            line: mix(LINE),
+            line: mix(group::LINE),
             detail: mix(pick(TEXT_SECONDARY, LIGHT_TEXT_SECONDARY)),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
             field: mix(FIELD_PLATE),
@@ -397,7 +395,7 @@ impl Look {
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
             heading: ink,
-            edge: Some(rgba(if dark { PAGE_LINE } else { LIGHT_PAGE_LINE })),
+            edge: None,
             primary: mix(PRIMARY),
             on_primary: other,
             primary_hovered,
@@ -420,15 +418,15 @@ impl Look {
             hovered: mix(ON_HOVERED),
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
-            knob: gpui::white().into(),
+            knob: rgba(GROUND_KNOB),
             on: accent,
-            knob_on: gpui::white().into(),
+            knob_on: rgba(GROUND_KNOB),
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
             primary: accent,
-            on_primary: gpui::white().into(),
+            on_primary: rgba(GROUND_KNOB),
             primary_hovered: darker(accent, ACCENT_HOVERED),
             primary_pressed: darker(accent, ACCENT_PRESSED),
         }
