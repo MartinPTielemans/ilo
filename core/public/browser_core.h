@@ -2050,6 +2050,9 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // The core is asking the page, which answers later through agent_close_answered: only ever
 // bc_agent_close_tab's return, never an answer.
 #define BC_AGENT_CLOSE_PENDING 4
+// The tab went back to the place it left but stays open, as one between windows does: the user's
+// again, and nothing archived. Only ever bc_agent_archive_tab's return, never an answer.
+#define BC_AGENT_CLOSE_RETURNED 5
 
 // Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
 // as the "Leave site?" dialog shows the tab, it would take the user's focus. A page with no
@@ -2070,11 +2073,12 @@ BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 // Its page is never asked: one with a beforeunload handler may hold unsaved changes, and then it
 // stays handed, untouched, and the call returns BC_AGENT_CLOSE_ASKS, unless |discard| loses what
 // it holds. A tab that goes back pinned or onto a favorite's tile stays handed too, with
-// BC_AGENT_CLOSE_PINNED. Returns BC_AGENT_CLOSED once it's gone, else BC_AGENT_CLOSE_REFUSED: for
+// BC_AGENT_CLOSE_PINNED. Returns BC_AGENT_CLOSED once it's gone, BC_AGENT_CLOSE_RETURNED for one
+// that went back but stays, as between windows, and is the user's, else BC_AGENT_CLOSE_REFUSED: for
 // a tab not handed to |agent| or one the user holds, it stays as it is; one that can't go back, as
-// when the Space it left is gone, stays handed; one that went back but stays, as between windows,
-// is the user's. Never PENDING. Agent code calls it from Work on pages up, and only from Full
-// access with |discard|, as losing what the user wrote is the agent's discard.
+// when the Space it left is gone, stays handed. Never PENDING. Agent code calls it from Work on
+// pages up, and only from Full access with |discard|, as losing what the user wrote is the agent's
+// discard.
 BC_EXPORT int bc_agent_archive_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its

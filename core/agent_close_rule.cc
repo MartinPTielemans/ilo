@@ -68,4 +68,12 @@ AgentArchive::Does AgentArchive::What() const {
   return Does::kArchives;
 }
 
+// static
+AgentArchive::Came AgentArchive::After(bool returned, bool gone) {
+  if (!returned) {
+    return Came::kStaysHanded;
+  }
+  return gone ? Came::kArchived : Came::kReturned;
+}
+
 }  // namespace browser_core

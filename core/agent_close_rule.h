@@ -81,6 +81,19 @@ struct AgentArchive {
     kArchives,
   };
   Does What() const;
+
+  // What an archive the rule let go ahead came to, from whether the tab went back to the place it
+  // left and whether it's gone since.
+  enum class Came {
+    // It couldn't go back, as when the Space it left is gone: still handed, for the app to give
+    // back.
+    kStaysHanded,
+    // It went back but stays open, as between windows: the user's again, and nothing archived.
+    kReturned,
+    // It's gone, into the archive.
+    kArchived,
+  };
+  static Came After(bool returned, bool gone);
 };
 
 }  // namespace browser_core
