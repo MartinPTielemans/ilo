@@ -527,6 +527,12 @@ source_set("share_snapshot") {
 
 # Where the keyboard goes as an overlay of the app's lets it go, apart so browser_core_unittests
 # tests the rule alone (#3587).
+# When a tab's dialog takes the keyboard back from the page under it, apart so browser_core_unittests
+# tests the rule alone (#3212).
+source_set("dialog_take_back_rule") {
+  sources = [ "dialog_take_back_rule.h" ]
+}
+
 source_set("overlay_lend") {
   sources = [
     "overlay_lend.cc",
@@ -1201,6 +1207,7 @@ source_set("browser_core") {
     ":handed_give_rule",
     ":handed_history",
     ":handed_place",
+    ":dialog_take_back_rule",
     ":overlay_lend",
     ":live_folder_rule",
     ":pinned_url",
@@ -1608,6 +1615,7 @@ test("browser_core_unittests") {
     "page_log_rule_unittest.cc",
     "boost_script_unittest.cc",
     "clear_both_engines_unittest.cc",
+    "dialog_take_back_rule_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
     "idle_check_unittest.cc",
@@ -1670,6 +1678,7 @@ test("browser_core_unittests") {
     ":handed_place",
     ":launch_space_rule",
     ":tile_rule",
+    ":dialog_take_back_rule",
     ":overlay_lend",
     ":live_folder_rule",
     ":native_ad_block_lists",
