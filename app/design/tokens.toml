@@ -1649,11 +1649,11 @@ hero-gap = 16.0
 hero-height = 96.0
 hero-title = 15.0
 hero-title-line = 20.0
-# Drawn tiles: 76 by 52, 8 apart, radius 8, the pick ringed 2 wide 2 out, the label 6 under.
+# Drawn tiles: 76 by 52, 8 apart, with a row's corners as the favorites' tiles have, the pick
+# ringed 2 wide 2 out, the label 6 under.
 tile-width = 76.0
 tile-height = 52.0
 tile-gap = 8.0
-tile-radius = 8.0
 tile-ring = 2.0
 tile-ring-gap = 2.0
 tile-label-top = 6.0

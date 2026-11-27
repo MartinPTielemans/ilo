@@ -8,8 +8,9 @@ use gpui::{AnyElement, App, SharedString, accesskit::Role, div, prelude::*, px};
 
 use super::Choice;
 use crate::settings_rows::{Look, detail_type};
+use crate::tokens::radius::ROW;
 use crate::tokens::settings::kit::{
-    TILE_GAP, TILE_HEIGHT, TILE_LABEL_TOP, TILE_RADIUS, TILE_RING, TILE_RING_GAP, TILE_WIDTH,
+    TILE_GAP, TILE_HEIGHT, TILE_LABEL_TOP, TILE_RING, TILE_RING_GAP, TILE_WIDTH,
 };
 
 /// Where ← or → (`key`) moves the pick from `at` among `count` tiles: to the one beside, none at
@@ -44,7 +45,7 @@ pub fn draw<T: PartialEq + Clone + 'static>(
         let values = values.clone();
         let ring = div()
             .p(px(TILE_RING_GAP))
-            .rounded(px(TILE_RADIUS + TILE_RING_GAP + TILE_RING))
+            .rounded(px(ROW + TILE_RING_GAP + TILE_RING))
             .border(px(TILE_RING))
             .border_color(match on {
                 true => look.ink,
@@ -54,7 +55,7 @@ pub fn draw<T: PartialEq + Clone + 'static>(
                 div()
                     .w(px(TILE_WIDTH))
                     .h(px(TILE_HEIGHT))
-                    .rounded(px(TILE_RADIUS))
+                    .rounded(px(ROW))
                     .overflow_hidden()
                     .child(drawing(choice)),
             );
