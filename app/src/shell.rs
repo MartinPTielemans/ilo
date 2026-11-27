@@ -139,6 +139,7 @@ mod task_cards;
 mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
+mod edge_cursor_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
