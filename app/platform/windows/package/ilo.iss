@@ -3,8 +3,8 @@
 ; (app/platform/windows/updates.cc) runs a newer one over it, silently, once ilo has quit:
 ; /waitpid=<ilo's process> waits for it to go, and /relaunch=1 starts ilo again after. package.sh
 ; compiles it with ISCC, giving each value below.
-#ifndef AppVersion
-  #error ISCC /DAppName=ilo /DProduct=<branding/product> /DAppPublisher=ilo /DAppVersion=0.1.0 /DSource=<staged app> /DOutput=<dir> ilo.iss
+#ifndef FileVersion
+  #error ISCC /DAppName=ilo /DProduct=<branding/product> /DAppPublisher=ilo /DAppVersion=0.1.0 /DFileVersion=<version.sh's> /DSource=<staged app> /DOutput=<dir> ilo.iss
 #endif
 ; -app-only for Browser.dll packed without an engine, which doesn't run.
 #ifndef Suffix
@@ -20,7 +20,8 @@ AppId=app.ilo.browser
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-VersionInfoVersion={#AppVersion}
+; The version the user sees is AppVersion; the file's climbs with the build (version.sh).
+VersionInfoVersion={#FileVersion}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

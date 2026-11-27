@@ -370,6 +370,12 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
         row(codex, Ready::NotFound, None, Row::Idle),
         says("Not installed", Offer::Get)
     );
+    // Older than the browser runs (AP27): said before any thread starts, with its maker's page.
+    assert_eq!(
+        row(codex, Ready::NeedsUpdate, None, Row::Idle),
+        says("Needs an update", Offer::Update)
+    );
+    assert_eq!(Offer::Update.label(codex).as_deref(), Some("How to Update"));
     let out = row(codex, Ready::SignedOut, Some("Plus"), Row::Idle);
     assert_eq!(out, says("Not signed in", Offer::SignIn));
     let signing = row(codex, Ready::SignedOut, None, Row::SigningIn);

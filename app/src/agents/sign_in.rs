@@ -772,7 +772,8 @@ impl Agents {
                 self.tasks.sign_ins.rows.insert(cli, Row::Idle);
                 return self.sign_in(cli, cx);
             }
-            Ready::SignedIn => Row::Idle,
+            // An older one than the browser runs: the row says it needs an update (AP27).
+            Ready::SignedIn | Ready::NeedsUpdate => Row::Idle,
             Ready::NotFound | Ready::Unknown => {
                 log!(
                     "browser: task agent {} not found after its install",
@@ -790,7 +791,10 @@ impl Agents {
     pub fn installed_here(&self, cli: Cli) -> bool {
         use super::ready::Ready;
         self.tasks.sign_ins.installed.contains(&cli)
-            && matches!(self.found(cli), Ready::SignedIn | Ready::SignedOut)
+            && matches!(
+                self.found(cli),
+                Ready::SignedIn | Ready::SignedOut | Ready::NeedsUpdate
+            )
     }
 
     /// Ends `cli`'s install or sign-in under way, as its row's Cancel does. Its end comes as any
@@ -902,6 +906,9 @@ pub enum Offer {
     TryAgain,
     /// Try Again, once an install failed: the install again, then the sign-in (AS4).
     TryInstall,
+    /// How to Update: its maker's page on updating it, for one older than the browser runs
+    /// (AP27). The browser never updates it itself.
+    Update,
     /// Its ⋯ menu, with Model and Sign Out, and the mark that has tasks run on it.
     SignedIn,
 }
@@ -915,6 +922,7 @@ impl Offer {
             Offer::Install => Some(INSTALL_AND_SIGN_IN.into()),
             Offer::SignIn => Some(format!("Sign In to {name}")),
             Offer::TryAgain | Offer::TryInstall => Some("Try Again".into()),
+            Offer::Update => Some("How to Update".into()),
             Offer::Cancel => Some("Cancel".into()),
             Offer::Nothing | Offer::SignedIn => None,
         }
@@ -1028,6 +1036,7 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
             shown(&format!("Installs {} {name}", cli.maker()), Offer::Install)
         }
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
+        (Row::Idle, Ready::NeedsUpdate) => shown("Needs an update", Offer::Update),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
         (Row::Idle, Ready::SignedIn) => match plan {
             Some(plan) => shown(&format!("Signed in · {plan} plan"), Offer::SignedIn),
@@ -1065,7 +1074,11 @@ impl Agents {
         match self.assistant_row(cli).offer {
             Offer::TryAgain => Some(Offer::SignIn),
             Offer::TryInstall => Some(Offer::Install),
-            offer @ (Offer::Get | Offer::Install | Offer::SignIn | Offer::Cancel) => Some(offer),
+            offer @ (Offer::Get
+            | Offer::Install
+            | Offer::Update
+            | Offer::SignIn
+            | Offer::Cancel) => Some(offer),
             Offer::Nothing | Offer::SignedIn => None,
         }
     }

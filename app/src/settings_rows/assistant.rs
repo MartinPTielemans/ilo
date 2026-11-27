@@ -86,6 +86,11 @@ pub fn assistant_row(
     let controls = match shown.offer {
         Offer::Nothing => Vec::new(),
         Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
+        Offer::Update => vec![press(
+            "assistant-update",
+            Offer::Update.label(cli).unwrap_or_default().into(),
+            Act::Get,
+        )],
         Offer::SignIn => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
         Offer::TryAgain => vec![press("assistant-try-again", sign_in(), Act::SignIn)],
         // Its program missing, its maker's installer and then its sign-in (AS1), from one press.
@@ -209,6 +214,11 @@ pub fn first_run_row(
     let controls = match shown.offer {
         Offer::Nothing => vec![working(look, index).into_any_element()],
         Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
+        Offer::Update => vec![press(
+            "assistant-update",
+            Offer::Update.label(cli).unwrap_or_default().into(),
+            Act::Get,
+        )],
         Offer::SignIn | Offer::TryAgain => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
         Offer::Install | Offer::TryInstall => {
             let title = shown.offer.label(cli).unwrap_or_default().into();

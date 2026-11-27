@@ -443,10 +443,14 @@ await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's 
 forward
 send key n cmd alt
 expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window on A"
-# The new window has no page, so it rests on its field, which ⌘L gives the keyboard.
+# The new window has no page, and ⌘L opens the command bar inside it, whose field takes the keyboard
+# and whose URL loads in it (docs/ux-spec.md, Little Arc).
 send key l cmd
-expect '^browser: resting field has the keyboard$' \
-  "⌘L didn't give the Little ilo window's field the keyboard"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in A's Little ilo window"
+expect '^browser: command bar opens inside the window$' \
+  "⌘L didn't open the command bar inside A's Little ilo window"
+expect '^browser: field Search or enter address has the keyboard$' \
+  "⌘L's command bar in A's Little ilo window didn't give its field the keyboard"
 send insert "${site}login.html?users-own"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "A's Little ilo tab didn't load"
@@ -460,13 +464,13 @@ done
 grep -rqa 'login.html?agents-own' "$store_b" &&
   fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
 # B's command bar finds A's tab by its title and names A as Settings does, and never the agent's
-# (#1234). ↩ opens it in B, a tab of B's own.
+# (#1234). ↩ opens it in B, a tab of B's own. B's window shows no page, so ⌘T gives the keyboard to
+# its resting bar, the same bar as ⌘T's over a page, drawn in the empty Space (#4140).
 device b
 await "^browser: other computers' tabs [1-9]" ||
   fail "B's core never told the app of A's open tab, which B's sync store has"
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
+resting_key t "device B window"
 send type login
 expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on $label" \
   "B's command bar didn't list A's tab for \"login\""
@@ -481,7 +485,8 @@ done
 selected | grep -q "login.html?users-own\$" ||
   fail "↓ never selected A's tab in B's command bar: $(selected)"
 send key return
-expect '^browser: command bar hidden$' "↩ on A's tab didn't close B's command bar"
+expect "^browser: command bar go ${site}login.html?users-own\$" \
+  "↩ on A's tab didn't go to it from B's resting bar"
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab didn't open its page in B"
 
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads

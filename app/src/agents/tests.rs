@@ -78,6 +78,8 @@ struct Made {
     private: RefCell<Vec<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The search engine's host, where a test moves it from search.example.
+    engine: std::cell::Cell<Option<&'static str>>,
 }
 
 impl Made {
@@ -228,6 +230,13 @@ impl Browser for Made {
             (false, true) => format!("https://{text}/"),
             (false, false) => format!("https://duckduckgo.com/?q={text}"),
         })
+    }
+
+    /// A search with an engine of the Space's profile's own, so a test sees whose it was.
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = self.space_profile(space).to_lowercase();
+        let engine = self.engine.get().unwrap_or("search.example");
+        Some(format!("https://{engine}/{profile}?q={words}"))
     }
 
     fn hand_off(&self, _: &str, tab: u64) -> bool {
@@ -873,6 +882,14 @@ fn give(agents: &Entity<Agents>, tier: Tier, cx: &mut TestAppContext) {
 fn stops(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Stop> {
     let key = session_key(agents, "claude-code", cx);
     agents.read_with(cx, |agents, _| agents.stops(&key))
+}
+
+/// The user's bank, chase.com, marked sensitive in "Default", so an agent's use there is refused
+/// below Full access.
+fn sensitive_bank(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive("Default", "chase.com", true, cx)
+    });
 }
 
 /// Checks `answer` is a refusal, at once, of the act `what` for `why`, which nothing asked about
@@ -3735,10 +3752,12 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 10] = [
+    const READS: [&str; 12] = [
         "list_tabs",
         "list_split",
         "open_tab",
+        "search",
+        "strand",
         "navigate",
         "snapshot",
         "read_page",
@@ -4323,11 +4342,15 @@ fn a_download_at_look_only_is_refused_and_leaves_no_file(cx: &mut TestAppContext
     assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
     assert_eq!(shown(&agents, cx), None);
 }
-/// A bank's site is refused below Full access, at Look only too, each time and logged, and opens
-/// once the user gives Full access.
+/// A site marked sensitive is refused below Full access, at Look only too, each time and logged,
+/// and opens once the user gives Full access.
 #[gpui::test]
-fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
+fn a_sensitive_site_opens_only_at_full_access(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
+    let profile = browser.space_profile(0);
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive(&profile, "chase.com", true, cx)
+    });
     let open = |cx: &mut TestAppContext| {
         call(
             &agents,
@@ -4342,7 +4365,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -4351,7 +4374,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         (
             "open_tab".into(),
             "chase.com".into(),
-            "Using a bank site isn't part of Work on pages.".into()
+            "Using a sensitive site isn't part of Work on pages.".into()
         )
     );
     give(&agents, Tier::Look, cx);
@@ -4360,7 +4383,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -7221,6 +7244,43 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// An assistant older than the browser runs is said on its row before any thread starts, and a
+    /// thread asked of it never starts: its card says it needs an update, with its row's How to
+    /// Update (AP27).
+    #[gpui::test]
+    fn an_assistant_that_needs_an_update_starts_no_thread(cx: &mut TestAppContext) {
+        // A program that's there, so only its look's answer keeps the thread from starting.
+        let (agents, _) = ready(Some(PathBuf::from("/nonexistent/claude")), cx);
+        set_found(&agents, Ready::NeedsUpdate, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// A run its program ends for want of an update, as a Codex that didn't take the browser's
+    /// limits does, says so on its card and its row, whatever its version said, until it's looked
+    /// for again.
+    #[gpui::test]
+    fn a_run_that_needs_an_update_says_so_on_its_card_and_row(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, cx| {
+            agents.fail(&agent, Failure::NeedsUpdate, cx)
+        });
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        let row = agents.read_with(cx, |agents, _| agents.assistant_row(Cli::Claude));
+        assert_eq!(
+            (row.line.as_str(), row.offer),
+            ("Needs an update", Offer::Update)
+        );
+    }
+
     /// The card offers the install for the fact that the program isn't there, never for a
     /// failure's words: what a CLI says of something of its own that "isn't installed" is its
     /// own failure, said as it said it, with no fix of the assistant's.
@@ -8122,6 +8182,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         let opening = call(
             &agents,
             &agent,
@@ -8926,6 +8987,7 @@ mod tasks {
             Some(shop_tree()),
             cx,
         );
+        sensitive_bank(&agents, cx);
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
         traced(
@@ -10833,6 +10895,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         // A refusal left unsettled, which the stop settles.
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(
@@ -12248,6 +12311,7 @@ mod sessions {
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        sensitive_bank(&agents, cx);
         let opening = call_on(
             &agents,
             2,
@@ -14890,13 +14954,13 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 }
 
 mod fenced;
-#[cfg(unix)]
-mod helpers;
 mod holds;
 mod installs;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
+#[cfg(unix)]
+mod not_our_tools;
 mod notes;
 mod other_apps;
 mod permission_stopped;
@@ -14904,7 +14968,10 @@ mod permission_stopped;
 mod rewall;
 #[cfg(unix)]
 mod searches;
+mod sensitive;
 mod sign_ins;
+#[cfg(unix)]
+mod strands;
 mod switches;
 mod uploads;
 mod went_to;

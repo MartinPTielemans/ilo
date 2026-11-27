@@ -10,7 +10,8 @@
 #     downloads, unsigned for 0.1.0, which ilo's own updater (updates.cc) updates.
 # Without an engine it packs Browser.dll alone, and with the identity's placeholders a test MSIX,
 # each named for it, to try the packaging: neither installs a browser that runs. --release stops on
-# either instead. The version is Cargo.toml's, with the 0 the Store wants last in the MSIX's.
+# either instead. The version the user sees is Cargo.toml's; the MSIX's identity and the installer's
+# file version are version.sh's, which climb with the build, as Windows and the Store need.
 # Usage: package.sh [--release] <out directory>
 set -euo pipefail
 release=
@@ -32,6 +33,10 @@ fail() {
 name=$(cat "$app/branding/name")
 product=$(cat "$app/branding/product")
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$app/Cargo.toml" | head -1)
+if [ -n "$release" ] && [ "$(git -C "$app" rev-parse --is-shallow-repository)" = true ]; then
+  fail "a release's build number needs the whole history: git fetch --unshallow"
+fi
+file_version=$("$here/version.sh")
 publisher=$(git config -f "$app/branding/winget.ini" winget.publisher)
 store() { git config -f "$app/branding/windows-store.ini" "store.$1"; }
 dll=$app/windows/target/release/Browser.dll
@@ -86,7 +91,7 @@ msix=$out/$name-$version-x64$alone$test_identity.msix
 iscc=$(command -v iscc || echo "/c/Program Files (x86)/Inno Setup 6/ISCC.exe")
 [ -x "$iscc" ] || fail "no ISCC.exe: install Inno Setup 6."
 MSYS2_ARG_CONV_EXCL='*' "$iscc" /Q "/DAppName=$name" "/DProduct=$product" "/DAppPublisher=$publisher" \
-  "/DAppVersion=$version" "/DSuffix=$alone" "/DSource=$(cygpath -w "$stage/app")" \
+  "/DAppVersion=$version" "/DFileVersion=$file_version" "/DSuffix=$alone" "/DSource=$(cygpath -w "$stage/app")" \
   "/DOutput=$(cygpath -w "$out")" "$(cygpath -w "$here/ilo.iss")"
 
 cd "$out"
