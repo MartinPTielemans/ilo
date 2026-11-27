@@ -286,6 +286,14 @@ struct Browser {
   // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
   // too (host_set_sidebar_right).
   bool sidebar_right = false;
+  // The edge knot's window and view (host_add_edge_knot), the room round its tab for its shadow,
+  // where its tab is in the window from its top left, and while it shows, the monitor that lets
+  // the mouse through the window but on the tab.
+  NSWindow* edge_knot;
+  NSView* edge_knot_view;
+  double edge_knot_margin = 0;
+  NSRect edge_knot_tab;
+  id edge_knot_monitor;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -676,24 +684,45 @@ NSRect Unconstrained(id, SEL, NSRect frame, NSScreen*) {
   return frame;
 }
 
-BOOL Never(id, SEL) {
-  return NO;
+// NeverKey's mark on a window, which GPUI's panel class asks as AppKit offers it the keyboard.
+char kNeverKey;
+// GPUI's own answer, which a panel without the mark gets.
+BOOL (*g_panel_can_become_key)(id, SEL);
+
+BOOL PanelCanBecomeKey(id window, SEL key) {
+  return !objc_getAssociatedObject(window, &kNeverKey) && g_panel_can_become_key(window, key);
 }
 
 // An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
 // key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
-// field the menu just opened (#1664).
+// field the menu just opened (#1664). The window is marked, and the class asks the mark: swapping a
+// window's class under the observers AppKit keeps on it aborted the app as a browser window's edge
+// knot was freed.
 void NeverKey(NSWindow* window) {
-  static Class never_key;
-  if (!never_key) {
-    Class panel = object_getClass(window);
-    SEL key = @selector(canBecomeKeyWindow);
-    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
-    class_addMethod(never_key, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(never_key);
+  static Class panel = NSClassFromString(@"GPUIPanel");
+  // -class, as KVO answers it with the window's own class, not the subclass it observes it by.
+  if (!panel || ![[window class] isSubclassOfClass:panel]) {
+    static bool told;
+    if (!told) {
+      told = true;
+      fprintf(stderr, "browser: an overlay of class %s isn't GPUI's panel, so it can take keys\n",
+              ClassName(window));
+    }
+    return;
   }
-  object_setClass(window, never_key);
+  static bool replaced = [] {
+    SEL key = @selector(canBecomeKeyWindow);
+    IMP own = class_replaceMethod(panel, key, (IMP)PanelCanBecomeKey,
+                                  method_getTypeEncoding(class_getInstanceMethod(panel, key)));
+    // GPUI defines it on the class; were it inherited, the superclass's is the one it had.
+    if (!own) {
+      own = class_getMethodImplementation(class_getSuperclass(panel), key);
+    }
+    g_panel_can_become_key = reinterpret_cast<BOOL (*)(id, SEL)>(own);
+    return true;
+  }();
+  (void)replaced;
+  objc_setAssociatedObject(window, &kNeverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // Another app that asks which of ours is in front takes the first window at the normal level, in
@@ -1463,8 +1492,8 @@ void WatchHeldEscape() {
 namespace {
 
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
-// isn't the active one, and with Reduce Transparency or Increase Contrast.
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill with Reduce
+// Transparency or Increase Contrast, whichever window is active.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
@@ -1473,42 +1502,13 @@ void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
-// From the first browser window, every browser window's material follows the app: active while
-// the app is the active one, AppKit's inactive fill once another app is in front. Following the
-// window's own key state instead gives a window the inactive fill behind its own command bar, a
-// menu or Settings, each a window that takes the keyboard from it.
-void WatchAppActiveForMaterial() {
-  static bool watching = false;
-  if (watching) {
-    return;
-  }
-  watching = true;
-  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
-    for (auto& browser : g_browsers) {
-      browser->material.state = state;
-    }
-  };
-  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  [center addObserverForName:NSApplicationDidBecomeActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateActive);
-                  }];
-  [center addObserverForName:NSApplicationDidResignActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateInactive);
-                  }];
-}
-
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
-  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
+  // Active even with another app in front, so the glass and the Space's colour stay; AppKit still
+  // gives its opaque fill with Reduce Transparency or Increase Contrast.
+  material.state = NSVisualEffectStateActive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
@@ -3004,6 +3004,12 @@ void host_forget_window(void* ui_view) {
   browser->offer_view = nil;
   browser->reveal = nil;
   browser->reveal_view = nil;
+  if (browser->edge_knot_monitor) {
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+  }
+  browser->edge_knot = nil;
+  browser->edge_knot_view = nil;
 }
 
 void host_set_overlay_elevation(int index,
@@ -6155,6 +6161,83 @@ void host_hide_reveal(void* ui_view) {
     if (had_keyboard) {
       [browser->window makeKeyWindow];
     }
+  });
+}
+
+// Lets the mouse through |browser|'s edge knot window but on its tab, with the pointer at |screen|.
+static void PlaceEdgeKnotClicks(Browser* browser, NSPoint screen) {
+  NSPoint at = [browser->edge_knot convertPointFromScreen:screen];
+  at.y = NSHeight(browser->edge_knot.frame) - at.y;
+  browser->edge_knot.ignoresMouseEvents = !NSPointInRect(at, browser->edge_knot_tab);
+}
+
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  browser->edge_knot_view = (__bridge NSView*)edge_knot_view;
+  browser->edge_knot = browser->edge_knot_view.window;
+  browser->edge_knot_margin = margin;
+  MakeOverlay(browser->edge_knot);
+  // The UI draws the tab and its shadow, in the margin round it, as the mini bar's.
+  browser->edge_knot.styleMask = NSWindowStyleMaskBorderless;
+  browser->edge_knot.hasShadow = NO;
+  browser->edge_knot.ignoresMouseEvents = YES;
+  // A click on it brings the sidebar out, and the keyboard stays where it was.
+  NeverKey(browser->edge_knot);
+}
+
+void host_show_edge_knot(void* ui_view, double top, double width, double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot || !browser->window) {
+      return;
+    }
+    const double margin = browser->edge_knot_margin;
+    NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
+    const double window_width = width + margin;
+    const CGFloat x = browser->sidebar_right ? NSMaxX(content) - window_width : NSMinX(content);
+    [browser->edge_knot setFrame:NSMakeRect(x, NSMaxY(content) - top - height - margin,
+                                            window_width, height + 2 * margin)
+                         display:NO];
+    browser->edge_knot_tab =
+        NSMakeRect(browser->sidebar_right ? margin : 0, margin, width, height);
+    if (browser->edge_knot_monitor) {
+      PlaceEdgeKnotClicks(browser, Pointer());
+      return;
+    }
+    // As the reveal does, it goes on screen once it has drawn what it shows now.
+    [browser->edge_knot_view.layer setNeedsDisplay];
+    [browser->edge_knot_view.layer displayIfNeeded];
+    AddOver(browser->window, browser->edge_knot);
+    // The page's view takes the pointer's moves while it's over the page, so the knot's window
+    // doesn't hear them. Only while it shows, and only as the pointer moves.
+    browser->edge_knot_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                              handler:^NSEvent*(NSEvent* event) {
+                                                NSPoint at = event.locationInWindow;
+                                                if (event.window) {
+                                                  at = [event.window convertPointToScreen:at];
+                                                }
+                                                PlaceEdgeKnotClicks(browser, at);
+                                                return event;
+                                              }];
+    PlaceEdgeKnotClicks(browser, Pointer());
+  });
+}
+
+void host_hide_edge_knot(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot_monitor) {
+      return;
+    }
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+    browser->edge_knot.ignoresMouseEvents = YES;
+    [browser->window removeChildWindow:browser->edge_knot];
+    [browser->edge_knot orderOut:nil];
   });
 }
 

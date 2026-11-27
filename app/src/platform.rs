@@ -258,6 +258,9 @@ unsafe extern "C" {
     );
     pub fn host_show_reveal(ui_view: *mut c_void, width: f64);
     pub fn host_hide_reveal(ui_view: *mut c_void);
+    pub fn host_add_edge_knot(ui_view: *mut c_void, edge_knot_view: *mut c_void, margin: f64);
+    pub fn host_show_edge_knot(ui_view: *mut c_void, top: f64, width: f64, height: f64);
+    pub fn host_hide_edge_knot(ui_view: *mut c_void);
     pub fn host_detent();
     pub fn host_app_active() -> bool;
     pub fn host_needs_you_badge(count: c_int);

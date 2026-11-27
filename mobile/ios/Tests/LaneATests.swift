@@ -364,7 +364,8 @@ import WebKit
     #expect(try site("github.com").query(of: URL(string: "https://example.com/search?q=ilo")) == nil)
   }
 
-  /// The list is the computer's, in core/site_searches.cc with the colours of app/design/tokens.toml.
+  /// The list is the computer's, in core/site_searches.cc. The chips' colours are the phone's own:
+  /// the computer's chips have none (#4401).
   @Test func `the built-in sites are the computer's own list`() throws {
     let root = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../..").standardizedFileURL
     let core = try String(contentsOf: root.appending(path: "core/site_searches.cc"), encoding: .utf8)
@@ -374,17 +375,6 @@ import WebKit
       #expect(row.0 == site.name)
       #expect(row.1 == site.host)
       #expect(row.2 == site.template)
-    }
-
-    let tokens = try String(contentsOf: root.appending(path: "app/design/tokens.toml"), encoding: .utf8)
-    let section = try #require(tokens.firstRange(of: "[command-bar.site-colors]").map { tokens[$0.upperBound...] })
-    let colours = section.prefix { $0 != "[" }.matches(of: /([a-z-]+) = 0x([0-9a-f]{6})/)
-    var byName: [String: UInt32] = [:]
-    for colour in colours { byName[String(colour.1)] = UInt32(colour.2, radix: 16) }
-    #expect(byName.count == sites.filter { $0.colour != nil }.count)
-    for site in sites {
-      let token = (site.name == "Gmail" ? "gmail" : site.name.lowercased().replacingOccurrences(of: " ", with: "-"))
-      #expect(byName[token] == site.colour, "\(site.name)")
     }
   }
 }

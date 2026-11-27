@@ -9,7 +9,7 @@
 # out with it and brings back the sidebar and the card, and the page's full screen takes the window
 # again after. A full-screen window's display going away keeps the window and the page together,
 # both full screen or both out, and escape and the page's full screen work after; going away while
-# the page takes the window full screen leaves both windowed. The footer's menu
+# the page takes the window full screen leaves both windowed. The Space button's menu
 # flips up at the screen's bottom in full screen.
 # Esc in full screen goes to a page that keeps it, and twice or held leaves anyway, and ⌘N in full
 # screen, with the page's keyboard, opens a window that goes full screen too and then opens ⌘T's
@@ -495,22 +495,22 @@ send state
 ../tools/window-screenshot.sh "$pid" "$out/fullscreen.png" || fail "no window to capture"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar in full screen"
-# The footer is at the screen's bottom in full screen, so the +'s menu flips up over the pointer.
-post click 204 $((height - 25))
+# The footer is at the screen's bottom in full screen, so the Space button's menu flips up over the pointer.
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
 plus="New Space…, New Folder…, New Split View, New Board, New Note, $(plus_adds)"
-expect "^browser: menu shown $(cased "$plus")\$" \
-  "the footer's + in full screen showed no menu"
-expect '^browser: menu window at ' "the +'s menu in full screen didn't open its window"
+expect "^browser: menu shown \(.*, \)\{0,1\}$(cased "$plus")\$" \
+  "the Space button in full screen showed no menu"
+expect '^browser: menu window at ' "the Space button's menu in full screen didn't open its window"
 top=$(grep '^browser: menu window at' "$log" | tail -1 | cut -d' ' -f5 | cut -d, -f2)
 [ "$top" -lt $((height - 65)) ] ||
-  fail "the +'s menu at the screen's bottom opened down, its window's top at $top, not up over the pointer"
+  fail "the Space button's menu at the screen's bottom opened down, its window's top at $top, not up over the pointer"
 ../tools/window-screenshot.sh "$pid" "$out/fullscreen-menu.png" || fail "no window to capture"
 send key escape
-expect '^browser: menu closed$' "escape didn't close the +'s menu in full screen"
-# The + took the keyboard for the UI, and the page's keys below need it back.
+expect '^browser: menu closed$' "escape didn't close the Space button's menu in full screen"
+# The Space button's menu took the keyboard for the UI, and the page's keys below need it back.
 send click $page_point
 send state
-in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed +'s menu"
+in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed Space button's menu"
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 check_layout "after full screen"

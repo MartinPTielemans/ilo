@@ -1964,3 +1964,168 @@ fn a_row_that_stays_moves_no_other_row() {
     tabs[7] = tabs[7].clone().stays(|_| true);
     assert_eq!((lay(&tabs), described(&tabs), super::height(&tabs)), before);
 }
+
+/// The Space button's menu with `spaces` Spaces, the `shown`th checked, a line and two items.
+fn spaces_menu(spaces: usize, shown: usize) -> Vec<MenuEntry> {
+    let space = |at: usize| MenuEntry {
+        scrolls: true,
+        checked: at == shown,
+        ..item(&format!("Space {at}"))
+    };
+    (0..spaces)
+        .map(space)
+        .chain([MenuEntry::line(), item("New Space…"), item("New Folder…")])
+        .collect()
+}
+
+/// Past `SCROLL_ROWS` Spaces, the menu shows that many and keeps New Space… right under them;
+/// as many or fewer, it shows them all, and its height says so to the control it hangs from.
+#[test]
+fn past_the_scroll_rows_the_spaces_scroll_and_the_rest_stays_under_them() {
+    let rows = super::SCROLL_ROWS as usize;
+    let few = opened(spaces_menu(rows, 0), 100., 100.);
+    assert!(few.layout.levels[0].scroll.is_none());
+    let many = opened(spaces_menu(rows + 4, 0), 100., 100.);
+    let root = &many.layout.levels[0];
+    let scroll = root.scroll.expect("the Spaces scroll");
+    assert_eq!((scroll.first, scroll.last), (0, rows + 3));
+    assert_eq!(root.bounds.size, few.layout.levels[0].bounds.size);
+    assert_eq!(
+        f32::from(root.bounds.size.height),
+        super::height(&spaces_menu(rows + 4, 0))
+    );
+    // New Space… stands where it does under eight Spaces.
+    assert_eq!(row_of(&many, rows + 5), row_of(&few, rows + 1));
+}
+
+/// A Space scrolled out of sight takes no pointer; a scroll brings it in, never past the run's
+/// ends, and highlights what comes under the pointer; the arrows keep the highlight in sight.
+#[test]
+fn a_scroll_and_the_arrows_bring_the_hidden_spaces_in() {
+    let rows = super::SCROLL_ROWS as usize;
+    let mut menu = opened(spaces_menu(rows + 4, 0), 100., 100.);
+    let last = rows + 3;
+    let hidden = row_of(&menu, last);
+    menu.point_at(hidden);
+    assert_ne!(
+        menu.open[0].highlight,
+        Some(last),
+        "a hidden Space took the pointer"
+    );
+    let first = row_of(&menu, 0);
+    menu.scrolled(first, 1000.);
+    let scroll = menu.layout.levels[0].scroll.unwrap();
+    assert_eq!(scroll.by, scroll.whole - scroll.shown);
+    let under = menu.open[0].highlight.unwrap();
+    assert_eq!(
+        row_of(&menu, under),
+        first,
+        "the row under the pointer isn't highlighted"
+    );
+    menu.scrolled(first, -1000.);
+    assert_eq!(menu.layout.levels[0].scroll.unwrap().by, 0.);
+    // From the first Space, lit under the pointer, ↓ goes down the run and on past its line.
+    assert_eq!(menu.open[0].highlight, Some(0));
+    for _ in 0..=last {
+        menu.key(Key::Down, Instant::now());
+    }
+    assert_eq!(
+        menu.open[0].highlight,
+        Some(rows + 5),
+        "↓ didn't reach past the Spaces"
+    );
+    menu.key(Key::Up, Instant::now());
+    assert_eq!(menu.open[0].highlight, Some(last));
+    menu.point_at(row_of(&menu, last));
+    assert_eq!(
+        menu.open[0].highlight,
+        Some(last),
+        "↑ left the last Space out of sight"
+    );
+}
+
+/// The menu opens with the Space shown in sight, wherever it is in the run.
+#[test]
+fn the_menu_opens_with_the_space_shown_in_sight() {
+    let rows = super::SCROLL_ROWS as usize;
+    let menu = opened(spaces_menu(rows + 4, rows + 2), 100., 100.);
+    let root = &menu.layout.levels[0];
+    let scroll = root.scroll.unwrap();
+    let row = root.row_bounds(rows + 2, &menu.entries);
+    let top = root.bounds.origin.y + px(scroll.top);
+    assert!(row.top() >= top && row.bottom() <= top + px(scroll.shown));
+}
+
+/// A menu a tab's drag opened is led by it: the pointer's moves and presses stay the browser
+/// window's, which hands the drag's place on, so the row under the tab is the one it would go
+/// to, and the drag's end closes the menu choosing nothing, as the window did what the drop asked.
+#[gpui::test]
+fn a_menu_led_by_a_drag_highlights_the_row_under_it_and_closes_with_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let chosen = Rc::new(Cell::new(None));
+    let answer = chosen.clone();
+    cx.cx.update(|cx: &mut App| {
+        super::lead_by_drag(cx);
+        let request = Request {
+            items: spaces_menu(3, 0),
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    let second = point(
+        px(120.),
+        row_of(&opened(spaces_menu(3, 0), 100., 100.), 1).y,
+    );
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    cx.cx.update(|cx: &mut App| {
+        assert!(
+            !super::pointer(Pointer::Moved, second - menu_at, cx),
+            "the menu took a move from the drag leading it"
+        );
+        assert!(!super::pointer(Pointer::Released, second - menu_at, cx));
+        assert_eq!(
+            super::drag_target(cx),
+            None,
+            "a row lit before the drag came over it"
+        );
+        super::dragged_over(second, cx);
+        assert_eq!(super::drag_target(cx), Some(1), "the drag's row isn't lit");
+        super::dragged_over(at(20., 20.), cx);
+        assert_eq!(
+            super::drag_target(cx),
+            None,
+            "a row stayed lit with the drag off the menu"
+        );
+        super::dragged_over(second, cx);
+        super::drag_ended(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::Left));
+    assert!(
+        !cx.cx
+            .update(|cx: &mut App| cx.has_global::<super::LedByDrag>())
+    );
+}
+
+/// A menu's row under the keys or the pointer is the flat plate the command bar and the tab
+/// switcher light (#4402), at its strength in each look, in the menu's own ink.
+#[test]
+fn a_menus_row_is_the_flat_plate_in_both_looks() {
+    for tone in [crate::palette::Tone::Dark, crate::palette::Tone::Light] {
+        let palette = crate::palette::Palette::of(None, tone);
+        let row = super::Highlight::plate(tone == crate::palette::Tone::Light);
+        assert_eq!(row.fill.a, palette.flat_plate().a, "{tone:?}");
+        assert!(
+            row.pressed.a > row.fill.a,
+            "{tone:?}: pressed is no stronger"
+        );
+    }
+}

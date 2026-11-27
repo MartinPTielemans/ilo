@@ -50,7 +50,7 @@ fn alpha(color: u32) -> f32 {
 
 /// The Gaussian's standard deviation of a CSS blur, which is half of it. GPUI's shader and Core
 /// Animation's shadow layers both take this, not the blur.
-fn sigma(blur: f32) -> f32 {
+pub(crate) fn sigma(blur: f32) -> f32 {
     blur / 2.
 }
 

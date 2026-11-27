@@ -1567,47 +1567,30 @@ fn a_task_asked_over_a_page_leaves_the_page(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
 }
 
-/// A card that turns to wait for the user brings the hidden sidebar out, as an agent's question
-/// does, so it reaches them while ilo is in front (#1080). Only the turn does: a card that stays
-/// waiting, or one that works, leaves the sidebar where the user put it.
+/// A card that turns to wait for the user leaves the hidden sidebar where the user put it (#1080):
+/// nothing slides over the page unasked, and the tab at the window's edge is the sign instead.
 #[gpui::test]
-fn a_card_that_turns_to_wait_brings_the_hidden_sidebar_out(cx: &mut TestAppContext) {
+fn a_card_that_turns_to_wait_leaves_the_hidden_sidebar_in(cx: &mut TestAppContext) {
     let (shell, _host, cx) = shell_with(cx, cards(&[(1, Dot::Working)]));
     still(cx);
-    let hide = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| {
-            shell.sidebar_hidden = true;
-            shell.set_revealed(false, cx);
-        });
-        cx.run_until_parked();
-    };
-    let revealed = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.revealed)
-    };
-    hide(&shell, cx);
-    let working = cards(&[(2, Dot::Working), (1, Dot::Working)]);
-    shell.update(cx, |shell, cx| shell.set_task_cards(working, cx));
-    assert!(
-        !revealed(&shell, cx),
-        "a working card brought the sidebar out"
-    );
-
-    let waiting = cards(&[(2, Dot::Working), (1, Dot::Waiting)]);
-    shell.update(cx, |shell, cx| shell.set_task_cards(waiting.clone(), cx));
+    shell.update(cx, |shell, cx| {
+        shell.sidebar_hidden = true;
+        shell.set_revealed(false, cx);
+    });
     cx.run_until_parked();
-    assert!(
-        revealed(&shell, cx),
-        "a card waiting for the user left the sidebar hidden"
-    );
-
-    hide(&shell, cx);
-    let mut still_waiting = waiting;
-    still_waiting[1].status = "Asks which flight".into();
-    shell.update(cx, |shell, cx| shell.set_task_cards(still_waiting, cx));
-    assert!(
-        !revealed(&shell, cx),
-        "a card still waiting brought the sidebar out again"
-    );
+    let waiting = cards(&[(2, Dot::Working), (1, Dot::Waiting)]);
+    shell.update(cx, |shell, cx| shell.set_task_cards(waiting, cx));
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert!(
+            !shell.revealed,
+            "a card waiting for the user brought the sidebar out"
+        );
+        assert!(
+            shell.edge_knot_shown(),
+            "a card waiting for the user showed no tab at the edge"
+        );
+    });
 }
 
 /// A page's word and its outline are one answer (`page_mark`), which the rail's tile and the card

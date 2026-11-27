@@ -153,6 +153,7 @@ impl Shell {
         MarkInks {
             ink: Hsla::from(self.palette.ink),
             on_primary: self.on_primary(),
+            needs_you: Hsla::from(self.palette.needs_you),
         }
     }
 
@@ -413,7 +414,8 @@ impl Shell {
                 .truncate()
                 .text_size(px(text::SMALL))
                 .line_height(px(NEEDS_LINE))
-                .text_color(self.palette.text(TITLE))
+                // Amber, as its mark is, the one colour on the line (#4402).
+                .text_color(Hsla::from(self.palette.needs_you))
                 .child(words)
         });
         // The title where it sits on any line, and the second line under it, as much room above

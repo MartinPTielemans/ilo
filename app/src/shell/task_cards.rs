@@ -383,7 +383,6 @@ impl Shell {
         if cards == self.task_cards {
             return;
         }
-        let mut waits = false;
         // What a screen reader is told of a task that came to need the user or to be done.
         let (mut told, mut answered) = (None, false);
         let read = self.a11y && self.window_active;
@@ -394,7 +393,6 @@ impl Shell {
         let list = &mut self.task_list;
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
-            waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
             // The window in front tells it, and nothing where its notification was posted.
             if read
                 && was.is_none_or(|was| was.dot != card.dot)
@@ -475,6 +473,7 @@ impl Shell {
             }
         }
         let before = std::mem::replace(&mut self.task_cards, cards);
+        self.note_waiting();
         self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {
@@ -486,12 +485,6 @@ impl Shell {
         }
         if answered {
             self.talk_answered(cx);
-        }
-        // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
-        // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.
-        // It isn't held out, as a task may wait a long while over the page.
-        if waits && self.can_reveal() {
-            self.set_revealed(true, cx);
         }
         // A conversation whose card went, dismissed, goes with it.
         if let Some(agent) = self.talk_agent()

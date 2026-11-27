@@ -91,9 +91,9 @@ nonisolated struct SiteSearch: Hashable, Identifiable, Sendable {
     return own + known.filter { !own.contains($0) }
   }
 
-  /// The searches a new profile has on the computer, the same list: core/site_searches.cc, with
-  /// the colours of `command-bar.site-colors` in app/design/tokens.toml. A test reads both files
-  /// and fails when this list differs from them.
+  /// The searches a new profile has on the computer, the same list: core/site_searches.cc. A test
+  /// reads it and fails when this list differs. The colours are the phone's chips' own, as the
+  /// computer's chips have none since #4401.
   static let builtIn: [SiteSearch] = [
     SiteSearch(name: "Google Drive", host: "drive.google.com", template: "https://drive.google.com/drive/search?q={searchTerms}", colour: 0xFBBC04),
     SiteSearch(name: "Gmail", host: "mail.google.com", template: "https://mail.google.com/mail/u/0/#search/{searchTerms}", colour: 0xEA4335),

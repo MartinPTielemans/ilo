@@ -114,10 +114,11 @@ impl Shell {
     }
 
     /// Whether fingers going right from `space` bring out the Library: from the first Space, in the
-    /// docked sidebar, of a regular window.
+    /// docked sidebar, of any window but a Blank Window, which has none. A private window's holds
+    /// its own session's things alone (the owner's call, 27 Nov).
     fn library_beside(&self, space: u64) -> bool {
         let first = self.spaces.first().is_some_and(|first| first.id == space);
-        first && !self.sidebar_hidden && !self.page_fullscreen && !self.one_space()
+        first && !self.sidebar_hidden && !self.page_fullscreen && !self.blank
     }
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
@@ -275,6 +276,7 @@ impl Shell {
             }
             self.ready_new_space(&mut swipe, cx);
             if self.library_swiped(&swipe).is_some() && self.library.is_none() {
+                self.section = self.opening_section();
                 self.show_section(self.section, cx);
             }
             // The trackpad clicks as where letting go would take the pages changes, by the rule

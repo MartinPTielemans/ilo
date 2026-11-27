@@ -885,8 +885,8 @@ pub struct Start {
 }
 
 /// What the composer last started a thread with in a profile, which it opens with there next:
-/// its level, never Full access, and the model picked on its assistant. Nothing of the words.
-/// Settings' `A new thread starts with` sets these too, and its effort, which only Settings sets.
+/// its level, never Full access, the model picked on its assistant and its effort. Nothing of
+/// the words. Settings' `A new thread starts with` sets these too.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Last {
     pub tier: Tier,
@@ -894,8 +894,8 @@ pub struct Last {
     /// Settings' assistant and model.
     pub model: Option<(Cli, String)>,
     /// The effort level a new thread starts at, one a CLI's `efforts` lists, for an assistant
-    /// whose program takes it; None for the program's own. A composer's pick holds for its
-    /// thread alone and never comes here.
+    /// whose program takes it; None for the program's own. The composer's pick comes here as its
+    /// model does, so a relaunch opens it with the last (the owner's 27 Nov call, D13, #4415).
     pub effort: Option<&'static str>,
 }
 
@@ -1085,11 +1085,38 @@ impl Agents {
     /// and Settings' `A new thread starts with`, whose rows are this same memory: a pick there is
     /// a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
+        let effort = self.composer_last(space).effort;
+        self.keep_composer(space, tier, model, effort);
+    }
+
+    /// The composer started a thread on `cli` in `space`: as `remember_composer`, with the effort
+    /// it started at. An assistant whose program takes none leaves the one kept for the others.
+    pub fn remember_start(
+        &mut self,
+        space: u64,
+        cli: Cli,
+        tier: Tier,
+        model: Option<String>,
+        effort: Option<&'static str>,
+    ) {
+        let effort = match cli.efforts().is_empty() {
+            true => self.composer_last(space).effort,
+            false => effort,
+        };
+        self.keep_composer(space, tier, model.map(|model| (cli, model)), effort);
+    }
+
+    fn keep_composer(
+        &mut self,
+        space: u64,
+        tier: Tier,
+        model: Option<(Cli, String)>,
+        effort: Option<&'static str>,
+    ) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
             return;
         }
-        let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
         let last = Last {
             tier,
             model,

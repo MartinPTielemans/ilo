@@ -1,177 +1,413 @@
-//! The sidebar's footer: the Space switcher, the plus button beside it, and off the Mac the menu
-//! control before the plus.
+//! The sidebar's foot (#4400): the Library at its left, off the Mac the menu control after it, and
+//! at its right the Space shown's button, whose menu holds every Space and what the + made.
+
+use std::time::Instant;
 
 use gpui::{
-    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Role, canvas, div, prelude::*,
-    px, svg,
+    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, SharedString,
+    Window, div, prelude::*, px, rgb, svg,
 };
 
 use super::{
-    FOOTER_HEIGHT, NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_RADIUS, NAV_SIZE, PLUS_INSET,
-    SPACE_CLEAR, SPACE_DRAGGED, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER,
-    SPACE_LEAST, SPACE_OTHER, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED,
-    SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, Space,
-    access::Accessible,
-    space_order::{Along, DraggedSpace},
+    FOOTER_HEIGHT, MenuEntry, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, Shell,
+    access::Accessible, drag::EDGE_WAIT, menus::MenuAction,
 };
-use crate::space_icon::{GLYPHS, SpaceIcon};
-use crate::tokens::shell::{FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, PLUS_PLATE};
+use crate::elevation::Level;
+use crate::palette::{Float, PAPER, Tone};
+use crate::space_icon::SpaceIcon;
+use crate::tokens::shell::space_button::motion::{PILL, PILL_FADE, SLIDE};
+use crate::tokens::shell::{
+    FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, LIBRARY_BUTTON, PLUS_PLATE,
+    SPACE_BUTTON_CHEVRON, SPACE_BUTTON_GAP, SPACE_BUTTON_PAD,
+};
+use crate::tokens::tooltip::{GAP, HEIGHT, NEAR_RADIUS, RIM, TEXT_SIZE, TEXT_X};
 use crate::tooltip::{Anchor, Tip};
 
-/// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
-const GLYPH_INK: f32 = 20. / 24.;
+/// The Space button's menu's New Space…, for a tab dropped on it: no Space's id.
+const NEW_SPACE: u64 = 0;
 
-/// How far the +'s box is from the sidebar's side: centred where the first row's size of button
-/// would be, so the glyph stays where it was drawn.
-pub(super) fn plus_right() -> f32 {
+/// How far the Space button's right edge is from the sidebar's side: where the +'s plate ended,
+/// centred where the first row's size of button would be.
+pub(super) fn space_button_right() -> f32 {
     PLUS_INSET + (NAV_SIZE - FOOT_PLATE) / 2.
 }
 
-/// How wide each Space's cell is in a switcher `span` wide, from its own pitch in `pitches`, a
-/// dot's or an icon's, with the `shown`th shown. While they don't all fit, the ones whose pitch is
-/// under an even share of what the rest leave keep theirs and the others take that share, in half
-/// points; once that share is under the least the Space shown keeps, it keeps that and the
-/// others share the rest evenly (Arc 1.171). The cells can come to a fraction more than the span,
-/// which the switcher centres.
-pub(super) fn space_cells(span: f32, pitches: &[f32], shown: usize) -> Vec<f32> {
-    let half = |width: f32| (width * 2.).round() / 2.;
-    let count = pitches.len();
-    if count < 2 || pitches.iter().sum::<f32>() <= span {
-        return pitches.iter().map(|pitch| pitch.min(span)).collect();
-    }
-    let mut narrowest = pitches.to_vec();
-    narrowest.sort_by(f32::total_cmp);
-    let (mut left, mut share) = (span, 0.);
-    for (index, pitch) in narrowest.into_iter().enumerate() {
-        share = left / (count - index) as f32;
-        if pitch > share {
-            break;
-        }
-        left -= pitch;
-    }
-    let share = half(share);
-    if share >= SPACE_SHOWN_LEAST {
-        return pitches.iter().map(|pitch| pitch.min(share)).collect();
-    }
-    let others = half((span - SPACE_SHOWN_LEAST).max(0.) / (count - 1) as f32);
-    (0..count)
-        .map(|index| {
-            if index == shown {
-                SPACE_SHOWN_LEAST
-            } else {
-                others
-            }
-        })
-        .collect()
+/// How wide the Space button is: its mark and chevron and the room round them.
+pub(super) fn space_button_width() -> f32 {
+    2. * SPACE_BUTTON_PAD + FOOT_GLYPH + SPACE_BUTTON_GAP + SPACE_BUTTON_CHEVRON
 }
 
-/// How big an item's ink `size` across draws in a cell `cell` wide: its own size, or less to keep
-/// clear of the items beside it, but never under the least, or the cell less a point below that.
-pub(super) fn squeezed(size: f32, cell: f32) -> f32 {
-    size.min(cell - SPACE_CLEAR)
-        .max(SPACE_LEAST.min(cell - 1.))
-        .max(0.)
+/// The Space button's change after a switch in this window: the Space before's mark leaves
+/// toward the side the one before was on as the new one's comes in from its own, once the rows
+/// have slid (under Reduce Motion they cross-fade), and the new Space's name shows in a pill
+/// above the button for a moment, as a tooltip would, so a switch by keys says where it went.
+pub(super) struct ButtonSwitch {
+    /// The mark leaving: the Space before's icon and name.
+    before: (SharedString, SharedString),
+    /// Whether the Space shown is to the right of the one before, among the Spaces.
+    right: bool,
+    /// When the mark started moving: None while the rows still slide.
+    start: Option<Instant>,
+    /// Whether the mark is in its place, which check.sh has heard.
+    settled: bool,
 }
 
-/// How strong a Space's icon draws in the switcher, as its dot would: the Space shown at full
-/// strength, the others dimmed by the dot's own ratio, and a hovered one by the dot's hovered
-/// ratio.
-pub(super) fn icon_opacity(shown: bool, hovered: bool) -> f32 {
-    match (shown, hovered) {
-        (true, _) => 1.,
-        (false, false) => SPACE_OTHER,
-        (false, true) => SPACE_HOVERED,
+impl ButtonSwitch {
+    /// How far along the mark's slide is, on its ease-out, `t` seconds in.
+    fn along(t: f32) -> f32 {
+        super::cubic_bezier(0., 0., 0.58, 1., (t / SLIDE).clamp(0., 1.))
+    }
+
+    /// How much the pill shows, `t` seconds in: fading in, held, then fading out by `PILL`.
+    fn pill(t: f32) -> f32 {
+        (t / PILL_FADE).min((PILL - t) / PILL_FADE).clamp(0., 1.)
     }
 }
 
 impl Shell {
-    /// A dot for each Space, in the footer. Arc draws none while there's only one.
-    pub(super) fn switcher(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if self.spaces.len() < 2 {
+    /// The window has switched from `before` to another Space, to its right or not: the Space
+    /// button's mark slides once the rows have, and its name's pill shows.
+    pub(super) fn switch_space_button(&mut self, before: u64, right: bool) {
+        let Some(space) = self.spaces.iter().find(|space| space.id == before) else {
+            return;
+        };
+        self.space_button_switch = Some(ButtonSwitch {
+            before: (space.icon.clone(), space.name.clone()),
+            right,
+            start: None,
+            settled: false,
+        });
+    }
+
+    /// Starts the Space button's slide once the rows' settle is over, keeps frames coming while it
+    /// or the pill moves, and drops the switch once both are done.
+    pub(super) fn step_space_button(&mut self, window: &mut Window) {
+        let settling = self.settle.is_some();
+        let now = self.clock.now();
+        let Some(switch) = self.space_button_switch.as_mut() else {
+            return;
+        };
+        let start = match switch.start {
+            Some(start) => start,
+            None if settling => return window.request_animation_frame(),
+            None => *switch.start.insert(now),
+        };
+        let t = now.saturating_duration_since(start).as_secs_f32();
+        if t >= SLIDE && !std::mem::replace(&mut switch.settled, true) {
+            // check.sh waits for this line before it clicks the button or captures it.
+            log!("browser: space button settled");
+        }
+        match t < SLIDE.max(PILL) {
+            true => window.request_animation_frame(),
+            false => self.space_button_switch = None,
+        }
+    }
+
+    /// The Space button's mark box: the Space shown's mark, and while a switch's slide is on, the
+    /// Space before's leaving it.
+    fn space_button_marks(
+        &self,
+        icon: &str,
+        name: &str,
+        ink: gpui::Hsla,
+        cx: &gpui::App,
+    ) -> AnyElement {
+        let mark = |icon: &str, name: &str| crate::space_icon::mark(icon, name, FOOT_GLYPH, ink);
+        // Until the rows have slid, the Space before's mark holds its place.
+        let moving = self.space_button_switch.as_ref().and_then(|switch| {
+            let along = (switch.start).map_or(0., |start| ButtonSwitch::along(self.since(start)));
+            (along < 1.).then_some((switch, along))
+        });
+        let Some((switch, along)) = moving else {
+            return mark(icon, name);
+        };
+        // From the side it's on among the Spaces, by the mark's box, as the page slides by its own.
+        let side = if switch.right {
+            FOOT_GLYPH
+        } else {
+            -FOOT_GLYPH
+        };
+        let still = crate::motion::still(cx);
+        let placed = |element: AnyElement, x: f32, shown: f32| {
+            div()
+                .absolute()
+                .top_0()
+                .left(px(if still { 0. } else { x }))
+                .size(px(FOOT_GLYPH))
+                .when(still, |element| element.opacity(shown))
+                .child(element)
+        };
+        let (before_icon, before_name) = &switch.before;
+        div()
+            .relative()
+            .flex_none()
+            .size(px(FOOT_GLYPH))
+            .overflow_hidden()
+            .child(placed(
+                mark(before_icon, before_name),
+                -side * along,
+                1. - along,
+            ))
+            .child(placed(mark(icon, name), side * (1. - along), along))
+            .into_any_element()
+    }
+
+    /// The pill naming the Space a switch in this window showed, above the Space button with
+    /// their right edges together, in the tooltip's look, its corner toward the button squarer.
+    pub(super) fn space_pill(&self) -> Option<impl IntoElement + use<>> {
+        let switch = self.space_button_switch.as_ref()?;
+        let shown = ButtonSwitch::pill(self.since(switch.start?));
+        if shown <= 0. || self.menu_open {
             return None;
         }
-        let span = self.switcher_span();
-        let cells = self.switcher_cells(span);
-        let shell = cx.weak_entity();
-        let dots = self.spaces.iter().zip(cells).map(|(space, cell)| {
-            let (id, shown) = (space.id, space.id == self.space);
-            let shell = shell.clone();
-            div()
-                .id(("space", id))
-                .when(self.a11y, |dot| {
-                    dot.role(Role::Tab)
-                        .accessibility_id(format!("space-{id}"))
-                        .aria_label(space.name.clone())
-                        .aria_selected(shown)
-                        .pressed_by_mouse_down(false, true)
-                })
-                .group("space")
-                .flex_none()
-                .relative()
-                .left(px(self.space_slide(Along::Switcher, id)))
-                .w(px(cell))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(self.space_dragged(id), |dot| dot.opacity(SPACE_DRAGGED))
-                .block_mouse_except_scroll()
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    log!("browser: command select-space via sidebar");
-                    shell.show_space(id, cx)
-                }))
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                        shell.space_menu(id, event.position, cx)
-                    }),
-                )
-                // Along the switcher it moves the Space (#1580).
-                .on_drag(DraggedSpace, move |_, grab, _, cx| {
-                    let grab = f32::from(grab.x);
-                    Shell::start_space_drag(&shell, id, Along::Switcher, cell, grab, cx)
-                })
-                .child(self.space_mark(space, shown, cell))
-                .child(self.dot_drawn(id))
-        });
+        let space = self.spaces.iter().find(|space| space.id == self.space)?;
+        let widest = self.width() - 2. * space_button_right();
         Some(
             div()
-                .id("switcher")
-                .when(self.a11y, |switcher| {
-                    switcher.role(Role::TabList).aria_label("Spaces")
-                })
                 .absolute()
-                .left(px(SWITCHER_INSET))
-                .w(px(span))
-                .bottom(px((FOOTER_HEIGHT - SPACE_HEIGHT) / 2.))
-                .h(px(SPACE_HEIGHT))
+                .right(px(space_button_right()))
+                .bottom(px((FOOTER_HEIGHT + FOOT_PLATE) / 2. + GAP))
+                .max_w(px(widest))
+                .h(px(HEIGHT))
+                .px(px(TEXT_X))
                 .flex()
-                .justify_center()
-                .on_drag_move(
-                    cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
-                        shell.drag_space_over(Along::Switcher, event, cx)
-                    }),
-                )
-                .children(dots)
-                .children(self.space_drop_line(Along::Switcher))
-                .child(self.space_drop_listener(Along::Switcher, cx)),
+                .items_center()
+                .rounded(px(HEIGHT / 2.))
+                .rounded_br(px(NEAR_RADIUS))
+                .border(px(RIM))
+                .border_color(Level::Popover.rim())
+                .shadow(Level::Popover.shadow())
+                .bg(Float::Tooltip.fill(Tone::Dark))
+                .opacity(shown)
+                .text_size(px(TEXT_SIZE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(PAPER))
+                .child(div().truncate().child(space.name.clone())),
         )
     }
 
-    /// Logs where Space `id`'s dot is drawn, its centre in the window, as "browser: switcher dot
-    /// `id` in window `window` at x y", each time that moves, for check.sh to click it there
-    /// whatever else the footer holds (#3175).
-    fn dot_drawn(&self, id: u64) -> impl IntoElement + use<> {
-        let (drawn, window) = (self.space_dots_drawn.clone(), self.browser.window());
-        canvas(
+    /// What a screen reader says for the Space button (words SP1): its label and value, the
+    /// Space's place among the user's Spaces.
+    fn space_button_said(&self, space: &super::Space) -> (SharedString, Option<SharedString>) {
+        let spaces: Vec<u64> = (self.spaces.iter())
+            .filter(|each| each.agent.is_empty())
+            .map(|each| each.id)
+            .collect();
+        let at = spaces
+            .iter()
+            .position(|&id| id == space.id)
+            .map(|at| (at + 1, spaces.len()));
+        said(&space.name, at, cfg!(target_os = "linux"))
+    }
+
+    /// Whether the Space button wears its plate: while the menu up is its own.
+    pub(super) fn space_button_lit(&self) -> bool {
+        self.space_switcher_up && self.menu_open
+    }
+
+    /// The Space button at the foot's right: the Space shown's mark and a chevron. A click opens
+    /// its menu, a right-click the Space's own. It wears the plate the + wore, under the pointer
+    /// and while its menu is up.
+    pub(super) fn space_button(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let space = self.spaces.iter().find(|space| space.id == self.space)?;
+        let ink = self.palette.glyph(ICON_INK);
+        Some(
+            div()
+                .id(SPACE_BUTTON)
+                .when(self.a11y, |button| {
+                    let (label, value) = self.space_button_said(space);
+                    let button = button.button_named(label).opens_menu();
+                    match value {
+                        Some(value) => button.aria_value(value),
+                        None => button,
+                    }
+                })
+                .absolute()
+                .right(px(space_button_right()))
+                .bottom(px((FOOTER_HEIGHT - FOOT_PLATE) / 2.))
+                .w(px(space_button_width()))
+                .h(px(FOOT_PLATE))
+                .px(px(SPACE_BUTTON_PAD))
+                .flex()
+                .items_center()
+                .gap(px(SPACE_BUTTON_GAP))
+                .rounded(px(FOOT_PLATE_RADIUS))
+                .block_mouse_except_scroll()
+                .when(self.space_button_lit(), |button| {
+                    button.bg(self.palette.plate(PLUS_PLATE))
+                })
+                .hover(|style| style.bg(self.palette.plate(PLUS_PLATE)))
+                // On the click, as the menu control's: the menu opens above the button, away from
+                // the pointer, so a release after it opened would close it.
+                .on_click(cx.listener(|shell, _, window, cx| shell.space_switcher(window, cx)))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                        shell.space_menu(shell.space, event.position, cx)
+                    }),
+                )
+                // In a box of its own: placed in the button's flow it would start at its padding, and
+                // the menu and the drag's hit box with it.
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(self.button_frame(SPACE_BUTTON)),
+                )
+                .child(self.space_button_drawn())
+                .child(self.space_button_marks(&space.icon, &space.name, ink.into(), cx))
+                .child(
+                    svg()
+                        .path("icons/chevrons-up-down.svg")
+                        .size(px(SPACE_BUTTON_CHEVRON))
+                        .flex_none()
+                        .text_color(ink),
+                ),
+        )
+    }
+
+    /// Whether `position`, in the window, is on the Space button's plate, where it takes the
+    /// pointer.
+    pub(super) fn on_space_button(&self, position: Point<Pixels>) -> bool {
+        (self.button_frames.borrow().get(SPACE_BUTTON))
+            .is_some_and(|frame| frame.contains(&position))
+    }
+
+    /// A tab dragged to `position`: held on the Space button for the edge's wait, the button's
+    /// menu springs open, as Arc's Spaces page at the sidebar's edge, with what the tab can go to:
+    /// another Space, or a new one. While it's up, the drag's moves highlight its rows.
+    pub(super) fn drag_over_space_button(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(drag) = self
+            .drag
+            .as_ref()
+            .filter(|drag| drag.moving && !drag.dropped)
+        else {
+            return;
+        };
+        if drag.space_menu {
+            return crate::menu::dragged_over(position, cx);
+        }
+        let on = self.moving_to_spaces(drag) && self.on_space_button(position);
+        if drag.on_space_button.is_some() == on {
+            return;
+        }
+        let since = on.then(Instant::now);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.on_space_button = since;
+        }
+        let Some(since) = since else {
+            return;
+        };
+        cx.spawn_in(window, async move |shell, cx| {
+            cx.background_executor().timer(EDGE_WAIT).await;
+            shell
+                .update_in(cx, |shell, window, cx| {
+                    let held = shell
+                        .drag
+                        .as_ref()
+                        .filter(|drag| drag.moving && !drag.dropped);
+                    if held.and_then(|drag| drag.on_space_button) != Some(since) {
+                        return;
+                    }
+                    // check.sh waits for this line.
+                    log!("browser: drag opened the space menu");
+                    shell.space_menu_for_drag(window, cx);
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The Space button's menu for a tab dragged onto it: the Spaces it can go to, the one it's in
+    /// dimmed, and New Space…, led by the drag.
+    fn space_menu_for_drag(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(frame) = self.button_frames.borrow().get(SPACE_BUTTON).copied() else {
+            return;
+        };
+        let Some(tab) = self.drag.as_ref().map(|drag| drag.tab) else {
+            return;
+        };
+        let mut items: Vec<(MenuEntry, MenuAction)> = Vec::new();
+        let mut targets = Vec::new();
+        let spaces = (self.spaces.iter()).filter(|space| space.agent.is_empty());
+        for space in spaces {
+            let mut entry = MenuEntry::named(space.name.clone(), space.id != self.space)
+                .checked(space.id == self.space);
+            entry.scrolls = true;
+            match SpaceIcon::parse(&space.icon).glyph_path() {
+                Some(path) => entry.icon = Some(path),
+                None => entry.mark = Some(crate::space_icon::letter(&space.name).into()),
+            }
+            items.push((entry, Box::new(|_, _| {})));
+            targets.push(Some(space.id));
+        }
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        targets.push(None);
+        items.push((MenuEntry::new("New Space…", true), Box::new(|_, _| {})));
+        targets.push(Some(NEW_SPACE));
+        let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
+        let width = crate::menu::root_width(&entries, window);
+        let foot = frame.top() - px(crate::menu::FROM_CONTROL);
+        let at = gpui::point(
+            frame.right() - px(width),
+            foot - px(crate::menu::height(&entries)),
+        );
+        crate::menu::lead_by_drag(cx);
+        self.show_space_switcher(items, at, cx);
+        self.space_menu_targets = targets;
+        if let Some(drag) = self.drag.as_mut().filter(|drag| drag.tab == tab) {
+            drag.space_menu = true;
+        }
+    }
+
+    /// The drag let go with the Space button's menu up, which it led: on a Space's row the tab goes
+    /// to that Space, as Move to sends it, and on New Space… it makes a Space with it. Anywhere
+    /// else the menu closes and the drop is the list's. Returns whether the menu took it.
+    pub(super) fn drop_on_space_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self
+            .drag
+            .as_mut()
+            .filter(|drag| drag.space_menu && !drag.dropped)
+        else {
+            return false;
+        };
+        drag.space_menu = false;
+        let tab = drag.tab;
+        let target = crate::menu::drag_target(cx).and_then(|at| self.space_menu_targets.get(at));
+        let target = target.copied().flatten();
+        cx.defer(crate::menu::drag_ended);
+        let Some(target) = target else {
+            return false;
+        };
+        self.cancel_drag(cx);
+        // check.sh waits for this line.
+        log!("browser: dropped tab {tab} on the space menu");
+        match target {
+            NEW_SPACE => self.new_space_with(Some(tab), cx),
+            space => self.move_to_space(tab, space, false, cx),
+        }
+        true
+    }
+
+    /// Logs where the Space button is drawn, its centre in the window, as "browser: space button
+    /// in window `window` at x y", each time that moves, for check.sh to click it there whatever
+    /// width the sidebar has.
+    fn space_button_drawn(&self) -> impl IntoElement + use<> {
+        let (drawn, window) = (self.space_button_drawn.clone(), self.browser.window());
+        gpui::canvas(
             |_, _, _| {},
             move |bounds, _, _, _| {
                 let centre = bounds.center();
-                let at = (f32::from(centre.x).round(), f32::from(centre.y).round());
-                let (x, y) = (at.0 as i32, at.1 as i32);
-                if drawn.borrow_mut().insert(id, (x, y)) != Some((x, y)) {
+                let x = f32::from(centre.x).round() as i32;
+                let y = f32::from(centre.y).round() as i32;
+                if drawn.replace(Some((x, y))) != Some((x, y)) {
                     // check.sh reads this line.
-                    log!("browser: switcher dot {id} in window {window} at {x} {y}");
+                    log!("browser: space button in window {window} at {x} {y}");
                 }
             },
         )
@@ -179,133 +415,8 @@ impl Shell {
         .inset_0()
     }
 
-    /// How wide the switcher is: the footer between its insets, less the menu control's pitch where
-    /// it has one, so the dots stay centred between the Library and the control (#3148).
-    pub(super) fn switcher_span(&self) -> f32 {
-        let control = if self.menu_control { NAV_PITCH } else { 0. };
-        self.width() - 2. * SWITCHER_INSET - control
-    }
-
-    /// A Space's dot, glyph or emoji in its switcher cell `cell` wide.
-    fn space_mark(&self, space: &Space, shown: bool, cell: f32) -> AnyElement {
-        let id = space.id;
-        match SpaceIcon::parse(&space.icon) {
-            SpaceIcon::Dot => {
-                let size = if shown {
-                    SPACE_SWATCH_SHOWN
-                } else {
-                    SPACE_SWATCH
-                };
-                // Under the pointer it grows as far again past its squeezed size.
-                let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
-                let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
-                // The Space shown's is the only dot in colour, a tone of its first colour toward
-                // the ink that reads on its own window (`Palette::space_dot`), or the ink without
-                // one; the others' are the quietest ink, a step firmer under the pointer.
-                match (shown, self.space_theme(id).is_some()) {
-                    (true, true) => dot(squeezed(size, cell), self.palette_of(id).space_dot.into()),
-                    (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
-                    (false, _) => dot(
-                        squeezed(size, cell),
-                        self.palette.glyph(self.palette.tertiary()),
-                    )
-                    .group_hover("space", |style| {
-                        style
-                            .size(px(hovered))
-                            .bg(self.palette.glyph(self.palette.secondary()))
-                    }),
-                }
-                .into_any_element()
-            }
-            // The Space shown's in its accent, as its dot is in its colour, or the ink without
-            // one; the others' in the dots' greys.
-            SpaceIcon::Glyph(index) => svg()
-                .path(GLYPHS[index].1)
-                .size(px(squeezed(SPACE_GLYPH * GLYPH_INK, cell) / GLYPH_INK))
-                .text_color(match (shown, self.space_theme(id).is_some()) {
-                    (true, true) => self.palette_of(id).accent.into(),
-                    (true, false) => self.palette.glyph(1.),
-                    (false, _) => self.palette.glyph(self.palette.tertiary()),
-                })
-                .when(!shown, |glyph| {
-                    glyph.group_hover("space", |style| {
-                        style.text_color(self.palette.glyph(self.palette.secondary()))
-                    })
-                })
-                .into_any_element(),
-            // The item's box is the dot's, so the strip doesn't move with an icon.
-            SpaceIcon::Emoji(emoji) => div()
-                .text_size(px(squeezed(SPACE_ICON_SWITCHER, cell)))
-                .opacity(icon_opacity(shown, false))
-                .when(!shown, |icon| {
-                    icon.group_hover("space", |style| style.opacity(icon_opacity(false, true)))
-                })
-                .child(emoji.to_string())
-                .into_any_element(),
-        }
-    }
-
-    /// The copy of a dragged dot that follows the pointer: its cell `cell` wide, as it's drawn in
-    /// the switcher.
-    pub(super) fn dot_ghost(&self, space: u64, cell: f32) -> Option<AnyElement> {
-        let space = self.spaces.iter().find(|each| each.id == space)?;
-        let mark = self.space_mark(space, space.id == self.space, cell);
-        Some(
-            div()
-                .w(px(cell))
-                .h(px(SPACE_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(mark)
-                .into_any_element(),
-        )
-    }
-
-    /// Whether the + wears its plate: while the menu up is its own.
-    pub(super) fn plus_lit(&self) -> bool {
-        self.plus_menu && self.menu_open
-    }
-
-    /// The footer's + at its right (Arc), whose menu makes a Space or a folder. Its box is the
-    /// plate it wears while that menu is up.
-    pub(super) fn plus_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div()
-            .id("plus")
-            .when(self.a11y, |plus| {
-                plus.button_named("New Space, Folder or Note")
-                    .pressed_by_mouse_down(true, false)
-            })
-            .absolute()
-            .right(px(plus_right()))
-            .bottom(px((FOOTER_HEIGHT - FOOT_PLATE) / 2.))
-            .size(px(FOOT_PLATE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(FOOT_PLATE_RADIUS))
-            .block_mouse_except_scroll()
-            // One plate, under the pointer and while its menu is up.
-            .when(self.plus_lit(), |plus| {
-                plus.bg(self.palette.plate(PLUS_PLATE))
-            })
-            .hover(|style| style.bg(self.palette.plate(PLUS_PLATE)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                    shell.plus_menu(event.position, cx)
-                }),
-            )
-            .child(
-                svg()
-                    .path("icons/plus.svg")
-                    .size(px(FOOT_GLYPH))
-                    .text_color(self.palette.glyph(ICON_INK)),
-            )
-    }
-
-    /// Off the Mac, the control before the + that opens ilo's menu, which the Mac's menu bar holds
-    /// (#3148). It keeps its plate while its menu is up, as the name row keeps its fill.
+    /// Off the Mac, the control after the Library button that opens ilo's menu, which the Mac's
+    /// menu bar holds (#3148). It keeps its plate while its menu is up, as the name row keeps its fill.
     pub(super) fn menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let lit = self.app_menu && self.menu_open;
         div()
@@ -316,7 +427,7 @@ impl Shell {
                 button.aria_active_descendant()
             })
             .absolute()
-            .right(px(PLUS_INSET + NAV_PITCH))
+            .left(px(super::library::LIBRARY_BACK_INSET + LIBRARY_BUTTON))
             .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
             .size(px(NAV_SIZE))
             .flex()
@@ -360,6 +471,27 @@ impl Shell {
     }
 }
 
+/// The Space button's spoken name for the Space `name`, `at` n of m (words SP1): Linux's screen
+/// readers take one string, the Mac's VoiceOver a label and a value, which it reads as
+/// "Space, Work, 2 of 4, menu button". With one Space there's no place to say.
+fn said(
+    name: &str,
+    at: Option<(usize, usize)>,
+    one_string: bool,
+) -> (SharedString, Option<SharedString>) {
+    let value = match at {
+        Some((n, m)) if m > 1 => format!("{name}, {n} of {m}"),
+        _ => name.to_string(),
+    };
+    match one_string {
+        true => (format!("Space: {value}").into(), None),
+        false => ("Space".into(), Some(value.into())),
+    }
+}
+
+/// The Space button's key among the buttons' frames, and its id.
+pub(super) const SPACE_BUTTON: &str = "space-button";
+
 /// The menu control's key among the buttons' frames, and its id.
 pub(super) const MENU_CONTROL: &str = "app-menu";
 /// What the menu control's tooltip and the screen reader call it: the menu the Mac's menu bar names
@@ -368,16 +500,18 @@ const MENU_CONTROL_NAME: &str = concat!(env!("APP_NAME"), " menu");
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
 
     use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
 
-    use super::{icon_opacity, plus_right, space_cells, squeezed};
-    use crate::palette::{TEXT_SECONDARY, TEXT_TERTIARY};
+    use super::{
+        ButtonSwitch, EDGE_WAIT, PILL, PILL_FADE, SLIDE, space_button_right, space_button_width,
+    };
+    use crate::shell::drag::detents::{X, press};
     use crate::shell::{FOOTER_HEIGHT, Shell, library::LIBRARY_BACK_INSET, recorder::Recorder};
-    use crate::tokens::shell::{FOOT_PLATE, LIBRARY_BUTTON};
+    use crate::tokens::shell::LIBRARY_BUTTON;
 
-    /// A window with two Spaces, so its foot has the +.
+    /// A window with two Spaces, the first shown.
     fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
         let host = Rc::new(Recorder::default());
         let browser = host.clone();
@@ -413,64 +547,91 @@ mod tests {
         })
     }
 
-    /// The + wears its plate from the click that opens its menu until the menu closes, chosen
-    /// from or not, and another menu doesn't give it one.
+    /// The middle of the Space button.
+    fn button(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Point<Pixels> {
+        foot(shell, cx, space_button_right() + space_button_width() / 2.)
+    }
+
+    /// The Space button wears its plate from the click that opens its menu until the menu closes,
+    /// and another menu doesn't give it one.
     #[gpui::test]
-    fn the_plus_wears_its_plate_while_its_menu_is_up(cx: &mut TestAppContext) {
+    fn the_space_button_wears_its_plate_while_its_menu_is_up(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
-        assert!(!shell.read_with(cx, |shell, _| shell.plus_lit()));
-        let middle = foot(&shell, cx, plus_right() + FOOT_PLATE / 2.);
-        cx.simulate_click(middle, Modifiers::none());
+        assert!(!shell.read_with(cx, |shell, _| shell.space_button_lit()));
+        let at = button(&shell, cx);
+        cx.simulate_click(at, Modifiers::none());
         cx.run_until_parked();
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         assert!(
             titles.iter().any(|(title, _)| title == "New Space…"),
-            "the click opened no menu"
+            "the click opened no menu: {titles:?}"
         );
+        // As check.sh's choose_space reads it: each Space, the shown one checked and the first not
+        // last, then New Space…, with no line and no ⌃ key between them.
+        let shown = crate::menu::described(&host.entries.borrow());
         assert!(
-            shell.read_with(cx, |shell, _| shell.plus_lit()),
+            shown.starts_with("Space 1 (checked), Space 2, New Space…, "),
+            "the menu as the log has it: {shown}"
+        );
+        assert!(!shown.contains('⌃'), "the log has a key: {shown}");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.space_button_lit()),
             "no plate while its menu is up"
         );
         cx.update(|_, cx| host.dismiss(cx));
         cx.run_until_parked();
         assert!(
-            !shell.read_with(cx, |shell, _| shell.plus_lit()),
+            !shell.read_with(cx, |shell, _| shell.space_button_lit()),
             "the plate outlived the menu"
         );
 
-        // A Space's own menu is not the +'s.
-        shell.update(cx, |shell, cx| shell.space_menu(1, middle, cx));
+        // A right-click opens the Space shown's own menu, which isn't the button's.
+        let at = button(&shell, cx);
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Right,
+            position: at,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        });
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.menu_open && !shell.plus_lit()));
+        let titles = host.menus.borrow().last().cloned().unwrap_or_default();
+        assert!(
+            titles.iter().any(|(title, _)| title == "Rename Space…"),
+            "a right-click opened no Space menu: {titles:?}"
+        );
+        assert!(shell.read_with(cx, |shell, _| shell.menu_open && !shell.space_button_lit()));
         cx.update(|_, cx| host.dismiss(cx));
     }
 
-    /// The + takes the pointer in the box its plate fills, 28 across about the glyph, and not
-    /// past it.
+    /// The Space button takes the pointer in its plate's box and not past it.
     #[gpui::test]
-    fn the_plus_takes_the_pointer_in_its_plates_box(cx: &mut TestAppContext) {
+    fn the_space_button_takes_the_pointer_in_its_plates_box(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
-        let middle = plus_right() + FOOT_PLATE / 2.;
-        let past = foot(&shell, cx, middle + FOOT_PLATE / 2. + 1.);
+        let past = foot(&shell, cx, space_button_right() + space_button_width() + 1.);
         cx.simulate_click(past, Modifiers::none());
         cx.run_until_parked();
         assert!(
             host.menus.borrow().is_empty(),
-            "a click past the box opened it"
+            "a click past the plate opened a menu"
         );
-        let inside = foot(&shell, cx, middle + FOOT_PLATE / 2. - 1.);
-        cx.simulate_click(inside, Modifiers::none());
+        let at = button(&shell, cx);
+        cx.simulate_click(at, Modifiers::none());
         cx.run_until_parked();
-        assert_eq!(
-            host.menus.borrow().len(),
-            1,
-            "a click in the box opened none"
-        );
-        cx.update(|_, cx| host.dismiss(cx));
+        assert_eq!(host.menus.borrow().len(), 1);
+        // The frame the menu hangs from and a drag hits is the plate's own, not shifted by its
+        // padding, so the menu's right edge is the plate's.
+        let (frame, width) = shell.read_with(cx, |shell, _| {
+            (
+                shell.button_frames.borrow()[super::SPACE_BUTTON],
+                shell.width(),
+            )
+        });
+        let right = width - space_button_right();
+        assert_eq!(f32::from(frame.right()), right);
+        assert_eq!(f32::from(frame.left()), right - space_button_width());
     }
 
-    /// The Library button wears its plate while the Library is open, from the click that opens it,
-    /// and not once it's closed.
     #[gpui::test]
     fn the_library_button_wears_its_plate_while_the_library_is_open(cx: &mut TestAppContext) {
         let (shell, cx, _host) = window(cx);
@@ -493,83 +654,158 @@ mod tests {
         );
     }
 
-    /// The switcher's cells in a sidebar 300 wide, 212 between the insets: a dot's pitch of 17 while
-    /// they fit, and once an even share is under that the Space shown keeps it and the others
-    /// share the rest in half points (the rule is Arc 1.171's): 16.5, 13 and 9.5 with 13, 16 and
-    /// 22 Spaces.
-    #[test]
-    fn the_switcher_shares_its_span_as_arcs() {
-        let span = 300. - 2. * 44.;
-        assert_eq!(space_cells(span, &[17.; 5], 0), vec![17.; 5]);
-        assert_eq!(space_cells(span, &[17.; 12], 3), vec![17.; 12]);
-        for (count, others) in [(13, 16.5), (16, 13.), (22, 9.5)] {
-            let cells = space_cells(span, &vec![17.; count], 4);
-            assert_eq!(cells.len(), count);
-            assert_eq!(cells[4], 17., "the Space shown with {count}");
-            let shared = cells
-                .iter()
-                .enumerate()
-                .all(|(i, &cell)| i == 4 || cell == others);
-            assert!(shared, "{count}: {cells:?}");
-            // Never more than the rounding's quarter point a Space over the span, which the
-            // switcher centres.
-            let over = cells.iter().sum::<f32>() - span;
-            assert!(over <= 0.25 * count as f32, "{count}: {cells:?}");
-        }
-        // Without the Space shown among them, as while a new Space's form shows, all share alike.
+    /// Draws a frame, as the window's next would.
+    fn frame(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// A switch in this window: the rows slide first, then the button's mark, and the Space's
+    /// name shows in its pill over the button for its moment and goes.
+    #[gpui::test]
+    fn after_a_switch_the_mark_slides_once_the_rows_have_and_the_name_shows(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _host) = window(cx);
+        shell.update(cx, |shell, cx| shell.set_space(2, cx));
+        let started = |shell: &Shell| {
+            shell
+                .space_button_switch
+                .as_ref()
+                .map(|s| s.start.is_some())
+        };
+        assert_eq!(shell.read_with(cx, |shell, _| started(shell)), Some(false));
+        frame(cx);
         assert!(
-            space_cells(span, &[17.; 22], usize::MAX)
-                .iter()
-                .all(|&cell| cell == 9.5)
+            shell.read_with(cx, |shell, _| shell.settle.is_some()
+                && started(shell) == Some(false)),
+            "the mark moved while the rows still slid"
         );
-        assert!(space_cells(span, &[], 0).is_empty());
-        assert_eq!(space_cells(span, &[17.], 0), vec![17.]);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        frame(cx);
+        assert_eq!(shell.read_with(cx, |shell, _| started(shell)), Some(true));
+        cx.executor().advance_clock(Duration::from_secs_f32(SLIDE));
+        frame(cx);
+        assert!(shell.read_with(cx, |shell, _| {
+            shell
+                .space_button_switch
+                .as_ref()
+                .is_some_and(|switch| switch.settled)
+        }));
+        assert!(
+            shell.read_with(cx, |shell, _| shell.space_pill().is_some()),
+            "no name's pill"
+        );
+        cx.executor().advance_clock(Duration::from_secs_f32(PILL));
+        frame(cx);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.space_button_switch.is_none()),
+            "the pill outlived its moment"
+        );
+        // The core telling the window which Space it shows, with none before, slides nothing.
+        shell.update(cx, |shell, cx| shell.set_space(2, cx));
+        assert!(shell.read_with(cx, |shell, _| shell.space_button_switch.is_none()));
     }
 
-    /// A Space with an icon keeps its wider pitch beside the dots while all fit. Once they don't,
-    /// the dots keep theirs and the icons share what's left, until that's under what the Space
-    /// shown keeps and all share as dots do.
+    /// The button says the Space and its place among the Spaces, as one string on Linux and as a
+    /// label and value elsewhere, and only the name with one Space (words SP1).
     #[test]
-    fn an_icon_keeps_its_own_pitch_beside_the_dots() {
-        let span = 228. - 2. * 44.;
-        assert_eq!(space_cells(span, &[34., 17., 34.], 1), [34., 17., 34.]);
-        assert_eq!(space_cells(span, &[34.; 5], 0), [28.; 5]);
+    fn the_space_button_says_the_space_and_its_place() {
+        use super::said;
+        let pair = |(label, value): (gpui::SharedString, Option<gpui::SharedString>)| {
+            (label.to_string(), value.map(|value| value.to_string()))
+        };
+        let mac = |label: &str, value: &str| (label.to_string(), Some(value.to_string()));
         assert_eq!(
-            space_cells(span, &[34., 17., 34., 17., 34., 17.], 0),
-            [29.5, 17., 29.5, 17., 29.5, 17.]
+            pair(said("Work", Some((2, 4)), false)),
+            mac("Space", "Work, 2 of 4")
         );
-        let cells = space_cells(span, &[34.; 9], 2);
-        assert_eq!((cells[2], cells[0], cells[8]), (17., 15.5, 15.5));
+        assert_eq!(
+            pair(said("Work", Some((1, 1)), false)),
+            mac("Space", "Work")
+        );
+        assert_eq!(
+            pair(said("Work", Some((2, 4)), true)),
+            ("Space: Work, 2 of 4".to_string(), None)
+        );
+        assert_eq!(
+            pair(said("Work", Some((1, 1)), true)),
+            ("Space: Work".to_string(), None)
+        );
     }
 
-    /// An item keeps its size while it has 4 clear of its neighbours, shrinks to keep that, and
-    /// never goes under 4, or under the cell less a point.
+    /// The pill fades in, holds, and fades out by its end.
     #[test]
-    fn a_squeezed_item_keeps_clear_of_its_neighbours() {
-        assert_eq!(squeezed(10., 34.), 10.);
-        assert_eq!(squeezed(10., 17.5), 10.);
-        assert_eq!(squeezed(10., 13.), 9.);
-        assert_eq!(squeezed(10., 9.), 5.);
-        assert_eq!(squeezed(10., 7.), 4.);
-        assert_eq!(squeezed(10., 3.), 2.);
-        assert_eq!(squeezed(14., 22.), 14.);
+    fn the_pill_fades_in_and_out_over_its_moment() {
+        assert_eq!(ButtonSwitch::pill(0.), 0.);
+        assert_eq!(ButtonSwitch::pill(PILL / 2.), 1.);
+        assert!(ButtonSwitch::pill(PILL_FADE / 2.) < 1.);
+        assert!(ButtonSwitch::pill(PILL - PILL_FADE / 2.) < 1.);
+        assert_eq!(ButtonSwitch::pill(PILL), 0.);
+        assert_eq!(ButtonSwitch::along(SLIDE), 1.);
     }
 
-    /// An icon is dimmed as the dot it replaces is: the Space shown at full strength, the others
-    /// at the quietest text's, and one under the pointer at the quiet text's.
-    #[test]
-    fn an_icon_dims_as_the_dot_does() {
-        assert_eq!(icon_opacity(true, false), 1.);
-        assert_eq!(icon_opacity(true, true), 1.);
-        let others = icon_opacity(false, false);
-        assert_eq!(others, TEXT_TERTIARY);
-        let hovered = icon_opacity(false, true);
-        assert_eq!(hovered, TEXT_SECONDARY);
-        assert!(others < hovered && hovered < 1.);
-    }
-}
+    /// A tab held on the Space button for the edge's wait springs its menu open, with the Spaces
+    /// it can go to, the one it's in dimmed, and New Space…; one only passing it opens nothing,
+    /// and the right edge under the button doesn't page.
+    #[gpui::test]
+    fn a_tab_held_on_the_space_button_springs_its_menu_open(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            let folders = crate::shell::Folders::default();
+            shell.set_tabs(1, Vec::new(), vec![3, 4], Vec::new(), folders, cx);
+        });
+        cx.run_until_parked();
+        frame(cx);
+        let y = press(&shell, cx, 4);
+        let over = button(&shell, cx);
+        let drag = |shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Point<Pixels>| {
+            shell.update_in(cx, |shell, window, cx| {
+                shell.drag_to(to, cx);
+                shell.drag_over_space_button(to, window, cx);
+            });
+        };
+        drag(&shell, cx, point(px(X), px(y + 10.)));
+        drag(&shell, cx, over);
+        drag(&shell, cx, point(px(X), px(y + 10.)));
+        cx.executor().advance_clock(EDGE_WAIT);
+        cx.run_until_parked();
+        assert!(
+            host.menus.borrow().is_empty(),
+            "a tab passing the button opened its menu"
+        );
 
-/// A plain round dot `size` across in `color`.
-fn dot(size: f32, color: gpui::Hsla) -> gpui::Div {
-    div().size(px(size)).flex_none().rounded_full().bg(color)
+        drag(&shell, cx, over);
+        cx.run_until_parked();
+        assert!(
+            host.menus.borrow().is_empty(),
+            "the menu sprang open at once"
+        );
+        cx.executor().advance_clock(EDGE_WAIT);
+        cx.run_until_parked();
+        assert!(
+            host.shown.take().is_empty(),
+            "the edge under the button paged"
+        );
+        let titles = host
+            .menus
+            .borrow()
+            .last()
+            .cloned()
+            .expect("no menu sprang open");
+        let titles: Vec<(&str, bool)> = (titles.iter())
+            .filter(|(title, _)| !title.is_empty())
+            .map(|(title, enabled)| (title.as_ref(), *enabled))
+            .collect();
+        assert_eq!(
+            titles,
+            [("Space 1", false), ("Space 2", true), ("New Space…", true)]
+        );
+        assert!(shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().is_some_and(|drag| drag.space_menu) && shell.space_button_lit()
+        }));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.space_menu_targets.clone()),
+            [Some(1), Some(2), None, Some(super::NEW_SPACE)]
+        );
+    }
 }

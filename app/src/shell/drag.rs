@@ -398,6 +398,8 @@ impl Shell {
             space: self.space,
             edge: None,
             paged: None,
+            on_space_button: None,
+            space_menu: false,
             alt_click: false,
         });
     }
@@ -452,7 +454,7 @@ impl Shell {
         let pointer = in_sidebar(position, drag.origin);
         // Ahead of the page's targets, which take the drag: one that crossed the edge to get over
         // the page is no longer held there (#1466).
-        self.watch_edge(pointer.x, cx);
+        self.watch_edge(pointer.x, position, cx);
         if !incoming && self.drag_over_page(position, cx) {
             return;
         }
@@ -630,19 +632,16 @@ impl Shell {
     /// pages to the user's Space on that side once it has waited there, as Arc's does. Only a tab
     /// Move to takes: not a favorite, a folder, a split view or links dragged in. Past the right
     /// edge it's over the page, which isn't the edge.
-    fn watch_edge(&mut self, x: f32, cx: &mut Context<Self>) {
+    fn watch_edge(&mut self, x: f32, position: Point<Pixels>, cx: &mut Context<Self>) {
         let width = self.width();
-        let right = x > width - EDGE && x <= width;
+        // The Space button reaches into the right edge's band, and a tab held on it waits for its
+        // menu, not the next Space (`drag_over_space_button`).
+        let right = x > width - EDGE && x <= width && !self.on_space_button(position);
         let side = (x < EDGE).then_some(false).or(right.then_some(true));
         let Some(drag) = &self.drag else {
             return;
         };
-        let tab = drag.tab;
-        // A folder goes whole, with what's in it (#1353).
-        let movable = !drag.incoming
-            && !self.favorites.contains(&tab)
-            && self.panes(tab).len() == 1
-            && !self.one_space();
+        let movable = self.moving_to_spaces(drag);
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
         if drag.edge.map(|(right, _)| right) == side {
             return;
@@ -654,6 +653,16 @@ impl Shell {
         if let Some((_, since)) = edge {
             self.page_drag_after(since, cx);
         }
+    }
+
+    /// Whether `drag` is of a tab Move to takes, which can go to another Space: not a favorite, a
+    /// split view or links dragged in. A folder goes whole, with what's in it (#1353).
+    pub(super) fn moving_to_spaces(&self, drag: &Drag) -> bool {
+        let tab = drag.tab;
+        !drag.incoming
+            && !self.favorites.contains(&tab)
+            && self.panes(tab).len() == 1
+            && !self.one_space()
     }
 
     /// The user's Space beside the one shown, right or left.
@@ -790,7 +799,7 @@ impl Shell {
             held.let_go = Some(self.clock.now());
             cx.notify();
         }
-        if self.drop_over_page(cx) {
+        if self.drop_on_space_menu(cx) || self.drop_over_page(cx) {
             return;
         }
         let Some(drag) = self.drag.as_mut().filter(|drag| !drag.dropped) else {
@@ -1443,12 +1452,13 @@ impl Shell {
             |_, _, _| {},
             move |_, _, window, _| {
                 let moved = shell.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture {
                         moved
                             .update(cx, |shell, cx| {
                                 shell.forget_moved();
-                                shell.drag_to(event.position, cx)
+                                shell.drag_to(event.position, cx);
+                                shell.drag_over_space_button(event.position, window, cx);
                             })
                             .ok();
                     }

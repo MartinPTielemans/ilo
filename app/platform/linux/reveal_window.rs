@@ -30,10 +30,15 @@ pub extern "C" fn host_set_sidebar_right(ui_view: *mut c_void, right: bool) {
     place(ui_view);
 }
 
+/// Whether `ui_view`'s window has its sidebar on the right, for the edge knot too.
+pub(crate) fn sidebar_right(ui_view: *mut c_void) -> bool {
+    RIGHT.with_borrow(|all| all.contains(&ui_view))
+}
+
 /// Where a reveal `width` wide goes in `ui_view`'s window's content `content` wide: at its left
 /// edge, or at its right with the sidebar there.
 fn reveal_x(ui_view: *mut c_void, content: Pixels, width: Pixels) -> Pixels {
-    match RIGHT.with_borrow(|all| all.contains(&ui_view)) {
+    match sidebar_right(ui_view) {
         true => content - width,
         false => px(0.),
     }

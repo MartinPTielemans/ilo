@@ -40,7 +40,7 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     settings_rows::drawn_of,
-    space_icon::has_icon,
+    space_icon::{has_glyph, has_icon},
     tokens::shell::{
         BLOCK_GAP, DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, SEGMENT_MARK_GAP,
         SPACE_PROFILE_GAP, live_folder::COUNT_END as LIVE_COUNT_END,
@@ -1967,7 +1967,7 @@ impl Shell {
     /// Space the user doesn't name, which Arc 1.171 counts as unnamed: its name tells it from no
     /// other. An agent's Space is one more, which the name then tells it from.
     pub(super) fn lone_unnamed(&self) -> bool {
-        let unnamed = |space: &Space| !has_icon(&space.icon) && given_name(&space.name);
+        let unnamed = |space: &Space| !has_glyph(&space.icon) && given_name(&space.name);
         !self.private && self.spaces.len() == 1 && self.shown_space().is_some_and(unnamed)
     }
 
@@ -2394,7 +2394,7 @@ mod tests {
                 "Space".into(),
                 None,
                 1,
-                "🌱".into(),
+                "glyph:star".into(),
                 "".into(),
                 "".into(),
             );
@@ -2558,7 +2558,7 @@ mod tests {
                 "Space".into(),
                 None,
                 1,
-                "🌱".into(),
+                "glyph:star".into(),
                 "".into(),
                 "".into(),
             );

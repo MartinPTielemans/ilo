@@ -478,6 +478,13 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
+    // PREVIEW_TASK_PAGES=<n> keeps its first n pages: 0 shows it with no rail (#4396).
+    if let Some(count) = states::var("PREVIEW_TASK_PAGES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+    {
+        talk.tabs.truncate(count);
+    }
     talk
 }
 
