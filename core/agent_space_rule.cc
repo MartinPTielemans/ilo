@@ -1,5 +1,8 @@
 #include "browser_core/agent_space_rule.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace browser_core::agent_space_rule {
 
 bool Refuses(Ask ask, const Tab& tab) {
@@ -38,6 +41,64 @@ Listed ListedIn(const Opened& opened) {
 
 bool TakesATabWithNowhereElse(const Candidate& space) {
   return !space.agents && !space.a_windows_own && space.of_the_tabs_profile;
+}
+
+int AgentSpaceIn(const std::vector<AgentSpace>& spaces,
+                 std::string_view agent,
+                 std::string_view profile) {
+  int found = -1;
+  for (size_t at = 0; at < spaces.size(); ++at) {
+    if (agent.empty() || spaces[at].agent != agent) {
+      continue;
+    }
+    if (profile.empty()) {
+      found = static_cast<int>(at);
+    } else if (spaces[at].profile == profile) {
+      return static_cast<int>(at);
+    }
+  }
+  return found;
+}
+
+bool OpensIn(std::string_view profile, std::string_view given) {
+  return !profile.empty() && profile == given;
+}
+
+uint64_t Picked(const std::vector<PickCandidate>& candidates) {
+  const PickCandidate* best = nullptr;
+  for (const PickCandidate& each : candidates) {
+    if (!each.profile || !each.loaded || each.private_session || each.last_visit <= 0) {
+      continue;
+    }
+    if (!best || each.last_visit > best->last_visit ||
+        (each.last_visit == best->last_visit && each.order < best->order)) {
+      best = &each;
+    }
+  }
+  return best ? best->profile : 0;
+}
+
+std::vector<std::string> PickHosts(std::string_view host, std::string_view site) {
+  std::vector<std::string> hosts;
+  for (std::string each : {std::string(host), std::string(site), "www." + std::string(site)}) {
+    if (!each.empty() && each != "www." &&
+        std::find(hosts.begin(), hosts.end(), each) == hosts.end()) {
+      hosts.push_back(std::move(each));
+    }
+  }
+  return hosts;
+}
+
+PickAnswer::PickAnswer(base::OnceCallback<void(int64_t)> answer) : answer_(std::move(answer)) {}
+
+PickAnswer::~PickAnswer() {
+  Answer(0);
+}
+
+void PickAnswer::Answer(int64_t last_visit) {
+  if (answer_) {
+    std::move(answer_).Run(last_visit);
+  }
 }
 
 }  // namespace browser_core::agent_space_rule

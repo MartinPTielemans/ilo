@@ -2554,7 +2554,7 @@ bool Run(const std::string& line) {
     if (!(words >> agent) || !std::getline(words >> std::ws, name) || name.empty()) {
       return false;
     }
-    const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
+    const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str(), 0);
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
     return true;
@@ -2564,7 +2564,7 @@ bool Run(const std::string& line) {
     if (!(words >> agent >> url)) {
       return false;
     }
-    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), 0, url.c_str());
     if (!tab) {
       return false;
     }
