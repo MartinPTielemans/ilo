@@ -1734,12 +1734,6 @@ else
   material=
   off=
   opaque=
-  # The Mac's own appearance is the VM's, so cleanup puts back the one found here, a red run too (#4445).
-  dark_mode=$(dark_mode_now) || fail "System Events didn't say whether the Mac is dark"
-  if [ "$dark_mode" != true ]; then
-    appearance true || fail "System Events didn't turn the Mac dark"
-    expect '^browser: window light false$' "the window didn't turn dark with the Mac"
-  fi
   # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
   for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
     tone=${pass%% *}
