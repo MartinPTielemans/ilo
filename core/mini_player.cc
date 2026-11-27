@@ -169,6 +169,8 @@ class MiniPlayerWatch : public views::WidgetObserver {
     if (visible || !widget->IsVisible()) {
       return;
     }
+    // One 600 ms task per off-screen change, one-shot and re-read inside the task: no repeating
+    // timer, and an idle shown player wakes only on the Space change that leaves it off-screen.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, base::BindOnce(&WidgetMoveIfLeftBehind, widget->GetWeakPtr()),
         base::Milliseconds(600));

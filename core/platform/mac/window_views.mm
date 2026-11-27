@@ -255,7 +255,12 @@ const void* const kJoinsFullScreenSpacesKey = &kJoinsFullScreenSpacesKey;
 
 // AppKit's question of whether the window is a non-activating panel, answered for the windows
 // the core marked before their first show. Swizzled on NSWindow itself, as the window's own class
-// inherits the answer, once; Ardia swizzles the same selector the same way.
+// inherits the answer, once; Ardia swizzles the same selector the same way. Asked for as a widget
+// is made, on the UI thread: Chromium makes every widget there, and on the Mac that thread is the
+// one AppKit asks its questions on, so the install and AppKit's own reads are ordered by one
+// thread, which is why the plain IMP global needs no atomics. Returns whether the answer is in
+// place, as a macOS that renames its private question leaves no mark on a window its answer
+// couldn't back; the check's gate reads the line.
 IMP g_is_nonactivating_panel = nullptr;
 
 BOOL MarkedNonactivatingPanel(id window) {
@@ -265,11 +270,16 @@ BOOL MarkedNonactivatingPanel(id window) {
               window, @selector(_isNonactivatingPanel)));
 }
 
-void AnswerNonactivatingPanel() {
+bool AnswerNonactivatingPanel() {
   static dispatch_once_t once;
+  // Static, so every caller reads the one install's answer; a __block local would read its own
+  // false once the first call's block had run.
+  static bool installed = false;
   dispatch_once(&once, ^{
     Method method = class_getInstanceMethod(NSWindow.class, @selector(_isNonactivatingPanel));
     if (!method) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: no _isNonactivatingPanel to answer for the Mini Player\n");
       return;
     }
     g_is_nonactivating_panel = method_getImplementation(method);
@@ -280,7 +290,9 @@ void AnswerNonactivatingPanel() {
                          method_getTypeEncoding(method))) {
       method_setImplementation(method, marked);
     }
+    installed = true;
   });
+  return installed;
 }
 
 // On the continuous curve the Mac rounds its windows with, so the card's corners, the window's
@@ -636,7 +648,11 @@ void JoinSpacesBeforeFirstShow(views::Widget* widget) {
   if (window.visible) {
     return;
   }
-  AnswerNonactivatingPanel();
+  // Only a window whose answer is in place is marked: a mark with no answer behind it promises
+  // the joining bits a macOS that won't keep them.
+  if (!AnswerNonactivatingPanel()) {
+    return;
+  }
   objc_setAssociatedObject(window, kJoinsFullScreenSpacesKey, @YES,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   // The public form of the joining bits, which clears Primary and FullScreenPrimary and sets

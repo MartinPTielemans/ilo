@@ -89,7 +89,7 @@ int main() {
             }
             Say([NSString stringWithFormat:@"yielded to %d", pid]);
           });
-        } else if (strncmp(line, "fullscreen", 10) == 0) {
+        } else if (strcmp(line, "fullscreen\n") == 0) {
           dispatch_async(dispatch_get_main_queue(), ^{
             // The browser's own screen, as the host picks it (platform/mac/host.mm), so the full
             // screen takes the Space the Mini Player is on and not the main display's.
@@ -106,7 +106,7 @@ int main() {
                                                screen.frame.origin.y + 20)];
             [window toggleFullScreen:nil];
           });
-        } else if (strncmp(line, "windowed", 8) == 0) {
+        } else if (strcmp(line, "windowed\n") == 0) {
           dispatch_async(dispatch_get_main_queue(), ^{
             [window toggleFullScreen:nil];
           });
