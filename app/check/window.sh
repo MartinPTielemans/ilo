@@ -1083,11 +1083,13 @@ overshoot() {
   # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
   # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
   # Recorded, for a look at the sidebar coming out (overshoot.mp4).
-  # The strip is the card's inset wide, where the page starts with the sidebar hidden.
+  # The strip is the one the page, the whole window with the sidebar hidden, leaves the UI at the
+  # window's side (shell.edge-strip, the core's kPageEdgeStrip): x 0 up to its width.
   send layout
-  strip_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
-    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),.*/\1/p')
-  [ -n "$strip_x" ] || fail "the layout named no page with the sidebar hidden"
+  sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    grep -q ', WebContentsViewCocoa [0-9]*,' ||
+    fail "the layout named no page with the sidebar hidden"
+  strip_x=$(token shell edge-strip)
   record overshoot 3
   send move 400 300
   send move $((strip_x - 1)) 300
@@ -1097,7 +1099,7 @@ overshoot() {
   expect '^browser: reveal left across the edge$' \
     "the pointer out across the window's edge from the strip wasn't heard leaving across it" "$from"
   from=$((step + 1))
-  send move 3 300
+  send move 0 300
   expect '^browser: reveal shown$' \
     "the pointer back at the window's edge after overshooting it didn't bring the sidebar out" "$from"
   recorded
@@ -1112,7 +1114,7 @@ overshoot() {
   send move $((strip_x / 2)) 300
   send move -20 300
   sleep 1.2 # past the second a return counts in
-  send move 3 300
+  send move 0 300
   sleep 0.3 # past the reveal's 100 ms wait
   none_since '^browser: reveal waits$' "$from" ||
     fail "the pointer back at the window's edge 1.2 s after passing out across it brought the sidebar out"
