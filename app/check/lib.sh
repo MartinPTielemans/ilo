@@ -273,7 +273,8 @@ counted_nowhere() {
   done
 }
 # Whether the engine linked was built with the core's files $@ as this checkout has them, for a
-# step that needs a core change: an engine built before it skips the step, saying so. Only the
+# step that needs a core change: an engine built before it skips the step, saying so, or fails it
+# on a full build (ILO_FULL=1), whose engine is meant to have every change. Only the
 # files of core/ and engine/patches/ are compared (tools/engine-changes.sh). The check's first call
 # looks them up and the rest read its answer, so no two steps read different engines and the lookup,
 # up to 80 s on Windows (#4014), is paid once. A lookup that fails stops the run: taken for "no", it
@@ -300,7 +301,13 @@ engine_has() {
       ../*) file=${file#../} ;;
       *) file=app/$file ;;
     esac
-    ! printf '%s\n' "$engine_changes" | grep -qxF "$file" || return 1
+    printf '%s\n' "$engine_changes" | grep -qxF "$file" || continue
+    # A full build (tools/check-select.sh) built its engine from this checkout, so a step it would
+    # skip is one it doesn't check: it fails instead. A look build runs on the last full build's.
+    [ "${ILO_FULL:-}" != 1 ] ||
+      fail "the engine wasn't built with $file as this checkout has it, and a full build (ILO_FULL=1) checks every step on its own engine"
+    echo "skip: the steps that need $file as this checkout has it, as the engine predates it: a look build runs on the last full build's engine, and the next full build checks them"
+    return 1
   done
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.

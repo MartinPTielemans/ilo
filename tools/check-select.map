@@ -1,0 +1,132 @@
+# Which check runs a changed path needs, for tools/check-select.sh. One rule a line: a pattern, a tab,
+# and what it selects. The first rule a path matches decides it; a path no rule matches selects every
+# run, so a new file is checked in full until a rule here says what it touches.
+#
+# A pattern is a shell glob on the repo-relative path, whose * also crosses /.
+# What it selects:
+#   full      a full build: a new engine and every run (core/, engine/, the header)
+#   all       every run a look build can do
+#   none      no run beyond the smoke set (docs, the tests cargo runs, what no run reads)
+#   self      the run the path's file is, when check.sh does it unnamed
+#   <runs>    those runs, space-separated
+#
+# Two lists head the file:
+#   @smoke        the runs every look build does
+#   @engine-only  the runs whose subject is the engine's alone: a look build, on the engine the last
+#                 full build published, would only repeat that build's answer, so only a full build
+#                 does them.
+@smoke	load keys tabs window overlays agents
+@engine-only	idle sync sync-devices webrtc policies battery-os alt-click
+
+# The engine and the core: a new engine, so a full build.
+core/*	full
+engine/*	full
+
+# The selection itself, and what every run reads, could hide what they leave out.
+tools/check-select.sh	all
+tools/check-select.map	all
+tools/check-select-test.sh	all
+tools/engine-changes.sh	all
+tools/engine-changed.sh	all
+tools/headless.sh	all
+tools/window-*	all
+app/check.sh	all
+app/check/lib.sh	all
+app/check/quarantine.*	all
+.github/workflows/check-*	all
+.github/scripts/runs.sh	all
+.github/scripts/main-check.sh	all
+.github/scripts/app-artifact.sh	all
+
+# A run's own file. Its helpers (cdp.py, servers, fixtures) aren't listed, so they select every run.
+app/check/*.sh	self
+
+# Read by no run: docs, Markdown, the repo's other tools and workflows, the phone and the site.
+*.md	none
+docs/*	none
+spikes/*	none
+mobile/*	none
+site/*	none
+tools/*	none
+.github/*	none
+LICENSE	none
+NOTICE	none
+.gitignore	none
+
+# The tests cargo test runs, which aren't in the app.
+app/src/*/tests.rs	none
+app/src/*/tests/*	none
+app/src/*_tests.rs	none
+app/src/shell/recorder.rs	none
+app/src/shell/recorder/*	none
+# The preview, a binary of its own the Browser doesn't hold.
+app/src/preview.rs	none
+app/src/preview/*	none
+# Other OSes' builds and packages, which the Mac's runs never run.
+app/windows/*	none
+app/linux/*	none
+app/platform/windows/*	none
+app/platform/linux/*	none
+app/patches/gpui-windows-*	none
+app/patches/gpui-linux-*	none
+
+# The look: tokens and the runs that read them.
+app/design/tokens.toml	appearance capture import little spaces window onboarding
+app/design/*	none
+
+# Agents: the MCP server, its bridge, tasks from ⌘T and their cards and conversation.
+app/src/agents/*	agents mcp rules thread-search
+app/src/agents.rs	agents mcp rules thread-search
+app/src/agents_core.rs	agents mcp rules thread-search
+app/src/agent_events.rs	agents mcp rules
+app/src/agent_history.rs	agents mcp
+app/src/agent_history/*	agents mcp
+app/src/bridge.rs	mcp
+app/src/developer_sites.rs	agents mcp
+app/src/tab_picks.rs	agents mcp thread-search
+app/src/tab_picks/*	agents mcp thread-search
+app/src/plus.rs	agents mcp thread-search
+app/src/plus/*	agents mcp thread-search
+app/src/shell/agent_*	agents mcp
+app/src/shell/conversation.rs	agents mcp thread-search
+app/src/shell/conversation/*	agents mcp thread-search
+app/src/shell/task_area.rs	agents mcp thread-search
+app/src/shell/task_area/*	agents mcp thread-search
+app/src/shell/task_cards.rs	agents mcp cards
+app/src/shell/task_cards/*	agents mcp cards
+app/src/shell/knot.rs	agents mcp
+
+# Settings and what draws its rows.
+app/src/settings.rs	about appearance everyday profiles sync-account import mcp scripting
+app/src/settings/*	about appearance everyday profiles sync-account import mcp scripting
+app/src/settings_rows.rs	about appearance everyday profiles sync-account import mcp scripting
+app/src/settings_rows/*	about appearance everyday profiles sync-account import mcp scripting
+
+# The command bar.
+app/src/command_bar.rs	tabs ranking find split blank little
+app/src/command_bar/*	tabs ranking find split blank little
+app/src/shell/commands.rs	tabs pinned clear split blank little windows private find history
+
+# The sidebar's pieces with one run of their own.
+app/src/shell/onboarding.rs	onboarding
+app/src/shell/onboarding/*	onboarding
+app/src/shell/broom.rs	tabs pinned
+app/src/shell/broom/*	tabs pinned
+app/src/broom.rs	tabs pinned
+app/src/broom/*	tabs pinned
+app/src/shell/menus.rs	popup favorites pinned split page-menu
+app/src/shell/menus/*	popup favorites pinned split page-menu
+app/src/shell/panes.rs	split
+app/src/shell/side_panel.rs	extensions
+app/src/site_controls.rs	boosts arrange arrange-card arrange-order extensions
+app/src/site_controls/*	boosts arrange arrange-card arrange-order extensions
+app/src/shell/boost.rs	boosts arrange-card
+app/src/shell/boost/*	boosts arrange-card
+app/src/shell/hover_cards.rs	cards favorites
+app/src/shell/hover_cards/*	cards favorites
+app/src/shell/onboarding_*	onboarding
+app/src/import.rs	import
+app/src/import/*	import
+app/src/import_host.rs	import
+app/src/hosts.rs	dialogs popup page-menu passwords devices pair preview cards trouble
+app/src/pages.rs	dialogs popup page-menu passwords devices pair media trouble
