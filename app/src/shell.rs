@@ -95,6 +95,8 @@ mod keys;
 mod knot;
 mod launch_room;
 mod library;
+#[cfg(test)]
+mod library_leave_tests;
 mod link;
 #[cfg(test)]
 mod link_previews;
@@ -4323,6 +4325,9 @@ impl Shell {
         if space == self.space {
             return;
         }
+        // The Library shows no Space's tabs, so going to one leaves it, by any way (#4414). A
+        // swipe out of it sets its own motion after.
+        self.set_library(false, cx);
         self.switching = Some((Switch::Space(space), Instant::now()));
         self.browser.show_space(space, cx);
     }
