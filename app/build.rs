@@ -39,8 +39,12 @@ fn main() {
         .write_to_file(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("browser_core.rs"))
         .unwrap();
 
-    // The name the user reads, from branding/, which build.sh also reads for the app's bundle.
-    let name = root.join("branding/name");
+    // The name the user reads, from branding/, which build.sh also reads for the app's bundle. The
+    // rework's copy has its own (branding/rework), which names its profile folder apart too.
+    let name = match std::env::var_os("CARGO_FEATURE_REWORK") {
+        Some(_) => root.join("branding/rework/name"),
+        None => root.join("branding/name"),
+    };
     let name_text = std::fs::read_to_string(&name).expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
     println!("cargo:rerun-if-changed={}", name.display());
