@@ -73,6 +73,10 @@ fn it_shows_while_a_thread_needs_the_user(cx: &mut TestAppContext) {
         Vec::<String>::new(),
         "a working thread showed it"
     );
+    let frame = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport))
+    };
+    let before = frame(cx);
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(1, Dot::Waiting)], cx)
     });
@@ -80,6 +84,11 @@ fn it_shows_while_a_thread_needs_the_user(cx: &mut TestAppContext) {
     assert_eq!(
         knot_calls(&host),
         [format!("edge knot at {TOP} {WIDTH} {HEIGHT}")]
+    );
+    assert_eq!(
+        frame(cx),
+        before,
+        "the page's frame changed as the tab came, so a page could tell a thread waits"
     );
     waiting(&shell, Dot::Done, cx);
     assert_eq!(knot_calls(&host), ["edge knot hidden"]);
