@@ -411,8 +411,9 @@ pub struct TraceStep {
     /// The page it acted on, by which the log groups a page's steps under the page; None for a
     /// step off any one page (a thought, a question, a step on several tabs).
     pub page: Option<OnPage>,
-    /// The assistant's own word on why it took the step, made plain, or empty: under its line in
-    /// the opened trace, as the assistant's. Never on a step that failed or was refused.
+    /// The assistant's own word on why it took the step, made plain, or empty: leading its line,
+    /// as the assistant's. A failed step keeps it, its account at the right saying it failed;
+    /// never a refused one, nor any other whose line is the product's account alone (TS3).
     pub says: tools::Note,
 }
 

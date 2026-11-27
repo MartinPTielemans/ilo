@@ -4251,8 +4251,8 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .children(chevron)
 }
 
-/// The split's line's glyph.
-const SPLIT_GLYPH: &str = "icons/network.svg";
+/// The split's line's glyph: a fork, as sheet 45 draws it.
+const SPLIT_GLYPH: &str = "icons/git-fork.svg";
 
 /// A page's glyph where its tab has no icon.
 const PAGE_GLYPH: &str = "icons/globe.svg";

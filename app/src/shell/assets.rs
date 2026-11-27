@@ -507,6 +507,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
     ),
     (
+        "icons/git-fork.svg",
+        include_bytes!("../../assets/icons/git-fork.svg"),
+    ),
+    (
         "icons/network.svg",
         include_bytes!("../../assets/icons/network.svg"),
     ),

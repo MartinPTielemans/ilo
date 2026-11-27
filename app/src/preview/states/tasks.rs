@@ -417,7 +417,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         running,
         failed,
         opens: match failed {
-            true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
+            true => Opens::Text("No element matches “Tickets” on the page".into()),
             false => Opens::Nothing,
         },
         under: "".into(),
@@ -439,7 +439,11 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             false,
         )),
         TraceItem::Step(step(1, read, "Read tickets.example", "", false, false)),
-        TraceItem::Step(step(2, click, "Couldn't click", "", false, true)),
+        // As sheet 45 draws a failed step: the assistant's words, its account and why at the right.
+        TraceItem::Step(TraceStep {
+            says: "Opening Saturday's tickets".into(),
+            ..step(2, click, "Couldn't click: not found", "", false, true)
+        }),
         TraceItem::Said("The banner is in the way, so I'll close it first.".into()),
         TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
         TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),

@@ -3142,6 +3142,18 @@ fn a_steps_line_is_the_assistants_words_then_the_account() {
         (title.as_ref(), note.as_ref()),
         ("Read brightcart.example", "3 s")
     );
+    // A failed step keeps the assistant's words, its account and why at the right (TS3, sheet
+    // 45), so the words can't hide the failure.
+    let failed = TraceStep {
+        says: "Trying the 1 TB model".into(),
+        failed: true,
+        ..step(2, "Couldn't choose: sold out", false)
+    };
+    let (title, note) = super::step_words(&failed);
+    assert_eq!(
+        (title.as_ref(), note.as_ref()),
+        ("Trying the 1 TB model", "Couldn't choose: sold out")
+    );
 }
 
 /// A stretch's fold says Z14's words while it works, its word and the time so far from its first
