@@ -14280,7 +14280,7 @@ mod sessions {
         agents.update(cx, |agents, _| {
             let task = agents.task_mut(&key).unwrap();
             task.session.as_mut().unwrap().tabs = pages.clone();
-            task.state = State::Working;
+            task.state = crate::agents::task::State::Working;
         });
         bye(&agents, cx);
         let open: Vec<u64> = (card(&agents, &key, cx).open.iter())
