@@ -90,6 +90,11 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     dialog->GetRootView()->AddPreTargetHandler(this);
     dialog->GetRootView()->AddPostTargetHandler(this);
     observation_.Observe(dialog);
+#if BUILDFLAG(IS_MAC)
+    unheard_ = std::make_unique<platform::UnheardKeys>(
+        dialog->GetNativeWindow(),
+        base::BindRepeating(&DialogKeys::Unheard, base::Unretained(this)));
+#endif
   }
   DialogKeys(const DialogKeys&) = delete;
   DialogKeys& operator=(const DialogKeys&) = delete;
@@ -102,6 +107,9 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   // ui::EventHandler:
   void OnKeyEvent(ui::KeyEvent* event) override {
+#if BUILDFLAG(IS_MAC)
+    unheard_->Heard();
+#endif
     // What the handler hears, first: a shortcut it never sees is lost before the dialog's root
     // view, and one it hears only as a key going up or as text is let go below (#3717).
     if (Driven() && event->phase() == ui::EP_PRETARGET &&
@@ -147,15 +155,9 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
       g_asking = &key;
       const content::KeyboardEventProcessingResult result =
           page->GetDelegate()->PreHandleKeyboardEvent(page, key);
-      KeyGate(key, result == content::KeyboardEventProcessingResult::HANDLED ? "asked: handled"
-                   : result == content::KeyboardEventProcessingResult::NOT_HANDLED
-                       ? "asked: not handled"
-                   : result == content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT
-                       ? "asked: not handled, a shortcut"
-                       : "asked: another answer");
+      KeyGate(key, Answer(result));
       g_asking = nullptr;
-      if (result != content::KeyboardEventProcessingResult::NOT_HANDLED &&
-          result != content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT) {
+      if (!LeftToDialog(result)) {
         event->StopPropagation();
       }
       return;
@@ -244,6 +246,54 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
   }
 
  private:
+#if BUILDFLAG(IS_MAC)
+  // A key going down that views never heard, as AppKit's no-op for it on macOS 14 (#4469): asked
+  // about before the dialog and, as the dialog would have let it go, after it, as a key it heard.
+  void Unheard(const ui::KeyEvent& down) {
+    if (Driven()) {
+      fprintf(stderr, "browser: tab dialog's handler never heard %s going down\n",
+              Chord(down.IsControlDown(), down.IsAltDown(), down.IsShiftDown(),
+                    down.IsCommandDown(), down.key_code())
+                  .c_str());
+    }
+    if (DialogKeeps(down)) {
+      LetGo(true, down, "the dialog keeps it");
+      return;
+    }
+    content::WebContents* page = ShownPage(window_);
+    if (!page || !page->GetDelegate()) {
+      LetGo(true, down, "no shown page");
+      return;
+    }
+    const input::NativeWebKeyboardEvent key(down);
+    g_asking = &key;
+    const content::KeyboardEventProcessingResult result =
+        page->GetDelegate()->PreHandleKeyboardEvent(page, key);
+    KeyGate(key, Answer(result));
+    g_asking = nullptr;
+    if (!LeftToDialog(result)) {
+      return;
+    }
+    // The tab, the window and the dialog can go in it: nothing here is touched after.
+    page->GetDelegate()->HandleKeyboardEvent(page, key);
+  }
+#endif
+
+  static const char* Answer(content::KeyboardEventProcessingResult result) {
+    return result == content::KeyboardEventProcessingResult::HANDLED ? "asked: handled"
+           : result == content::KeyboardEventProcessingResult::NOT_HANDLED
+               ? "asked: not handled"
+           : result == content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT
+               ? "asked: not handled, a shortcut"
+               : "asked: another answer";
+  }
+
+  // Whether the app left the key it was asked about before the dialog to the dialog.
+  static bool LeftToDialog(content::KeyboardEventProcessingResult result) {
+    return result == content::KeyboardEventProcessingResult::NOT_HANDLED ||
+           result == content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT;
+  }
+
   // Says why a shortcut's key wasn't asked about, once a key as it goes into the dialog, so a
   // shortcut that doesn't reach the app from a dialog names its gate (#3230). Only a key held
   // with ⌃ or ⌘: one typed as text in the dialog's field may be a password's.
@@ -274,6 +324,9 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 
   const raw_ptr<views::Widget> dialog_;
   const raw_ptr<views::Widget> window_;
+#if BUILDFLAG(IS_MAC)
+  std::unique_ptr<platform::UnheardKeys> unheard_;
+#endif
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
