@@ -4181,7 +4181,7 @@ fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
 /// what ⇥ does (#4393).
 #[gpui::test]
 fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     assert_eq!(
         bar.switch(),
         Some((false, "Search, or start a thread".into()))
@@ -4231,7 +4231,7 @@ fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut T
 /// empty field lists the commands, as Arc's does.
 #[gpui::test]
 fn with_no_assistant_ready_the_new_tab_bar_shows_no_switch(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     bar.host.agents.borrow_mut().as_mut().unwrap().signed_out =
         vec![("codex".into(), "Codex".into())];
     bar.cx.cx.update(task_agents_changed);
@@ -4502,7 +4502,7 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
 /// on the first ready one as soon as the browser learns it, as if ↩ came then.
 #[gpui::test]
 fn enter_before_the_agents_are_learned_starts_the_thread_once_they_are(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
     bar.edit("", None);
     bar.type_text("pick a seat");
@@ -4525,7 +4525,7 @@ fn enter_before_the_agents_are_learned_starts_the_thread_once_they_are(cx: &mut 
 #[gpui::test]
 fn a_held_enter_goes_with_the_ask(cx: &mut TestAppContext) {
     let started = |bar: &Bar| (bar.calls().iter()).any(|call| call.starts_with("task "));
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
     bar.edit("", None);
     bar.type_text("pick a seat");
@@ -4537,7 +4537,7 @@ fn a_held_enter_goes_with_the_ask(cx: &mut TestAppContext) {
     bar.cx.run_until_parked();
     assert!(!started(&bar), "a left ask started: {:?}", bar.calls());
 
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
     bar.edit("", None);
     bar.type_text("pick a seat");
