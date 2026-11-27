@@ -10,10 +10,10 @@
 # leaves out and another brings back, once a click on its icon has picked it, as the step picks
 # none for the user; and Skip; Your favorites (3b), once an import offers sites;
 # Your first Space (4), whose → picks the next palette; Other apps (5) while an agent program is
-# found, whose command switch a launch in a made-up home turns on and off, writing the command's
-# skill there and taking it away; and step 6, always last, whose Help improve the dark pass turns
-# on and off from the keyboard, and whose Start Browsing leaves the card for the first Space with
-# the command bar up. ↩ presses a step's main
+# found, whose command's Install a launch in a made-up home presses, writing the command's skill
+# there as the picture under the cards brings its sidebar card (#4451); and step 6, always last,
+# whose Help improve the dark pass turns on and off from the keyboard, and whose Start Browsing
+# leaves the card for the first Space with the command bar up. ↩ presses a step's main
 # button; ⌘[ goes back a step, which the dark pass checks at the last; Esc and ⌘W leave the step as
 # it is. Make Default makes ilo the default for a moment only on
 # a Linux CI VM, so the run never changes a desk's. Help › Welcome to ilo plays it again in first
@@ -188,9 +188,9 @@ exec 3>&-
 quit
 
 # Dark: each step captured, the import's Skip clicked where it says it's drawn, Your first Space's
-# → picking the next palette, and Esc and ⌘W there leaving the step as it is; Other apps' switch
-# turned on and off with clicks, and at the last Help improve's from the keyboard, then ⌘[ back a
-# step and on again to Start Browsing.
+# → picking the next palette, and Esc and ⌘W there leaving the step as it is; Other apps as it
+# shows, and at the last Help improve's switch from the keyboard, then ⌘[ back a step and on again
+# to Start Browsing.
 # With the system's animations off the app reduces its motion, read at launch, and follows them
 # back on. Only on a CI VM, as the setting is the desk's: on Windows "Show animations in Windows",
 # and on Linux GTK's settings file, the last word where, as in the CI session, no portal answers.
@@ -387,11 +387,11 @@ quit
 
 # The command's skill (first run's step 5), on the Mac and Linux, where the command's Add writes
 # one: a new profile in a made-up home of the run's own, with only Claude Code's folder, which the
-# app gets by HOME, as it does the command it links. The left switch, command, writes the command's
-# skill there, one folder named as the skill holding a file only the user may read, and turned off
-# takes it and the skills folder it made away again. The skill's name isn't spelled here: it is the
-# command's, which the build names. The right switch, mcp, isn't clicked: it would run Claude Code's
-# own setup. Nothing looks into the run's own home.
+# app gets by HOME, as it does the command it links. The left card's Install writes the command's
+# skill there, one folder named as the skill holding a file only the user may read, and Settings ›
+# Other apps' Remove, after the card, takes it and the skills folder it made away again. The skill's
+# name isn't spelled here: it is the command's, which the build names. The right card's Connect
+# isn't pressed: it would run Claude Code's own setup. Nothing looks into the run's own home.
 if ! windows; then
   skill_home="$PWD/$out/onboarding-skill-home"
   rm -rf "$skill_home"
@@ -424,15 +424,16 @@ if ! windows; then
   exec 3> "$out/drive"
   await '^browser: onboarding started$' || fail "skill: the first launch didn't start the onboarding"
   walk_steps 5 "skill: "
-  await '^browser: onboarding command at ' || fail "skill: Other apps didn't draw the command's switch"
+  await '^browser: onboarding command at ' || fail "skill: Other apps didn't draw the command's Install"
+  logged '^browser: onboarding command Install$' || fail "skill: the command's button didn't read Install"
   [ ! -e "$skill_home/.claude/skills" ] || fail "skill: .claude/skills was there before a click"
   send click $(grep '^browser: onboarding command at ' "$log" | tail -1 | cut -d' ' -f5-6)
-  expect '^browser: onboarding switch slid$' "skill: a click on the command's switch didn't turn it"
   expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' \
-    "skill: the command's switch didn't finish adding the command"
-  logged '^browser: agent ilo-command connected$' || fail "skill: the command's switch didn't add the command"
+    "skill: Install didn't finish installing the command"
+  logged '^browser: agent ilo-command connected$' || fail "skill: Install didn't install the command"
+  expect '^browser: onboarding command Installed$' "skill: the command's button didn't read Installed once it was"
   skill_is there ||
-    fail "skill: the command's switch wrote no SKILL.md in a folder of .claude/skills"
+    fail "skill: Install wrote no SKILL.md in a folder of .claude/skills"
   entries=$(set -- "$skills"/*; echo $#)
   [ "$entries" -eq 1 ] || fail "skill: .claude/skills holds $entries entries, not one folder"
   skill_name=$(basename "$(dirname "$skill_file")")
@@ -440,17 +441,33 @@ if ! windows; then
   [ "$mode" = 600 ] || fail "skill: .claude/skills/$skill_name/SKILL.md is mode $mode, not 600"
   grep -Fqx "name: $skill_name" "$skill_file" ||
     fail "skill: .claude/skills/$skill_name/SKILL.md doesn't name its folder, $skill_name"
-  capture_step skill-6-on
-  send click $(grep '^browser: onboarding command at ' "$log" | tail -1 | cut -d' ' -f5-6)
-  expect '^browser: onboarding switch slid$' "skill: a second click on the command's switch didn't turn it back"
+  # The picture under the cards plays as Install finishes: the sidebar card comes, and the step is
+  # captured with it there.
+  expect '^browser: onboarding sidebar card came$' "skill: Installed brought no sidebar card under the knot"
+  capture_step skill-5-on
+  # Settings › Other apps' Remove takes away exactly what Install wrote: the skill and the skills
+  # folder it made, keeping .claude. First run's Installed presses nothing (#4451), so the card is
+  # left first. (The Settings lane makes it ⋯ › Uninstall.)
+  pass_step 5 "skill: "
+  step_settled 6 "skill: first run's last step didn't come"
+  pass_step 6 "skill: "
+  expect '^browser: onboarding done$' "skill: first run's card didn't end after its last step"
+  send menu Settings…
+  settings_on_general "skill: Settings… didn't show Settings"
+  send clickkey $(drawn "toolbar Other apps")
+  expect '^browser: settings tab Other apps$' "skill: a click on Other apps didn't show its section"
+  settings_drew 'Other apps'
+  click_in_sight "ilo-command remove"
+  expect_late '^browser: agent ilo-command disconnected$' \
+    "skill: a click on Settings › Other apps' Remove didn't remove the ilo command"
   skill_is gone ||
-    fail "skill: turning the command's switch off left .claude/skills/$skill_name/SKILL.md"
+    fail "skill: Remove left .claude/skills/$skill_name/SKILL.md"
   for _ in $(seq 300); do
     [ -e "$skill_home/.claude/skills" ] || break
     sleep 0.1
   done
-  [ ! -e "$skill_home/.claude/skills" ] || fail "skill: turning the switch off left the .claude/skills it made"
-  [ -d "$skill_home/.claude" ] || fail "skill: turning the switch off took .claude away"
+  [ ! -e "$skill_home/.claude/skills" ] || fail "skill: Remove left the .claude/skills it made"
+  [ -d "$skill_home/.claude" ] || fail "skill: Remove took .claude away"
   exec 3>&-
   quit
   rm -rf "$skill_home"
@@ -545,4 +562,4 @@ expect '^browser: appearance automatic$' \
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking the next palette and Esc and ⌘W leaving it as it is, Other apps where it comes, the command's switch writing its skill into a made-up home and taking it away off Windows, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"
+echo "ok: a new profile's first launch plays the onboarding's card in a window of its own, the only one on screen until it ends, through the steps it shows, $steps in the replay: the Welcome's Not Now while the build names a sync server, Just the Browser at the assistants', the import of the fixture's $found and its Skip, Your first Space, with → picking the next palette and Esc and ⌘W leaving it as it is, Other apps where it comes, the command's Install writing its skill into a made-up home off Windows as its sidebar card comes and Settings' Remove taking it away, and the last, its Help improve turned on and off from the keyboard and ⌘[ going back from it, ended by Start Browsing for the first Space with the command bar up, in light and dark; the import's ↩ brings in a made-up Chrome, after which Your favorites offers its sites; Help › Welcome to $app_name plays it again in first run's window, over a page too; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed entry's motion in $out/onboarding-entry.mp4"

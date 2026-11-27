@@ -376,6 +376,8 @@ pub(super) struct Onboarding {
     default_row: bool,
     /// Bring your stuff's motion: the flight, the strands as each kind is written, All here.
     bring: bring::BringMotion,
+    /// Other apps' picture under its cards.
+    ways: other_apps::Motion,
 }
 
 impl Onboarding {
@@ -587,6 +589,7 @@ impl Shell {
             copied: None,
             default_row: !self.browser.is_default_browser(),
             bring: Default::default(),
+            ways: Default::default(),
         };
         let fraction = onboarding.fraction(first);
         onboarding.progress = (fraction, fraction, now);
@@ -1131,9 +1134,12 @@ impl Shell {
         let Some(&(_, on)) = switches.iter().find(|(each, _)| *each == switch) else {
             return;
         };
+        // A way's button presses only while it shows; undoing one is Settings'.
         if matches!(switch, Switch::Command | Switch::Mcp) {
-            let other = (switches.iter()).any(|&(each, on)| each != switch && on);
-            self.onboarding_way(switch, on, other, cx);
+            if !on {
+                self.onboarding_way(switch, cx);
+            }
+            return;
         }
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((switch, onboarding.clock.now()));
@@ -1443,7 +1449,7 @@ impl Shell {
         let progressing =
             !still && onboarding.secs_since(onboarding.progress.2) < t::PROGRESS_MOTION;
         let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
-        let bringing = onboarding.bring.moving;
+        let bringing = onboarding.bring.moving || onboarding.ways.moving;
         onboarding.drawing =
             !came || entry.is_some() || ending.is_some() || sliding || progressing || bringing;
         if onboarding.drawing {
@@ -1610,6 +1616,10 @@ impl Shell {
         let bring = matches!(step, Step::Import | Step::Favorites)
             .then(|| self.bring_now(window, cx))
             .flatten();
+        // Other apps' ways, and the picture following them.
+        let ways = (step == Step::OtherApps)
+            .then(|| self.ways_now(window, cx))
+            .flatten();
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div().id("onboarding-step");
         };
@@ -1623,14 +1633,14 @@ impl Shell {
             (Step::Import, Some(words)) => (step.message(os).0, words),
             _ => step.message(os),
         };
-        let whole = matches!(step, Step::Import | Step::Favorites);
+        let whole = matches!(step, Step::Import | Step::Favorites | Step::OtherApps);
         let said = (title.clone(), line.clone());
         let body = match step {
             Step::Account => self.welcome(inks, entering, window, cx),
             Step::Done => self.done(inks, first, cx),
             _ => {
                 let (controls, trail, skip, back) =
-                    self.step_parts(step, bring.as_ref(), inks, window, cx);
+                    self.step_parts(step, bring.as_ref(), ways, inks, window, cx);
                 let (controls, over) = match whole {
                     true => (div().into_any_element(), Some(controls)),
                     false => (controls, None),
@@ -1696,6 +1706,7 @@ impl Shell {
         &mut self,
         step: Step,
         bring: Option<&crate::import::Bring>,
+        ways: Option<[other_apps::Way; 2]>,
         inks: Inks,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1723,7 +1734,7 @@ impl Shell {
             Step::Import => self.bring_controls(bring, inks, cx),
             Step::Favorites => self.bring_tiles(bring, inks, cx),
             Step::Space => self.space_controls(inks).into_any_element(),
-            Step::OtherApps => self.other_apps_ways(inks, cx),
+            Step::OtherApps => self.other_apps_ways(ways, inks, cx),
             _ => div().into_any_element(),
         };
         let signed_in = self.assistants_signed_in(cx);
@@ -2600,7 +2611,7 @@ fn opt_in_frame(
         move |bounds, _, _| {
             let moved =
                 settled && frames.borrow_mut().insert((switch, part), bounds) != Some(bounds);
-            if moved && part == "switch" {
+            if moved && matches!(part, "switch" | "button") {
                 let at = bounds.center();
                 log!(
                     "browser: onboarding {} at {:.0} {:.0}",
