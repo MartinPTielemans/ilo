@@ -12,10 +12,11 @@ use crate::{
     passwords::Key,
     shell::{
         Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP, PRESS_TIME, Page,
-        SIDEBAR_BUTTON_X, Shell, beside::AtRest, header::nav_places, history::HOLD,
-        library::LIBRARY_BACK_INSET, recorder::Recorder,
+        Shell, beside::AtRest, header::nav_places, history::HOLD, library::LIBRARY_BACK_INSET,
+        recorder::Recorder,
     },
     site_controls::Place,
+    tokens::shell::SIDEBAR_BUTTON_X,
 };
 
 /// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).

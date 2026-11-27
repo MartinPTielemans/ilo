@@ -402,7 +402,6 @@ use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_SIZE;
 use crate::tokens::shell::NAV_TOP;
 use crate::tokens::shell::NAV_TRAIL;
-use crate::tokens::shell::SIDEBAR_BUTTON_X;
 
 use crate::tokens::shell::URL_BUTTON_GLYPH;
 use crate::tokens::shell::URL_BUTTON_INSET;

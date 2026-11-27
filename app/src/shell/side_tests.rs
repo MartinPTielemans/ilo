@@ -12,9 +12,10 @@ use gpui::{
 use super::commands::{ShellHandle, bar_commands};
 use super::header::nav_places;
 use super::{
-    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_BUTTON_X, SIDEBAR_MAX, Section, Shell,
-    SidebarRight, recorder::Recorder,
+    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
+    recorder::Recorder,
 };
+use crate::tokens::shell::SIDEBAR_BUTTON_X;
 use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
 
 const WIDTH: f32 = 1000.;
