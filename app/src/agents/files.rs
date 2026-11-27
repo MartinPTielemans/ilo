@@ -326,8 +326,7 @@ pub struct Never {
 impl Never {
     /// For this user and this build, with the tasks' folder where there is one.
     pub fn here(task: Option<PathBuf>) -> Never {
-        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let home = PathBuf::from(std::env::var_os(named).unwrap_or_default());
+        let home = home();
         let name = include_str!("../../branding/name").trim();
         let ilo = [
             PathBuf::from(crate::profile_dir()),
@@ -721,10 +720,22 @@ pub fn grant(picked: &Path, never: &Never) -> Option<Granted> {
     Granted::picked(root).ok()
 }
 
+/// The user's home, as the floor knows it: the system's, and in the tests one of their own, so the
+/// folders they give a thread are outside every home dot-entry wherever the checkout is (a T3 Code
+/// worktree is in `~/.t3`). No rule changes with it: the app reads the system's alone.
+pub fn home() -> PathBuf {
+    #[cfg(test)]
+    return std::env::temp_dir().join("ilo-test-homes").join("sam");
+    #[cfg(not(test))]
+    {
+        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        PathBuf::from(std::env::var_os(named).unwrap_or_default())
+    }
+}
+
 /// Where the tests make the folders they give a thread, so they pass on any checkout: the system's
 /// temporary folder, else, where the floor refuses that (the Mac's and Windows' are the system's
-/// own), beside the build. A checkout under a home dot-folder is refused (`Never::dotted`), so
-/// beside the build alone would fail there.
+/// own), beside the build, which is outside the tests' home (`home`) wherever the checkout is.
 #[cfg(test)]
 pub(crate) fn test_folders() -> PathBuf {
     let never = Never::here(None);

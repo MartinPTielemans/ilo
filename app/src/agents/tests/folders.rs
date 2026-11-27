@@ -144,9 +144,13 @@ mod picked {
     #[gpui::test]
     fn a_pick_the_floor_refuses_isnt_added_nor_logged(cx: &mut TestAppContext) {
         let (agents, ..) = saving(cx);
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let home = crate::agents::files::home();
+        // There, so each is refused as the home or its dot-entry and not only as gone.
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
         for refused in [
             home.as_path(),
+            ssh.as_path(),
             Path::new("/"),
             Path::new("/etc"),
             Path::new("/proc"),
