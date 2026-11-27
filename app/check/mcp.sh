@@ -1390,21 +1390,10 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
   }
   # Hands $warned back from its page watched, the UI given the keyboard by a click on the sidebar.
-  # With $1 "click", a click on the page row's Hand Back does it instead, as ⌘↩ does (#4395).
   hand_back_warned() {
     watch "$warned"
     send click $sidebar_point
     handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
-    if [ "${1:-}" = click ]; then
-      await_log "^browser: page row hand back $warned at " "the page row of tab $warned, which the user holds, drew no Hand Back"
-      read -r hx hy hw hh <<HAND
-$(sed -n "s/^browser: page row hand back $warned at //p" "$log" | tail -1)
-HAND
-      send click $((hx + hw / 2)) $((hy + hh / 2))
-      await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
-        fail "a click on the page row's Hand Back didn't hand back tab $warned, which the click on its warning took over"
-      return
-    fi
     send key return cmd
     await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
       fail "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
@@ -1515,10 +1504,24 @@ PICTURE
   [ "$taken" = "$(printf '%s\n' "$warned" "$beside" | sort -u | tr '\n' ' ')" ] ||
     fail "the click on the agent's warning and the press beside it took over tabs $taken, not $warned and $beside"
   hand_back_pressed "$presses"
-  # The warning's tab, which its click took, is handed back from its page watched, by a click on its
-  # page row's Hand Back this time.
+  # The warning's tab, which its click took, is handed back from its page watched.
   to_pages "the split view"
-  hand_back_warned click
+  hand_back_warned
+  # Hand Back on the panel's page row does what ⌘↩ does (#4395): the click on the warning takes the
+  # tab over again, and a click on the row's Hand Back gives it back.
+  to_pages "tab $warned"
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
+  watch_warning "for the page row's Hand Back"
+  took_warned "for the page row's Hand Back"
+  send click $sidebar_point
+  handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
+  await_log "^browser: page row hand back $warned at " "the page row of tab $warned, which the user holds, drew no Hand Back"
+  read -r hx hy hw hh <<HAND
+$(sed -n "s/^browser: page row hand back $warned at //p" "$log" | tail -1)
+HAND
+  send click $((hx + hw / 2)) $((hy + hh / 2))
+  await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
+    fail "a click on the page row's Hand Back didn't hand back tab $warned, which the click on its warning took over"
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
   # keeps the keys that answer it (dialog_keys.cc). The click that gave it the keyboard took the
   # tab over, so the Escape is the user's act on their own tab, and the panel's page row says they
