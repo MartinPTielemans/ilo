@@ -479,6 +479,17 @@ jobs:
           [ "$minutes" -ge 1 ] || minutes=1
           echo "minutes=$minutes" | tee -a "$GITHUB_OUTPUT"
 
+      # A run that turns the Mac's appearance has to put back the one it found, and the runner
+      # starts dark, so a window run asked for by name starts light to show it does (#4445). The
+      # runner is thrown away after the job, so nothing else sees it.
+      - name: Start light
+        id: light
+        if: ${{ inputs.runs == 'window' }}
+        run: |
+          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false'
+          [ "$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode')" = false ] ||
+            { echo "::error::the runner didn't turn light"; exit 1; }
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
@@ -671,6 +682,12 @@ jobs:
           echo "Its log is $run.log in the artifact. Its last lines:"
           tail -40 "$out/$run.log" 2> /dev/null || echo "(no log)"
           exit 1
+
+      - name: Back to light
+        if: ${{ always() && steps.light.outcome == 'success' }}
+        run: |
+          [ "$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode')" = false ] ||
+            { echo "::error::the run left the Mac dark, which it found light (#4445)"; exit 1; }
 
       # The lists this run's adblock-parity blocked with, for a run on another OS to take with
       # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
