@@ -28,6 +28,11 @@ struct ArchivedTab {
   // that's still one of the user's Spaces. Invalid for a window's own Space, which has none, and
   // for one archived before the archive kept it.
   base::Uuid space;
+  // Whether the user closed it, which ⇧⌘T brings back, rather than auto-archive's timer, whose tabs
+  // the Library alone brings back (#4408).
+  bool reopens = false;
+  // The directory of its Space's profile, whose windows' ⇧⌘T bring it back.
+  std::string profile;
 };
 
 // All of it, newest first.
@@ -36,13 +41,19 @@ const std::vector<ArchivedTab>& Archived();
 // Puts back what the last launch saved, as the browser starts. Then archive_changed.
 void LoadArchive(std::vector<ArchivedTab> archived);
 
-// Archives |tab|, a Today tab closing at |url| in the Space with the node |space|, or with |little|
-// a Little ilo window's tab. Then archive_changed.
+// Archives |tab|, a Today tab closing at |url| in the Space with the node |space| of the profile
+// in the directory |profile|, or with |little| a Little ilo window's tab, and with |reopens| one
+// the user closed. Then archive_changed.
 void Archive(bc_id tab,
              const GURL& url,
              const std::string& title,
              const base::Uuid& space,
-             bool little = false);
+             bool little,
+             bool reopens,
+             const std::string& profile);
+// Whether the archive keeps the closed tab |tab|, or a Delete or Clear its Undo can put back does:
+// its history is kept as long (ReopenClosedTab).
+bool ArchiveHolds(bc_id tab);
 
 // Takes |tab|, a closed tab that has come back, out of the archive. Then archive_changed.
 void Unarchive(bc_id tab);

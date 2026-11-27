@@ -47,6 +47,7 @@
 #include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
 #include "browser_core/clear_site.h"
+#include "browser_core/closed_windows.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/daily_count.h"
 #include "browser_core/developer_mode.h"
@@ -1948,6 +1949,41 @@ bool bc_window_restore_sidebar(bc_id window_id, double time) {
 bc_id bc_window_reopen_closed_tab(bc_id window_id) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window ? window->ReopenClosedTab() : 0;
+}
+
+bc_id bc_window_open_closed(bc_id closed, bc_rect bounds, void* ui_view) {
+  const auto& all = browser_core::ClosedWindows();
+  if (std::ranges::find(all, closed, &browser_core::ClosedWindow::id) == all.end()) {
+    return 0;
+  }
+  browser_core::Window* window = browser_core::Window::Open(ToRect(bounds), ui_view);
+  if (!window) {
+    return 0;
+  }
+  const std::optional<browser_core::ClosedWindow> record = browser_core::TakeClosedWindow(closed);
+  window->SetSidebarWidth(record->sidebar_width);
+  // Its Space while that's still one of the user's, else the first, as a new window's.
+  browser_core::Space* space = browser_core::Space::WithNode(record->space);
+  if (!space && !browser_core::Space::All().empty()) {
+    space = browser_core::Space::All().front();
+  }
+  if (space) {
+    // The tab it showed there, which ShowSpace passes over if another window shows it now.
+    std::vector<bc_id> tabs = space->pinned();
+    std::ranges::copy(space->today(), std::back_inserter(tabs));
+    for (bc_id tab : tabs) {
+      const browser_core::Space::Node* node = space->NodeOf(tab);
+      if (record->tab.is_valid() && node && node->id == record->tab) {
+        window->SetSelectedIn(space->id(), tab);
+        break;
+      }
+    }
+    window->ShowSpace(space->id());
+  }
+  if (record->fullscreen && window->widget()) {
+    window->widget()->SetFullscreen(true);
+  }
+  return window->id();
 }
 
 bc_id bc_window_reopen_tab(bc_id window_id, bc_id closed) {

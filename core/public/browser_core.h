@@ -1292,6 +1292,12 @@ typedef struct bc_host {
   // with bc_window_reopen_tab, as Arc's ⇧⌘T reopens one in Little Arc with its history. The
   // user's alone: agents get no Little ilo window.
   void (*window_reopen_little)(void* context, bc_id window, bc_id closed, bc_id profile);
+  // bc_window_reopen_closed_tab in |window| found what the user closed last was a window: open
+  // |closed| again with bc_window_open_closed at |frame|, its frame out of full screen and
+  // maximized in bc_window_open's terms, and maximize it first if |maximized| (never on the Mac),
+  // as the launch opens a saved window (bc_saved_window_frames). The user's alone: agents get no
+  // windows.
+  void (*window_reopen)(void* context, bc_id window, bc_id closed, bc_rect frame, bool maximized);
   // The page of |tab|, the tab |window| has selected, went to another window, which shows it live,
   // and |window| shows no page; or |tab| is 0, and |window| shows a page again, or has selected
   // another tab. Once for each change. window_selected doesn't say it: the tab stays selected.
@@ -1966,8 +1972,9 @@ BC_EXPORT bool bc_saved_window_maximized(size_t index);
 BC_EXPORT bc_id bc_window_open_saved(size_t index, bc_rect bounds, void* ui_view);
 
 // Closes the window. With other windows open, its tabs go, their pages live, to the one active
-// before it, which shows its tab live again if it showed one this window took. Else its pages get
-// their unload handlers. Then window_closed. The user's: agents get none.
+// before it, which shows its tab live again if it showed one this window took, and a regular
+// window is kept for bc_window_reopen_closed_tab to open again (#4408). Else its pages get their
+// unload handlers. Then window_closed. The user's: agents get none.
 BC_EXPORT void bc_window_close(bc_id window);
 
 // Answers window_downloads_question, if the window still asks: |cancel| cancels the downloads and
@@ -3024,16 +3031,31 @@ BC_EXPORT bc_id bc_window_undo_delete_space(bc_id window, bc_id space);
 // The user's alone: agents work in their own Spaces, and get no tool for this.
 BC_EXPORT bool bc_window_restore_sidebar(bc_id window, double time);
 
-// Reopens the Today tab closed last, in any window, with its history: at its place in its Space's
-// Today tabs, else at the top of the Space the window shows. One closed from a split view goes back
-// to its place in it, if a tab of the split is open and it has room. The window shows it, and its
-// Space, and it leaves the archive.
+// Reopens what the user closed last in the profile of the Space the window shows, as the archive
+// keeps it, so after a relaunch too: a Today tab, or a regular window closed while another stayed
+// open. Not what auto-archive took, which only the Library brings back (#4408). A tab closed since
+// the browser started comes back with its history at its place in its Space's Today tabs, else at
+// the top of the Space the window shows; one closed from a split view goes back to its place in it,
+// if a tab of the split is open and it has room. One closed before the browser started comes back
+// at its page, at the top of its Space. The window shows it, and its Space, and it leaves the
+// archive. A tab deleted from the archive (bc_archive_remove, bc_archive_clear) doesn't come back,
+// until bc_archive_undo_remove puts it back.
 // Tabs that close with their window or as the browser quits come back at the next launch instead,
 // but a Little ilo window's, which closes into the archive with its window. When the tab closed
 // last was a Little ilo window's, it comes back in a new one: this returns 0, and
-// window_reopen_little follows. A private window reopens none.
-// Returns the tab, or 0 if none is closed.
+// window_reopen_little follows. When it was a window, this returns 0 too, and window_reopen
+// follows. A private window reopens only the tabs closed in it, while it's open.
+// Returns the tab, or 0 if none is closed. The user's: agents get none, as it walks the user's
+// closed tabs, which an agent's pages never join (#1408).
 BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
+
+// Opens the closed window |closed| (window_reopen) at |bounds|, as bc_window_open does, in front
+// and key. It shows the Space it showed, else the first, with the tab it showed there unless
+// another window shows that, its sidebar's width (bc_window_sidebar_width), and goes full screen if
+// it was, and it leaves those bc_window_reopen_closed_tab brings back. Returns 0 if there's no such
+// window or Chromium is quitting. Then window_space_shown and window_selected. The user's: agents
+// get none, as it changes what the user sees.
+BC_EXPORT bc_id bc_window_open_closed(bc_id closed, bc_rect bounds, void* ui_view);
 
 // As bc_window_reopen_closed_tab for the Today tab that had the id |closed| when it closed, rather
 // than the one closed last, so a tab closed before another can come back first. A Little ilo
@@ -3041,7 +3063,7 @@ BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
 // the window shows it; a regular window's only in a regular window. It doesn't show
 // the tab: the one shown stays, so several can come back behind it, and the caller shows the one
 // that was shown when it closed. Returns the new tab's id, which is not |closed|, or 0 if that tab
-// isn't among those that reopen: it came back already, or 25 others closed since.
+// isn't among those that reopen: it came back already, or the archive no longer keeps it.
 BC_EXPORT bc_id bc_window_reopen_tab(bc_id window, bc_id closed);
 
 // Reopens the archived tab at the top of the Today tabs of the Space the window shows, unloaded,
@@ -3090,8 +3112,8 @@ BC_EXPORT void bc_extension_answer(bc_id question, bool accept);
 // come before it can take them. Then extensions_changed, for each.
 BC_EXPORT void bc_extensions_report(void);
 
-// Empties the archive. Tabs closed since the browser started still reopen with
-// bc_window_reopen_closed_tab. Then archive_changed. Returns the removal's id, for
+// Empties the archive, and with it the tabs bc_window_reopen_closed_tab brings back, until
+// bc_archive_undo_remove puts them back. Then archive_changed. Returns the removal's id, for
 // bc_archive_undo_remove, or 0 if the archive was empty.
 BC_EXPORT bc_id bc_archive_clear(void);
 
@@ -3112,10 +3134,9 @@ BC_EXPORT bool bc_tab_snooze(bc_id tab, double until);
 // archive_changed. The user's, as bc_tab_snooze.
 BC_EXPORT bool bc_archive_snooze(bc_id archived, double until);
 
-// Takes the archived tab out of the archive, as bc_archive_clear does with all of them. Its tab,
-// if it closed since the browser started, still reopens with bc_window_reopen_closed_tab. Then
-// archive_changed, unless the archive has no such tab. Returns the removal's id, as
-// bc_archive_clear does, or 0 if it has none.
+// Takes the archived tab out of the archive, as bc_archive_clear does with all of them, and out of
+// those bc_window_reopen_closed_tab brings back. Then archive_changed, unless the archive has no
+// such tab. Returns the removal's id, as bc_archive_clear does, or 0 if it has none.
 BC_EXPORT bc_id bc_archive_remove(bc_id archived);
 
 // Puts back what the bc_archive_remove or bc_archive_clear that returned |removal| took out, each

@@ -100,16 +100,31 @@ void Archive(bc_id tab,
              const GURL& url,
              const std::string& title,
              const base::Uuid& space,
-             bool little) {
+             bool little,
+             bool reopens,
+             const std::string& profile) {
   Tabs().insert(Tabs().begin(), {.id = NewId(),
                                  .url = url,
                                  .title = title,
                                  .archived = base::Time::Now(),
                                  .tab = tab,
                                  .little = little,
-                                 .space = space});
+                                 .space = space,
+                                 .reopens = reopens,
+                                 .profile = profile});
   Prune();
   Changed();
+}
+
+bool ArchiveHolds(bc_id tab) {
+  if (!tab) {
+    return false;
+  }
+  return std::ranges::contains(Tabs(), tab, &ArchivedTab::tab) ||
+         std::ranges::any_of(Removals(), [tab](const Removal& removal) {
+           return std::ranges::any_of(removal.tabs,
+                                      [tab](const auto& each) { return each.second.tab == tab; });
+         });
 }
 
 void Unarchive(bc_id tab) {

@@ -177,7 +177,7 @@ void ArchiveDue() {
     }
   });
   for (bc_id id : due) {
-    Window::CloseTab(id);
+    Window::CloseForArchive(id);
   }
   // A Little ilo window closes into the archive with its tab (KeepClosed), as Arc's Little Arc
   // windows do, but for one whose page plays sound, which waits another interval.
@@ -195,7 +195,7 @@ void ArchiveDue() {
   });
   for (bc_id id : little) {
     if (Window* window = Window::FromId(id)) {
-      window->Close();
+      window->CloseUnused();
     }
   }
   // Old downloads leave the list, their files kept, as Clear List leaves them.

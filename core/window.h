@@ -209,6 +209,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static void CloseTab(bc_id tab, bool discard = false);
   // |tab|'s page kept it as the user closed it, as Stay on its beforeunload does (#3890).
   static void ClosingKept(bc_id tab);
+  // Closes |tab| as CloseTab does, for auto-archive's timer: it goes in the archive but isn't among
+  // the tabs ReopenClosedTab reopens, which are the ones the user closed (#4408).
+  static void CloseForArchive(bc_id tab);
   // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
   // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
   static void ForgetPage(bc_id tab, const GURL& url);
@@ -437,6 +440,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // private window, and the last regular one, ask each Browser to close instead, which runs their
   // pages' unload handlers; a page can keep it open.
   void Close();
+  // Closes a Little ilo window auto-archive found unused, its tabs into the archive as
+  // CloseForArchive closes one.
+  void CloseUnused();
 
   // From the stand-in, as |browser| goes.
   void OnBrowserGone(BrowserWindowInterface* browser);

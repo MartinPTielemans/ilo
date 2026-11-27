@@ -31,6 +31,8 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/boost_colors.h"
 #include "browser_core/browser_window_stand_in.h"
+#include "browser_core/closed_rule.h"
+#include "browser_core/closed_windows.h"
 #include "browser_core/closing_way_back.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
@@ -202,8 +204,8 @@ struct ClosedTab {
   std::string profile;
 };
 
-// As many as Chrome keeps.
-constexpr size_t kMaxClosedTabs = 25;
+// As many Delete Spaces as a window can undo, as many as Chrome's recently closed keeps.
+constexpr size_t kMaxDeletedSpaces = 25;
 
 // How many Clears a window can undo.
 constexpr size_t kMaxClears = 10;
@@ -260,10 +262,25 @@ std::set<bc_id>& DeletingSpaces() {
   return *deleting;
 }
 
-// Newest last.
+// Newest last, each for as long as the archive keeps it (ArchiveHolds), which ReopenClosedTab
+// reads them by.
 std::vector<ClosedTab>& ClosedTabs() {
   static base::NoDestructor<std::vector<ClosedTab>> closed;
   return *closed;
+}
+
+// A private window's, by its Space, newest last, kept only while it's open and reopened only in it
+// (#4408): never archived, nor seen by another window.
+std::map<bc_id, std::vector<ClosedTab>>& PrivateClosed() {
+  static base::NoDestructor<std::map<bc_id, std::vector<ClosedTab>>> closed;
+  return *closed;
+}
+
+// The tabs auto-archive is closing, which go in the archive but not among those ⇧⌘T brings back:
+// only what the user closed comes back (#4408). Until they close, or their page keeps them.
+std::set<bc_id>& TimerClosing() {
+  static base::NoDestructor<std::set<bc_id>> closing;
+  return *closing;
 }
 
 // A Space deleted, for UndoDeleteSpace.
@@ -292,6 +309,7 @@ std::map<bc_id, GURL>& ForgottenPages() {
 
 // Keeps |id|, a tab closing, for ReopenClosedTab, and archives it.
 void KeepClosed(bc_id id) {
+  const bool by_user = !TimerClosing().erase(id);
   Tab* tab = Tab::Get(id);
   // A sign-in's callback page, whose address carries a single-use code, leaves nothing to reopen
   // (#2527); a tab that has gone on from it closes as any does.
@@ -300,27 +318,32 @@ void KeepClosed(bc_id id) {
     return;
   }
   Space* space = Space::Holding(id);
-  // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
-  // private window's leaves nothing behind. An agent's pages aren't the user's to find again
-  // (#1408). A Little ilo window's goes in the archive, as Arc's Little Arc's do, and ⇧⌘T reopens
-  // it in another.
-  if (!tab || !space || space->IsPinned(id) || space->off_the_record() || space->agent()) {
+  // One not in a Space never showed, and a pinned tab closes only when its page closes itself. An
+  // agent's pages aren't the user's to find again (#1408). A Little ilo window's goes in the
+  // archive, as Arc's Little Arc's do, and ⇧⌘T reopens it in another.
+  if (!tab || !space || space->IsPinned(id) || space->agent()) {
     return;
   }
   SavedTab saved = tab->Save();
   if (saved.history.empty()) {
     return;
   }
+  const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
+  // A private window's leaves nothing behind it, but ⇧⌘T brings it back while the window's open.
+  if (space->off_the_record()) {
+    PrivateClosed()[space->id()].push_back(
+        {.id = id, .space = space->id(), .index = index, .saved = std::move(saved)});
+    return;
+  }
   // A Blank Window's goes in the archive, so nothing closed is lost, but not in the closed tabs
   // ⇧⌘T reopens, whose Space went with its window.
   if (space->blank()) {
     Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
-            /*little=*/false);
+            /*little=*/false, /*reopens=*/false, space->profile());
     return;
   }
   Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
-          space->little());
-  const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
+          space->little(), by_user, space->profile());
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
   ClosedTabs().push_back({.id = id,
@@ -334,9 +357,8 @@ void KeepClosed(bc_id id) {
                           .split_icon = space->SplitIcon(id),
                           .little = space->little(),
                           .profile = space->profile()});
-  if (ClosedTabs().size() > kMaxClosedTabs) {
-    ClosedTabs().erase(ClosedTabs().begin());
-  }
+  // As long as its row, or the Delete that took the row, which ⌘Z puts back with its history.
+  std::erase_if(ClosedTabs(), [](const ClosedTab& closed) { return !ArchiveHolds(closed.id); });
 }
 
 // The closed tab |id|, taken from those ReopenClosedTab brings back, and from the archive.
@@ -1684,6 +1706,23 @@ void Window::CloseTab(bc_id tab, bool discard) {
 // static
 void Window::ClosingKept(bc_id tab) {
   UserClosing().Stayed(tab);
+  // Its page kept it, so the user's close next is the user's.
+  TimerClosing().erase(tab);
+}
+
+// static
+void Window::CloseForArchive(bc_id tab) {
+  TimerClosing().insert(tab);
+  CloseTab(tab);
+}
+
+void Window::CloseUnused() {
+  if (const Space* own = Space::FromId(space_)) {
+    for (bc_id tab : own->today()) {
+      TimerClosing().insert(tab);
+    }
+  }
+  Close();
 }
 
 void Window::KeepWayBack(const Space& left) const {
@@ -1946,7 +1985,7 @@ bool Window::DeleteSpace(bc_id space) {
   const std::vector<Window*> windows = All();
   deleted.shown = windows.empty() ? 0 : windows.front()->SelectedIn(space);
   deleted.saved = SaveSpace(**it, deleted.shown, &deleted.today);
-  if (DeletedSpaces().size() > kMaxClosedTabs) {
+  if (DeletedSpaces().size() > kMaxDeletedSpaces) {
     // |deleted| is the last, which stays.
     DeletedSpaces().erase(DeletedSpaces().begin());
   }
@@ -2908,15 +2947,74 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
 }
 
 bc_id Window::ReopenClosedTab() {
-  // A private window keeps none of its own and reopens none of the others'.
-  if (ClosedTabs().empty() || off_the_record_) {
+  // A private window brings back only its own, which it keeps while it's open.
+  if (off_the_record_) {
+    auto own = PrivateClosed().find(space_);
+    if (own == PrivateClosed().end() || own->second.empty()) {
+      return 0;
+    }
+    const ClosedTab closed = std::move(own->second.back());
+    own->second.pop_back();
+    const bc_id tab = Reopen(space_, closed.index, closed.saved);
+    if (tab) {
+      Select(tab);
+    }
+    return tab;
+  }
+  // What the user closed in the profile of the Space shown, newest first: the archive's tabs, so it
+  // outlasts a relaunch, and the windows that closed while another stayed (#4408).
+  const Space* shown = Space::FromId(space_);
+  if (!shown) {
     return 0;
   }
-  const ClosedTab& last = ClosedTabs().back();
+  std::vector<closed_rule::Closed> tabs;
+  for (const ArchivedTab& row : Archived()) {
+    tabs.push_back(
+        {.id = row.id, .at = row.archived, .profile = row.profile, .by_user = row.reopens});
+  }
+  std::vector<closed_rule::Closed> windows;
+  for (const ClosedWindow& window : ClosedWindows()) {
+    windows.push_back({.id = window.id,
+                       .window = true,
+                       .at = window.closed,
+                       .profile = window.profile,
+                       .by_user = true});
+  }
+  const std::vector<closed_rule::Closed> list = closed_rule::Merged(tabs, windows);
+  const std::optional<size_t> next = closed_rule::Next(list, shown->profile());
+  if (!next) {
+    return 0;
+  }
+  // A window comes back as a new one, which the app opens (bc_window_open_closed). Posted, as a
+  // Little ilo window's below.
+  if (list[*next].window) {
+    if (own_space_) {
+      return 0;
+    }
+    const ClosedWindow& window =
+        *std::ranges::find(ClosedWindows(), list[*next].id, &ClosedWindow::id);
+    const bc_rect frame{static_cast<double>(window.bounds.x()),
+                        static_cast<double>(window.bounds.y()),
+                        static_cast<double>(window.bounds.width()),
+                        static_cast<double>(window.bounds.height())};
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> from, bc_id closed, bc_rect frame, bool maximized) {
+                         if (from && Host().window_reopen) {
+                           Host().window_reopen(Host().context, from->id(), closed, frame,
+                                                maximized);
+                         }
+                       },
+                       weak_factory_.GetWeakPtr(), window.id, frame, window.maximized));
+    return 0;
+  }
+  // A copy: reopening it changes the archive.
+  const ArchivedTab row = *std::ranges::find(Archived(), list[*next].id, &ArchivedTab::id);
+  const bool held = row.tab && std::ranges::contains(ClosedTabs(), row.tab, &ClosedTab::id);
   // A Little ilo window's comes back in a new one, which the app opens, as Arc's ⇧⌘T reopens it in
   // Little Arc. Posted, so the app hears of it once its own call has returned. With Little ilo off
   // it comes back as a Today tab, as a regular window's does.
-  if (last.little && UserSettings().little_windows) {
+  if (row.little && held && UserSettings().little_windows) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
                        [](base::WeakPtr<Window> window, bc_id closed, bc_id profile) {
@@ -2925,14 +3023,21 @@ bc_id Window::ReopenClosedTab() {
                                                        profile);
                          }
                        },
-                       weak_factory_.GetWeakPtr(), last.id, ProfileId(last.profile)));
+                       weak_factory_.GetWeakPtr(), row.tab, ProfileId(row.profile)));
     return 0;
   }
   // The rest are the regular windows', which a window of its own never shows.
   if (own_space_) {
     return 0;
   }
-  return ReopenClosed(last.id, /*show=*/true);
+  // With its history at its place while the core holds it, else, as after a relaunch, at its page
+  // at the top of its Space. A Little ilo window's with Little ilo off comes back so too.
+  if (held) {
+    if (const bc_id tab = ReopenClosed(row.tab, /*show=*/true)) {
+      return tab;
+    }
+  }
+  return RestoreArchived(row.id);
 }
 
 bc_id Window::ReopenClosed(bc_id id, bool show) {
@@ -3334,6 +3439,23 @@ void Window::Close() {
   if (to && own_space_ && !off_the_record_ && !browser_shutdown::IsTryingToQuit()) {
     HandOver(*to, /*others_only=*/true);
   }
+  // The user's close of a regular window while another stays, which ⇧⌘T opens again (#4408). Its
+  // tabs stay in their Spaces, so what comes back is the window, its Space and its tab. The last
+  // regular window is the session's instead.
+  if (const Space* shown = hand_over ? Space::FromId(space_) : nullptr) {
+    const Space::Node* tab = shown->NodeOf(selected_);
+    views::Widget* widget = widget_.get();
+    KeepClosedWindow({.closed = base::Time::Now(),
+                      .bounds = RestoredFrame(),
+#if !BUILDFLAG(IS_MAC)
+                      .maximized = widget && widget->IsMaximized() && !widget->IsFullscreen(),
+#endif
+                      .fullscreen = widget && widget->IsFullscreen() && !FullScreenForPage(),
+                      .sidebar_width = sidebar_width_,
+                      .space = shown->node().id,
+                      .tab = tab ? tab->id : base::Uuid(),
+                      .profile = shown->profile()});
+  }
   if (hand_over) {
     for (bc_id pane : panes_) {
       HoldWhileMoving(Tab::FromId(pane));
@@ -3455,6 +3577,10 @@ void Window::Destroy() {
   // An agent's page made with no window open takes the last one's size.
   if (!own_space_ && !AgentPageSize().IsEmpty()) {
     g_last_agent_page_size = AgentPageSize();
+  }
+  // A private window's closed tabs go with it.
+  if (off_the_record_) {
+    PrivateClosed().erase(space_);
   }
   // Out of the list first, so the app can't reach the window from its callback.
   std::erase(Order(), id_);
