@@ -407,11 +407,17 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
     }
     // What a sort of today's tabs counts changes only when a page turns web or not (#4252).
     let flipped = Cell::new(false);
+    let developer_mode = Cell::new(false);
     update_shells(|shell, cx| {
-        let counted = shell.broom_counts(tab);
+        let (counted, was) = (shell.broom_counts(tab), shell.page(tab).developer_mode);
         shell.set_page(tab, page.clone(), cx);
         flipped.set(flipped.get() || counted != shell.broom_counts(tab));
+        developer_mode.set(developer_mode.get() || was != page.developer_mode);
     });
+    // The list of sites in Developer Mode in Settings follows the mode, with no timer.
+    if developer_mode.get() {
+        update_app(settings::developer_mode_changed);
+    }
     if flipped.get() {
         update_app(broom_host::page_counts_changed);
     }

@@ -104,6 +104,10 @@ struct Made {
     front: std::cell::Cell<Option<u64>>,
     /// The agents' Spaces outside "Default", 200 and up, in the order they're made.
     more_spaces: RefCell<Vec<(String, u64)>>,
+    /// What the core's page log holds for each tab, as JSON, and whether its page is in Developer
+    /// Mode; and each time the agents asked for one, with the agent and the tab.
+    page_logs: RefCell<HashMap<u64, (String, bool)>>,
+    page_log_asked: RefCell<Vec<(String, u64)>>,
 }
 
 impl Made {
@@ -257,6 +261,11 @@ impl Browser for Made {
 
     fn read_text(&self, tab: u64, request: u64) {
         self.reads.borrow_mut().push((tab, request));
+    }
+
+    fn page_log(&self, agent: &str, tab: u64) -> (String, bool) {
+        self.page_log_asked.borrow_mut().push((agent.into(), tab));
+        (self.page_logs.borrow().get(&tab).cloned()).unwrap_or_default()
     }
 
     fn disconnected(&self, agent: &str, _: &mut App) {
@@ -1732,6 +1741,7 @@ fn reading_a_tab_of_the_users_is_refused_and_logged(cx: &mut TestAppContext) {
 /// Every tool that takes a tab, with what it needs besides, so only the tab can refuse it.
 const TAB_TOOLS: &[(&str, &str)] = &[
     ("read_page", "{}"),
+    ("page_log", "{}"),
     ("snapshot", "{}"),
     ("screenshot", "{}"),
     ("click", r#"{ "ref": "e1" }"#),
@@ -3885,7 +3895,7 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 13] = [
+    const READS: [&str; 14] = [
         "list_profiles",
         "list_tabs",
         "list_split",
@@ -3895,6 +3905,7 @@ fn every_tool_and_step_is_in_one_class() {
         "navigate",
         "snapshot",
         "read_page",
+        "page_log",
         "scroll",
         "screenshot",
         "wait",
@@ -6917,6 +6928,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "navigate",
             "snapshot",
             "read_page",
+            "page_log",
             "click",
             "type",
             "select",
@@ -15483,6 +15495,7 @@ mod loaded_late;
 mod not_our_tools;
 mod notes;
 mod other_apps;
+mod page_log;
 mod permission_stopped;
 #[cfg(unix)]
 mod rewall;

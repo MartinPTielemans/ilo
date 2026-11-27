@@ -16,6 +16,7 @@ use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
 use browser::build_info;
 use browser::default_browser::{self, DefaultBrowser, Os};
+use browser::developer_sites;
 use browser::dialog;
 use browser::import::ImportView;
 use browser::link_rules::LinkRulesView;
@@ -654,6 +655,36 @@ fn off_sites() -> Vec<OffSite> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// The core's profiles and the sites each has Developer Mode on for.
+struct CoreSites;
+
+impl developer_sites::Host for CoreSites {
+    fn profiles(&self) -> Vec<(u64, SharedString)> {
+        (crate::ids(bc::bc_profiles).into_iter())
+            .map(|profile| (profile, crate::name(bc::bc_profile_name, profile)))
+            .collect()
+    }
+
+    fn sites(&self, profile: u64) -> Vec<SharedString> {
+        let sites = crate::name(bc::bc_developer_mode_sites, profile);
+        (sites.split('\n').filter(|site| !site.is_empty()))
+            .map(|site| site.to_owned().into())
+            .collect()
+    }
+
+    fn turn_off(&self, profile: u64, site: &str) {
+        if let Ok(site) = CString::new(site) {
+            unsafe { bc::bc_developer_mode_turn_off_site(profile, site.as_ptr()) };
+        }
+    }
+}
+
+/// A page's Developer Mode changed, as the user's site menu or command bar turned it, which the
+/// list of sites in it follows, as the core's tab_state_changed says it.
+pub fn developer_mode_changed(cx: &mut App) {
+    update_made(cx, |_, cx| cx.notify());
 }
 
 /// The profiles, the one the browser started with first.
@@ -3971,6 +4002,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.developer_mode_sites(cx));
         access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
@@ -4339,6 +4371,29 @@ impl Settings {
             Block::Group(self.flashed(&heading, group(look, rows))),
             Block::Under(under),
         ]
+    }
+
+    /// Sites in Developer Mode (#4377): every profile's, each with Turn Off. The user's alone, as
+    /// the mode is: no tool lists these or changes them. Not drawn while there are none.
+    fn developer_mode_sites(&self, cx: &mut Context<Self>) -> Vec<Block> {
+        let sites = developer_sites::listed(&CoreSites);
+        let each = sites.clone();
+        let press = |index: usize| -> developer_sites::Press {
+            let site = each[index].clone();
+            Box::new(cx.listener(move |_, _, _, cx| {
+                developer_sites::turn_off(&CoreSites, &site);
+                log!("browser: developer mode off for {}", site.site);
+                cx.notify();
+            }))
+        };
+        let logged = &self.drawn_logged;
+        match developer_sites::rows(&self.look, self.a11y, &sites, logged, press) {
+            Some(rows) => vec![
+                Block::Heading(developer_sites::TITLE.into()),
+                Block::Group(rows),
+            ],
+            None => Vec::new(),
+        }
     }
 
     /// Site notes (#4122): the switch, then a row for each site ilo has a note for, which opens

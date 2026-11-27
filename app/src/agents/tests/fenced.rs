@@ -6,7 +6,7 @@ use crate::agents::fence;
 use crate::agents::tier::{Tier, Why};
 
 /// Claude Code, connected, with mybank.example fenced.
-fn fenced(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+pub(super) fn fenced(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
     let (agents, browser, _) = connected(cx);
     agents.update(cx, |agents, cx| {
         assert_eq!(
@@ -21,7 +21,13 @@ fn fenced(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
 
 /// Tab `tab`'s page goes to `url` without the agent opening it, as a click, a redirect, back or
 /// the page itself takes it, and the core says it loaded.
-fn arrives(agents: &Entity<Agents>, browser: &Made, tab: u64, url: &str, cx: &mut TestAppContext) {
+pub(super) fn arrives(
+    agents: &Entity<Agents>,
+    browser: &Made,
+    tab: u64,
+    url: &str,
+    cx: &mut TestAppContext,
+) {
     let url: &'static str = Box::leak(url.to_string().into_boxed_str());
     for each in (browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == tab) {
         each.2 = "MyBank";
