@@ -579,8 +579,8 @@ else
     send key s cmd
     expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar of the window on top"
     send move 600 400
-    send move 3 300
-    send move 3 306
+    send move 0 300
+    send move 0 306
     expect '^browser: reveal shown$' "the pointer at the edge of the window on top didn't bring its sidebar out"
     expect '^browser: reveal window shown$' "the sidebar out of the window on top didn't come on screen"
     send stack
