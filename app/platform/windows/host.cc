@@ -5537,6 +5537,33 @@ bool host_app_active(void) {
   return g_active;
 }
 
+// The power request that holds the system awake, made at the first hold with its reason, which
+// `powercfg /requests` lists beside the app.
+namespace {
+HANDLE g_awake = nullptr;
+}  // namespace
+
+void host_keep_awake(bool on, const char* reason) {
+  if (!g_awake) {
+    if (!on) {
+      return;
+    }
+    std::wstring said = Wide(reason);
+    REASON_CONTEXT context = {POWER_REQUEST_CONTEXT_VERSION, POWER_REQUEST_CONTEXT_SIMPLE_STRING};
+    context.Reason.SimpleReasonString = said.data();
+    g_awake = PowerCreateRequest(&context);
+    if (g_awake == INVALID_HANDLE_VALUE) {
+      g_awake = nullptr;
+      return;
+    }
+  }
+  if (on) {
+    PowerSetRequest(g_awake, PowerRequestSystemRequired);
+  } else {
+    PowerClearRequest(g_awake, PowerRequestSystemRequired);
+  }
+}
+
 namespace {
 
 void (*g_needs_you_clicked)(uint64_t) = nullptr;

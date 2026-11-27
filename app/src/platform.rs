@@ -265,6 +265,8 @@ unsafe extern "C" {
     pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_keep_awake(on: bool, reason: *const c_char);
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(

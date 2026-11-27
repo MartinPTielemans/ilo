@@ -6472,3 +6472,17 @@ NSView* HostRevealView(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   return browser ? browser->reveal_view : nil;
 }
+
+// The activity NSProcessInfo makes the PreventUserIdleSystemSleep assertion of, while one is held.
+static id<NSObject> g_awake;
+
+void host_keep_awake(bool on, const char* reason) {
+  if (on && !g_awake) {
+    g_awake = [NSProcessInfo.processInfo
+        beginActivityWithOptions:NSActivityIdleSystemSleepDisabled
+                          reason:@(reason)];
+  } else if (!on && g_awake) {
+    [NSProcessInfo.processInfo endActivity:g_awake];
+    g_awake = nil;
+  }
+}

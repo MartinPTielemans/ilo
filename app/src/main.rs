@@ -47,6 +47,10 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 #[path = "../platform/linux/active_window.rs"]
 mod active_window;
 mod agents_core;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/awake.rs"]
+mod awake;
+mod awake_host;
 mod bar_picks_host;
 mod browser_windows;
 #[cfg(target_os = "linux")]
@@ -635,6 +639,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
         }
         needs_you_host::start(cx);
+        awake_host::start(cx);
         daily_count_host::start(cx);
         safe_start_host::start(cx);
         open_window(None, None, cx);

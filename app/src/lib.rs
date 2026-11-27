@@ -214,6 +214,7 @@ pub mod ad_block;
 pub mod address_wrap;
 pub mod agent_history;
 pub mod agents;
+pub mod awake;
 pub mod boards;
 pub mod boost_editor;
 pub mod boost_style;

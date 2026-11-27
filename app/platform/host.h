@@ -823,6 +823,13 @@ void host_needs_you_badge(int count);
 void host_needs_you_notify(uint64_t id, const char* title, const char* body);
 void host_watch_needs_you(void (*clicked)(uint64_t id));
 
+// With |on|, keeps the computer from sleeping when it's idle, the display free to sleep, until a
+// call without it: one hold for every thread under way (awake.rs). The Mac's is the system's
+// PreventUserIdleSystemSleep assertion, named |reason| in `pmset -g assertions`; Windows' is a
+// power request for the system, which `powercfg /requests` lists with |reason|. A closed lid
+// still sleeps. Linux's is the app's own, in Rust, over D-Bus.
+void host_keep_awake(bool on, const char* reason);
+
 // Calls |released| once, after the event that shows ⌃ is no longer held: ⌃ going up, a key or a
 // button pressed without it, or the app going to the background. Watches the whole app, whichever
 // view has the keyboard.

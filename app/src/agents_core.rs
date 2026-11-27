@@ -509,6 +509,8 @@ pub fn start(cx: &mut App) {
         let cards = agents.read(cx).shown_cards(cx);
         let when = agents.read(cx).notify();
         browser::needs_you::follow(&cards, when, cx);
+        // The computer stays awake while a thread is under way (awake.rs).
+        browser::awake::follow(cards.iter().map(|card| card.dot), cx);
         // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
         // shows it, for 30 days (browser::agent_history).
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
