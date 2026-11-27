@@ -1,0 +1,4 @@
+# The Mac minimum for everything cargo builds: Rust, the host's Objective-C++ (the cc crate) and the
+# translator's Swift (build.rs). It matches LSMinimumSystemVersion in build.sh (#4354).
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"

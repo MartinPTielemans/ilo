@@ -2000,11 +2000,8 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
     to = [NSRunningApplication runningApplicationWithProcessIdentifier:owner];
   }
   if (to) {
-    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
-    if (@available(macOS 14, *)) {
-      [NSApp yieldActivationToApplication:to];
-      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
-    }
+    [NSApp yieldActivationToApplication:to];
+    [to activateFromApplication:NSRunningApplication.currentApplication options:0];
     // Inactive, the app has no key window for AppKit to hand on from.
     [NSApp deactivate];
   }

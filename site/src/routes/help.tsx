@@ -49,7 +49,7 @@ function Help() {
       <section id="install">
         <h2>Installing</h2>
         <p>
-          On a Mac, ilo needs macOS 15 Sequoia or later on Apple silicon. Open the download and drag
+          On a Mac, ilo needs macOS 14 Sonoma or later on Apple silicon. Open the download and drag
           ilo into Applications.
         </p>
         <p>

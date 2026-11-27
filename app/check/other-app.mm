@@ -60,11 +60,8 @@ int main() {
             Say([NSString stringWithFormat:@"no app of process %d", pid]);
             return;
           }
-          // Always, as the check runs on macOS 15, but this builds for older SDKs too.
-          if (@available(macOS 14, *)) {
-            [NSApp yieldActivationToApplication:to];
-            [to activateFromApplication:NSRunningApplication.currentApplication options:0];
-          }
+          [NSApp yieldActivationToApplication:to];
+          [to activateFromApplication:NSRunningApplication.currentApplication options:0];
           Say([NSString stringWithFormat:@"yielded to %d", pid]);
         });
       }

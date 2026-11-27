@@ -1668,11 +1668,8 @@ bool Run(const std::string& line, void (^done)(void)) {
               pid, up ? "is up" : "isn't");
       return false;
     }
-    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
-    if (@available(macOS 14, *)) {
-      [NSApp yieldActivationToApplication:to];
-      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
-    }
+    [NSApp yieldActivationToApplication:to];
+    [to activateFromApplication:NSRunningApplication.currentApplication options:0];
     fprintf(stderr, "browser: yielded to %d\n", pid);
     done();
     return true;

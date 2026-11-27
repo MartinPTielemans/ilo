@@ -234,9 +234,10 @@ plutil -replace CFBundleDisplayName -string "$name" "$plist"
 plutil -replace CrProductDirName -string "$name" "$plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace CFBundleVersion -string "$build" "$plist"
-# macOS 15 (Sequoia) or later, the owner's call (#678). Below it macOS won't open the app, and
+# macOS 14 (Sonoma) or later, the owner's call (#4354): the lowest where Safari's engine plays
+# protected video for the pages Chromium can't (decision 1). Below it macOS won't open the app, and
 # Sparkle's generate_appcast copies it into the feed's entry, so an older Mac is offered no update.
-plutil -replace LSMinimumSystemVersion -string 15.0 "$plist"
+plutil -replace LSMinimumSystemVersion -string 14.0 "$plist"
 # No script reaches Chromium's AppleScript dictionary, which its code answers outside the core: a
 # script could read every window's tabs and their URLs, and save a page, view its source or run
 # JavaScript in it (#704). Quit and open-location Apple Events have handlers of their own. ilo's
