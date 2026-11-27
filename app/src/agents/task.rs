@@ -1103,9 +1103,6 @@ pub struct Tasks {
     pub(super) look_again: Vec<(Cli, bool)>,
     /// The user's tabs the threads hold (handed.rs).
     pub(super) handed: handed::Records,
-    /// Helpers for the tasks a test starts, whatever the switch says.
-    #[cfg(test)]
-    pub(super) helpers: bool,
     /// What answers for `wall::put_up` in a test, which no system does yet.
     #[cfg(test)]
     pub(super) wall: Option<rewall::PutUp>,

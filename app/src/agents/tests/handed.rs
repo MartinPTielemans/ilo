@@ -431,35 +431,41 @@ fn what_stands_in_is_never_told_logged_or_kept_as_the_threads_title(cx: &mut Tes
     }
 }
 
-/// No send hands a helper a tab. A helper is the assistant's own and has no name a send could go
+/// No send hands a strand a tab. A strand is the assistant's own and has no name a send could go
 /// to: the start's tab, a reply's and one held for the turn's end each go to the thread, whose
-/// assistant alone is told, and a send that names a helper as its thread reaches nothing.
+/// assistant alone is told, and a send that names a strand as its thread reaches nothing.
 #[gpui::test]
-fn no_send_hands_a_helper_a_tab(cx: &mut TestAppContext) {
-    use crate::agents::runner::Helper;
-    use crate::tokens::agents::helpers::DEEP;
-    let run = run("handed-helper", cx);
+fn no_send_hands_a_strand_a_tab(cx: &mut TestAppContext) {
+    let run = run("handed-strand", cx);
     (run.browser.tabs.borrow_mut()).push((FARES.0, USERS, FARES.1, FARES.2));
-    (run.agents).update(cx, |agents, _| agents.tasks.helpers = true);
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     run.ran(1);
-    let own = opens_its_own(&run, &agent, cx);
-    let helper = "toolu_helper_1".to_string();
-    let told = |cx: &mut TestAppContext, told: Helper| {
-        let id = helper.clone();
-        run.said(&agent, Out::Helper { id, told }, cx);
-    };
-    told(cx, Helper::Asked("Compare fares".into()));
-    let (id, deep) = (Some(helper.clone()), DEEP.into());
-    run.said(&agent, Out::Started { id, deep }, cx);
-    told(cx, Helper::On(own));
+    let goal = json!({ "goal": "Compare fares" });
+    let answer = call(&run.agents, &agent, tools::STRAND, goal, cx);
+    cx.run_until_parked();
+    let helper = format!("{agent}-1");
+    let strands = (run.agents).read_with(cx, |agents, _| agents.strands_of(&agent));
+    assert_eq!(strands, [helper.clone()]);
 
-    // A reply while the helper works is the thread's, held for its turn's end as any is.
+    // A reply while the strand works is the thread's, held for its turn's end as any is.
     reply(&run, &agent, "And this", &[SEATS.0], cx);
     assert_eq!(given(&run), [TRAINS.0]);
-    // One sent to the helper's own name, as nothing in the product can, reaches nothing.
+    // One sent to the strand's own name, as nothing in the product can, reaches nothing.
     reply(&run, &helper, "Yours", &[FARES.0], cx);
     assert_eq!(space_of(&run, FARES.0), USERS);
+    let said = |out: Out, cx: &mut TestAppContext| {
+        let event = runner::Event {
+            agent: helper.clone(),
+            run: (run.agents).read_with(cx, |agents, _| agents.strand_run(&helper)),
+            out,
+        };
+        (run.agents).update(cx, |agents, cx| agents.task_said(event, cx));
+        cx.run_until_parked();
+    };
+    said(Out::Said("The 9:05 is cheapest.".into()), cx);
+    said(Out::Ended(None), cx);
+    assert!(!answer.try_recv().expect("the strand answered").error);
+    assert_eq!(given(&run), [TRAINS.0]);
     run.said(&agent, Out::Ended(None), cx);
     cx.run_until_parked();
     assert_eq!(given(&run), [TRAINS.0, SEATS.0]);
