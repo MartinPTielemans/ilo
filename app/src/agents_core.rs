@@ -241,6 +241,19 @@ impl Browser for Core {
         }
     }
 
+    fn archive_handed(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> agents::Closed {
+        let Ok(agent) = CString::new(agent) else {
+            return agents::Closed::Refused;
+        };
+        match unsafe { bc::bc_agent_archive_tab(agent.as_ptr(), tab, discard) } as u32 {
+            bc::BC_AGENT_CLOSED => agents::Closed::Closed,
+            bc::BC_AGENT_CLOSE_RETURNED => agents::Closed::Returned,
+            bc::BC_AGENT_CLOSE_ASKS => agents::Closed::Asks,
+            bc::BC_AGENT_CLOSE_PINNED => agents::Closed::Pinned,
+            _ => agents::Closed::Refused,
+        }
+    }
+
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close(tab, false) };
     }

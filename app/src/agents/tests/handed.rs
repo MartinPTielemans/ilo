@@ -947,13 +947,14 @@ fn a_tab_the_core_cant_put_back_is_still_the_users(cx: &mut TestAppContext) {
     );
 }
 
-/// A thread's close of a handed tab gives it back: no close reaches the core, the tab is at its
-/// place among the user's on the page it's at, the entry says it returned, and the thread hears
-/// what its close of a page of its own says, then and after. A page it opened closes as ever.
+/// At Look only, a thread's close of a handed tab gives it back: no close reaches the core, the
+/// tab is at its place among the user's on the page it's at, the entry says it returned, and the
+/// thread hears what its close of a page of its own says, then and after. A page it opened closes
+/// as ever.
 #[gpui::test]
-fn a_threads_close_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
+fn at_look_only_a_threads_close_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
     let run = run("handed-close", cx);
-    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let agent = send_at(&run, Tier::Look, &[TRAINS.0, SEATS.0], cx);
     let opened = call(
         &run.agents,
         &agent,
@@ -1139,8 +1140,101 @@ fn a_folder_takes_its_tabs_on_every_way_back(cx: &mut TestAppContext) {
         folders(&run)[1],
         (USERS, "Lisbon".to_string(), vec![TRAINS.0, SEATS.0])
     );
+    // The thread's close of one the core takes back but can't close, as between windows.
+    run.browser.stays_open.borrow_mut().insert(13);
     _ = answered(&run, &agent, "close_tab", 13, cx);
     assert_eq!(folders(&run)[1].2, [TRAINS.0, SEATS.0, 13]);
+}
+
+/// From Work on pages up, a thread's close of a handed tab archives it: the core takes it back
+/// and closes it there, the entry says the thread archived it (Z37a), and the thread hears it was
+/// archived. One the core takes back but can't close is the user's again, a give-back with its
+/// entry, answered as a close; a_folder_takes_its_tabs_on_every_way_back has its folder.
+#[gpui::test]
+fn from_work_a_threads_close_of_a_handed_tab_archives_it(cx: &mut TestAppContext) {
+    let run = run("handed-archive", cx);
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0], cx);
+    let archived = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    assert!(!archived.error, "{archived:?}");
+    assert_eq!(archived.text, format!("Archived tab {}.", TRAINS.0));
+    assert_eq!(*run.browser.archived.borrow(), [(TRAINS.0, false)]);
+    assert_eq!(space_of(&run, TRAINS.0), 0);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx), ["example.com"]);
+    assert_eq!(
+        handed::entry(handed::ARCHIVED, "example.com", "").as_deref(),
+        Some("The thread archived example.com")
+    );
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+
+    run.browser.stays_open.borrow_mut().insert(SEATS.0);
+    let returned = answered(&run, &agent, "close_tab", SEATS.0, cx);
+    assert!(!returned.error, "{returned:?}");
+    assert_eq!(returned.text, format!("Closed tab {}.", SEATS.0));
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert!(!is_handed(&run, &agent, SEATS.0, cx));
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["tickets.example"]
+    );
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx).len(), 1);
+    let stops = (run.agents).read_with(cx, |agents, _| agents.stops(&agent));
+    assert!(stops.is_empty(), "{stops:?}");
+}
+
+/// A handed tab whose page asks before it's left, or that the user pinned, stays handed at a
+/// thread's close, nothing closing. Archiving it without saving is refused on the user's line at
+/// Work and archives it at Full.
+#[gpui::test]
+fn a_handed_tab_that_asks_or_is_pinned_stays_and_full_access_discards(cx: &mut TestAppContext) {
+    let run = run("handed-archive-asks", cx);
+    run.browser.asks.borrow_mut().insert(TRAINS.0);
+    run.browser.pinned.borrow_mut().insert(SEATS.0);
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0], cx);
+    let kept = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    assert!(kept.error, "{kept:?}");
+    assert!(
+        (kept.text).starts_with(&format!("Tab {} stays open: its page asks", TRAINS.0)),
+        "{kept:?}"
+    );
+    let pinned = answered(&run, &agent, "close_tab", SEATS.0, cx);
+    assert_eq!(
+        pinned.text,
+        format!("Tab {} stays open: the user pinned it.", SEATS.0)
+    );
+    let discard = |agent: &str, cx: &mut TestAppContext| {
+        let arguments = json!({ "tab": TRAINS.0, "discard": true });
+        let answer = call(&run.agents, agent, "close_tab", arguments, cx);
+        cx.run_until_parked();
+        answer.try_recv().expect("answered at once")
+    };
+    assert!(discard(&agent, cx).error);
+    let stops = (run.agents).read_with(cx, |agents, _| agents.stops(&agent));
+    let [stop] = stops.as_slice() else {
+        panic!("{stops:?}");
+    };
+    assert_eq!(
+        (stop.why, stop.tab, stop.tier),
+        (Why::Discard, TRAINS.0, Tier::Work)
+    );
+    for tab in [TRAINS.0, SEATS.0] {
+        assert!(is_handed(&run, &agent, tab, cx), "{tab} left the thread");
+        assert_eq!(space_of(&run, tab), THREADS);
+    }
+    assert!(run.browser.archived.borrow().is_empty());
+    assert!(entries(&run, &agent, handed::ARCHIVED, cx).is_empty());
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+    run.finish(&agent, cx);
+
+    let agent = send_at(&run, Tier::Full, &[TRAINS.0], cx);
+    let archived = discard(&agent, cx);
+    assert!(!archived.error, "{archived:?}");
+    assert_eq!(
+        archived.text,
+        format!("Archived tab {} without saving.", TRAINS.0)
+    );
+    assert_eq!(*run.browser.archived.borrow(), [(TRAINS.0, true)]);
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx), ["example.com"]);
 }
 
 /// A thread names 8 folders at most: a ninth name is refused, and one of the 8 again is not.
@@ -1927,7 +2021,7 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
     let run = run("handed-kept", cx);
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     run.ran(1);
-    // The thread ends with it, is handed two, closes one, the user returns the other, and it
+    // The thread ends with it, is handed two, archives one, the user returns the other, and it
     // ends again.
     run.finish(&agent, cx);
     reply(&run, &agent, "And then?", &[TRAINS.0, SEATS.0], cx);
@@ -1949,7 +2043,8 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
         ["example.com", "example.com", "tickets.example"]
     );
     assert_eq!(noted(handed::TAKEN_BACK), ["tickets.example"]);
-    assert_eq!(noted(handed::GIVEN_BACK), ["example.com", "example.com"]);
+    assert_eq!(noted(handed::GIVEN_BACK), ["example.com"]);
+    assert_eq!(noted(handed::ARCHIVED), ["example.com"]);
     (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
     cx.run_until_parked();
     let files = run.files();

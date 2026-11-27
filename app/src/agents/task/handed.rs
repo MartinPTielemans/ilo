@@ -11,7 +11,9 @@ use gpui::{App, Context, SharedString};
 use serde_json::Value;
 
 use crate::agents::tier::{Tier, Why};
-use crate::agents::{Act, Agents, Gone, TabInfo, ToolResult, act_of, held, site, tools};
+use crate::agents::{
+    Act, Agents, Closed, Closing, Gone, TabInfo, ToolResult, act_of, held, site, tools,
+};
 use crate::broom;
 
 /// The activity log's entry of a tab the user handed to a thread, as the log file names it. The
@@ -23,6 +25,8 @@ pub const TAKEN_BACK: &str = "tab_taken_back";
 pub const GIVEN_BACK: &str = "tab_given_back";
 /// The entry of a handed tab its thread put in a today's folder (#4278).
 pub const FOLDERED: &str = "tab_put_in_folder_by_thread";
+/// The entry of a handed tab its thread archived by closing it, from Work on pages up (#4278).
+pub const ARCHIVED: &str = "tab_archived_by_thread";
 
 /// put_in_folder's answers (#4278): a name the broom wouldn't give a folder; a tab not handed to
 /// the thread; one name more than a thread may give. Look only refuses it on the user's line
@@ -326,6 +330,7 @@ pub fn entry(action: &str, site: &str, folder: &str) -> Option<String> {
         TAKEN_BACK => Some(format!("You returned {site} to your tabs")),
         GIVEN_BACK => Some(format!("{site} returned to your tabs")),
         FOLDERED => Some(format!("The thread put {site} in \u{201c}{folder}\u{201d}")),
+        ARCHIVED => Some(format!("The thread archived {site}")),
         _ => None,
     }
 }
@@ -746,6 +751,73 @@ impl Agents {
         self.went(tab, agent, Gone::Itself);
         _ = reply.send(ToolResult::text(format!("Closed tab {tab}.")));
         true
+    }
+
+    /// Whether `agent`'s close of `tab` archives it: one the user handed its thread, from Work on
+    /// pages up. Below that the close gives it back (`close_gives_back`).
+    pub(in crate::agents) fn archives_handed(&self, agent: &str, tab: u64) -> bool {
+        self.is_handed(agent, tab) && self.task(agent).is_some_and(|task| task.tier >= Tier::Work)
+    }
+
+    /// The thread's close of `tab`, which the user handed it: the core gives it back and closes it
+    /// there into the user's Archive, never with its page's dialog (bc_agent_archive_tab), with
+    /// `discard` once the user's access said yes to losing what it holds. One that went back but
+    /// stays open is the user's again, a give-back; one the core couldn't take back is given back
+    /// as below Work; one that may hold unsaved changes, or pinned, stays handed and is answered
+    /// as the thread's own tab is, a discard asking first.
+    pub(in crate::agents) fn archive_handed(
+        &mut self,
+        tab: u64,
+        closing: Closing,
+        discard: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let held = &self.tasks.handed.held;
+        let Some(at) = held
+            .iter()
+            .position(|each| each.tab == tab && each.agent == closing.agent)
+        else {
+            return;
+        };
+        // No longer the thread's from here, as in return_tab_at: the core reports its move.
+        let record = self.tasks.handed.held.remove(at);
+        let closed = self
+            .browser
+            .archive_handed(&closing.agent, tab, discard, cx);
+        let (agent, site) = (closing.agent.clone(), closing.site.clone());
+        let gone = |agents: &mut Self, entry: &str, cx: &mut Context<Self>| {
+            agents.let_go(tab, held::Event::GivenBack { stopped: false }, cx);
+            agents.forget_page(tab);
+            agents.went(tab, &agent, Gone::Itself);
+            agents.note_page(&agent, (0, tab), entry, &site, "");
+            cx.notify();
+        };
+        let answer = match closed {
+            Closed::Closed => {
+                self.tasks.handed.waiting.retain(|each| each.tab != tab);
+                gone(self, ARCHIVED, cx);
+                match discard {
+                    true => format!("Archived tab {tab} without saving."),
+                    false => format!("Archived tab {tab}."),
+                }
+            }
+            Closed::Returned => {
+                gone(self, GIVEN_BACK, cx);
+                self.into_folder(record, cx);
+                format!("Closed tab {tab}.")
+            }
+            _ => {
+                let held = &mut self.tasks.handed.held;
+                held.insert(at.min(held.len()), record);
+                if closed == Closed::Refused {
+                    self.close_gives_back(&closing.agent, tab, &closing.reply, cx);
+                } else {
+                    _ = self.close_came_to(tab, closing, closed, cx);
+                }
+                return;
+            }
+        };
+        _ = closing.reply.send(ToolResult::text(answer));
     }
 
     /// put_in_folder: `agent`'s thread puts tabs the user handed it into the today's folder it

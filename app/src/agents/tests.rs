@@ -89,6 +89,10 @@ struct Made {
     /// as one whose Space is gone, as a test says.
     returned: RefCell<Vec<u64>>,
     not_returned: RefCell<HashSet<u64>>,
+    /// Handed tabs that go back but stay open as the core archives them, as between windows.
+    stays_open: RefCell<HashSet<u64>>,
+    /// Each tab the core archived for a thread, with whether it was discarded.
+    archived: RefCell<Vec<(u64, bool)>>,
     /// The tabs whose page is using the camera or the microphone.
     in_use: RefCell<HashSet<u64>>,
     /// The today's folders of the user's Spaces: each one's Space, name and tabs, in order.
@@ -415,6 +419,31 @@ impl Browser for Made {
             return Closed::Pending;
         }
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+        Closed::Closed
+    }
+
+    /// As the core's: a handed tab the user doesn't hold, not pinned, and whose page doesn't ask
+    /// or is discarded, goes back to its place, then closes there into the Archive.
+    fn archive_handed(&self, agent: &str, tab: u64, discard: bool, cx: &mut App) -> Closed {
+        let space = self.agent_space(agent);
+        let ours = (self.tabs.borrow().iter()).any(|each| each.0 == tab && each.1 == space);
+        if space == 0 || self.held.borrow().contains(&tab) || !ours {
+            return Closed::Refused;
+        }
+        if self.pinned.borrow().contains(&tab) {
+            return Closed::Pinned;
+        }
+        if !discard && self.asks.borrow().contains(&tab) {
+            return Closed::Asks;
+        }
+        if !self.return_tab(tab, cx) {
+            return Closed::Refused;
+        }
+        if self.stays_open.borrow().contains(&tab) {
+            return Closed::Returned;
+        }
+        self.archived.borrow_mut().push((tab, discard));
+        self.close_user_tab(tab, cx);
         Closed::Closed
     }
 
