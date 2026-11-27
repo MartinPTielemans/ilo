@@ -35,9 +35,8 @@ struct Recorder {
     /// Commands that do nothing now, so the bar isn't offered them, such as a split's outside one.
     idle: Vec<shell::Command>,
     elsewhere: RefCell<HashMap<u64, u64>>,
-    /// The agents ⇥ asks, None while tasks are off, and the page the user is on.
+    /// The agents ⇥ asks, None while tasks are off.
     agents: RefCell<Option<TaskAgents>>,
-    page: Option<(SharedString, SharedString)>,
     /// The bar shows over a private window.
     private: bool,
     /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
@@ -242,22 +241,16 @@ impl Host for Recorder {
         self.record(format!("asking {shown}"));
     }
 
-    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
-        self.page.clone()
-    }
-
     fn run_task(
         &self,
         agent: &str,
         asked: &str,
-        page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
         files: Picked,
         _: &mut App,
     ) {
-        let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
         let tier = match tier {
             Tier::Work => String::new(),
             tier => format!(" at {}", tier.id()),
@@ -282,9 +275,7 @@ impl Host for Recorder {
             Some(folder) => format!(" folder {}", name(folder.root())),
             None => String::new(),
         };
-        self.record(format!(
-            "task {agent} {asked}{page}{tier}{model}{effort}{files}"
-        ));
+        self.record(format!("task {agent} {asked}{tier}{model}{effort}{files}"));
     }
 
     fn run_task_at_rest(
@@ -3520,16 +3511,10 @@ fn the_bar_keeps_the_focus_in_its_field(cx: &mut TestAppContext) {
 }
 
 impl Bar {
-    /// The bar, opened for a new tab, with tasks on and `listed` agents ready, on `page`.
-    fn with_agents(
-        cx: &mut TestAppContext,
-        listed: &[(&str, Option<&str>)],
-        page: Option<(&str, &str)>,
-    ) -> Self {
-        let page = page.map(|(url, title)| (url.to_string().into(), title.to_string().into()));
+    /// The bar, opened for a new tab, with tasks on and `listed` agents ready.
+    fn with_agents(cx: &mut TestAppContext, listed: &[(&str, Option<&str>)]) -> Self {
         let host = Recorder {
             agents: RefCell::new(agents(listed)),
-            page,
             ..Recorder::default()
         };
         Bar::open(cx, Vec::new(), host)
@@ -3716,22 +3701,17 @@ impl Bar {
     }
 }
 
-/// ⇥ after typing makes it a thread's: the page the user is on goes with it as a chip, the rows
-/// give way to the composer's choices, which open at the level every thread starts at and on
+/// ⇥ after typing makes it a thread's: the rows give way to the composer's choices, which open at the level every thread starts at and on
 /// Settings' assistant and model, and ↩ closes the bar, then starts the thread with them. Nothing
 /// about tasks runs as the bar opens or takes keys: the host is asked only what it last learned.
 #[gpui::test]
 fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
-    let page = Some(("https://lisbon.example/guide", "Lisbon guide"));
-    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)], page);
+    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)]);
     bar.type_text("flight here next friday");
     assert_eq!(bar.chip_and_hint(), (None, false, true), "⇥ isn't offered");
     let asked = bar.host.asked.borrow().len();
     bar.keys("tab");
-    assert_eq!(
-        bar.chip_and_hint(),
-        (Some("Lisbon guide".into()), true, false)
-    );
+    assert_eq!(bar.chip_and_hint(), (None, true, false));
     assert_eq!(bar.plates().0, 0, "the composer lists rows");
     assert_eq!(
         bar.choices(),
@@ -3745,7 +3725,7 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     bar.keys("enter");
     assert_eq!(
         bar.calls(),
-        ["task claude flight here next friday under 150 on https://lisbon.example/guide"]
+        ["task claude flight here next friday under 150"]
     );
     assert!(!bar.is_open());
 }
@@ -3755,7 +3735,7 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
 /// thread's, which ↩ starts it with, and only the menus' picks set them.
 #[gpui::test]
 fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None), ("codex", None)]);
     bar.type_text("compare the two");
     bar.keys("tab");
     let (rows, chosen) = bar.choice_menu(false);
@@ -3802,7 +3782,7 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
 /// takes it off and changes nothing.
 #[gpui::test]
 fn a_trigger_wears_its_plate_while_its_menu_is_open(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("plan the week");
     bar.keys("tab");
     let open = |bar: &mut Bar| {
@@ -3849,7 +3829,7 @@ fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
             menu::show(menu::Request { area, ..request }, cx);
         })))
     });
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("plan the week");
     bar.keys("tab");
     let open = |bar: &mut Bar| {
@@ -3894,7 +3874,7 @@ fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
 /// picked is what the trigger reads and goes with the start, and Default takes it back to none.
 #[gpui::test]
 fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("plan the week");
     bar.keys("tab");
     assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
@@ -3920,7 +3900,7 @@ fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppConte
 /// memory, as the host keeps only what Settings set.
 #[gpui::test]
 fn the_composer_opens_on_settings_effort(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.host.last.borrow_mut().effort = Some("high");
     bar.type_text("plan the week");
     bar.keys("tab");
@@ -3963,7 +3943,7 @@ fn every_effort_row_passes_a_level_from_the_programs_list(cx: &mut TestAppContex
     let listed = crate::agents::runner::Cli::Claude.efforts();
     let mut passed = Vec::new();
     for row in 0..=listed.len() {
-        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        let mut bar = Bar::with_agents(cx, &[("claude", None)]);
         bar.type_text("plan the week");
         bar.keys("tab");
         let (rows, chosen) = bar.effort_menu().unwrap();
@@ -3990,7 +3970,7 @@ fn every_effort_row_passes_a_level_from_the_programs_list(cx: &mut TestAppContex
 /// effort menu; a level picked for Claude doesn't go with Codex's start.
 #[gpui::test]
 fn codex_has_no_effort_trigger(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("codex", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("codex", None)]);
     bar.type_text("plan the week");
     bar.keys("tab");
     assert_eq!(bar.effort_said(), None);
@@ -4031,16 +4011,13 @@ fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     );
 }
 
-/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and ⌫ at the start takes the
-/// page's chip off before it leaves. Esc closes the composer as it closes the bar.
+/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, as ⌫ at the start does. Esc
+/// closes the composer as it closes the bar.
 #[gpui::test]
 fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
-    let page = Some(("https://lisbon.example/guide", ""));
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("book it");
     bar.keys("tab");
-    // A page without a title is named by its site.
-    assert_eq!(bar.chip_and_hint().0.as_deref(), Some("lisbon.example"));
     bar.calls();
     bar.keys("shift-tab");
     assert_eq!(bar.chip_and_hint(), (None, false, true));
@@ -4049,20 +4026,10 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
 
     bar.keys("tab");
     bar.keys("home backspace");
-    assert_eq!(
-        bar.chip_and_hint(),
-        (None, true, false),
-        "⌫ didn't take the chip off first"
-    );
-    bar.keys("backspace");
     assert_eq!(bar.chip_and_hint().1, false);
     assert_eq!(bar.input().0, "book it");
-    // Run without the page: nothing goes with the task.
-    bar.keys("tab");
-    bar.keys("home backspace enter");
-    assert!(bar.calls().contains(&"task claude book it".to_string()));
 
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("book it");
     bar.keys("tab");
     bar.calls();
@@ -4072,6 +4039,26 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
         "Esc left the composer rather than closing it"
     );
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
+}
+
+/// An ask from ⌘T over a page the user is on starts a thread that holds no tab of the user's: no
+/// chip names the page, and the thread is started with what's typed alone.
+#[gpui::test]
+fn an_ask_from_a_page_takes_no_tab_of_the_users(cx: &mut TestAppContext) {
+    let url = "https://lisbon.example/guide";
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::opened(cx, host, |cx| {
+        show(None, vec![url.into()], vec![tab(7, url)], None, cx)
+    });
+    bar.type_text("book it");
+    bar.keys("tab");
+    assert_eq!(bar.chip_and_hint(), (None, true, false));
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude book it"]);
 }
 
 /// Going back from ⌘T's composer keeps the words and asks nothing for them until the user's
@@ -4084,7 +4071,7 @@ fn leaving_the_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext)
             .collect()
     };
     for back in ["tab", "shift-tab", "escape"] {
-        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        let mut bar = Bar::with_agents(cx, &[("claude", None)]);
         bar.type_text("book");
         bar.keys("tab");
         bar.type_text(" a table for two");
@@ -4120,7 +4107,7 @@ fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
             })
             .unwrap()
     };
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     assert_eq!(placeholder(&mut bar), "Search, or start a thread");
 
     *bar.host.agents.borrow_mut() = agents(&[]);
@@ -4161,7 +4148,7 @@ fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) 
     let typed = "flights to lisbon";
     let rows = || vec![searching(typed), page("https://flights.test/")];
     let opened = |cx: &mut TestAppContext| {
-        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        let mut bar = Bar::with_agents(cx, &[("claude", None)]);
         bar.type_text(typed);
         bar.suggest(typed, rows());
         bar
@@ -4220,7 +4207,7 @@ fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) 
 /// thread starts until the next ↩, which starts it with the committed words.
 #[gpui::test]
 fn return_committing_japanese_in_the_composer_starts_nothing(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("東京の");
     bar.keys("tab");
     bar.calls();
@@ -4243,7 +4230,7 @@ fn return_committing_japanese_in_the_composer_starts_nothing(cx: &mut TestAppCon
 /// to it and starts nothing; the thread starts on the committed words, at the level picked.
 #[gpui::test]
 fn a_level_picked_while_composing_japanese_keeps_the_words(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.type_text("東京の");
     bar.keys("tab");
     bar.compose("ほてる");
@@ -4264,7 +4251,7 @@ fn a_level_picked_while_composing_japanese_keeps_the_words(cx: &mut TestAppConte
 /// row as it did.
 #[gpui::test]
 fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[("claude", Some("18:00")), ("codex", None)], None);
+    let mut bar = Bar::with_agents(cx, &[("claude", Some("18:00")), ("codex", None)]);
     bar.type_text("summarise this");
     bar.keys("tab");
     assert_eq!(bar.choices().1, "codex's default");
@@ -4279,7 +4266,7 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
         ]
     );
 
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     bar.host.agents.borrow_mut().as_mut().unwrap().signed_out =
         vec![("codex".into(), "Codex".into())];
     bar.edit("", None);
@@ -4336,7 +4323,6 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
 fn a_private_window_offers_no_task(cx: &mut TestAppContext) {
     let host = Recorder {
         agents: RefCell::new(agents(&[("claude", None), ("codex", None)])),
-        page: Some(("https://rijksmuseum.nl/".into(), "Rijksmuseum".into())),
         private: true,
         ..Recorder::default()
     };
@@ -4379,7 +4365,7 @@ fn a_private_window_offers_no_task(cx: &mut TestAppContext) {
 /// then starts on one as it learns.
 #[gpui::test]
 fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
-    let mut bar = Bar::with_agents(cx, &[], None);
+    let mut bar = Bar::with_agents(cx, &[]);
     *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
     bar.edit("", None);
     bar.type_text("book a table");
@@ -5462,7 +5448,7 @@ fn made(name: &str, files: &[&str]) -> std::path::PathBuf {
 /// The composer opened on what's typed, by a bar over a system that can wall a thread in with the
 /// user's files, or one that can't.
 fn composing(cx: &mut TestAppContext, files: bool) -> Bar {
-    let bar = Bar::with_agents(cx, &[("claude", None)], None);
+    let bar = Bar::with_agents(cx, &[("claude", None)]);
     bar.host.files.set(files);
     let mut bar = bar;
     bar.type_text("pack for the trip");
