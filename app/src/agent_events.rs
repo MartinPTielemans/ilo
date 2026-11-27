@@ -145,7 +145,3 @@ pub(crate) unsafe extern "C" fn tab_text(
     );
     agents_core::update(move |agents, cx| agents.text_read(request, text, cx));
 }
-
-/// What came of a Choose File… for a page's file field, which ilo never asks for: an upload is the
-/// user's step in the page itself, and its field is dropped as it's described.
-pub(crate) unsafe extern "C" fn file_field_done(_: *mut c_void, _: bc::bc_id, _: c_int, _: c_int) {}

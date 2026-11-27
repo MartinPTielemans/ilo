@@ -127,6 +127,8 @@ pub enum Happened {
     NotCopied { files: Given },
     /// The user stopped the task, which held `pages` pages then.
     YouStopped { pages: usize },
+    /// ilo ended the task's run, as its assistant started with a tool that isn't ilo's own.
+    NotOurTools,
 }
 
 impl Happened {
@@ -135,6 +137,7 @@ impl Happened {
             Happened::Yours { tab } | Happened::TabBack { tab } => Some(*tab),
             Happened::TierChanged { .. }
             | Happened::YouStopped { .. }
+            | Happened::NotOurTools
             | Happened::Revoked { .. }
             | Happened::FolderGone { .. }
             | Happened::NotCopied { .. } => None,
@@ -174,12 +177,13 @@ impl Agents {
         if made.tab().is_some() && task.placed.iter().any(standing) {
             return;
         }
-        // The task's access changed, the user stopped it, or its files changed: the line said
-        // so, and it needs nothing of the user.
+        // The task's access changed, the user or ilo stopped it, or its files changed: the line
+        // said so, and it needs nothing of the user.
         let settled = matches!(
             made,
             Happened::TierChanged { .. }
                 | Happened::YouStopped { .. }
+                | Happened::NotOurTools
                 | Happened::Revoked { .. }
                 | Happened::FolderGone { .. }
                 | Happened::NotCopied { .. }
@@ -313,6 +317,7 @@ impl Agents {
                     None => continue,
                 },
                 Happened::YouStopped { pages } => IloKind::YouStopped { pages: *pages },
+                Happened::NotOurTools => IloKind::NotOurTools,
             };
             let settled = match &placed.kind {
                 // An outside agent's task the user stopped offers its pages back, ended as it

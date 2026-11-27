@@ -1005,7 +1005,12 @@ if [ "$active" = 1 ]; then
   popped=$(sed -n "s/^browser: little window $opener popup $popup_tab in window \([0-9]*\) at \(.*\)\$/\1 \2/p" "$log" | tail -1)
   set -- $popped
   popup_window=$1
-  [ "$4 $5" = "500 616" ] || fail "the pop-up's window is $4 by $5, not its page's 480 by 560 under its bar"
+  # Its page's size with the card's inset at each side and below, and the Little bar over it, as
+  # window_frames.rs's popup lays it out from tokens.toml's [shell].
+  inset=$(token shell card-inset)
+  popup_size="$((480 + 2 * inset)) $((560 + $(token shell little-bar) + inset))"
+  [ "$4 $5" = "$popup_size" ] ||
+    fail "the pop-up's window is $4 by $5, not $popup_size: its page's 480 by 560 under its bar"
   expect "^browser: title $popup_tab signin ready\$" "the sign-in pop-up didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/little-popup.png" all || fail "no window to capture"
   send window "$(grep -c '^browser: window opened ' "$log")"

@@ -59,6 +59,12 @@ struct Made {
     requests: RefCell<Vec<(u64, u64, request::Request)>>,
     /// The saved reads sent: the profile, the read, the address, its size and its time.
     saved_reads: RefCell<Vec<(u64, u64, String, usize, i64)>>,
+    /// Each PDF read asked of the engine: its bytes, first page and count, by the read it got,
+    /// 900 on.
+    pdf_reads: RefCell<Vec<(u64, Vec<u8>, usize, usize)>>,
+    /// Each field a thread's copies were put in, with them, and whether the core refuses the next.
+    puts: RefCell<Vec<(u64, Vec<std::path::PathBuf>)>>,
+    refuses_put: std::cell::Cell<bool>,
     /// The split views, each its tabs left to right.
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
@@ -93,6 +99,8 @@ struct Made {
     in_use: RefCell<HashSet<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The search engine's host, where a test moves it from search.example.
+    engine: std::cell::Cell<Option<&'static str>>,
 }
 
 impl Made {
@@ -255,6 +263,13 @@ impl Browser for Made {
         })
     }
 
+    /// A search with an engine of the Space's profile's own, so a test sees whose it was.
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = self.space_profile(space).to_lowercase();
+        let engine = self.engine.get().unwrap_or("search.example");
+        Some(format!("https://{engine}/{profile}?q={words}"))
+    }
+
     fn hand_off(&self, _: &str, tab: u64) -> bool {
         self.held.borrow_mut().insert(tab)
     }
@@ -274,6 +289,21 @@ impl Browser for Made {
 
     fn file_field_drop(&self, field: u64) {
         self.dropped.borrow_mut().push(field);
+    }
+
+    fn file_field_put(&self, field: u64, paths: &[std::path::PathBuf]) -> bool {
+        if self.refuses_put.get() {
+            return false;
+        }
+        self.puts.borrow_mut().push((field, paths.to_vec()));
+        true
+    }
+
+    fn pdf_read(&self, bytes: &[u8], first: usize, count: usize) -> u64 {
+        let mut reads = self.pdf_reads.borrow_mut();
+        let read = 900 + reads.len() as u64;
+        reads.push((read, bytes.to_vec(), first, count));
+        read
     }
 
     fn answer_download(&self, download: u64, keep: bool) {
@@ -3799,11 +3829,14 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 /// acts on a page would otherwise run at Look only.
 #[test]
 fn every_tool_and_step_is_in_one_class() {
-    // Opens or reads a page, which every tier allows.
-    const READS: [&str; 10] = [
+    // Opens or reads a page, or reads a file, which every tier allows.
+    const READS: [&str; 13] = [
+        "read_file",
         "list_tabs",
         "list_split",
         "open_tab",
+        "search",
+        "strand",
         "navigate",
         "snapshot",
         "read_page",
@@ -7668,6 +7701,43 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// An assistant older than the browser runs is said on its row before any thread starts, and a
+    /// thread asked of it never starts: its card says it needs an update, with its row's How to
+    /// Update (AP27).
+    #[gpui::test]
+    fn an_assistant_that_needs_an_update_starts_no_thread(cx: &mut TestAppContext) {
+        // A program that's there, so only its look's answer keeps the thread from starting.
+        let (agents, _) = ready(Some(PathBuf::from("/nonexistent/claude")), cx);
+        set_found(&agents, Ready::NeedsUpdate, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// A run its program ends for want of an update, as a Codex that didn't take the browser's
+    /// limits does, says so on its card and its row, whatever its version said, until it's looked
+    /// for again.
+    #[gpui::test]
+    fn a_run_that_needs_an_update_says_so_on_its_card_and_row(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, cx| {
+            agents.fail(&agent, Failure::NeedsUpdate, cx)
+        });
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        let row = agents.read_with(cx, |agents, _| agents.assistant_row(Cli::Claude));
+        assert_eq!(
+            (row.line.as_str(), row.offer),
+            ("Needs an update", Offer::Update)
+        );
+    }
+
     /// The card offers the install for the fact that the program isn't there, never for a
     /// failure's words: what a CLI says of something of its own that "isn't installed" is its
     /// own failure, said as it said it, with no fix of the assistant's.
@@ -7805,6 +7875,11 @@ mod tasks {
             };
             let pattern = format!("\"{pattern}");
             for name in pattern.split('"').skip(1).step_by(2) {
+                // The file tools are a Unix system's alone, as its arm is, until the path floor
+                // runs elsewhere.
+                if !cfg!(unix) && tools::FILE_TOOLS.contains(&name) {
+                    continue;
+                }
                 let listed = match pattern.contains("if is_task(") {
                     true => task.iter().any(|each| each == name),
                     false => task.iter().chain(&outside).any(|each| each == name),
@@ -15338,15 +15413,17 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 #[cfg(unix)]
-pub(crate) mod handed;
+mod file_tools;
 #[cfg(unix)]
-mod helpers;
+pub(crate) mod handed;
 mod holds;
 mod in_use;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
 mod loaded_late;
+#[cfg(unix)]
+mod not_our_tools;
 mod notes;
 mod other_apps;
 mod permission_stopped;
@@ -15355,6 +15432,8 @@ mod rewall;
 #[cfg(unix)]
 mod searches;
 mod sign_ins;
+#[cfg(unix)]
+mod strands;
 mod switches;
 mod uploads;
 mod went_to;

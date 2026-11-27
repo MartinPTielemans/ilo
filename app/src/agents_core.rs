@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
+use browser::log;
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -30,6 +31,34 @@ fn call<T>(core: impl FnOnce() -> T) -> T {
 }
 
 struct Core;
+
+/// bc_profile_search_url's shape, as browser_core.h declares it on core/profile-search-url
+/// (306b2ada4), in build 14: `size_t (bc_id profile, const char* text, char* url, size_t
+/// capacity)`. The caller's buffer takes the URL, so nothing is freed; 0 is no engine.
+type ProfileSearchUrl =
+    unsafe extern "C" fn(bc::bc_id, *const std::ffi::c_char, *mut std::ffi::c_char, usize) -> usize;
+
+/// bc_profile_search_url, where the core linked has it (build 14 on). It's looked up by name, so a
+/// core from before it still starts the app, which searches as it did; logged once, at the start.
+fn profile_search_url() -> Option<ProfileSearchUrl> {
+    static FOUND: std::sync::OnceLock<Option<ProfileSearchUrl>> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        #[cfg(unix)]
+        // SAFETY: dlsym reads the name, which ends in a zero byte, and answers null when nothing
+        // loaded has it. The core exports it only in ProfileSearchUrl's shape (306b2ada4).
+        let found = unsafe {
+            let found = libc::dlsym(libc::RTLD_DEFAULT, c"bc_profile_search_url".as_ptr());
+            (!found.is_null())
+                .then(|| std::mem::transmute::<*mut std::ffi::c_void, ProfileSearchUrl>(found))
+        };
+        #[cfg(not(unix))]
+        let found = None;
+        // check.sh reads this line.
+        let by = if found.is_some() { "profile" } else { "window" };
+        log!("browser: core searches by {by}");
+        found
+    })
+}
 
 impl Browser for Core {
     fn agent_space(&self, agent: &str) -> u64 {
@@ -215,6 +244,28 @@ impl Browser for Core {
         })
     }
 
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        // The engine of the Space's profile, whichever window is open, where the core has it.
+        if let Some(search) = profile_search_url() {
+            return crate::url_for(words, |words, url, capacity| unsafe {
+                search(profile, words, url, capacity)
+            });
+        }
+        // Else that of a window that shows the profile. A thread's Space has none of its own, and
+        // with no window of its profile open there's no engine to search with, never another
+        // profile's.
+        let window = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .filter(|window| window.regular())
+                .find(|window| unsafe { bc::bc_space_profile(bc::bc_window_space(window.id)) } == profile)
+                .map(|window| window.id)
+        })?;
+        crate::url_for(words, |words, url, capacity| unsafe {
+            bc::bc_search_url(window, std::ptr::null(), words, url, capacity)
+        })
+    }
+
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;
@@ -252,6 +303,23 @@ impl Browser for Core {
 
     fn file_field_drop(&self, field: u64) {
         unsafe { bc::bc_file_field_drop(field) };
+    }
+
+    fn file_field_put(&self, field: u64, paths: &[std::path::PathBuf]) -> bool {
+        let paths: Option<Vec<CString>> = (paths.iter())
+            .map(|path| CString::new(path.to_str()?).ok())
+            .collect();
+        let Some(paths) = paths else { return false };
+        let pointers: Vec<*const std::ffi::c_char> =
+            paths.iter().map(|path| path.as_ptr()).collect();
+        unsafe { bc::bc_file_field_put(field, pointers.as_ptr(), pointers.len()) }
+    }
+
+    fn pdf_read(&self, bytes: &[u8], first: usize, count: usize) -> u64 {
+        let (Ok(first), Ok(count)) = (i32::try_from(first), i32::try_from(count)) else {
+            return 0;
+        };
+        unsafe { bc::bc_pdf_read(bytes.as_ptr(), bytes.len(), first, count) }
     }
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
@@ -484,6 +552,52 @@ pub unsafe extern "C" fn profile_read_done(
     update(move |agents, cx| agents.read_done(read, answer, cx));
 }
 
+/// The core's answer to a PDF read (bc_pdf_read): its pages are copied, then the read is
+/// dropped, so the core keeps nothing of it once the Agents have it.
+pub unsafe extern "C" fn pdf_read_done(
+    _: *mut std::ffi::c_void,
+    read: u64,
+    result: std::ffi::c_int,
+    page_count: std::ffi::c_int,
+    pages_read: std::ffi::c_int,
+) {
+    let pages = (0..pages_read.max(0))
+        .map(|index| {
+            let length = unsafe { bc::bc_pdf_page_text(read, index, std::ptr::null_mut(), 0) };
+            let mut text = vec![0u8; length + 1];
+            let length =
+                unsafe { bc::bc_pdf_page_text(read, index, text.as_mut_ptr().cast(), text.len()) };
+            text.truncate(length);
+            let size = unsafe { bc::bc_pdf_page_picture(read, index, std::ptr::null_mut(), 0) };
+            let picture = (size > 0).then(|| {
+                let mut jpeg = vec![0u8; size];
+                let size =
+                    unsafe { bc::bc_pdf_page_picture(read, index, jpeg.as_mut_ptr(), jpeg.len()) };
+                jpeg.truncate(size);
+                jpeg
+            });
+            (String::from_utf8_lossy(&text).into_owned(), picture)
+        })
+        .collect();
+    unsafe { bc::bc_pdf_drop(read) };
+    let pdf = agents::files::read::Pdf {
+        result,
+        page_count: page_count.max(0) as usize,
+        pages,
+    };
+    update(move |agents, cx| agents.pdf_read_done(read, pdf, cx));
+}
+
+/// What came of a thread's files put into a page's field (bc_file_field_put), for its upload.
+pub unsafe extern "C" fn file_field_done(
+    _: *mut std::ffi::c_void,
+    field: u64,
+    result: std::ffi::c_int,
+    count: std::ffi::c_int,
+) {
+    update(move |agents, cx| agents.file_field_done(field, result, count.max(0) as usize, cx));
+}
+
 /// The tabs `copy` copies of `space`, as bc_space_today does.
 fn tabs(
     copy: unsafe extern "C" fn(bc::bc_id, *mut bc::bc_id, usize) -> usize,
@@ -521,6 +635,7 @@ pub fn start(cx: &mut App) {
         bridge = agents::bridge::store_alias(&local);
     }
     let bridge = agents::bridge::launch(&bridge, agents::bridge::flatpak_id().as_deref());
+    profile_search_url();
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),

@@ -60,8 +60,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
     env!("PRODUCT_NAME"),
     ", their web browser, signed in wherever they are. You work only through its tools, in \
      tabs of your own, which the user can watch on your task's card in their sidebar; you can \
-     only see and use your own tabs. Open pages, read them and act in them. You have no shell, files or web \
-     search, so find everything with the browser.\n\n\
+     only see and use your own tabs. Open pages, read them and act in them. You have no shell or \
+     files, so find everything with the browser, and search the web with search.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
      Give every call its tab once you have more than one: one without acts on the tab you used \
@@ -69,8 +69,10 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      all in one turn, then do each step on all of them in one turn, one call per tab with its \
      tab. Calls on different tabs run at the same time, so that's faster than one tab after \
      another.\n\n\
-     The tools that act on a page (open_tab, navigate, click, type, select, press_key, scroll, \
-     request, and each step in run_steps) take an optional `note`: a short reason for that step, \
+     A helper works in the tab you give it or one it opens, at this task's access level, and what \
+     it finds comes back to you as its result.\n\n\
+     The tools that act on a page (open_tab, navigate, search, click, type, select, press_key, \
+     scroll, request, and each step in run_steps) take an optional `note`: a short reason for that step, \
      at most 80 characters, which ",
     env!("APP_NAME"),
     " shows beside the step in the task's trace and which changes nothing about what the step \
@@ -88,6 +90,23 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
+/// What a strand's CLI is told, after its own system prompt: a helper's part of its thread's task,
+/// in the thread's tabs and at its access, which answers the thread with its last message.
+pub const STRAND_INSTRUCTIONS: &str = concat!(
+    "You do one page's part of a task in the user's web browser, ",
+    env!("PRODUCT_NAME"),
+    ", through its tools only. Give every call its tab. A sign-in, a 2FA prompt or a CAPTCHA is \
+     the user's: stop there and say so in your result, with the tab, so the task hands it over. \
+     Never pay, order, book or send a message unless your instructions say the user asked for \
+     it. End with what you found, short and plain."
+);
+/// The tool a thread starts a strand with: a helper, in what the assistant is told.
+pub const STRAND: &str = "strand";
+/// A thread's own tools, which no strand of it has: its name, its questions, its end, a tab handed
+/// to the user or asked back, and a strand of its own. Each speaks to the user as the thread.
+pub const THE_THREADS_OWN: [&str; 6] =
+    ["title", "ask", "finish", "hand_off", "ask_for_tab", STRAND];
+
 /// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
 /// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
 /// the rest.
@@ -125,9 +144,17 @@ pub fn list(agent: &str) -> Value {
     if let Some(tools) = tools.as_array_mut() {
         match super::is_task(agent) {
             true => {
-                // Only the product's own threads, a helper's calls among them, say why a step.
+                tools.extend(task_tools());
+                // A strand has the thread's tools but those that are the thread's own.
+                if super::strand_parent(agent).is_some() {
+                    tools.retain(|tool| !THE_THREADS_OWN.iter().any(|own| tool["name"] == *own));
+                }
+                // Only the product's own threads, their strands among them, say why a step,
                 noted(tools);
-                tools.extend(task_tools())
+                // and put their own files in a page's field.
+                if cfg!(unix) {
+                    upload_files(tools);
+                }
             }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
             // from outside pins. It names its session as a task names itself (#3690), and says
@@ -148,12 +175,20 @@ pub fn names(agent: &str) -> Vec<String> {
 
 /// Whether `agent` has a tool of this name: one of those tools/list gives it. Each list is made
 /// once and kept for the process's life, which is right only while a list depends on the kind of
-/// agent alone, a task's or an outside agent's. The day one varies by a setting, the kept list
-/// goes, or a tool switched on is refused here and one switched off is run.
+/// agent alone, a thread's, a strand's or an outside agent's. The day one varies by a setting,
+/// the kept list goes, or a tool switched on is refused here and one switched off is run.
 pub fn has(agent: &str, tool: &str) -> bool {
-    static NAMES: [std::sync::OnceLock<Vec<String>>; 2] =
-        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
-    let names = NAMES[usize::from(super::is_task(agent))].get_or_init(|| names(agent));
+    static NAMES: [std::sync::OnceLock<Vec<String>>; 3] = [
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+        std::sync::OnceLock::new(),
+    ];
+    let kind = match (super::is_task(agent), super::strand_parent(agent)) {
+        (false, _) => 0,
+        (true, None) => 1,
+        (true, Some(_)) => 2,
+    };
+    let names = NAMES[kind].get_or_init(|| names(agent));
     names.iter().any(|name| name == tool)
 }
 
@@ -226,11 +261,68 @@ fn title_tool() -> Value {
     })
 }
 
-/// A task's own tools: its title, a question for the user, and finishing.
+/// The tools that reach the user's files, which only a thread Claude runs is handed
+/// (`handed`).
+pub const FILE_TOOLS: [&str; 1] = ["read_file"];
+
+/// The tool names a thread's assistant is handed at launch: a Codex thread none of the file
+/// tools until its deny-root profile lands, as its own tools read the whole disk. The list
+/// tools/list gives is the kind's (`has`), and the call is refused at dispatch too.
+pub fn handed(agent: &str, cli: super::runner::Cli) -> Vec<String> {
+    let mut names = names(agent);
+    if cli == super::runner::Cli::Codex {
+        names.retain(|name| !FILE_TOOLS.contains(&name.as_str()));
+    }
+    names
+}
+
+/// read_file, a thread's alone (#4367).
+fn read_file_tool() -> Value {
+    json!({
+        "name": "read_file",
+        "title": "Read a file",
+        "description": format!("Read one of the user's files: a text file's numbered lines, a PDF's pages as text with a picture of each page that has almost no text, as a scan, or a PNG, JPEG, GIF or WebP picture to look at. A relative path is taken from the task's first folder. Each read is checked against the task's folders and access, and some places are never read. A PDF gives at most {} pages a read, from pages; a text file {} lines from offset. The answer says where to read on.", super::files::read::MOST_PAGES, super::files::read::LINES),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "The file's path, full or from the task's first folder." },
+                "offset": { "type": "integer", "minimum": 1, "description": "A text file's first line to read, from 1." },
+                "limit": { "type": "integer", "minimum": 1, "description": format!("How many lines of a text file to read, {} at most.", super::files::read::LINES) },
+                "pages": { "type": "string", "description": format!("A PDF's pages to read, as \"31-60\" or \"5\", {} at most. The first {} if not given.", super::files::read::MOST_PAGES, super::files::read::MOST_PAGES) },
+            },
+            "required": ["path"],
+        },
+        "annotations": { "readOnlyHint": true, "openWorldHint": false },
+    })
+}
+
+/// upload's `files`, in a thread's schema alone (#4368).
+fn upload_files(tools: &mut [Value]) {
+    let files = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Files of the user's to put in the field yourself, by path, full or from the task's first folder, rather than handing the tab to the user: each is checked as read_file checks it, and none goes in unless all may. More than one only for a field that takes several. Leave it out to have the user choose.",
+    });
+    let upload = tools
+        .iter_mut()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("upload"));
+    if let Some(properties) = upload
+        .and_then(|tool| tool.pointer_mut("/inputSchema/properties"))
+        .and_then(Value::as_object_mut)
+    {
+        properties.insert("files".into(), files);
+    }
+}
+
+/// A task's own tools: its title, a question for the user, finishing, and a search with the user's
+/// search engine, which a thread has in place of its program's own.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
-    vec![
+    let files = cfg!(unix).then(read_file_tool);
+    files.into_iter().chain([
         title_tool(),
+        search_tool(),
+        strand_tool(),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -281,7 +373,55 @@ fn task_tools() -> Vec<Value> {
             },
             "annotations": own,
         }),
-    ]
+    ])
+    .collect()
+}
+
+/// A search for words with the user's search engine: an open_tab, or a navigate with a tab, to its
+/// results, whatever the words name.
+fn search_tool() -> Value {
+    let open = shared();
+    let open = (open.as_array().into_iter().flatten())
+        .find(|tool| tool["name"] == "open_tab")
+        .expect("open_tab is a shared tool");
+    let properties = &open["inputSchema"]["properties"];
+    json!({
+        "name": SEARCHED,
+        "title": "Search",
+        "description": "Search the web for words with the user's search engine, in a new tab of your own, or in tab when you give one. Answers with the results page's outline, or with its text when answer is text. It answers once the page has settled, or once wait_for's text shows in it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "words": { "type": "string", "description": "The words to search for." },
+                "tab": tab_schema(),
+                "answer": properties["answer"],
+                "wait_for": properties["wait_for"],
+                "seconds": properties["seconds"],
+            },
+            "required": ["words"],
+        },
+        "annotations": open["annotations"],
+    })
+}
+
+/// A helper for one page's part of the thread's task: a strand, in what the user reads, which the
+/// browser starts, counts and ends itself, and whose last message answers the call.
+fn strand_tool() -> Value {
+    let most = crate::tokens::agents::helpers::MOST;
+    json!({
+        "name": STRAND,
+        "title": "Start a helper",
+        "description": format!("Start a helper when the same work repeats across pages: one page each, with goal as what it's to do there. Start at most {most} for each message of the user's, and a helper may start none of its own: {} stops the turn if either limit is passed. If there are more pages, do the rest yourself in your own tabs. A helper works in the tab you give it or one it opens, and what it finds comes back to you as this call's answer.", env!("PRODUCT_NAME")),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "goal": { "type": "string", "description": "What the helper is to do, in a sentence or two." },
+                "tab": tab_schema(),
+            },
+            "required": ["goal"],
+        },
+        "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true },
+    })
 }
 
 /// A tool's tab argument.
@@ -294,9 +434,10 @@ fn tab_schema() -> Value {
 
 /// The tools that act on a page, each of whose calls, and each step of a run, may carry a `note`:
 /// the assistant's short reason for the step, which only the trace draws (`take_note`).
-pub const NOTED: [&str; 8] = [
+pub const NOTED: [&str; 9] = [
     "open_tab",
     "navigate",
+    SEARCHED,
     "click",
     "type",
     "select",
@@ -808,7 +949,7 @@ fn not_a_tab() -> String {
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Did {
-    /// The tool, a run's step's action, "back" or "forward", "thought", or `SEARCHED`.
+    /// The tool, a run's step's action, "back" or "forward", or "thought".
     pub tool: String,
     /// The site it was on, or went to.
     pub site: String,
@@ -831,11 +972,18 @@ pub struct Did {
     /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
     /// trace draws it: never a log, the activity file, a card or the kept list.
     pub says: String,
+    /// A file step's line once it's done or failed, the words table's, which the app sets as it
+    /// knows what the file resolved to: its title then, whatever its tool says. Else empty.
+    pub line: String,
 }
 
-/// The tool of a step that's a search the assistant's program made, by its provider's own search:
-/// no tool of the browser's.
-pub const SEARCHED: &str = "web_search";
+/// The tool that searches the web with the user's search engine, a thread's in place of its
+/// program's own.
+pub const SEARCHED: &str = "search";
+
+/// What the activity log named a program's own search before threads searched with `SEARCHED`, as
+/// a past thread's file may still hold it.
+const PROGRAM_SEARCHED: &str = "web_search";
 
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
@@ -987,6 +1135,9 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     // A tab of the user's that went to a thread or came back: its one sentence too.
     if let Some(handed) = super::task::handed::entry(&did.tool, &did.site) {
         return handed;
+    }
+    if !did.line.is_empty() && tense != Tense::Now {
+        return did.line.clone();
     }
     let site = |none: &str| match did.site.is_empty() {
         true => none.to_string(),
@@ -1149,6 +1300,16 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't add",
             format!("a file to {}", site("a page")),
         ),
+        // Named once it's resolved, by the name it resolved to (FL12), never the path asked.
+        "read_file" => (
+            "Reading",
+            "Read",
+            "Couldn't read",
+            match did.target.is_empty() {
+                true => "a file".to_string(),
+                false => super::files::words::quoted(&did.target),
+            },
+        ),
         "ask_for_tab" => {
             let tab = site("a tab");
             return match tense {
@@ -1161,14 +1322,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         NOT_SECURE_ACTION => return format!("{NOT_SECURE} · {}", site("a page")),
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
-        // A trace's step has its words; the activity log's entry, a thread's, its count alone.
+        // A trace's step has its words whole; the activity log's entry, a thread's, its count
+        // alone (Z46), and names no engine.
         SEARCHED => {
-            return match (did.text.is_empty(), did.target.parse::<usize>()) {
-                (false, _) => format!("Searched the web for “{}”", did.text),
-                (true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
+            return match (tense, did.text.is_empty(), did.target.parse::<usize>()) {
+                (Tense::Failed, ..) => "Couldn't search".into(),
+                (Tense::Now, false, _) => format!("Searching the web for “{}”", did.text),
+                (_, false, _) => format!("Searched the web for “{}”", did.text),
+                (_, true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
                 _ => "Searched the web".into(),
             };
         }
+        PROGRAM_SEARCHED => return "Searched the web".into(),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
@@ -1224,10 +1389,10 @@ pub fn step_glyph(tool: &str) -> &'static str {
         }
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
-        "upload" => "icons/file.svg",
+        "upload" | "read_file" => "icons/file.svg",
         // Three dots, as the log draws a thought (spec-thread-stage.md).
         "thought" => "icons/ellipsis.svg",
-        SEARCHED => "icons/search.svg",
+        SEARCHED | PROGRAM_SEARCHED => "icons/search.svg",
         _ => "icons/globe.svg",
     }
 }
@@ -1294,8 +1459,9 @@ pub fn tabs_named(arguments: &Value) -> Vec<u64> {
 }
 
 /// The tools that never act on the tab their connection used last.
-pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
+pub const NO_TAB_OF_ITS_OWN: [&str; 7] = [
     "open_tab",
+    SEARCHED,
     "list_tabs",
     "title",
     "done",
@@ -1339,6 +1505,7 @@ pub fn describe(action: &str) -> &'static str {
         "read_page" => "Read the page",
         "open_tab" => "Opened a page",
         "navigate" => "Went to a page",
+        SEARCHED | PROGRAM_SEARCHED => "Searched the web",
         "back" => "Went back",
         "forward" => "Went forward",
         "snapshot" => "Looked at the page",
@@ -1360,6 +1527,7 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "upload" => "Added a file to a page",
+        "read_file" => "Read a file",
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",
@@ -1388,6 +1556,7 @@ pub fn describe(action: &str) -> &'static str {
         "done" => "Marked the thread done",
         super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
         super::fence::CAME_ACTION => super::fence::CAME_DONE,
+        STRAND => "Started a strand",
         _ => "Acted",
     }
 }

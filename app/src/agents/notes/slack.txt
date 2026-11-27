@@ -1,0 +1,15 @@
+source: https://slack.com/help/articles/201374536-Slack-keyboard-shortcuts
+source: https://slack.com/help/articles/202528808-Search-in-Slack
+checked: 2026-11-27
+holds: search filters, shortcuts
+---
+Go straight there
+Search takes in:CHANNEL or in:NAME, from:NAME, with:NAME, before:, after: and on: a date, during: a month or a year, has:pin, is:saved and is:thread. Quotes find a phrase, a minus leaves out a word or an in: or from:, and a * after three letters or more finds words starting with them.
+
+Keys beat clicks
+⌘ on a Mac stands for Ctrl elsewhere. ⌘+/ lists every key. ⌘+G opens search and ⌘+F searches the conversation open. ⌘+Shift+A opens All unreads. Option+Shift+Down and Option+Shift+Up, Alt elsewhere, go to the next and the last unread conversation. Esc marks the one open read. ⌘+N writes a new message. Up in an empty message box edits the last one sent.
+Off a Mac, Ctrl+K jumps to a conversation by its name.
+
+Know before you start
+Shift+Esc marks every conversation read, so press it only when the user asked.
+Threads, Activity and uploading have keys only in Slack's own app, not in a browser.

@@ -321,6 +321,7 @@ fn logged(kind: &IloKind) -> bool {
         | IloKind::TierChanged { .. }
         | IloKind::YouStopped { .. }
         | IloKind::Helpers { .. }
+        | IloKind::NotOurTools
         | IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }

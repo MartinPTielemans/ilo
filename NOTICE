@@ -302,7 +302,9 @@ crates/gpui/examples/input.rs. The license's full text is at the end of this fil
 Sparkle (https://github.com/sparkle-project/Sparkle), MIT License, with the licenses below for the
 code it carries
 The Mac's updater: release 2.10.1's Sparkle.framework, unchanged but for its XPC services, which
-app/build.sh leaves out, in Contents/Frameworks of a release build (app/setup.sh pins it).
+app/build.sh leaves out, in Contents/Frameworks of a release build (app/setup.sh pins it). And
+tools/update-order.py's version comparator, adapted from 2.10.1's
+Sparkle/SUStandardVersionComparator.m.
 
   Copyright (c) 2006-2013 Andy Matuschak.
   Copyright (c) 2009-2013 Elgato Systems GmbH.

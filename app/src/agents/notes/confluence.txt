@@ -1,0 +1,9 @@
+source: https://support.atlassian.com/confluence-cloud/docs/keyboard-shortcuts-markdown-and-autocomplete/
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+Viewing a page, Shift+? lists the keys, and editing one, ⌘+/. e edits the page. Ctrl+Option+Z searches, ⌘+Option+H goes home and ⌘+Option+O opens the notifications.
+Editing, / inserts anything, @ mentions someone, ⌘+K adds a link, ⌘+Option+1 makes a heading, ⌘+Shift+I a table and ⌘+Option+C a comment. ⌘+Enter publishes.
+At a line's start, # and a space make a heading, * and a space a list, and [] and a space an action item.
+Elsewhere Ctrl stands for ⌘ and Alt for Option, but search is Alt+Shift+Z.

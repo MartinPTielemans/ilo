@@ -1,0 +1,19 @@
+source: https://linear.app/docs/search
+source: https://linear.app/docs/inbox
+source: https://linear.app/docs/my-issues
+source: https://linear.app/docs/creating-issues
+source: https://linear.app/docs/filters
+landmark: https://linear.app/docs/search | Search
+landmark: https://linear.app/docs/inbox | snooze
+checked: 2026-11-27
+holds: search filters, shortcuts
+---
+Keys beat clicks
+/ opens search, which finds issues, projects and documents by ID, title, description or comments. An ID such as LIN-123 finds that issue, and words in quotes an exact term. o then i searches issue titles alone.
+c makes an issue, and Option+C, Alt+C elsewhere, one from a template. g then i opens the inbox and g then m My issues.
+In a list, j and k or the arrows move, x selects, and f opens the filters, where typing a status, a person or a team finds it.
+In the inbox, u marks read or unread, h snoozes and Backspace deletes.
+In the command menu, i and a space shows issues alone, p and a space projects, and d and a space documents.
+
+Know before you start
+⌘+K, Ctrl+K elsewhere, on selected issues lists what can be done to them all at once.
