@@ -795,7 +795,9 @@ if [ -n "$mac" ]; then
   home="$PWD/$out/box-home"
   rm -rf "$home"
   mkdir -p "$home/.claude" "$home/.local/bin" "$home/Documents" "$home/Desktop"
-  echo 'export PATH="$HOME/.local/bin:$PATH"' > "$home/.zshrc"
+  # In ~/.zprofile, which the login shell a task's look asks reads: finding claude has its own
+  # steps above, and this one is the box's.
+  echo 'export PATH="$HOME/.local/bin:$PATH"' > "$home/.zprofile"
   # A file of the user's, with words no answer may hold.
   secret="ilo-box-secret-$$-$RANDOM"
   echo "$secret" > "$home/Documents/ilo-box-probe.txt"
