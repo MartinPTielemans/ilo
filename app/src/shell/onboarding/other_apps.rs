@@ -101,6 +101,15 @@ fn mcp_way(on: bool, small: String) -> Way {
     }
 }
 
+/// The door's card's name (FR22): the first program found, Claude Code before Codex, as each
+/// names itself, and `An app`, the line's own noun, where neither is.
+pub(super) fn door_name(found: &[Client]) -> &'static str {
+    match found.first() {
+        Some(program) => program.name(),
+        None => "An app",
+    }
+}
+
 /// The programs the preview's step finds, as it has no Agents to look.
 const PREVIEW_FOUND: [Client; 2] = [Client::ClaudeCode, Client::Codex];
 
@@ -180,7 +189,7 @@ impl Shell {
         let (command, mcp, first) = match (crate::agents::global(cx), self.preview_ways) {
             (Some(agents), _) => {
                 let agents = agents.read(cx);
-                let first = agents.skill_programs().first().copied();
+                let first = door_name(&agents.skill_programs());
                 (command(agents), mcp(agents), first)
             }
             (None, Some([command, mcp])) => {
@@ -188,7 +197,7 @@ impl Shell {
                 (
                     command_way(command, &found, cfg!(unix)),
                     mcp_way(mcp, format!("Connects {found}.")),
-                    PREVIEW_FOUND.first().copied(),
+                    door_name(&PREVIEW_FOUND),
                 )
             }
             (None, None) => return div().into_any_element(),
@@ -208,7 +217,6 @@ impl Shell {
             .gap(px(gap))
             .child(self.way_card(Switch::Command, command, height + grown, inks, mono, cx))
             .child(self.way_card(Switch::Mcp, mcp, height + grown, inks, mono, cx));
-        let first = first.unwrap_or(Client::ClaudeCode).name();
         let door = self.other_apps_door(on, first, grown, inks, window, cx);
         card::at(0., 0.)
             .size_full()

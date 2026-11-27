@@ -2424,6 +2424,26 @@ fn other_apps_door_fills_the_step_from_its_ways_to_its_foot(cx: &mut TestAppCont
     }
 }
 
+/// The door's card is named for the first program found, Claude Code before Codex whatever order
+/// they're found in, and `An app` where neither is (FR22).
+#[gpui::test]
+fn other_apps_door_names_the_first_program_found_or_an_app(cx: &mut TestAppContext) {
+    use crate::agents::Client;
+    use crate::shell::onboarding::other_apps::door_name;
+    for (found, name) in [
+        (vec![Client::Codex, Client::ClaudeCode], "Claude Code"),
+        (vec![Client::Codex], "Codex"),
+        (vec![], "An app"),
+    ] {
+        let (agents, _, _) =
+            cx.update(|cx| crate::agents::tests::stand_in_failing(found.clone(), None, cx));
+        // Settings and first run look for the programs as they show.
+        agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+        let named = agents.read_with(cx, |agents, _| door_name(&agents.skill_programs()));
+        assert_eq!(named, name, "{found:?}");
+    }
+}
+
 /// Other apps' two switches are on their own step, off as it shows, each Settings' own and set at
 /// once, a click on it or its card turning it either way. Either on turns the outside switch on as
 /// it lands; it goes off only as the second is turned off. No other step has them, and nothing

@@ -375,7 +375,7 @@ impl Shell {
             .child(
                 div()
                     .relative()
-                    .child("An app appears in your sidebar when it connects.")
+                    .child("An app appears in your sidebar when it opens a page.")
                     .children(self.place(Step::OtherApps, "door line")),
             );
         // The door draws on the card's own coordinates, as v9 places it.
