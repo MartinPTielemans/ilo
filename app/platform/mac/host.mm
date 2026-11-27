@@ -684,24 +684,45 @@ NSRect Unconstrained(id, SEL, NSRect frame, NSScreen*) {
   return frame;
 }
 
-BOOL Never(id, SEL) {
-  return NO;
+// NeverKey's mark on a window, which GPUI's panel class asks as AppKit offers it the keyboard.
+char kNeverKey;
+// GPUI's own answer, which a panel without the mark gets.
+BOOL (*g_panel_can_become_key)(id, SEL);
+
+BOOL PanelCanBecomeKey(id window, SEL key) {
+  return !objc_getAssociatedObject(window, &kNeverKey) && g_panel_can_become_key(window, key);
 }
 
 // An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
 // key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
-// field the menu just opened (#1664).
+// field the menu just opened (#1664). The window is marked, and the class asks the mark: swapping a
+// window's class under the observers AppKit keeps on it aborted the app as a browser window's edge
+// knot was freed.
 void NeverKey(NSWindow* window) {
-  static Class never_key;
-  if (!never_key) {
-    Class panel = object_getClass(window);
-    SEL key = @selector(canBecomeKeyWindow);
-    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
-    class_addMethod(never_key, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(never_key);
+  static Class panel = NSClassFromString(@"GPUIPanel");
+  // -class, as KVO answers it with the window's own class, not the subclass it observes it by.
+  if (!panel || ![[window class] isSubclassOfClass:panel]) {
+    static bool told;
+    if (!told) {
+      told = true;
+      fprintf(stderr, "browser: an overlay of class %s isn't GPUI's panel, so it can take keys\n",
+              ClassName(window));
+    }
+    return;
   }
-  object_setClass(window, never_key);
+  static bool replaced = [] {
+    SEL key = @selector(canBecomeKeyWindow);
+    IMP own = class_replaceMethod(panel, key, (IMP)PanelCanBecomeKey,
+                                  method_getTypeEncoding(class_getInstanceMethod(panel, key)));
+    // GPUI defines it on the class; were it inherited, the superclass's is the one it had.
+    if (!own) {
+      own = class_getMethodImplementation(class_getSuperclass(panel), key);
+    }
+    g_panel_can_become_key = reinterpret_cast<BOOL (*)(id, SEL)>(own);
+    return true;
+  }();
+  (void)replaced;
+  objc_setAssociatedObject(window, &kNeverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // Another app that asks which of ours is in front takes the first window at the normal level, in
@@ -1471,8 +1492,8 @@ void WatchHeldEscape() {
 namespace {
 
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
-// isn't the active one, and with Reduce Transparency or Increase Contrast.
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill with Reduce
+// Transparency or Increase Contrast, whichever window is active.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
@@ -1481,42 +1502,13 @@ void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
-// From the first browser window, every browser window's material follows the app: active while
-// the app is the active one, AppKit's inactive fill once another app is in front. Following the
-// window's own key state instead gives a window the inactive fill behind its own command bar, a
-// menu or Settings, each a window that takes the keyboard from it.
-void WatchAppActiveForMaterial() {
-  static bool watching = false;
-  if (watching) {
-    return;
-  }
-  watching = true;
-  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
-    for (auto& browser : g_browsers) {
-      browser->material.state = state;
-    }
-  };
-  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  [center addObserverForName:NSApplicationDidBecomeActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateActive);
-                  }];
-  [center addObserverForName:NSApplicationDidResignActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateInactive);
-                  }];
-}
-
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
-  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
+  // Active even with another app in front, so the glass and the Space's colour stay; AppKit still
+  // gives its opaque fill with Reduce Transparency or Increase Contrast.
+  material.state = NSVisualEffectStateActive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
