@@ -1249,8 +1249,10 @@ runner_cpu() {
 }
 
 # The page view keeps the sidebar's 228 points on its left and 8 on its other sides, over GPUI's
-# view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
-# sidebar hidden ("inset") it's 8 in from every side.
+# view, which fills the window. A full-screen page ("fills") covers the whole window, and so does
+# one with the sidebar hidden ("inset"), with no rim: the card's radius, shell.card-radius, goes
+# with its rim, none of which shows then (Shell::card_radius), so the page has the window's own
+# corners and no radius of its own.
 check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
@@ -1267,7 +1269,7 @@ check_layout() {
   # Rounded as the card's corners, square when it fills the window.
   expected_radius=10
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
-  [ "${2:-}" = inset ] && expected="8,8 $((width - 16))x$((height - 16))"
+  [ "${2:-}" = inset ] && expected="0,0 $content" && expected_radius=
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
   [ "$radius" = "$expected_radius" ] ||
     fail "$1: the page's corners have a radius of ${radius:-0}, not ${expected_radius:-0}"

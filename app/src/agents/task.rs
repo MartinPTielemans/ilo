@@ -1856,6 +1856,7 @@ impl Agents {
                         found.models = agents.cli_models(cli).cloned();
                     }
                     agents.tasks.found.insert(cli, found);
+                    agents.looked_after_install(cli, cx);
                 }
                 agents.save();
                 // The first ready is the default until the user picks one.

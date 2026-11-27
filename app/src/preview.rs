@@ -2808,8 +2808,12 @@ fn main() {
             // signing out, with the same rows as Settings draws (#4100).
             // =models shows one signed in, its Model chosen, and one not, then Notifications.
             if let Ok(state) = states::var("PREVIEW_ASSISTANTS") {
+                // =install shows Claude Code's install from its row, missing, installing and
+                // failed; =installed, installed by ilo with its way out, signed out and in.
                 let shown = match state.as_str() {
                     "models" => Pictures::Models,
+                    "install" => Pictures::Install { installed: false },
+                    "installed" => Pictures::Install { installed: true },
                     _ => Pictures::Assistants {
                         signed_in: state == "signed-in",
                     },
@@ -3260,6 +3264,19 @@ fn main() {
                                 taken: Vec::new(),
                             };
                             shell.set_agent_status(vec![status], cx);
+                        }
+                        // A task whose assistant is missing ended out of sight, so its card keeps
+                        // its fix until its conversation shows, as one ending while the user is
+                        // elsewhere does.
+                        if group_state().as_deref() == Some("not-installed") {
+                            let working = (cards.iter().cloned())
+                                .map(|mut card| {
+                                    card.dot = Dot::Working;
+                                    card.word = Word::Working;
+                                    card
+                                })
+                                .collect();
+                            shell.set_task_cards(working, cx);
                         }
                         shell.set_task_cards(cards, cx);
                         // After the first frame, which sets the palette the reply field takes, as

@@ -10,7 +10,8 @@
 # headers don't apply fails as needing an engine with that patch, not as a compile error.
 # Not checked: a file the branch adds in platform/, which may be another OS's, a changed .mojom or
 # .proto (the pack has the engine's generated headers), a BUILD.gn change to a target's flags, and
-# the link.
+# the link. Where the core's .proto, .mojom or BUILD.gn files differ from those the pack's engine
+# was built from, a red names them, as it needs a new pack (#4378).
 name: Core Mac syntax
 
 on:
@@ -84,19 +85,21 @@ jobs:
           run-id: ${{ steps.find.outputs.run }}
           github-token: ${{ github.token }}
 
-      # The engine patches the pack's engine was built with: its run's commit's series and patches.
+      # What the pack's engine was built from: its run's commit's series, patches and core.
       - if: steps.find.outputs.run != ''
-        name: The engine's patches
+        name: The engine's patches and core
         env:
           SHA: ${{ steps.find.outputs.sha }}
         run: |
           git fetch -q --depth=1 --no-tags origin "$SHA"
           mkdir -p "$RUNNER_TEMP/built"
-          git archive "$SHA" engine/series engine/patches | tar -xf - -C "$RUNNER_TEMP/built"
+          git archive "$SHA" engine/series engine/patches core | tar -xf - -C "$RUNNER_TEMP/built"
 
       # Each error also shows on the commit as an annotation at its line.
       - if: steps.find.outputs.run != ''
         name: Check
+        env:
+          PACK: ${{ steps.find.outputs.name }}
         run: |
           zstd -dc "$RUNNER_TEMP/pack/core-syntax.tar.zst" | tar -xf - -C "$RUNNER_TEMP/pack"
           # The Xcode whose SDK the engine built with, where the runner has it.

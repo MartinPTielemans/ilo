@@ -332,12 +332,15 @@ fn a_search_kept_from_its_engine_is_the_searchs_entry(cx: &mut TestAppContext) {
     );
 }
 
-/// A search its thread's access refuses, an engine on a bank's site at Work, is the search's
-/// entry too.
+/// A search its thread's access refuses, an engine on a site the user marked sensitive at Work, is
+/// the search's entry too.
 #[gpui::test]
 fn a_search_its_access_refuses_is_the_searchs_entry(cx: &mut TestAppContext) {
     let run = Run::new("search-tier", cx);
     run.browser.engine.set(Some("mybank.example"));
+    run.agents.update(cx, |agents, cx| {
+        agents.mark_sensitive("Default", "mybank.example", true, cx)
+    });
     let agent = run.start(Cli::Claude, cx);
     let answer = call(
         &run.agents,

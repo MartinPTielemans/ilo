@@ -152,22 +152,26 @@ impl Agents {
         (self.page_task(agent, tab)).map_or_else(own, |task| task.tier)
     }
 
-    /// Why `act` on `site` is one a tier may refuse, from what would have asked (`why`), or None
-    /// for one that only opens or reads.
-    pub(super) fn why_of(act: &Act, site: &str, why: Option<&'static str>) -> Option<Why> {
-        let bank = || page::opening_risk(site).is_some();
-        match why {
-            Some(FENCED) => Some(Why::Fenced),
-            Some(page::ORDER) => Some(Why::Order),
-            Some(page::SENDS) if bank() => Some(Why::Bank),
-            Some(page::SENDS) => Some(Why::Message),
-            Some(DOWNLOADS) => Some(Why::Download),
-            Some(UNSAVED) => Some(Why::Discard),
-            Some(CHANGES_ASK) => Some(Why::Request),
-            Some(_) => Some(Why::Bank),
-            None if ACTS.contains(&act.action) && bank() => Some(Why::Bank),
-            None if ACTS.contains(&act.action) => Some(Why::Act),
-            None => None,
+    /// Why `act` is one a tier may refuse, from what would have asked (`why`) and what its site
+    /// is if it's a sensitive one (`sensitive`, sensitive.rs), or None for one that only opens or
+    /// reads.
+    pub(super) fn why_of(
+        act: &Act,
+        sensitive: Option<Why>,
+        why: Option<&'static str>,
+    ) -> Option<Why> {
+        match (why, sensitive) {
+            (Some(FENCED), _) => Some(Why::Fenced),
+            (Some(page::ORDER), _) => Some(Why::Order),
+            (Some(page::SENDS), Some(sensitive)) => Some(sensitive),
+            (Some(page::SENDS), None) => Some(Why::Message),
+            (Some(DOWNLOADS), _) => Some(Why::Download),
+            (Some(UNSAVED), _) => Some(Why::Discard),
+            (Some(CHANGES_ASK), _) => Some(Why::Request),
+            (Some(_), sensitive) => Some(sensitive.unwrap_or(Why::Sensitive)),
+            (None, Some(sensitive)) if ACTS.contains(&act.action) => Some(sensitive),
+            (None, _) if ACTS.contains(&act.action) => Some(Why::Act),
+            (None, _) => None,
         }
     }
 

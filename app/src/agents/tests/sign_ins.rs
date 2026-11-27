@@ -266,7 +266,7 @@ fn nothing_a_sign_in_carries_is_saved(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
-/// No agent can start, read or end a sign-in: the MCP server has no tool for it, and nothing an
+/// No agent can start, read or end a sign-in or an install: the MCP server has no tool for it, and nothing an
 /// agent's call runs reaches the Agents' sign-in.
 #[test]
 fn no_agent_reaches_a_sign_in() {
@@ -299,10 +299,10 @@ fn no_agent_reaches_a_sign_in() {
             "sign_out(Cli::",
             "sign_out(cli,",
         ];
-        for call in
-            calls
-                .into_iter()
-                .chain(["cancel_sign_in(", "sign_in::start(", "start_sign_in("])
+        for call in calls
+            .into_iter()
+            .chain(["cancel_sign_in(", "sign_in::start(", "start_sign_in("])
+            .chain(["install::start(", "start_install("])
         {
             assert!(!source.contains(call), "{file} calls {call}");
         }

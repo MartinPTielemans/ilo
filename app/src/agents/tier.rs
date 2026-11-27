@@ -17,7 +17,7 @@ pub enum Tier {
     /// It opens pages, reads, scrolls and takes pictures, and changes nothing.
     Look,
     /// It types, presses, fills in and sends forms, but not what ilo recognises as paying, placing
-    /// an order, sending a message as the user, or a bank's site. Where every task starts, but
+    /// an order, sending a message as the user, or a sensitive site. Where every task starts, but
     /// an outside client's whose others the user left lower (`Agents::starting_tier`).
     #[default]
     Work,
@@ -63,7 +63,7 @@ impl Tier {
         match self {
             Tier::Look => "Reads pages.",
             Tier::Work => "Also clicks, types and submits forms.",
-            Tier::Full => "Also pays, orders, sends messages and uses bank sites.",
+            Tier::Full => "Also pays, orders, sends messages and uses sensitive sites.",
         }
     }
 
@@ -89,11 +89,11 @@ impl Tier {
             Tier::Work => concat!(
                 "Clicks, types and submits forms. ",
                 env!("PRODUCT_NAME"),
-                " stops at paying, ordering, sending messages as you and bank sites."
+                " stops at paying, ordering, sending messages as you and sensitive sites."
             ),
             Tier::Full => {
-                "Everything you can do on a page, including paying, ordering, messages and bank \
-                 sites."
+                "Everything you can do on a page, including paying, ordering, messages and \
+                 sensitive sites."
             }
         }
     }
@@ -109,8 +109,8 @@ pub enum Why {
     Message,
     /// A payment or an order (page::ORDER).
     Order,
-    /// Opens a bank's site, or acts on one.
-    Bank,
+    /// Opens a sensitive site, or acts on one (sensitive.rs).
+    Sensitive,
     /// Saves a file to the user's computer.
     Download,
     /// Closes a page the user gave it, losing what it hadn't saved.
@@ -124,8 +124,8 @@ pub enum Why {
     Never,
     /// Signs in with what the browser keeps (#4098): a stub row until that tool comes.
     SignIn,
-    /// Signs in on a bank's site.
-    SignInBank,
+    /// Signs in on an identity provider's page, a bank or government ID's (sensitive.rs).
+    SignInSensitive,
     /// Anything but reading, on a page that is using the camera or the microphone
     /// (access::IN_USE_ANSWERS).
     InUse,
@@ -158,9 +158,9 @@ const ROWS: [Row; 12] = [
         refused: "Placing an order isn't part of {level}.",
     },
     Row {
-        why: Why::Bank,
+        why: Why::Sensitive,
         allowed: [false, false, true],
-        refused: "Using a bank site isn't part of {level}.",
+        refused: "Using a sensitive site isn't part of {level}.",
     },
     Row {
         why: Why::Download,
@@ -193,9 +193,9 @@ const ROWS: [Row; 12] = [
         refused: "Signing in with your saved login isn't part of {level}.",
     },
     Row {
-        why: Why::SignInBank,
+        why: Why::SignInSensitive,
         allowed: [false, false, true],
-        refused: "Signing in to a bank site isn't part of {level}.",
+        refused: "Signing in to a sensitive site isn't part of {level}.",
     },
     Row {
         why: Why::InUse,
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(at(Act), [false, true, true]);
         assert_eq!(at(Message), [false, false, true]);
         assert_eq!(at(Order), [false, false, true]);
-        assert_eq!(at(Bank), [false, false, true]);
+        assert_eq!(at(Sensitive), [false, false, true]);
         assert_eq!(at(Download), [false, true, true]);
         assert_eq!(at(Discard), [false, false, true]);
         assert_eq!(at(Request), [false, false, true]);
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(at(Fenced), [false, false, false]);
         assert_eq!(at(Never), [false, false, false]);
         assert_eq!(at(SignIn), [false, true, true]);
-        assert_eq!(at(SignInBank), [false, false, true]);
+        assert_eq!(at(SignInSensitive), [false, false, true]);
         assert_eq!(at(InUse), [false, false, true]);
         assert_eq!(Tier::default(), Work);
         assert_eq!(Look.lifting(Act), Some(Work));
