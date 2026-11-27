@@ -140,6 +140,17 @@ fn windows_install(updater: Updater) -> &'static str {
 /// is built in a crate of its own (linux/, windows/), whose version isn't the app's.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The channel this copy's crash reports and daily counts name, so the rework's daily copy's and a
+/// nightly's never mix with a release's: the rework's whatever its track, else the track it was
+/// built for.
+pub fn channel(nightly: bool) -> &'static str {
+    match (option_env!("APP_REWORK").is_some(), nightly) {
+        (true, _) => "rework",
+        (false, true) => "nightly",
+        (false, false) => "release",
+    }
+}
+
 /// The version Settings › About shows, with the build number build.sh gives a prod build.
 pub fn version() -> String {
     match option_env!("APP_BUILD") {
@@ -332,6 +343,13 @@ fn chip() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_build_names_the_channel_it_was_built_for() {
+        // The rework's copy is built with build.sh rework, never in the tests.
+        assert_eq!(channel(false), "release");
+        assert_eq!(channel(true), "nightly");
+    }
 
     fn made_up() -> BuildInfo {
         BuildInfo {

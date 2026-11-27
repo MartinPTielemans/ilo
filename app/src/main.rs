@@ -1048,6 +1048,17 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let collector = include_str!("../branding/crash-reports").trim();
     if cfg!(feature = "prod") && !collector.is_empty() {
         args.push(format!("--crash-upload-url={collector}"));
+        // The version and channel the core marks each report with, so the rework's copy's and a
+        // nightly's crashes stay apart from a release's.
+        #[cfg(not(target_os = "linux"))]
+        let nightly = unsafe { platform::host_nightly_build() };
+        #[cfg(target_os = "linux")]
+        let nightly = false;
+        args.push(format!("--crash-release={}", browser::build_info::VERSION));
+        args.push(format!(
+            "--crash-channel={}",
+            browser::build_info::channel(nightly)
+        ));
     }
     // Where the daily usage count goes, which only the prod build names, unless the process was
     // given it, as a check is. The user's sync server doesn't change it.

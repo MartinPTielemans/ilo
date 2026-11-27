@@ -96,10 +96,8 @@ fn send_if_due(cx: &mut App) {
         count.tried = Some(today);
         count.sending = Some(today);
     });
-    let channel = match browser::updates::built(cx) {
-        browser::updates::Track::Release => c"release",
-        browser::updates::Track::Nightly => c"nightly",
-    };
+    let nightly = browser::updates::built(cx) == browser::updates::Track::Nightly;
+    let channel = CString::new(browser::build_info::channel(nightly)).unwrap_or_default();
     let version = CString::new(browser::build_info::VERSION).unwrap_or_default();
     // check.sh reads this line.
     log!(
