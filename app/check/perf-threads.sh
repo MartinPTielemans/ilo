@@ -100,7 +100,7 @@ threads_shows() {
   done
   return 1
 }
-# A driven launch, logged as $1, on perf's page as $2, once its stand-in claude is found signed in.
+# A driven launch, logged as $1, on perf's page as $2.
 threads_launch() {
   log="$perf_dir/$1.log"
   step=0
@@ -111,8 +111,6 @@ threads_launch() {
   exec 3> "$out/drive"
   await "^browser: title [0-9]* $2 fcp " || fail "$1's first page didn't paint"
   loaded=$(date +%s)
-  await "^browser: task agent claude is SignedIn at $home/bin/claude\$" ||
-    fail "$1 didn't find the stand-in signed in: $(grep '^browser: task agent claude ' "$log")"
   send click $page_point
 }
 # Opens perf's page as $1 in a new tab from ⌘T's bar.
@@ -131,6 +129,9 @@ threads_ask() {
   send type "Pick a seat"
   send key tab
   expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a thread"
+  # A launch looks for no CLI: the ask's first showing in a run does (Agents::task_ask_shown).
+  await "^browser: task agent claude is SignedIn at $home/bin/claude\$" ||
+    fail "the ask didn't find the stand-in signed in: $(grep '^browser: task agent claude ' "$log")"
   send key return
   expect '^browser: command bar runs a task on claude$' "↩ didn't run the thread on the stand-in"
   expect_late '^browser: task task-[0-9]* on claude asked from space ' "the thread didn't start"
