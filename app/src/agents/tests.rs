@@ -7029,6 +7029,36 @@ mod tasks {
         program
     }
 
+    /// A stand-in for `claude` as `fake_cli`, which also keeps each run's arguments beside
+    /// itself, one run a line.
+    #[cfg(unix)]
+    fn fake_cli_with_args(name: &str) -> PathBuf {
+        let program = fake_cli(name);
+        let script = "#!/bin/sh\necho \"run $*\" >> \"$0.args\"\nexec cat >> \"$0.in\"\n";
+        std::fs::write(&program, script).unwrap();
+        run_once_free(&program);
+        program
+    }
+
+    /// The lines of `program`'s `.args` that name a run's arguments, once there are `runs`
+    /// of the task's own (the free run before has none).
+    #[cfg(unix)]
+    fn runs_args(program: &std::path::Path, runs: usize) -> Vec<String> {
+        let args = program.with_extension("args");
+        let mut lines = Vec::new();
+        for _ in 0..200 {
+            lines = (std::fs::read_to_string(&args).unwrap_or_default().lines())
+                .filter(|line| *line != "run ")
+                .map(str::to_string)
+                .collect();
+            if lines.len() >= runs {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        lines
+    }
+
     /// Runs the fake CLI just written, with nothing to read, until it starts. Another test's thread
     /// that forked while the script was open for writing hands its child that handle until the
     /// child runs its own program, and the script won't run meanwhile: "Text file busy" (ETXTBSY).
@@ -7222,6 +7252,84 @@ mod tasks {
             agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()
                 || !agents.tokens.lock().unwrap().contains_key(&token))
         );
+    }
+
+    /// The effort picked in a thread's own menu reaches its run: Claude Code's `--effort` is for
+    /// the session, so the run under way keeps its level and the next message starts a run at the
+    /// one picked. A pick mid-turn lets the message steer the run under way, and the one after
+    /// starts the next. A level the program doesn't list changes nothing.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn an_effort_picked_in_the_thread_reaches_its_next_run(cx: &mut TestAppContext) {
+        let program = fake_cli_with_args("effort");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        let effort = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| {
+                agents.conversation(&agent, cx).unwrap().effort
+            })
+        };
+        let pick = |level: Option<&str>, cx: &mut TestAppContext| {
+            let action = TaskAction::PickEffort(level.map(str::to_string));
+            agents.update(cx, |agents, cx| agents.task_action(&agent, action, cx));
+        };
+        let run = |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.run_of(&agent));
+        let levels = Cli::Claude.efforts();
+        assert_eq!(
+            effort(cx),
+            Some((levels, None)),
+            "Claude's levels, none picked"
+        );
+        let first = run(cx);
+        said(&agents, &agent, Out::Ended(None), cx);
+        pick(Some("high"), cx);
+        assert_eq!(effort(cx), Some((levels, Some("high"))));
+        assert_eq!(run(cx), first, "a pick alone ends no run");
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Go on", cx));
+        let second = run(cx);
+        assert_ne!(
+            second, first,
+            "the next message starts a run at the level picked"
+        );
+        let args = runs_args(&program, 2);
+        assert!(!args[0].contains("--effort"), "the first run: {}", args[0]);
+        assert!(
+            args[1].contains("--effort high"),
+            "the second run: {}",
+            args[1]
+        );
+
+        // Mid-turn: the message steers the run under way, which keeps its level.
+        pick(Some("low"), cx);
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Sooner", cx));
+        assert_eq!(
+            run(cx),
+            second,
+            "a message mid-turn steers the run under way"
+        );
+        said(&agents, &agent, Out::Ended(None), cx);
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Thanks", cx));
+        assert_ne!(run(cx), second);
+        let args = runs_args(&program, 3);
+        assert!(
+            args[2].contains("--effort low"),
+            "the third run: {}",
+            args[2]
+        );
+
+        pick(Some("turbo"), cx);
+        assert_eq!(
+            effort(cx),
+            Some((levels, Some("low"))),
+            "a level Claude doesn't list"
+        );
+        pick(None, cx);
+        assert_eq!(
+            effort(cx),
+            Some((levels, None)),
+            "Default leaves it to the program"
+        );
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
     }
 
     /// At a quit with no window left, its CLI ends and its token with it, and its Space stays for

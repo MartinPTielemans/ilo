@@ -502,6 +502,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         finished: Vec::new(),
         folder: None,
         model: Some(model(Cli::Claude, Some("Opus"))),
+        effort: Some((Cli::Claude.efforts(), None)),
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);

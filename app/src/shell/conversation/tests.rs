@@ -115,6 +115,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         finished: Vec::new(),
         folder: None,
         model: None,
+        effort: None,
     }
 }
 
@@ -3171,6 +3172,70 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
             view.read_with(cx, |view, _| view.menu_open),
             None,
             "its plate went"
+        );
+    }
+}
+
+/// The thread's composer has ⌘T's effort trigger and menu where its assistant's program takes an
+/// effort: before a pick it says `Effort`, then the level; its menu is ⌘T's own, Default then the
+/// program's levels, the one picked checked; a pick is the user's press on the thread. A program
+/// that takes none has no trigger.
+#[gpui::test]
+fn the_threads_effort_is_the_composers_own(cx: &mut TestAppContext) {
+    type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let shown_menu: Shown = Rc::default();
+    let into = shown_menu.clone();
+    cx.update(|_, cx| {
+        cx.set_global(crate::menu::EntriesMenu(Rc::new(
+            move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
+        )))
+    });
+    let levels = crate::agents::runner::Cli::Claude.efforts();
+    let show = |effort, shell: &Entity<Shell>, cx: &mut gpui::VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let talk = Conversation {
+                effort,
+                ..conversation(1)
+            };
+            shell.set_conversation(Some(talk), cx);
+        });
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    show(None, &shell, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.effort_drawn.get())
+            .is_none(),
+        "a program that takes no effort has a trigger"
+    );
+    for picked in [None, Some("high")] {
+        show(Some((levels, picked)), &shell, cx);
+        let trigger = view.read_with(cx, |view, _| view.effort_drawn.get());
+        let trigger = trigger.expect("the effort trigger drawn");
+        cx.simulate_click(trigger.center(), Modifiers::none());
+        cx.run_until_parked();
+        let (items, chosen) = (shown_menu.borrow_mut().take()).expect("no menu showed");
+        let rows = |items: &[MenuEntry]| -> Vec<(String, bool)> {
+            (items.iter())
+                .map(|item| (item.title.to_string(), item.checked))
+                .collect()
+        };
+        let (_, expected) = crate::command_bar::effort_choices(levels, picked);
+        assert_eq!(rows(&items), rows(&expected), "⌘T's effort menu");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.menu_open),
+            Some("conversation-effort")
+        );
+        host.take();
+        // The row after Default is the program's first level.
+        cx.update(|window, cx| chosen(crate::menu::Closed::Chose(1), window, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.take(),
+            vec![format!("task task-1 PickEffort(Some({:?}))", levels[0])],
+            "the pick is the user's press on the thread"
         );
     }
 }

@@ -180,6 +180,10 @@ pub struct Conversation {
     /// alone; and whether its program takes another for the
     /// next message, so the trigger opens its menu. None for an outside agent's session.
     pub model: Option<(&'static str, SharedString, SharedString, bool)>,
+    /// The effort levels its assistant's program takes and the one picked, None for its own,
+    /// which the composer's effort trigger reads and its menu changes. None for a program that
+    /// takes none, and for an outside agent's session.
+    pub effort: Option<(&'static [&'static str], Option<&'static str>)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -856,6 +860,9 @@ pub enum TaskAction {
     /// The model the user picked in a going thread's model menu, by id, empty for its program's
     /// own default: it holds from the next message, where the program takes one.
     PickModel(String),
+    /// The effort level the user picked in a thread's effort menu, None for its program's own:
+    /// it holds from the next message, as the composer's does for a thread's start.
+    PickEffort(Option<String>),
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// The stopped line's Hand Back, on an outside agent's task: its pages are its client's
@@ -1296,6 +1303,7 @@ impl Agents {
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
             TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
             TaskAction::PickModel(id) => self.pick_model(agent, &id, cx),
+            TaskAction::PickEffort(level) => self.pick_effort(agent, level.as_deref(), cx),
         }
         (None, None)
     }
@@ -1466,6 +1474,13 @@ impl Agents {
                 };
                 (cli.glyph(), words, word, cli.switches_model())
             }),
+            effort: (task.cli.map(Cli::efforts))
+                .filter(|levels| !levels.is_empty() && task.session.is_none())
+                .map(|levels| {
+                    let picked = (task.effort.as_deref())
+                        .and_then(|level| levels.iter().copied().find(|each| *each == level));
+                    (levels, picked)
+                }),
         })
     }
 
@@ -1971,6 +1986,29 @@ impl Agents {
             process.set_model(&run_on);
         }
         log!("browser: task {agent} model picked");
+        cx.notify();
+    }
+
+    /// The user's pick in a thread's effort menu: only a level its program lists, or None for the
+    /// program's own. Its run holds the level it started at, so the next message starts another
+    /// (`reply`).
+    fn pick_effort(&mut self, agent: &str, level: Option<&str>, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        let Some(cli) = task.cli else { return };
+        let level = match level {
+            Some(level) => match cli.efforts().iter().find(|each| **each == level) {
+                Some(level) => Some(level.to_string()),
+                None => return,
+            },
+            None => None,
+        };
+        task.effort = level;
+        log!(
+            "browser: task {agent} effort {}",
+            task.effort.as_deref().unwrap_or("default")
+        );
         cx.notify();
     }
 
@@ -2810,6 +2848,17 @@ impl Agents {
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
         self.pick_up(agent, cx);
         let resumes = self.resumes(agent);
+        // A run holds the effort it started at: one picked since ends it between turns, so this
+        // message starts the next at the new level, going on as a run that went would. Mid-turn
+        // the message steers the run under way, and the one after it starts the next.
+        let other_effort = self.task(agent).is_some_and(|task| {
+            task.state != State::Working
+                && (task.process.as_ref())
+                    .is_some_and(|process| process.effort() != task.effort.as_deref())
+        });
+        if other_effort {
+            self.wall_outgrown(agent, cx);
+        }
         let Some(task) = self.task_mut(agent) else {
             return;
         };

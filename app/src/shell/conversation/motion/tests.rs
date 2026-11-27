@@ -63,6 +63,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         finished: Vec::new(),
         folder: None,
         model: None,
+        effort: None,
     }
 }
 

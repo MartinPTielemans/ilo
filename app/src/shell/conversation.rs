@@ -298,9 +298,11 @@ pub struct TalkView {
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
-    /// Where the composer's level trigger was drawn, if the last frame drew it, and its model's.
+    /// Where the composer's level trigger was drawn, if the last frame drew it, its model's and
+    /// its effort's.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    effort_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The composer's trigger whose menu is open, which wears its plate while it is.
     menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
@@ -532,6 +534,7 @@ impl Shell {
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
                     model_drawn: Rc::default(),
+                    effort_drawn: Rc::default(),
                     menu_open: None,
                     folder_drawn: Rc::default(),
                     plus: crate::plus::Plus::default(),
@@ -1219,6 +1222,41 @@ impl TalkView {
             view.update(cx, closed).ok();
         });
         self.menu_open = Some(LEVEL);
+        cx.notify();
+        let at = point(trigger.left(), trigger.bottom() + px(CHOICES_MENU_DROP));
+        menu(items, at, false, window, chosen, cx);
+    }
+
+    /// The effort trigger's menu, ⌘T's own (`command_bar::effort_choices`), hanging under it:
+    /// Default, then the levels the thread's assistant's program takes, the one picked checked.
+    /// Only the user's pick here changes it, from the next message.
+    fn effort_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((levels, picked)) = self.shown.as_ref().and_then(|shown| shown.effort) else {
+            return;
+        };
+        let (Some(trigger), Some(menu)) = (
+            self.effort_drawn.get(),
+            cx.try_global::<crate::menu::EntriesMenu>(),
+        ) else {
+            return;
+        };
+        let menu = menu.0.clone();
+        let (picks, items) = crate::command_bar::effort_choices(levels, picked);
+        let view = cx.entity().downgrade();
+        let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
+            let action = (closed.chosen())
+                .and_then(|item| picks.get(item).copied())
+                .map(|level| TaskAction::PickEffort(level.map(str::to_string)));
+            let closed = |view: &mut Self, cx: &mut Context<Self>| {
+                view.menu_open = None;
+                cx.notify();
+                if let Some(action) = action {
+                    view.act(action, cx);
+                }
+            };
+            view.update(cx, closed).ok();
+        });
+        self.menu_open = Some(EFFORT);
         cx.notify();
         let at = point(trigger.left(), trigger.bottom() + px(CHOICES_MENU_DROP));
         menu(items, at, false, window, chosen, cx);
@@ -3109,7 +3147,8 @@ impl TalkView {
     /// The composer's row under its field, the bar's own (choices.rs): the plus, disabled where a
     /// reply has nothing to add, the thread's level, which opens its menu (#4094), the folder it
     /// holds (#4101), its model, which opens its assistant's models where its program takes
-    /// another for the next message and is plain words elsewhere, and the round button: Stop while
+    /// another for the next message and is plain words elsewhere, its effort where its program
+    /// takes one, which opens ⌘T's effort menu, and the round button: Stop while
     /// it works and nothing is typed, else Send, which does nothing with nothing typed.
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
@@ -3182,6 +3221,21 @@ impl TalkView {
             }
             _ => 0.,
         };
+        // The effort, as ⌘T's composer has it, where the thread's program takes one.
+        let effort = (shown.and_then(|shown| shown.effort)).map(|(_, picked)| {
+            let said: SharedString = match picked {
+                Some(level) => crate::command_bar::effort_name(level).into(),
+                None => crate::command_bar::EFFORT_NAME.into(),
+            };
+            let trigger = choices::Trigger {
+                id: EFFORT,
+                at: self.effort_drawn.clone(),
+                click: Some(Box::new(
+                    cx.listener(|view, _, window, cx| view.effort_menu(window, cx)),
+                )),
+            };
+            (said, trigger)
+        });
         let inks = self.inks(look);
         let plus = choices::plus_look(
             inks.dim,
@@ -3205,7 +3259,7 @@ impl TalkView {
             level: (tier, level),
             model,
             model_least,
-            effort: None,
+            effort,
             held: self
                 .folder_chip(look, cx)
                 .map(|chip| chip.into_any_element())
@@ -3654,6 +3708,7 @@ fn held_button(
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "conversation-level";
 const MODEL: &str = "conversation-model";
+const EFFORT: &str = "conversation-effort";
 
 /// Where the page row's Open for `tab` was drawn, kept in `at`, which it opens from, and logged as
 /// it moves, for check.sh to click it.

@@ -206,6 +206,8 @@ pub struct Process {
     walled: Option<Arc<Wall>>,
     /// Where a walled start's sweep answers: its task, on the channel its lines go on.
     answer: Option<(String, UnboundedSender<Event>)>,
+    /// The effort level it started at, which its program holds for the run.
+    effort: Option<String>,
 }
 
 impl Process {
@@ -280,6 +282,7 @@ impl Process {
             rising: still_rising.clone(),
             walled: wall.clone(),
             answer: walled.then(|| (agent.to_string(), events.clone())),
+            effort: launch.effort.clone(),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -365,6 +368,12 @@ impl Process {
         if let (Cli::Codex, Some(state)) = (self.cli, &self.codex) {
             super::codex::set_model(state, model);
         }
+    }
+
+    /// The effort level it started at: Claude Code's `--effort` is for the session (its --help),
+    /// so another level takes another run.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
     }
 
     /// Sends the user's message, which the agent reads once its turn under way ends.

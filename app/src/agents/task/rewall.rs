@@ -491,8 +491,9 @@ impl Agents {
         wall.map(Some).ok_or(())
     }
 
-    /// The run the task `key` has is over, as the wall it's inside is no longer the task's.
-    /// Whatever starts it next starts it inside the wall of the level it then has.
+    /// The run the task `key` has is over, as the wall it's inside is no longer the task's, or
+    /// the effort it holds isn't the one picked. Whatever starts it next starts it inside the wall
+    /// of the level it then has.
     pub(super) fn wall_outgrown(&mut self, key: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(key) else {
             return;
