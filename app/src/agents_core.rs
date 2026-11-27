@@ -476,6 +476,10 @@ impl Browser for Core {
         unsafe { bc::bc_tab_give_to_agent(tab, space) }
     }
 
+    fn may_be_given(&self, tab: u64, _: &App) -> bool {
+        unsafe { bc::bc_tab_may_be_given(tab) }
+    }
+
     fn return_tab(&self, tab: u64, _: &mut App) -> bool {
         unsafe { bc::bc_tab_return_from_agent(tab) }
     }

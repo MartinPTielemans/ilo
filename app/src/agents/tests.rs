@@ -88,9 +88,11 @@ struct Made {
     private: RefCell<Vec<u64>>,
     space_asks: std::cell::Cell<usize>,
     /// The user's tabs given to an agent, each with the Space it left and its place there, in the
-    /// order given; and those the core refuses to give, as a test says.
+    /// order given; those the core refuses at the give, as one whose page changed after the
+    /// composer's menu opened; and those it says it won't give, as a test says.
     given: RefCell<Vec<(u64, u64, usize)>>,
     not_given: RefCell<HashSet<u64>>,
+    ungivable: RefCell<HashSet<u64>>,
     /// The tabs the core returned to the place they left, in order; and those it can't return,
     /// as one whose Space is gone, as a test says.
     returned: RefCell<Vec<u64>>,
@@ -616,6 +618,11 @@ impl Browser for Made {
         space != 0
             && !agents.values().any(|own| *own == space)
             && tabs.iter().any(|each| each.0 == tab && each.1 == space)
+    }
+
+    /// As the core's: no for a tab the test says it won't give.
+    fn may_be_given(&self, tab: u64, _: &App) -> bool {
+        !self.ungivable.borrow().contains(&tab)
     }
 
     /// As the core's: the tab goes to the agent's Space, and where it left is kept.
