@@ -225,6 +225,11 @@ impl site_controls::Host for SiteControlsHost {
                 };
                 share_page(&window, &url, &title, frame);
             }
+            site_controls::Run::Sensitive(on) => {
+                crate::agents_core::update(move |agents, cx| {
+                    agents.mark_tab_sensitive(tab, on, cx)
+                });
+            }
             site_controls::Run::SiteSettings => {
                 let url = window
                     .shell

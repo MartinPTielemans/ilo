@@ -1138,7 +1138,11 @@ pub trait Browser {
     /// sets the frame on the main queue's next turn, as the ask comes inside the press. On a yes
     /// the UI draws the card growing in the window as it is on each frame (first-run v9 §10),
     /// shaped by `shape_first_run`; on a no nothing changes and the exit is the cross-fade.
+    /// On a yes the host also puts the browser window under first run's then, unseen.
     fn grows_first_run(&self) -> bool;
+    /// How far the browser window under a grown first run's window has come in, its opacity,
+    /// and the card's glass's, both 0 to 1, said on each frame of a grown exit.
+    fn reveal_first_run(&self, _window: f32, _glass: f32) {}
     /// First run's window opens on screen at once, for a host with no call that shows it.
     fn shows_first_run_at_open(&self) -> bool {
         false

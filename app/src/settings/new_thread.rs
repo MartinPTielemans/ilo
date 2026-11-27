@@ -70,8 +70,8 @@ impl Settings {
         ]
     }
 
-    /// Access's menu: the composer's level menu, without Full access, which is never where a
-    /// thread starts.
+    /// Access's menu: the composer's level menu, row for row, Full access too: a thread may start
+    /// at any level (#4360), and this row sets it back.
     fn choose_access(
         &mut self,
         agents: &Entity<Agents>,
@@ -79,7 +79,7 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let (tiers, items) = command_bar::level_choices(current, false);
+        let (tiers, items) = command_bar::level_choices(current);
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&tier) = picked.and_then(|at| tiers.get(at)) {

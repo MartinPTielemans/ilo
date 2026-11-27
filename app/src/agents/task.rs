@@ -480,8 +480,8 @@ pub struct Task {
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
     asking: Option<(u64, mpsc::Sender<ToolResult>)>,
-    /// Its access, which only the user raises and which ends with it: never kept, so Full access
-    /// is never remembered. An outside client's starts at what the user left that client's others
+    /// Its access, which only the user raises or sets as where new threads start. An outside
+    /// client's starts at what the user left that client's others
     /// at, and comes down to an ended one's as it takes that one's page (`starting_tier`,
     /// `left_at`).
     pub tier: Tier,
@@ -583,6 +583,8 @@ impl Task {
     fn end(&mut self, at: SystemTime) {
         self.ended = Some(at);
         self.end_entry = super::next_entry_id();
+        // Its strands end with it, each call of theirs answered as stopped.
+        self.helpers.end_strands(self.trace.len());
         // A refusal is passed once its task ends: there's nothing left to raise or take over.
         for stop in &mut self.stops {
             stop.settled = true;
@@ -1044,6 +1046,9 @@ pub struct Tasks {
     /// What the composer last started a thread with, by the folder's name of the profile it
     /// started in.
     pub(super) last: HashMap<String, Last>,
+    /// The level an outside app's next task starts at, Settings › Other apps' Access: the user's
+    /// alone to set, Full access too (#4360).
+    pub(super) others_start: Tier,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
     pub(super) events: Option<(
@@ -1057,9 +1062,6 @@ pub struct Tasks {
     /// The assistants a look asked for while one ran waits to look for once it ends, as after a
     /// sign-in, each with whether the user's click on its row asked for it.
     pub(super) look_again: Vec<(Cli, bool)>,
-    /// Helpers for the tasks a test starts, whatever the switch says.
-    #[cfg(test)]
-    pub(super) helpers: bool,
     /// What answers for `wall::put_up` in a test, which no system does yet.
     #[cfg(test)]
     pub(super) wall: Option<rewall::PutUp>,
@@ -1080,18 +1082,14 @@ impl Agents {
     }
 
     /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
-    /// it opens there: its model, and its level unless that was Full access, which is set for one
-    /// thread and never remembered. The composer's start calls it, and Settings' `A new thread
-    /// starts with`, whose rows are this same memory: a pick there is a pick here.
+    /// it opens there: its model and its level, Full access too. The composer's start calls it,
+    /// and Settings' `A new thread starts with`, whose rows are this same memory: a pick there is
+    /// a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
             return;
         }
-        let tier = match tier {
-            Tier::Full => Tier::default(),
-            tier => tier,
-        };
         let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
         let last = Last {
             tier,
@@ -2086,7 +2084,7 @@ impl Agents {
             picked_from: None,
             placed: Vec::new(),
             told: None,
-            helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
+            helpers: Helpers::default(),
             files: self.files_at_start(),
             names: self.names_at_start(),
             rising: None,
@@ -2257,6 +2255,24 @@ impl Agents {
         }));
     }
 
+    /// A strand has NO_ANSWER from its start to call or say something, as its thread has while
+    /// it thinks, on its thread's own timer (`no_answer`), or it ends, its call answered with why.
+    pub(super) fn watch_strands(&mut self, thread: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(thread).filter(|task| task.waiting.is_none()) else {
+            return;
+        };
+        let Some(since) = task.helpers.unheard_since() else {
+            return;
+        };
+        let now = cx.background_executor().now();
+        let wait = NO_ANSWER.saturating_sub(now.duration_since(since));
+        let agent = thread.to_string();
+        task.waiting = Some(cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(wait).await;
+            _ = agents.update(cx, |agents, cx| agents.no_answer(&agent, cx));
+        }));
+    }
+
     fn no_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
             return;
@@ -2265,8 +2281,20 @@ impl Agents {
         if let Some(timer) = task.waiting.take() {
             timer.detach();
         }
-        if !task.thinking() {
+        // A strand that hasn't answered in its time ends as its thread would, which goes on.
+        let (why, trace) = (format!("{} didn't answer.", task.name), task.trace.len());
+        let now = cx.background_executor().now();
+        if task.helpers.end_unheard((now, NO_ANSWER), &why, trace) {
+            self.tokens_changed();
+            cx.notify();
+        }
+        let Some(task) = self.task_mut(agent) else {
             return;
+        };
+        // A thread whose strands are under way waits on their calls, as on any tool's: it isn't
+        // thinking, though it has said nothing.
+        if !task.thinking() || task.helpers.has_strands() {
+            return self.watch_strands(agent, cx);
         }
         // check.sh reads this line.
         log!(
@@ -2277,16 +2305,6 @@ impl Agents {
         task.process = None;
         let why = format!("{} didn't answer.", task.name);
         self.fail(agent, Failure::Other(why), cx);
-    }
-
-    /// Whether a task that starts now gets its assistant's helper tool: the switch. A test's
-    /// tasks have what the test says, on or off, whatever the switch is.
-    fn helpers_on(&self) -> bool {
-        #[cfg(test)]
-        let said = Some(self.tasks.helpers);
-        #[cfg(not(test))]
-        let said = None;
-        said.unwrap_or(helpers::ON)
     }
 
     /// The files a task that starts now has: none, until a grant gives a task its own.
@@ -2316,6 +2334,71 @@ impl Agents {
         self.launch_in(agent, first, wall, cx);
     }
 
+    /// Starts the run of the strand `strand` of the thread `thread`, which reads `first`: the
+    /// thread's assistant, model and effort, with the strand's token and tools, inside the wall
+    /// the thread's files need and reading what the thread reads. It keeps nothing. Why not, in
+    /// the words its call is answered with, if it couldn't start.
+    pub(super) fn launch_strand(
+        &mut self,
+        thread: &str,
+        strand: &str,
+        first: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Process, String> {
+        let Some(cli) = self.task(thread).and_then(|task| task.cli) else {
+            return Err(String::new());
+        };
+        let couldnt = format!("{} couldn't start.", cli.name());
+        let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
+        let Some(program) = found.program.clone() else {
+            return Err(format!("{} isn't installed.", cli.name()));
+        };
+        // A strand of a thread with files is held to them as the thread is, in a wall of its own
+        // that reads its own folder and config, or doesn't start.
+        let wall = self
+            .wall_or_without(thread, strand)
+            .map_err(|()| couldnt.clone())?;
+        let Some(task) = self.task(thread) else {
+            return Err(couldnt);
+        };
+        let Some(token) = task.helpers.token_of(strand) else {
+            return Err(couldnt);
+        };
+        let dir = self.tasks_dir();
+        let mut args = self.bridge.clone();
+        args.push(self.socket.to_string_lossy().into_owned());
+        let command = args.remove(0);
+        let launch = Launch {
+            cli,
+            program,
+            path: found.path.clone(),
+            dir: dir.join(strand),
+            config: dir.join(format!("{strand}.json")),
+            server: runner::Server {
+                command,
+                args,
+                token,
+            },
+            model: self.launch_model(thread, cli),
+            effort: task.effort.clone(),
+            instructions: tools::STRAND_INSTRUCTIONS.into(),
+            tools: tools::names(strand),
+            wall,
+            reads: (task.files.folder.iter())
+                .map(|folder| folder.root().to_path_buf())
+                .chain(task.files.attached.clone())
+                .collect(),
+        };
+        let events = self.task_events(cx);
+        Process::start(&launch, strand, first, events).map_err(|error| {
+            log!(
+                "browser: strand {strand} couldn't start {}: {error}",
+                cli.id()
+            );
+            couldnt
+        })
+    }
+
     /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
     pub(super) fn launch_in(
         &mut self,
@@ -2332,6 +2415,11 @@ impl Agents {
             self.fail(agent, Failure::NotInstalled, cx);
             return false;
         };
+        // Its row already says so (AP27): a thread never starts only to fail.
+        if found.ready == Ready::NeedsUpdate {
+            self.fail(agent, Failure::NeedsUpdate, cx);
+            return false;
+        }
         let dir = self.tasks_dir();
         let walled = wall.is_some();
         let mut args = self.bridge.clone();
@@ -2354,17 +2442,14 @@ impl Agents {
             },
             model,
             effort,
-            instructions: match task.helpers.on {
-                true => format!(
-                    "{}\n\n{}",
-                    tools::TASK_INSTRUCTIONS,
-                    helpers::instructions()
-                ),
-                false => tools::TASK_INSTRUCTIONS.into(),
-            },
+            instructions: tools::task_instructions(task.tier),
             tools: tools::names(agent),
-            helpers: task.helpers.on,
             wall,
+            // The files it starts with: a task whose wall was refused has none by now.
+            reads: (task.files.folder.iter())
+                .map(|folder| folder.root().to_path_buf())
+                .chain(task.files.attached.clone())
+                .collect(),
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
@@ -2377,10 +2462,6 @@ impl Agents {
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
-                    // Until its first line says which kinds of helper it has (#4102).
-                    let new = matches!(keep, super::kept::Keep::New(_));
-                    let had = (task.trace.len(), task.messages.len());
-                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
                 true
@@ -2433,11 +2514,15 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, run, out } = event;
+        // A strand's run answers its thread's call, and is no line of the thread's (helpers.rs).
+        if let Some(thread) = super::strand_parent(&agent).map(str::to_string) {
+            return self.strand_said(&thread, &agent, run, out, cx);
+        }
         // The sweep after a run's end answers for that run, whichever run is under way now.
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
         }
-        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        // A line of a run ilo ended as it started the task again isn't the task's (rewall.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
@@ -2452,10 +2537,11 @@ impl Agents {
         if out == Out::Walled(Ok(())) {
             return self.walled_in(&agent);
         }
-        // Whatever it said, it answered.
+        // Whatever it said, it answered; a strand of it still unheard keeps its watch.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
         }
+        self.watch_strands(&agent, cx);
         match out {
             Out::Said(text) => {
                 let Some(task) = self.task_mut(&agent) else {
@@ -2516,19 +2602,8 @@ impl Agents {
                     notes: None,
                 });
             }
-            Out::Searched(query) => {
-                let Some(task) = self.task_mut(&agent) else {
-                    return;
-                };
-                let step = searched(&query, task.messages.len());
-                task.trace.push(step);
-                self.count_search(&agent);
-            }
-            Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
-            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
-            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             Out::Swept(_) => {}
+            Out::Refused(why) => self.not_our_tools(&agent, &why, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -2620,6 +2695,7 @@ impl Agents {
         };
         // check.sh reads this line.
         log!("browser: task {agent} failed: {failure:?}");
+        let needs_update = failure == Failure::NeedsUpdate;
         let state = match failure {
             Failure::Limit(resets) => State::Limit {
                 resets: resets.map(clock),
@@ -2635,6 +2711,14 @@ impl Agents {
                 why: format!("{} isn't installed.", cli.name()).into(),
                 assistant: true,
             },
+            Failure::NeedsUpdate => {
+                let product = crate::product::PRODUCT;
+                let why = format!("{} needs an update to work in {product}.", cli.name()).into();
+                State::Failed {
+                    why,
+                    assistant: true,
+                }
+            }
             Failure::Other(why) => State::Failed {
                 why: page::clip(&why, 200).into(),
                 assistant: false,
@@ -2651,9 +2735,34 @@ impl Agents {
         }
         self.keep_ended(agent, cx);
         self.forget_waiting(agent, None, cx);
-        // What's ready may have changed.
-        self.look_for_task_agents(cx);
+        match needs_update {
+            // Its program refused the browser's limits, so its row and card say so until it's
+            // looked for again, whatever its version said.
+            true => {
+                if let Some(found) = self.tasks.found.get_mut(&cli) {
+                    found.ready = Ready::NeedsUpdate;
+                }
+            }
+            // What's ready may have changed.
+            false => self.look_for_task_agents(cx),
+        }
         cx.notify();
+    }
+
+    /// ilo ended `agent`'s run as it started with a tool that isn't the browser's, or called one
+    /// (runner.rs), `why` in the dev log's words: its turn ends before its first answer, one line
+    /// of ilo's says so (AP17), and the card says the same. The next message starts a run that's
+    /// checked again.
+    fn not_our_tools(&mut self, agent: &str, why: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        log!("browser: task {agent} ended as {why}");
+        use crate::shell::conversation::words;
+        let (said, _) = words::head(&ilo::IloKind::NotOurTools, &task.name);
+        let why = format!("{} {said}.", words::MARK);
+        self.place_in(agent, super::lines::Happened::NotOurTools);
+        self.fail(agent, Failure::Other(why), cx);
     }
 
     /// The user's reply, which the agent reads once its turn under way ends.
@@ -3073,7 +3182,8 @@ impl Agents {
                 None => return,
             },
         };
-        if matches!(tool, "title" | "finish" | "run_steps") {
+        // A strand's start is its own line, under the name its thread gave it (helpers.rs).
+        if matches!(tool, "title" | "finish" | "run_steps" | tools::STRAND) {
             return;
         }
         let did = tools::Did {
@@ -3088,13 +3198,42 @@ impl Agents {
             )
         };
         self.trace(&key, call.id, did, call.at, cx);
-        // A page opened while the task's helpers work may be one of theirs (#4102).
-        if tool == "open_tab"
+        // A page opened while the task's helpers work may be one of theirs (#4102): an open's, or
+        // a search's that names no tab.
+        let opens = match tool {
+            "open_tab" => true,
+            tools::SEARCHED => tools::tab_argument(&call.arguments) == Ok(None),
+            _ => false,
+        };
+        if opens
             && let Some(task) = self.task_mut(&key).filter(|task| task.helpers.on)
             && let Some(at) = task.trace.len().checked_sub(1)
         {
             task.helpers.opens_at(at);
         }
+    }
+
+    /// The browser ended the hand-off `call` of `agent`'s, as `tab`'s page moved past the user's
+    /// step (#4361): a step of its trace, after the hand-off's.
+    pub(super) fn trace_moved_on(
+        &mut self,
+        agent: &str,
+        (connection, call): (u64, u64),
+        tab: u64,
+        cx: &App,
+    ) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let did = self.did(
+            agent,
+            connection,
+            tools::MOVED_ON,
+            &Value::Null,
+            Some(tab),
+            cx,
+        );
+        self.trace(&key, call, did, Instant::now(), cx);
     }
 
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
@@ -3172,8 +3311,9 @@ impl Agents {
             session.tabs.push(tab);
             task.tier = task.tier.min(left.unwrap_or(task.tier));
         }
-        // An ask is done once asked: the wait for the answer is the user's.
-        let ended = (did.tool == "ask").then_some(at);
+        // An ask is done once asked: the wait for the answer is the user's. A page that moved on
+        // did so as it was seen.
+        let ended = matches!(did.tool.as_str(), "ask" | tools::MOVED_ON).then_some(at);
         let after = task.messages.len();
         task.trace.push(Traced {
             call,
@@ -3312,12 +3452,28 @@ impl Agents {
     }
 
     /// The access a new task of the outside client `agent`'s starts at. A level the user lowered
-    /// outlives its task, for that client, until they pick again: it's the lowest of where every
-    /// task starts and of the tasks the client's are held to, so never Full access, which no
-    /// task is given but by the user. Only the tasks ilo holds say it: nothing is kept for it.
+    /// outlives its task, for that client, until they pick again: it's the lowest of the level
+    /// the user set in Settings › Other apps and of the tasks the client's are held to, so Full
+    /// access only where the user set it there. Only the tasks the app holds say the rest.
     pub(super) fn starting_tier(&self, agent: &str) -> Tier {
         let held = self.held_to(agent).map(|task| task.tier);
-        held.fold(Tier::default(), Tier::min)
+        held.fold(self.tasks.others_start, Tier::min)
+    }
+
+    /// Settings › Other apps' Access: the level an outside app's next task starts at.
+    pub fn others_start(&self) -> Tier {
+        self.tasks.others_start
+    }
+
+    /// Sets Settings › Other apps' Access, the user's pick alone. Tasks under way keep theirs.
+    pub fn set_others_start(&mut self, tier: Tier, cx: &mut Context<Self>) {
+        if tier == self.tasks.others_start {
+            return;
+        }
+        self.tasks.others_start = tier;
+        log!("browser: other apps start at {}", tier.id());
+        self.save();
+        cx.notify();
     }
 
     /// The access the session `key` takes the page `tab` at, if it's lower than its own: the
@@ -3371,6 +3527,17 @@ impl Agents {
             self.launch(key, &first, cx);
         }
         self.wait_for_answer(key, cx);
+    }
+
+    /// Tells the thread `key` that a tab it handed off is back, or why it isn't, as a steer
+    /// arrives (#4363): now while it works or once its turn ended, which takes it up again, and
+    /// else with the user's next turn.
+    pub(super) fn tell_back(&mut self, key: &str, text: String, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
+        let now = matches!(task.state, State::Working | State::Done { .. });
+        self.tell_task(key, text, now, cx);
     }
 
     /// The session of `agent`'s whose call `call` is under way.
@@ -3654,7 +3821,9 @@ impl Agents {
     /// the helper of a task's that asked for it (#4102).
     pub(super) fn opened(&mut self, agent: &str, call: u64, tab: u64) {
         if let Some(task) = self.task_mut(agent).filter(|task| task.helpers.on) {
-            let opens = |step: &Traced| step.call == call && step.did.tool == "open_tab";
+            let opens = |step: &Traced| {
+                step.call == call && matches!(step.did.tool.as_str(), "open_tab" | tools::SEARCHED)
+            };
             if let Some(at) = task.trace.iter().rposition(opens) {
                 task.helpers.opened(at, tab);
             }
@@ -4134,6 +4303,14 @@ impl Agents {
                     }
                 }
             },
+            // Its words whole, as a thought is held; never the engine it searched with.
+            tools::SEARCHED => {
+                (did.site, did.page, did.title) = Default::default();
+                did.text = tier::capped(&string("words"), THOUGHT_MOST);
+                if tools::tab_argument(arguments).ok().flatten().is_none() {
+                    did.tab = None;
+                }
+            }
             "click" => did.target = element.as_ref().map(named).unwrap_or_default(),
             // What was typed or chosen shows only where the field lets it, cut at its most.
             "type" | "select" => {
@@ -4624,72 +4801,8 @@ fn labels(text: &str) -> String {
 /// The most characters of a thought a step holds, and of a search's words.
 const THOUGHT_MOST: usize = 4000;
 
-/// A search the assistant's program made, as a step of its trace after `after` messages: its words
-/// alone, one line, cut as a thought is. It's in memory only: the trace is kept nowhere, and a card
-/// leaves it out, as it does a thought.
-pub(super) fn searched(query: &str, after: usize) -> Traced {
-    let now = Instant::now();
-    Traced {
-        call: 0,
-        did: tools::Did {
-            tool: tools::SEARCHED.into(),
-            text: tier::capped(query, THOUGHT_MOST),
-            ..Default::default()
-        },
-        after,
-        started: now,
-        ended: Some(now),
-        error: None,
-        kind: None,
-        picture: None,
-        close: None,
-        notes: None,
-    }
-}
-
-impl Agents {
-    /// A search `agent`'s task's program made, its step already in the trace: the thread's one
-    /// activity entry, counting its searches by that trace, never their words. It's no call of
-    /// the browser's, so no line is logged of it and nothing waits on it.
-    pub(super) fn count_search(&mut self, agent: &str) {
-        let Some(task) = self.task(agent) else {
-            return;
-        };
-        let count = (task.trace.iter())
-            .filter(|step| step.did.tool == tools::SEARCHED)
-            .count();
-        let tier = self.entry_tier(agent, 0, 0).label();
-        let entry = (self.log.iter_mut().rev())
-            .find(|each| each.agent == agent && each.action == tools::SEARCHED);
-        if let Some(entry) = entry {
-            entry.target = count.to_string().into();
-            return;
-        }
-        if self.log.len() >= super::LOG_LENGTH {
-            self.log.remove(0);
-        }
-        self.log.push(super::Activity {
-            at: SystemTime::now(),
-            agent: agent.to_string().into(),
-            connection: 0,
-            action: tools::SEARCHED.into(),
-            site: SharedString::default(),
-            target: count.to_string().into(),
-            refused: SharedString::default(),
-            steps: Vec::new(),
-            by: SharedString::default(),
-            id: super::entry_id(),
-            url: SharedString::default(),
-            sent: Vec::new(),
-            said: SharedString::default(),
-            tier: tier.into(),
-            notes: SharedString::default(),
-        });
-    }
-}
-
-/// Whether a step is the assistant's own, a thought or a search, which acts on no page: a card
-/// counts and says none of them.
+/// Whether a step is the assistant's own, a thought or a search, whose results page is no page
+/// of the task's own: a card counts and says none of them.
 fn own(step: &Traced) -> bool {
     matches!(step.did.tool.as_str(), "thought" | tools::SEARCHED)
 }
@@ -5352,7 +5465,8 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             }
         };
         let did = &step.did;
-        let groups = (did.tab.is_some() || did.tool == "open_tab")
+        let opens = matches!(did.tool.as_str(), "open_tab" | tools::SEARCHED);
+        let groups = (did.tab.is_some() || opens)
             && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
         // Closes join only those their pages answered alike.
         let like = |line: &Together| {

@@ -78,6 +78,8 @@ struct Made {
     private: RefCell<Vec<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The search engine's host, where a test moves it from search.example.
+    engine: std::cell::Cell<Option<&'static str>>,
 }
 
 impl Made {
@@ -228,6 +230,13 @@ impl Browser for Made {
             (false, true) => format!("https://{text}/"),
             (false, false) => format!("https://duckduckgo.com/?q={text}"),
         })
+    }
+
+    /// A search with an engine of the Space's profile's own, so a test sees whose it was.
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = self.space_profile(space).to_lowercase();
+        let engine = self.engine.get().unwrap_or("search.example");
+        Some(format!("https://{engine}/{profile}?q={words}"))
     }
 
     fn hand_off(&self, _: &str, tab: u64) -> bool {
@@ -593,8 +602,7 @@ impl Clients for Configs {
 
     /// Under a made-up home that's never this computer's.
     fn skill_at(&self, kept: &crate::agents::skill::Kept) -> Option<PathBuf> {
-        let home = std::path::Path::new("/made-up-home");
-        crate::agents::skill::at(home, kept.program, &kept.name)
+        crate::agents::skill::at(&made_up_home(), kept.program, &kept.name)
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -818,6 +826,14 @@ fn give(agents: &Entity<Agents>, tier: Tier, cx: &mut TestAppContext) {
 fn stops(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Stop> {
     let key = session_key(agents, "claude-code", cx);
     agents.read_with(cx, |agents, _| agents.stops(&key))
+}
+
+/// The user's bank, chase.com, marked sensitive in "Default", so an agent's use there is refused
+/// below Full access.
+fn sensitive_bank(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive("Default", "chase.com", true, cx)
+    });
 }
 
 /// Checks `answer` is a refusal, at once, of the act `what` for `why`, which nothing asked about
@@ -3680,10 +3696,12 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 10] = [
+    const READS: [&str; 12] = [
         "list_tabs",
         "list_split",
         "open_tab",
+        "search",
+        "strand",
         "navigate",
         "snapshot",
         "read_page",
@@ -4268,11 +4286,15 @@ fn a_download_at_look_only_is_refused_and_leaves_no_file(cx: &mut TestAppContext
     assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
     assert_eq!(shown(&agents, cx), None);
 }
-/// A bank's site is refused below Full access, at Look only too, each time and logged, and opens
-/// once the user gives Full access.
+/// A site marked sensitive is refused below Full access, at Look only too, each time and logged,
+/// and opens once the user gives Full access.
 #[gpui::test]
-fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
+fn a_sensitive_site_opens_only_at_full_access(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
+    let profile = browser.space_profile(0);
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive(&profile, "chase.com", true, cx)
+    });
     let open = |cx: &mut TestAppContext| {
         call(
             &agents,
@@ -4287,7 +4309,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -4296,7 +4318,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         (
             "open_tab".into(),
             "chase.com".into(),
-            "Using a bank site isn't part of Work on pages.".into()
+            "Using a sensitive site isn't part of Work on pages.".into()
         )
     );
     give(&agents, Tier::Look, cx);
@@ -4305,7 +4327,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -6472,6 +6494,16 @@ fn no_agent_path_reaches_arrange_or_a_boost() {
 }
 
 /// The request tool (#1439): HTTP requests from a tab's page to its own site.
+/// The made-up home the fake host's skills are under: whole on every system, as a skill's file is
+/// made only from a whole home (`skill::at`), and a path from the root alone isn't on Windows.
+fn made_up_home() -> PathBuf {
+    PathBuf::from(if cfg!(windows) {
+        r"C:\made-up-home"
+    } else {
+        "/made-up-home"
+    })
+}
+
 mod requests {
     use super::*;
 
@@ -7154,6 +7186,43 @@ mod tasks {
         // Its row's own Get.
         assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
         assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// An assistant older than the browser runs is said on its row before any thread starts, and a
+    /// thread asked of it never starts: its card says it needs an update, with its row's How to
+    /// Update (AP27).
+    #[gpui::test]
+    fn an_assistant_that_needs_an_update_starts_no_thread(cx: &mut TestAppContext) {
+        // A program that's there, so only its look's answer keeps the thread from starting.
+        let (agents, _) = ready(Some(PathBuf::from("/nonexistent/claude")), cx);
+        set_found(&agents, Ready::NeedsUpdate, cx);
+        start(&agents, "Find a flight", cx);
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// A run its program ends for want of an update, as a Codex that didn't take the browser's
+    /// limits does, says so on its card and its row, whatever its version said, until it's looked
+    /// for again.
+    #[gpui::test]
+    fn a_run_that_needs_an_update_says_so_on_its_card_and_row(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, cx| {
+            agents.fail(&agent, Failure::NeedsUpdate, cx)
+        });
+        let card = card_of(&agents, cx);
+        let why = format!("Claude needs an update to work in {PRODUCT}.");
+        assert_eq!(card.status.as_ref(), why);
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Update)));
+        let row = agents.read_with(cx, |agents, _| agents.assistant_row(Cli::Claude));
+        assert_eq!(
+            (row.line.as_str(), row.offer),
+            ("Needs an update", Offer::Update)
+        );
     }
 
     /// The card offers the install for the fact that the program isn't there, never for a
@@ -8057,6 +8126,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         let opening = call(
             &agents,
             &agent,
@@ -8670,18 +8740,18 @@ mod tasks {
         }
     }
 
-    /// Once the user hands the page back the wait is over, and the next step moves as any does.
+    /// A thread's hand-off returns at once (#4363), so nothing waits: while the user has page 31,
+    /// the thread's next step, on another page, moves as any does. Its being told when the page is
+    /// back is lines.rs's, with a run to tell.
     #[gpui::test]
-    fn the_next_step_moves_again_after_the_hand_back(cx: &mut TestAppContext) {
+    fn the_next_step_moves_at_once_after_a_hand_off(cx: &mut TestAppContext) {
         for refused in [false, true] {
             let (agents, _browser, agent) = at_work_past(refused, cx);
             let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
             let handed = begun(&agents, &agent, "hand_off", reason, cx);
+            assert!(!handed.try_recv().expect("the hand-off waited").error);
             assert_eq!(moving(&agents, &agent, cx), [""; 0]);
-            agents.update(cx, |agents, cx| agents.hand_back(31, cx));
-            cx.run_until_parked();
-            assert!(!handed.recv().unwrap().error);
-            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 31 }), cx);
+            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 30 }), cx);
             assert_eq!(
                 moving(&agents, &agent, cx),
                 ["snapshot"],
@@ -8861,6 +8931,7 @@ mod tasks {
             Some(shop_tree()),
             cx,
         );
+        sensitive_bank(&agents, cx);
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
         traced(
@@ -10768,6 +10839,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         // A refusal left unsettled, which the stop settles.
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(
@@ -11571,8 +11643,8 @@ mod tasks {
     }
 
     /// The composer opens in a profile with what it last started a thread with there: its level,
-    /// except Full access, which opens at the level every thread starts at, and its model. Each
-    /// profile keeps its own, with the effort Settings set there, and they're saved.
+    /// Full access too (#4360), and its model. Each profile keeps its own, with the effort
+    /// Settings set there, and they're saved.
     #[gpui::test]
     fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
         use crate::agents::task::Last;
@@ -11589,6 +11661,7 @@ mod tasks {
             agents.remember_composer(1, Tier::Look, haiku.clone());
             agents.remember_composer(2, Tier::Full, None);
         });
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Full, cx));
         let opens = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
             agents.read_with(cx, |agents, _| {
                 (agents.composer_last(1), agents.composer_last(2))
@@ -11600,12 +11673,24 @@ mod tasks {
             model: haiku.clone(),
             effort: Some("high"),
         };
-        assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
+        let full = Last {
+            tier: Tier::Full,
+            ..Last::default()
+        };
+        assert_eq!(opens(&agents, cx), (looked.clone(), full.clone()));
         let again = super::agents(&browser, &configs, Some(path.clone()), cx);
         let saved = std::fs::read_to_string(&path).unwrap();
-        assert!(!saved.contains("\"full\""), "Full access was kept: {saved}");
+        assert!(
+            saved.contains("\"full\""),
+            "Full access wasn't kept: {saved}"
+        );
         again.update(cx, |agents, cx| agents.load(&saved, cx));
-        assert_eq!(opens(&again, cx), (looked, Last::default()));
+        assert_eq!(opens(&again, cx), (looked, full));
+        // Other apps' Access is kept too, Full access included.
+        assert_eq!(
+            again.read_with(cx, |agents, _| agents.others_start()),
+            Tier::Full
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
@@ -12183,6 +12268,7 @@ mod sessions {
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        sensitive_bank(&agents, cx);
         let opening = call_on(
             &agents,
             2,
@@ -12646,8 +12732,8 @@ mod sessions {
         assert_eq!(browser.pages.borrow().len(), pages, "the click went");
     }
 
-    /// Full access is never carried: a task at Full access ends, and the client's next starts
-    /// where every task does.
+    /// Full access isn't carried while Other apps' Access is below it: a task at Full access ends,
+    /// and the client's next starts at that level.
     #[gpui::test]
     fn full_access_isnt_carried_to_the_next_task(cx: &mut TestAppContext) {
         let (agents, _, first) = lowered(Tier::Full, cx);
@@ -12658,6 +12744,31 @@ mod sessions {
         let second = cards(&agents, cx)[0].agent.to_string();
         assert_ne!(first, second);
         assert_eq!(tier(&agents, &second, cx), Tier::Work);
+    }
+
+    /// Where the user set Other apps' Access to Full access (#4360), an app's next task starts
+    /// there, and setting it back lowers the task after.
+    #[gpui::test]
+    fn a_full_access_default_starts_the_next_task_at_full(cx: &mut TestAppContext) {
+        let (agents, browser, first) = lowered(Tier::Full, cx);
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Full, cx));
+        let said = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        answered(&agents, 4, cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+        assert_eq!(tier(&agents, &second, cx), Tier::Full);
+        agents.update(cx, |agents, cx| agents.set_others_start(Tier::Work, cx));
+        let said = call_as(&agents, 6, "done", json!({}), cx).recv().unwrap();
+        assert!(!said.error, "{}", said.text);
+        answered(&agents, 6, cx);
+        call_as(&agents, 7, "snapshot", json!({ "tab": 20 }), cx);
+        let third = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(second, third);
+        assert_eq!(tier(&agents, &third, cx), Tier::Work);
     }
 
     /// A task under way that takes over a page an ended task of its client's held goes no higher
@@ -14219,11 +14330,10 @@ mod sessions {
         assert_eq!(read(cx), (vec![Client::ClaudeCode], vec![], None));
 
         add(false, cx);
-        let file = format!(
-            "/made-up-home/.agents/skills/{}/SKILL.md",
-            super::skill::name()
-        );
-        assert_eq!(read(cx), (vec![], vec![Client::Codex], Some(file.into())));
+        let file = (super::made_up_home().join(".agents").join("skills"))
+            .join(super::skill::name())
+            .join("SKILL.md");
+        assert_eq!(read(cx), (vec![], vec![Client::Codex], Some(file)));
 
         // Gone: said no more.
         change(Place::Missing);
@@ -14825,13 +14935,30 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
     assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
 }
 
+/// A thread of the browser's own is told its hand_off returns at once, as it's told when the tab
+/// is back; an outside client's waits, as nothing reaches it between calls (#4363).
+#[test]
+fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
+    let description = |agent: &str| {
+        let tools = tools::list(agent);
+        let tools = tools.as_array().unwrap();
+        let hand_off = tools
+            .iter()
+            .find(|tool| tool["name"] == "hand_off")
+            .unwrap();
+        hand_off["description"].as_str().unwrap().to_string()
+    };
+    assert!(description("task-1").contains("this returns at once"));
+    assert!(description("claude-code").contains("this waits until"));
+}
+
 mod fenced;
-#[cfg(unix)]
-mod helpers;
 mod holds;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
+#[cfg(unix)]
+mod not_our_tools;
 mod notes;
 mod other_apps;
 mod permission_stopped;
@@ -14839,7 +14966,10 @@ mod permission_stopped;
 mod rewall;
 #[cfg(unix)]
 mod searches;
+mod sensitive;
 mod sign_ins;
+#[cfg(unix)]
+mod strands;
 mod switches;
 mod uploads;
 mod went_to;

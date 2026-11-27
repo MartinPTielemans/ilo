@@ -119,3 +119,78 @@ fn an_agent_gone_during_a_handoff_leaves_the_tab_the_users(cx: &mut TestAppConte
     assert!(browser.held.borrow().is_empty());
     assert!(held_tabs(&agents, cx).is_empty());
 }
+
+/// The page the core read on held tab 20, with the steps of the user's it has.
+fn read(agents: &Entity<Agents>, page: HeldPage, cx: &mut TestAppContext) {
+    agents.update(cx, |agents, cx| agents.held_page(20, page, cx));
+    cx.run_until_parked();
+}
+
+/// A hand-off ends by itself once its page moves on (#4361): a sign-in's next steps, a password
+/// then a one-time code, keep it the user's, and a page with neither gives it back. The agent
+/// hears what Hand Back tells it, and the log says the page moved on.
+#[gpui::test]
+fn a_handoff_ends_once_its_page_moves_past_the_sign_in(cx: &mut TestAppContext) {
+    let (agents, browser, handed) = handed_off(cx);
+    let password = HeldPage {
+        document: 2,
+        password: true,
+        ..HeldPage::default()
+    };
+    read(&agents, password, cx);
+    let code = HeldPage {
+        document: 3,
+        one_time_code: true,
+        ..HeldPage::default()
+    };
+    read(&agents, code, cx);
+    assert!(handed.try_recv().is_err(), "a sign-in's next step ended it");
+    assert!(browser.held.borrow().contains(&20));
+    assert_eq!(held_tabs(&agents, cx), [20]);
+
+    let done = HeldPage {
+        document: 4,
+        ..HeldPage::default()
+    };
+    read(&agents, done, cx);
+    let answer = handed.try_recv().expect("the handoff still waits");
+    assert!(!answer.error);
+    assert_eq!(
+        answer.text,
+        "The user handed tab 20 back. Take a snapshot to see where it is now."
+    );
+    assert!(browser.held.borrow().is_empty(), "the core still holds it");
+    assert!(held_tabs(&agents, cx).is_empty(), "the bar still lists it");
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0].0,
+        crate::agents::tools::MOVED_ON
+    );
+}
+
+/// A page with a CAPTCHA on it is still the user's to do.
+#[gpui::test]
+fn a_captcha_keeps_a_handoff(cx: &mut TestAppContext) {
+    let (agents, browser, handed) = handed_off(cx);
+    let captcha = HeldPage {
+        document: 2,
+        captcha: true,
+        ..HeldPage::default()
+    };
+    read(&agents, captcha, cx);
+    assert!(handed.try_recv().is_err(), "a CAPTCHA ended it");
+    assert!(browser.held.borrow().contains(&20));
+    assert_eq!(held_tabs(&agents, cx), [20]);
+}
+
+/// A tab the user took over stays theirs however its page moves on: only the agent's own
+/// hand-off ends by itself.
+#[gpui::test]
+fn a_taken_tab_stays_the_users_as_its_page_moves_on(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+    let entries = log(&agents, "claude-code", cx).len();
+    read(&agents, HeldPage::default(), cx);
+    assert!(browser.held.borrow().contains(&20));
+    assert_eq!(held_tabs(&agents, cx), [20]);
+    assert_eq!(log(&agents, "claude-code", cx).len(), entries);
+}

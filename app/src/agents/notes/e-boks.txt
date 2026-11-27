@@ -1,0 +1,12 @@
+source: https://private.e-boks.com/danmark/da
+landmark: https://private.e-boks.com/danmark/da | Brug for hjælp
+checked: 2026-11-27
+holds: addresses, where things are
+---
+Go straight there
+On e-Boks' mail site, /privat is a person's mailbox and /erhverv a business's.
+On its information site, /danmark/da/kom-i-gang/ is how to start, /danmark/da/kontakt/ how to get in touch, and Brug for hjælp at the top leads to its help.
+
+Know before you start
+The user can also read their mail in e-Boks' app.
+The site is in Danish, with English under En.

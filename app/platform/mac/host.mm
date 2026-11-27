@@ -2148,21 +2148,45 @@ void host_hold_window(void* ui_view) {
 
 static void PlaceTitlebarSide(Browser* browser);
 
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen);
+
 void host_show_window(void* ui_view) {
-  host_show_window_behind(ui_view, nullptr);
+  ShowWindow(ui_view, nil, false);
+}
+
+void host_show_window_behind(void* ui_view, void* above_ui_view) {
+  Browser* above = above_ui_view ? BrowserWithView(above_ui_view) : nullptr;
+  ShowWindow(ui_view, above ? above->window : nil, false);
 }
 
 // Whether the window first run held is on, in the place of first run's (host_close_first_run).
 static bool g_took_first_runs_place;
 
-void host_show_window_behind(void* ui_view, void* above_ui_view) {
+// The browser window a grow put under first run's, unseen until the card gives way to it
+// (host_set_first_run_reveal), until it comes to the front.
+static __weak NSWindow* g_under_first_run;
+
+// Its opacity while unseen: not none, as a window with none counts as hidden, and then GPUI
+// doesn't draw it nor Chromium its pages; and too little to see over any desktop.
+constexpr CGFloat kUnseen = 0.01;
+
+// Shows the window of |ui_view| in front with the keyboard, or right behind |above|, neither key
+// nor activating the app, and there all but transparent where |unseen|.
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
     return;
   }
-  Browser* above = above_ui_view ? BrowserWithView(above_ui_view) : nullptr;
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
+  // Shown already under first run's, drawn there through the grow: whole, and in front.
+  if (window && window == g_under_first_run && !above) {
+    g_under_first_run = nil;
+    window.alphaValue = 1;
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    return;
+  }
   browser->window = window;
   // The window first run held comes on at its frame whole, with none of AppKit's motion for a
   // window ordered in: first run's card has just grown to that frame, or faded where it stood.
@@ -2172,9 +2196,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
-  if (browser->sidebar_right) {
-    PlaceTitlebarSide(browser);
-  }
+  PlaceTitlebarSide(browser);
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -2191,7 +2213,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   [view addSubview:browser->material positioned:NSWindowBelow relativeTo:nil];
   // Views keeps a new window clear until its compositor's first frame, which waits for the GPU
   // process to start, though the UI's and the pages' views cover all of that compositor.
-  window.alphaValue = 1;
+  window.alphaValue = unseen ? kUnseen : 1;
   if (g_launch_window && !above) {
     // It takes the launch window's place, and its picture stays over the UI until the UI has
     // drawn. The launch window itself can't stay over it: Chromium counts a covered window's
@@ -2212,8 +2234,8 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     TellMain(shown, NSApp.active && shown.isMainWindow);
   });
   WatchHeldEscape();
-  if (above && above->window) {
-    [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
+  if (above) {
+    [window orderWindow:NSWindowBelow relativeTo:above.windowNumber];
   } else {
     // Before it's on screen, so its first frame is already the small one.
     if (browser->grows) {
@@ -5290,13 +5312,17 @@ void host_show_window_buttons(void* ui_view, bool shown) {
 // puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
 // for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
 // class answers it for each window, and the rest of the window keeps its direction: the title,
-// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+// which is hidden, and the Window menu and Mission Control, which read the title, not this. A
+// window with its sidebar on the left answers left to right under an Arabic or Hebrew system too:
+// its buttons sit in the sidebar's header row, and the core reads the direction as the sidebar's
+// side, for the strip at its edge (core/platform/mac/window_views.mm).
 static char kSidebarRight;
 static IMP g_titlebar_direction;
 
 static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
-  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
-    return NSUserInterfaceLayoutDirectionRightToLeft;
+  if (NSNumber* right = objc_getAssociatedObject(self, &kSidebarRight)) {
+    return right.boolValue ? NSUserInterfaceLayoutDirectionRightToLeft
+                           : NSUserInterfaceLayoutDirectionLeftToRight;
   }
   return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
 }
@@ -5325,8 +5351,13 @@ static void PlaceTitlebarSide(Browser* browser) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
+  const NSUserInterfaceLayoutDirection was = window.windowTitlebarLayoutDirection;
+  objc_setAssociatedObject(window, &kSidebarRight, @(browser->sidebar_right),
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Only a change moves the buttons, so a window on the system's own side costs nothing more.
+  if (window.windowTitlebarLayoutDirection == was) {
+    return;
+  }
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
   // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
@@ -6424,6 +6455,7 @@ bool host_grow_first_run(void) {
   }
   // The window first run ends on: the one held, and with none or more than one there's no saying.
   NSWindow* held = nil;
+  NSView* held_view = nil;
   for (auto& browser : g_browsers) {
     if (!browser->held) {
       continue;
@@ -6432,6 +6464,7 @@ bool host_grow_first_run(void) {
       return false;
     }
     held = browser->window;
+    held_view = browser->ui_view;
   }
   if (!held || held.miniaturized || (held.styleMask & NSWindowStyleMaskFullScreen)) {
     return false;
@@ -6460,8 +6493,26 @@ bool host_grow_first_run(void) {
     PlaceFirstRunGlass();
     [g_first_run_view.layer setNeedsDisplay];
     [g_first_run_view.layer displayIfNeeded];
+    // Under the card from the grow's start, unseen, so the UI and its pages draw it on their own
+    // frames while the card grows, and the reveal only changes opacities: drawn at the reveal or
+    // at the exit's end, as before, it took frames from the card's motion or left the grown card
+    // blank until it came.
+    ShowWindow((__bridge void*)held_view, first_run, true);
+    g_under_first_run = held;
   });
   return true;
+}
+
+void host_set_first_run_reveal(double window, double glass) {
+  if (!g_first_run || !g_under_first_run) {
+    return;
+  }
+  g_under_first_run.alphaValue = MAX(window, kUnseen);
+  for (NSView* view in g_first_run.contentView.subviews) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) {
+      view.alphaValue = glass;
+    }
+  }
 }
 
 void host_show_first_run(void) {
@@ -6494,6 +6545,9 @@ void host_close_first_run(void) {
     g_took_first_runs_place = false;
     g_first_run.animationBehavior = NSWindowAnimationBehaviorNone;
   }
+  // A window still under it, as on a quit mid-exit, isn't left unseen.
+  g_under_first_run.alphaValue = 1;
+  g_under_first_run = nil;
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;

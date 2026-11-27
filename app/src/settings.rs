@@ -206,6 +206,8 @@ enum Popup {
     NewThreadAccess,
     NewThreadModel,
     NewThreadEffort,
+    /// Other apps' Access: where an app's next task starts.
+    OthersAccess,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -225,7 +227,7 @@ impl Popup {
                 format!("{} options", browser::settings_rows::assistant_name(cli)).into()
             }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
-            Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadAccess | Popup::OthersAccess => browser::agents::tier::ACCESS.into(),
             Popup::NewThreadModel => browser::agents::task::MODEL.into(),
             Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
@@ -331,7 +333,7 @@ pub struct Settings {
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
     requests_all: HashSet<u64>,
-    /// The site notes opened to read, by host (#4122).
+    /// The site notes opened to read, by name (#4122).
     notes_opened: HashSet<&'static str>,
 }
 
@@ -3923,7 +3925,12 @@ impl Settings {
             threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
             threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
-        let mut blocks = vec![Block::Rows(vec![self.other_apps(agents, accent, cx)])];
+        let mut rows = vec![self.other_apps(agents, accent, cx)];
+        // Where their next task starts, while they may connect: the composer's level menu.
+        if agents.read(cx).other_apps() {
+            rows.push(self.others_access(agents, cx));
+        }
+        let mut blocks = vec![Block::Rows(rows)];
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
@@ -3934,6 +3941,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.sensitive_sites(agents, cx));
         access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
@@ -4064,6 +4072,34 @@ impl Settings {
         // S30, batch 12: off says what off does; on, the row is bare.
         let line = (!on).then(|| "Off: no app connects.".into());
         setting(&self.look, name, line, vec![switch])
+    }
+
+    /// Other apps' Access (#4360): the level an app's next task starts at, from the composer's
+    /// level menu, Full access too; only the user's pick sets it, and it sets it back.
+    fn others_access(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let tier = agents.read(cx).others_start();
+        let agents = agents.clone();
+        let choose = cx.listener(move |settings, _, window, cx| {
+            let (tiers, items) = browser::command_bar::level_choices(tier);
+            let (settings_, agents) = (cx.weak_entity(), agents.clone());
+            let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+                if let Some(&tier) = picked.and_then(|at| tiers.get(at)) {
+                    agents.update(cx, |agents, cx| agents.set_others_start(tier, cx));
+                }
+                settings_.update(cx, |settings, cx| settings.chose(cx)).ok();
+            });
+            settings.pop_up(Popup::OthersAccess, items, picked, window, cx);
+        });
+        let popup = self
+            .popup(
+                Popup::OthersAccess,
+                tier.label().into(),
+                POPUP_WIDTH,
+                choose,
+            )
+            .child(self.drawn("other apps access".into()))
+            .into_any_element();
+        setting(&self.look, agents::tier::ACCESS, None, vec![popup])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
@@ -4240,6 +4276,55 @@ impl Settings {
         ]
     }
 
+    /// Sensitive sites (#4369): each profile's, its profile named with two or more, each with
+    /// Remove, the way out of a mark the user or a sign-in made, and what the list does. A later
+    /// sign-in with a bank or government ID marks a removed site again.
+    fn sensitive_sites(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::sensitive;
+        let look = &self.look;
+        let profiles = crate::ids(bc::bc_profiles);
+        let several = profiles.len() > 1;
+        let model = agents.read(cx);
+        let marked: Vec<(String, String, Option<SharedString>)> = (profiles.into_iter())
+            .flat_map(|profile| {
+                let folder = crate::agents_core::profile_folder(profile);
+                let name = several.then(|| crate::name(bc::bc_profile_name, profile));
+                (model.sensitive_sites(&folder).into_iter())
+                    .map(move |site| (folder.clone(), site, name.clone()))
+            })
+            .collect();
+        let mut rows: Vec<gpui::Div> = (marked.into_iter().enumerate())
+            .map(|(index, (folder, site, name))| {
+                let (agents, gone) = (agents.clone(), site.clone());
+                // The words table's SS8.
+                let remove = self
+                    .button(("agent-sensitive-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("unmark {site}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| {
+                            agents.mark_sensitive(&folder, &gone, false, cx)
+                        })
+                    });
+                let text = sensitive::row(&site, name.as_deref());
+                line_row(look, text, None, vec![remove.into_any_element()])
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(line_row(
+                look,
+                sensitive::NONE,
+                Some(sensitive::NONE_LINE.into()),
+                Vec::new(),
+            ));
+        }
+        vec![
+            Block::Heading(sensitive::HEADING.into()),
+            Block::Group(group(look, rows)),
+            Block::Under(div().child(foot(look, sensitive::FOOT))),
+        ]
+    }
+
     /// Site notes (#4122): the switch, then a row for each site ilo has a note for, which opens
     /// to the note's own text, as the agent gets it. The list is the app's, so nothing adds to it.
     fn site_notes(
@@ -4264,11 +4349,11 @@ impl Settings {
         let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
         let rows: Vec<gpui::Div> = (notes::NOTES.iter())
             .map(|note| {
-                let host = note.host;
-                let opened = self.notes_opened.contains(host);
+                let name = note.name;
+                let opened = self.notes_opened.contains(name);
                 let toggle = cx.listener(move |settings, _, _, cx| {
-                    if !settings.notes_opened.remove(host) {
-                        settings.notes_opened.insert(host);
+                    if !settings.notes_opened.remove(name) {
+                        settings.notes_opened.insert(name);
                     }
                     cx.notify();
                 });

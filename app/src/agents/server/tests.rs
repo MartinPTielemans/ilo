@@ -556,9 +556,9 @@ fn each_connection_closing_says_so_and_the_last_says_bye() {
     assert!(next(&mut handed).is_none(), "the agent said bye twice");
 }
 
-/// A client that closes its end while its call waits on the user, as on an ask before opening a
-/// bank's site, ends its session: the UI hears the agent go and drops the call, as it drops what
-/// waits for an agent that went, and the server closes the connection, which the bridge waits for.
+/// A client that closes its end while its call waits on the user, as on an ask before a payment,
+/// ends its session: the UI hears the agent go and drops the call, as it drops what waits for an
+/// agent that went, and the server closes the connection, which the bridge waits for.
 #[test]
 fn a_client_closing_while_a_call_waits_ends_its_session() {
     let (server, _, mut handed) = server();

@@ -720,8 +720,7 @@ impl Agents {
                 reading.push((agent.clone(), card));
             }
             self.tasks.dismissed.push_back(agent.clone());
-            let helpers = self.helpers_on() && *cli == Cli::Claude;
-            (self.tasks.tasks).push(Task::past(agent, *cli, past, helpers));
+            (self.tasks.tasks).push(Task::past(agent, *cli, past));
         }
         if !left.is_empty() {
             log!("browser: {} tasks of a run before are kept", left.len());
@@ -960,8 +959,8 @@ impl Task {
     /// A task a run before left, from what the file says of it: its title, how and when it
     /// ended, in the Archive, with no messages, as its conversation is its assistant's. It has no
     /// Space of the user's and none of its own until it's brought back (`Agents::place_past`),
-    /// and the access every task starts at. `helpers` says whether its runs may start helpers.
-    pub(super) fn past(agent: String, cli: Cli, past: &kept::Past, helpers: bool) -> Task {
+    /// and the access every task starts at.
+    pub(super) fn past(agent: String, cli: Cli, past: &kept::Past) -> Task {
         let at = SystemTime::UNIX_EPOCH + Duration::from_secs(past.at);
         let state = match past.end {
             kept::End::Done => State::Done {
@@ -1019,7 +1018,7 @@ impl Task {
             picked_from: None,
             placed: Vec::new(),
             told: None,
-            helpers: Helpers::of_task(helpers),
+            helpers: Helpers::default(),
             files: crate::agents::files::Given::default(),
             rising: None,
             rewalled: Vec::new(),
