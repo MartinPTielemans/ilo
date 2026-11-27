@@ -1229,10 +1229,6 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
         }
-        // A strand's start, with its goal's first line.
-        STRAND if !did.target.is_empty() => {
-            return format!("{} · {}", describe(STRAND), did.target);
-        }
         action => return describe(action).to_string(),
     };
     let verb = match tense {

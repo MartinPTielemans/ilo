@@ -27,7 +27,7 @@ fn strand(
 
 /// The thread's answer when a strand's run ended badly for `reason` (AP29).
 fn ended(reason: &str) -> String {
-    format!("The helper ended: {reason} Do its part yourself.")
+    format!("The helper ended: {reason} Check what's already done and finish its part yourself.")
 }
 
 /// The thread's name, as its strands' answers say it.
@@ -324,23 +324,16 @@ fn a_strands_start_is_its_threads_entry(cx: &mut TestAppContext) {
             })
             .collect()
     });
-    // A row for each strand, never a count, its goal's first line cut at 60 characters.
-    let cut: String = long.chars().take(60).collect();
-    assert_eq!(
-        started,
-        [
-            (
-                thread.clone(),
-                "Started a strand · Find the fare".to_string(),
-                format!("{thread}-1")
-            ),
-            (
-                thread.clone(),
-                format!("Started a strand · {cut}…"),
-                format!("{thread}-2")
-            ),
-        ]
-    );
+    // A row for each strand, never a count, and none keeps its goal.
+    let row = |strand: u32| {
+        let strand = format!("{thread}-{strand}");
+        (thread.clone(), "Started a strand".to_string(), strand)
+    };
+    assert_eq!(started, [row(1), row(2)]);
+    let kept = (run.agents).read_with(cx, |agents, _| {
+        (agents.log.iter()).any(|entry| entry.target.contains("fare"))
+    });
+    assert!(!kept, "an entry kept a strand's goal");
 }
 
 /// Each entry a strand's call leaves is its thread's, at its thread's access, and names the

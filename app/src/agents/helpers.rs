@@ -370,7 +370,9 @@ impl Helpers {
 /// The thread's answer when its strand's run ended badly, for `reason` (AP29): what went wrong and
 /// what to do next, as the model otherwise learns only that something broke.
 fn ended_badly(reason: &str) -> ToolResult {
-    ToolResult::error(format!("The helper ended: {reason} Do its part yourself."))
+    ToolResult::error(format!(
+        "The helper ended: {reason} Check what's already done and finish its part yourself."
+    ))
 }
 
 /// What went wrong with a strand's turn, for its thread's call: as the thread's own card would say
@@ -510,12 +512,11 @@ impl Agents {
         };
         let started = self.launch_strand(&agent, &strand, &first, cx);
         // Its start is its thread's entry in the activity log, naming the strand as its calls'
-        // entries do, with its goal's first line cut as the assistant's own words are: one
-        // entry for each strand, never a count.
+        // entries do: one entry for each strand, never a count. The log keeps what happened,
+        // never the assistant's words, so not its goal.
         if started.is_ok() {
-            let goal = super::page::clip(goal.lines().next().unwrap_or_default(), 60);
             self.as_strand(&strand, |agents| {
-                agents.note_on(&agent, connection, tools::STRAND, "", &goal, "")
+                agents.note(&agent, connection, tools::STRAND, "", "")
             });
         }
         let Some(task) = self.task_mut(&agent) else {
