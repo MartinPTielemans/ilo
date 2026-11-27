@@ -348,8 +348,9 @@ pub(crate) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
-    /// The Shell that set_threads and show_share_sheet read, as the core's do: turning agents off
-    /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
+    /// The Shell that set_threads, show_share_sheet and start_broom read, as the core's do:
+    /// turning agents off ends their ask, which reads every Shell, the share sheet finds its tab's
+    /// window, and a sort reads the Space its window shows.
     reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
 
@@ -823,7 +824,8 @@ impl Browser for Recorder {
         self.broom.get()
     }
 
-    fn start_broom(&self, _: &mut App) {
+    fn start_broom(&self, cx: &mut App) {
+        self.read_shell(cx);
         self.record("start broom".into())
     }
 
