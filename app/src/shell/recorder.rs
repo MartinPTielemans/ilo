@@ -1981,6 +1981,7 @@ impl Browser for Recorder {
         tab: u64,
         place: crate::site_controls::Place,
         _: Size<Pixels>,
+        _: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<crate::site_controls::Extension>,
         profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,

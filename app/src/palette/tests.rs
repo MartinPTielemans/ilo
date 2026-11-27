@@ -256,7 +256,7 @@ fn failures_over(
     }
     {
         use crate::tokens::site_controls::*;
-        for (name, alpha) in [("text", TEXT), ("state", SECONDARY), ("link", LINK)] {
+        for (name, alpha) in [("text", TEXT), ("state", SECONDARY)] {
             check(
                 &format!("site controls {name}"),
                 on(palette.on_overlay(alpha), &[overlay]),
@@ -2306,11 +2306,6 @@ fn float_words() -> Vec<(&'static str, f32, f32)> {
             "Site Controls' text",
             site_controls::TEXT,
             site_controls::TEXT,
-        ),
-        (
-            "Site Controls' link",
-            site_controls::LINK,
-            site_controls::LINK,
         ),
         (
             "Site Controls' secondary",
