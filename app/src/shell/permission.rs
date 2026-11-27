@@ -66,6 +66,7 @@ impl Shell {
             Some(question) => self.questions.insert(tab, question),
             None => self.questions.remove(&tab),
         };
+        self.note_waits(tab, cx);
         // A question that changes under the pointer is a new one to settle.
         if tab == self.selected && changed {
             self.question_settling.replace(None);
@@ -90,6 +91,7 @@ impl Shell {
             return;
         }
         if self.questions.remove(&tab).is_some() {
+            self.note_waits(tab, cx);
             self.browser.answer_permission(tab, answer, cx);
             cx.notify();
         }

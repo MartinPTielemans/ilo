@@ -1573,10 +1573,11 @@ impl Agents {
             (State::Working | State::Asking { .. }, Some(question)) => {
                 (needs_you(question), Dot::Waiting, false, NEEDS_YOU.len())
             }
-            // A refusal the user hasn't settled says where it stopped, as its line says why.
+            // A refusal the user hasn't settled says where it stopped, as its line says why. The
+            // agent was told and goes on, so nothing waits on the user: no amber (#4410).
             (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => (
                 format!("{STOPPED_AT} {}", stop.at).into(),
-                Dot::Waiting,
+                Dot::Working,
                 false,
                 0,
             ),

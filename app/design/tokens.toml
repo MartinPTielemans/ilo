@@ -1141,8 +1141,9 @@ light-neutral-gradient-alpha = 0.11
 # orchestrator, 11:09Z).
 overlay-light = 0xf2f2f3
 dialog-light = 0xf9f9f9
-# The one colour of the chrome's own, amber, says a thread or an agent waits on you (#4401): the
-# knot and its words, nowhere else. Colour otherwise stays in favicons and pages, red for what
+# The one colour of the chrome's own, amber, says something is stuck until you act (#4401,
+# #4410): a thread's knot and its words while it waits on you, and the mark on a tab's row while
+# its page waits on a permission, a sign-in or a dialog, nowhere else. Colour otherwise stays in favicons and pages, red for what
 # destroys, and the makers' logos.
 needs-you = 0xf5a524
 # ilo green, which a Board's page alone still takes, as its accent (copy-board.sh, [board]). A

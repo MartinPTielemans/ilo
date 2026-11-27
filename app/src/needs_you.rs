@@ -1,6 +1,6 @@
 //! Quiet until it needs you, outside ilo (docs/ux-spec.md › Agent task, Needs you): the Dock's
-//! badge, the taskbar button's overlay or the window's urgency says how many tasks wait for the
-//! user, ⌘T's and outside agents' alike, and a task that comes to need the user or finishes posts
+//! badge, the taskbar button's overlay or the window's urgency says how many tasks and tabs wait
+//! for the user, ⌘T's and outside agents' alike, and a task that comes to need the user or finishes posts
 //! one system notification, as Settings › Agents' Notify says, whose click opens its task's
 //! card. Nothing is kept of them past the run, and nothing else interrupts: no sound, no bounce, no
 //! flash.
@@ -81,6 +81,10 @@ const KEPT: usize = 64;
 struct NeedsYou {
     host: Rc<dyn Host>,
     count: usize,
+    /// The tasks whose cards wait, as last followed.
+    cards: usize,
+    /// The tabs a page's question or dialog waits on (#4410), which count as a task's wait does.
+    tabs: HashSet<u64>,
     /// Each task's state as last followed, so a notification is for a state it came to, not one
     /// it was in when ilo first saw it, as a finished task kept from a run before.
     last: Vec<(SharedString, Dot)>,
@@ -104,6 +108,8 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) {
     cx.set_global(NeedsYou {
         host,
         count: 0,
+        cards: 0,
+        tabs: HashSet::new(),
         last: Vec::new(),
         told: HashSet::new(),
         posted: Vec::new(),
@@ -120,15 +126,10 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
     }
     let state = cx.global_mut::<NeedsYou>();
     let host = state.host.clone();
-    let waiting = (cards.iter())
+    state.cards = (cards.iter())
         .filter(|card| card.dot == Dot::Waiting)
         .count();
-    if waiting != state.count {
-        state.count = waiting;
-        // check.sh reads this line.
-        crate::log!("browser: needs you {}", state.count);
-        host.badge(state.count);
-    }
+    state.show_count();
     let was = |agent: &SharedString| {
         (state.last.iter())
             .find(|(each, _)| each == agent)
@@ -181,7 +182,33 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
         .collect();
 }
 
-pub fn tab_waits(_tab: u64, _waits: bool, _cx: &mut App) {}
+/// Whether tab `tab` waits on the user, for a page's question or dialog: the count has it while
+/// it does, so a wait the user can't see still shows outside ilo (#4410).
+pub fn tab_waits(tab: u64, waits: bool, cx: &mut App) {
+    if !cx.has_global::<NeedsYou>() {
+        return;
+    }
+    let state = cx.global_mut::<NeedsYou>();
+    let changed = match waits {
+        true => state.tabs.insert(tab),
+        false => state.tabs.remove(&tab),
+    };
+    if changed {
+        state.show_count();
+    }
+}
+
+impl NeedsYou {
+    fn show_count(&mut self) {
+        let count = self.cards + self.tabs.len();
+        if count != self.count {
+            self.count = count;
+            // check.sh reads this line.
+            crate::log!("browser: needs you {}", self.count);
+            self.host.badge(self.count);
+        }
+    }
+}
 
 /// What the last `follow` found the task `agent` came to, to wait or to be done, and whether its
 /// notification was posted then. Nothing is told of it in the app beside a notification.

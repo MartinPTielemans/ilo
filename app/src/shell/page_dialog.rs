@@ -79,6 +79,7 @@ impl Shell {
             Some(dialog) => self.page_dialogs.insert(tab, dialog),
             None => self.page_dialogs.remove(&tab),
         };
+        self.note_waits(tab, cx);
         // The one dialog of a user's page that shows while a task has the page area: whether to
         // leave it, as the window closes (#4202).
         self.step_aside_to_ask(cx);
@@ -104,6 +105,7 @@ impl Shell {
             .page_dialogs
             .remove(&tab)
             .is_some_and(|dialog| dialog.kind == DialogKind::Leave && !reply.accept);
+        self.note_waits(tab, cx);
         self.page_dialog_shown = Some(None);
         self.page_dialog_up = None;
         // check.sh reads this line, which never has what was typed.

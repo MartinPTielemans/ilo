@@ -1566,6 +1566,7 @@ impl Shell {
             .as_ref()
             .filter(|renaming| renaming.naming.tab() == Some(tab));
         let trouble = self.trouble_mark(tab);
+        let waiting = self.waiting_mark(tab);
         let speaker = match trouble {
             Some(_) => None,
             None => self.speaker(tab, cx),
@@ -1580,8 +1581,8 @@ impl Shell {
                 .items_center()
                 .when(button.is_none(), |label| label.pr(px(TITLE_END_INSET)))
                 // The mark takes the capture mark's place, and the speaker goes, while the page
-                // has died or hung.
-                .children(match trouble {
+                // has died or hung; the amber one takes it while the page waits on the user.
+                .children(match trouble.or(waiting) {
                     Some(mark) => Some(mark.into_any_element()),
                     None => self.capture_mark(tab).map(IntoElement::into_any_element),
                 })

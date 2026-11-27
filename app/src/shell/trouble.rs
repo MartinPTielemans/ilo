@@ -8,8 +8,8 @@
 use std::time::Instant;
 
 use gpui::{
-    Bounds, Context, Div, FontWeight, MouseButton, Pixels, Stateful, Window, div, prelude::*, px,
-    svg,
+    App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, Pixels, Stateful, Window, div,
+    prelude::*, px, rgb, svg,
 };
 
 use super::{
@@ -25,6 +25,7 @@ const STOPPED: &str = "This page stopped";
 pub const RELOAD: &str = "Reload";
 pub const NOT_RESPONDING: &str = "Not responding";
 pub const WAIT: &str = "Wait";
+use crate::tokens::palette::NEEDS_YOU;
 use crate::tokens::shell::trouble::BUTTON_INSET;
 use crate::tokens::shell::trouble::LINE;
 use crate::tokens::shell::trouble::WORDS_SIZE;
@@ -195,28 +196,36 @@ impl Shell {
     /// The mark in the speaker's place in `tab`'s row while its page has died or hung. The row
     /// still shows the tab, and its card or note says what to do.
     pub(super) fn trouble_mark(&self, tab: u64) -> Option<Div> {
-        matches!(self.page(tab).trouble, Trouble::Crashed | Trouble::Hung).then(|| {
-            div()
-                .flex_none()
-                .mr(px(SPEAKER_GAP))
-                .size(px(SPEAKER_SIZE))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path(MARK)
-                        .size(px(SPEAKER_DRAWN))
-                        .text_color(self.line_palette(tab).text(SECONDARY)),
-                )
-        })
+        (matches!(self.page(tab).trouble, Trouble::Crashed | Trouble::Hung))
+            .then(|| mark(self.line_palette(tab).text(SECONDARY)))
+    }
+
+    /// The mark in the same place, amber, while `tab`'s page waits on the user for a permission,
+    /// a sign-in or a dialog, until it's answered: stuck until the user acts (#4410).
+    pub(super) fn waiting_mark(&self, tab: u64) -> Option<Div> {
+        self.waits(tab).then(|| mark(rgb(NEEDS_YOU).into()))
+    }
+
+    /// Whether `tab`'s page waits on the user's answer.
+    pub(super) fn waits(&self, tab: u64) -> bool {
+        self.questions.contains_key(&tab) || self.page_dialogs.contains_key(&tab)
+    }
+
+    /// Tells the count outside ilo whether `tab` waits, after its question or dialog changed.
+    pub(super) fn note_waits(&self, tab: u64, cx: &mut App) {
+        crate::needs_you::tab_waits(tab, self.waits(tab), cx);
     }
 }
 
-impl Shell {
-    pub(super) fn waiting_mark(&self, _tab: u64) -> Option<Div> {
-        None
-    }
+fn mark(color: Hsla) -> Div {
+    div()
+        .flex_none()
+        .mr(px(SPEAKER_GAP))
+        .size(px(SPEAKER_SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(svg().path(MARK).size(px(SPEAKER_DRAWN)).text_color(color))
 }
 
 /// How the logs name `trouble`.
