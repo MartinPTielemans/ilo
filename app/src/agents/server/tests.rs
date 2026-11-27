@@ -430,6 +430,7 @@ fn the_server_answers_what_needs_no_browser() {
             "navigate",
             "snapshot",
             "read_page",
+            "page_log",
             "click",
             "type",
             "select",

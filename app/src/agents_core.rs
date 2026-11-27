@@ -146,6 +146,34 @@ impl Browser for Core {
         unsafe { bc::bc_tab_read_text(tab, request) };
     }
 
+    fn page_log(&self, agent: &str, tab: u64) -> (String, bool) {
+        let Ok(agent) = CString::new(agent) else {
+            return (String::new(), false);
+        };
+        let mut developer_mode = false;
+        // A page that reports between the two calls grows the log, so a copy that came up short
+        // asks again for the length it was told.
+        let mut capacity = 0;
+        loop {
+            let mut log = vec![0u8; capacity];
+            let length = unsafe {
+                bc::bc_agent_page_log(
+                    agent.as_ptr(),
+                    tab,
+                    &mut developer_mode,
+                    log.as_mut_ptr().cast(),
+                    log.len(),
+                )
+            };
+            // The copy keeps room for its terminator, which the length leaves out.
+            if length < capacity {
+                log.truncate(length);
+                return (String::from_utf8_lossy(&log).into_owned(), developer_mode);
+            }
+            capacity = length + 1;
+        }
+    }
+
     fn disconnected(&self, agent: &str, _: &mut App) {
         if let Ok(agent) = CString::new(agent) {
             call(|| unsafe { bc::bc_agent_disconnected(agent.as_ptr()) });

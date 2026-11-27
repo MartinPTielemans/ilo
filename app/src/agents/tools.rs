@@ -96,6 +96,28 @@ pub const MAX_ANSWER: usize = 12_000;
 /// `MAX_ANSWER` for which page it is and what an action did.
 pub const MAX_TEXT: usize = 10_000;
 
+/// page_log's description (#4377): what it gives, and that Developer Mode is the user's to turn on.
+const PAGE_LOG: &str = "What the page reported since it loaded: failed requests, and in Developer Mode the console and full requests. Only the user can turn Developer Mode on, in the site's menu.";
+/// The log's action for a page_log call that read a page in Developer Mode, and for any other:
+/// the step's words differ, as what it read does.
+pub const CONSOLE: &str = "console";
+pub const PAGE_LOG_FAILED: &str = "page_log";
+/// What a page_log answer adds, for a page not in Developer Mode, to the core's log.
+pub const NEEDS_DEVELOPER_MODE: &str = "The console needs Developer Mode for this site, which only the user can turn on, in the site's menu.";
+
+/// page_log's answer: the core's log as it came, then for a page not in Developer Mode the sentence
+/// that says what's missing. The core's log is cut at the answer's limit with room left for it.
+pub fn page_log_answer(log: String, developer_mode: bool) -> String {
+    if developer_mode {
+        return capped(log);
+    }
+    if log.is_empty() {
+        return NEEDS_DEVELOPER_MODE.to_string();
+    }
+    let room = NEEDS_DEVELOPER_MODE.chars().count() + 2;
+    format!("{}\n\n{NEEDS_DEVELOPER_MODE}", capped_after(log, room))
+}
+
 /// `text`, cut at `MAX_ANSWER` characters, saying so.
 pub fn capped(text: String) -> String {
     capped_after(text, 0)
@@ -503,6 +525,16 @@ fn shared() -> Value {
                     "from": { "type": "integer", "minimum": 0, "description": "The character to start at, for the part after one an answer ended, as it says. 0 by default." },
                     "tab": tab,
                 },
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": true },
+        },
+        {
+            "name": "page_log",
+            "title": "Page log",
+            "description": PAGE_LOG,
+            "inputSchema": {
+                "type": "object",
+                "properties": { "tab": tab },
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
@@ -1012,6 +1044,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             site("the page"),
         ),
         "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
+        CONSOLE => (
+            "Reading the console on",
+            "Read the console on",
+            "Couldn't read the console on",
+            site("the page"),
+        ),
+        PAGE_LOG_FAILED => (
+            "Reading failed requests on",
+            "Read failed requests on",
+            "Couldn't read failed requests on",
+            site("the page"),
+        ),
         "screenshot" => (
             "Looking at",
             "Looked at",
@@ -1195,7 +1239,7 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
     };
     match did.tool.as_str() {
         "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot"
-        | "upload" => step_title(&on("pages"), tense),
+        | "upload" | CONSOLE | PAGE_LOG_FAILED => step_title(&on("pages"), tense),
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
             step_title(&on("pages"), tense)
         }
@@ -1208,7 +1252,7 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
 /// A step's glyph, by its tool, from the shell's one family.
 pub fn step_glyph(tool: &str) -> &'static str {
     match tool {
-        "read_page" | "snapshot" => "icons/text-align-start.svg",
+        "read_page" | "snapshot" | CONSOLE | PAGE_LOG_FAILED => "icons/text-align-start.svg",
         "click" => "icons/mouse-pointer-2.svg",
         "type" => "icons/type.svg",
         "select" => "icons/chevrons-up-down.svg",
@@ -1337,6 +1381,8 @@ pub fn describe(action: &str) -> &'static str {
         NOT_SECURE_ACTION => NOT_SECURE,
         "list_tabs" => "Listed its tabs",
         "read_page" => "Read the page",
+        CONSOLE => "Read the console",
+        PAGE_LOG_FAILED => "Read failed requests",
         "open_tab" => "Opened a page",
         "navigate" => "Went to a page",
         "back" => "Went back",

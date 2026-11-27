@@ -236,6 +236,9 @@ pub trait Browser {
     /// Asks the core for the text of `tab`'s page (bc_tab_read_text), which comes to
     /// `Agents::text_read` with `request`.
     fn read_text(&self, tab: u64, request: u64);
+    /// What the page in the agent's `tab` reported (bc_agent_page_log): the core's log as JSON,
+    /// and whether the page is in Developer Mode. Empty for a tab the agent doesn't own.
+    fn page_log(&self, agent: &str, tab: u64) -> (String, bool);
     /// Tells the core the agent's client went (bc_agent_disconnected).
     fn disconnected(&self, agent: &str, cx: &mut App);
     /// Opens `url`, http(s) only, in a new tab at the top of the agent's Space, not shown
@@ -2275,24 +2278,8 @@ impl Agents {
                 _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
             }
             "read_page" => {
-                let tab = match tools::tab_argument(&arguments) {
-                    Ok(Some(tab)) => tab,
-                    Ok(None) => match self.default_tab(&agent, connection, cx) {
-                        Ok(tab) => tab,
-                        // Its one refusal of that kind: the agent has no tab at all.
-                        Err(refused) if refused.kind == Some(tools::Kind::NotFound) => {
-                            _ = reply.send(ToolResult::text(tools::tab_list(&[], None, &[])));
-                            return;
-                        }
-                        Err(refused) => {
-                            _ = reply.send(refused.into());
-                            return;
-                        }
-                    },
-                    Err(why) => {
-                        _ = reply.send(ToolResult::error(why));
-                        return;
-                    }
+                let Some(tab) = self.call_tab(&agent, connection, &arguments, &reply, cx) else {
+                    return;
                 };
                 let from = match arguments.get("from") {
                     None | Some(Value::Null) => 0,
@@ -2322,6 +2309,11 @@ impl Agents {
                     note,
                     from,
                 });
+            }
+            "page_log" => {
+                if let Some(tab) = self.call_tab(&agent, connection, &arguments, &reply, cx) {
+                    self.page_log(&agent, connection, tab, &reply, cx);
+                }
             }
             "open_tab" => {
                 let Some(url) = self.url_argument(&arguments, &reply) else {
@@ -5084,6 +5076,77 @@ impl Agents {
         false
     }
 
+    /// The tab a call of a tool that reads one page is on: the one it names, or the one its
+    /// connection used last. Else the call is answered, as a tool that lists none does when the
+    /// agent has no tab, or refused, and None comes back.
+    fn call_tab(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        arguments: &Value,
+        reply: &mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        match tools::tab_argument(arguments) {
+            Ok(Some(tab)) => Some(tab),
+            Ok(None) => match self.default_tab(agent, connection, cx) {
+                Ok(tab) => Some(tab),
+                // Its one refusal of that kind: the agent has no tab at all.
+                Err(refused) if refused.kind == Some(tools::Kind::NotFound) => {
+                    _ = reply.send(ToolResult::text(tools::tab_list(&[], None, &[])));
+                    None
+                }
+                Err(refused) => {
+                    _ = reply.send(refused.into());
+                    None
+                }
+            },
+            Err(why) => {
+                _ = reply.send(ToolResult::error(why));
+                None
+            }
+        }
+    }
+
+    /// page_log's answer for `tab`: what its page reported, judged as reading the page is, so the
+    /// core is asked for the log only once the tab is the agent's and may be read (#4377). The
+    /// entry names what was read, the console only for a page in Developer Mode.
+    fn page_log(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        tab: u64,
+        reply: &mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        // The core knows no page_log action: it judges it as the read it is.
+        let checked = self.may_act(agent, tab, "read_page", cx);
+        let (answer, action) = match checked {
+            Ok(()) => {
+                let (log, developer_mode) = self.browser.page_log(agent, tab);
+                let action = match developer_mode {
+                    true => tools::CONSOLE,
+                    false => tools::PAGE_LOG_FAILED,
+                };
+                (Ok(tools::page_log_answer(log, developer_mode)), action)
+            }
+            Err(refused) => (Err(refused), tools::PAGE_LOG_FAILED),
+        };
+        let site = site(&self.browser.tab(tab, cx).url);
+        let why = answer.as_ref().err().map_or(String::new(), |refused| {
+            self.log_words(tab, &refused.why, cx)
+        });
+        self.note_page(agent, (connection, tab), action, &site, &why);
+        cx.notify();
+        match answer {
+            Ok(text) => {
+                self.current.insert((agent.into(), connection), tab);
+                _ = reply.send(ToolResult::text(text));
+            }
+            Err(refused) => _ = reply.send(refused.into()),
+        }
+    }
+
     /// Asks the core for the text of `reading`'s tab, which `text_read` answers with.
     fn read_page(&mut self, reading: Reading) {
         let request = self.next_request;
@@ -6352,8 +6415,9 @@ const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses
 const FENCED: &str = "fenced";
 /// The tools whose call on a tab that came to a fenced site asks first: each reads or acts on its
 /// page. Leaving it, closing it, handing it to the user and arranging tabs don't.
-const FENCE_ASKS: [&str; 10] = [
+const FENCE_ASKS: [&str; 11] = [
     "read_page",
+    "page_log",
     "snapshot",
     "screenshot",
     "click",
