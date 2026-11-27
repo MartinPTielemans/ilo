@@ -65,10 +65,10 @@ use crate::tokens::shell::conversation::{
     COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
     COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
     COPY_GLYPH, FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, HELPER_ABOVE, HELPER_NAME_LINE,
-    HELPER_QUIET_LINE, HELPER_QUIET_TEXT, HELPER_QUIET_TOP, INSET, ITEM_GAP, KNOT_DONE,
-    LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP,
-    META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL,
-    PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP,
+    HELPER_QUIET_LINE, HELPER_QUIET_TEXT, HELPER_QUIET_TOP, HELPER_TIME, INSET, ITEM_GAP,
+    KNOT_DONE, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE,
+    LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON,
+    PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP,
     PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
     REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK, SAID_RULE, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
     SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE,
@@ -2332,9 +2332,16 @@ impl TalkView {
         self.crossfade(fold, &mut line, look);
         let paged = pages::paged(&trace.items);
         let mut nest = nest();
+        // Where the run of helpers in hand split, from its first helper's start: each one's time
+        // counts from there.
+        let mut split_at = None;
         for (at, each) in paged.iter().enumerate() {
+            let run = pages::split_at(&paged, at);
+            if let Some(count) = run {
+                split_at = split_began(&paged[at..at + count]);
+            }
             // A run of helpers has the line that says the work split over it.
-            let split = pages::split_at(&paged, at).and_then(words::split);
+            let split = run.and_then(words::split);
             if let (Some(split), pages::Paged::Item(_, TraceItem::Helper { step, .. })) =
                 (split, each)
             {
@@ -2354,14 +2361,23 @@ impl TalkView {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 // A helper's line has no Take Over, which is the one page's the task stands on.
-                TraceItem::Helper { step, name, tab } => {
+                TraceItem::Helper {
+                    step,
+                    name,
+                    tab,
+                    ended,
+                    ..
+                } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
-                    match helper_row(step, name, page) {
+                    let time = split_at.map(|split| helper_time(split, *ended, look.now));
+                    match helper_row(step, name, page, time) {
                         HelperRow::Known(line) => {
                             // Under its name, the step it's on, or done its last, as a step's
                             // line says it, with no lines between it and the row before.
+                            // The row's width is the nest's, so the time stands at its right.
                             let row = div()
                                 .flex_none()
+                                .w_full()
                                 .pt(px(HELPER_ABOVE))
                                 .child(trace_line(look, line))
                                 .children(self.quiet_line(step, look));
@@ -3833,6 +3849,7 @@ impl TraceLine {
             // Under Reduce Motion the step under way holds whole at the title's ink, its account
             // too, in place of the shimmer (TS7).
             note: match self.shimmers {
+                _ if self.knot.is_some() => answer_text_3(palette),
                 Some(None) => palette.text(TITLE),
                 _ => palette.gray(TRACE_NOTE),
             },
@@ -3884,8 +3901,13 @@ enum HelperRow {
     Nothing,
 }
 
-fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) -> HelperRow {
-    match helper_line(step, name, page) {
+fn helper_row(
+    step: &TraceStep,
+    name: &SharedString,
+    page: Option<&HelperPage>,
+    time: Option<String>,
+) -> HelperRow {
+    match helper_line(step, name, page, time) {
         Some(line) => HelperRow::Known(line),
         None if step.title.is_empty() => HelperRow::Nothing,
         None => HelperRow::Step,
@@ -3893,23 +3915,42 @@ fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) 
 }
 
 /// The name line of a helper known by words of its own (screen 4c): the name its task gave it,
-/// or with none its page's title, as the page's row in the sidebar says it, after ilo's knot.
-/// Nothing on it is the helper's own text or what it found. None for one with neither a name nor
-/// a titled page.
+/// or with none its page's title, as the page's row in the sidebar says it, after ilo's knot,
+/// and its `time` at the right. Nothing on it is the helper's own text or what it found. None for
+/// one with neither a name nor a titled page.
 fn helper_line(
     step: &TraceStep,
     name: &SharedString,
     page: Option<&HelperPage>,
+    time: Option<String>,
 ) -> Option<TraceLine> {
     let known = match name.is_empty() {
         false => name.clone(),
         true => (page.map(|page| page.title.clone())).filter(|title| !title.is_empty())?,
     };
-    let mut line = TraceLine::new(LineKey::Helper(step.key), known, "".into());
+    let time = time.unwrap_or_default().into();
+    let mut line = TraceLine::new(LineKey::Helper(step.key), known, time);
     // Whole while its step is under way: the trace has no word yet for a helper at work between
     // its steps, which comes with its time.
     line.knot = Some(step.running);
     Some(line)
+}
+
+/// When a run of helpers split: its first helper's start, by its CLI's word.
+fn split_began(run: &[pages::Paged]) -> Option<Instant> {
+    (run.iter())
+        .filter_map(|each| match each {
+            pages::Paged::Item(_, TraceItem::Helper { began, .. }) => *began,
+            _ => None,
+        })
+        .min()
+}
+
+/// A helper's time on its line (screen 4c): from its run's `split` to its end, or while it works
+/// to `now`, counted on the frames its stretch already draws, as the fold's is.
+fn helper_time(split: Instant, ended: Option<Instant>, now: Instant) -> String {
+    let to = ended.unwrap_or(now);
+    crate::agents::task::duration(to.saturating_duration_since(split).as_secs().max(1))
 }
 
 /// A stretch's summary line: its title and what it counts, joined as one string.
@@ -4189,6 +4230,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                         .flex_none()
                         .opacity(note_alpha)
                         .text_color(note)
+                        .when(knot.is_some(), |time| time.text_size(px(HELPER_TIME)))
                         .child(description)
                         .into_any_element(),
                 )

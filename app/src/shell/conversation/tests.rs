@@ -2965,6 +2965,8 @@ fn helper(step: TraceStep) -> TraceItem {
         step,
         name: "".into(),
         tab: None,
+        began: None,
+        ended: None,
     }
 }
 
@@ -2981,20 +2983,59 @@ fn a_named_helpers_line_says_its_name_after_the_knot() {
     };
     for running in [true, false] {
         let reading = step(10, "Reading shop.example", running);
-        let line = helper_line(&reading, &name, Some(&page)).expect("named");
+        let line = helper_line(&reading, &name, Some(&page), None).expect("named");
         assert_eq!(line.text(), "Northwick Home price");
         assert_eq!((line.glyph, line.knot), (None, Some(running)));
     }
     // A page that's gone leaves the name alone.
     let reading = step(10, "Reading shop.example", true);
-    let line = helper_line(&reading, &name, None).expect("named");
+    let line = helper_line(&reading, &name, None, None).expect("named");
     assert_eq!(line.text(), "Northwick Home price");
     // With no name and an untitled page, nothing to be known by.
     let untitled = HelperPage {
         tab: 30,
         title: "".into(),
     };
-    assert!(helper_line(&reading, &"".into(), Some(&untitled)).is_none());
+    assert!(helper_line(&reading, &"".into(), Some(&untitled), None).is_none());
+}
+
+/// A helper's time stands at the right of its name line (screen 4c), counted from where its run
+/// split: its run's first start, so helpers that started apart count from the same moment. It
+/// counts up while the helper works and stops where it ended, in the fold's units.
+#[test]
+fn a_helpers_time_counts_from_the_split_and_stops_as_it_ends() {
+    use super::{helper_line, helper_time, pages, split_began};
+    let split = std::time::Instant::now();
+    let at = |seconds| split + std::time::Duration::from_secs(seconds);
+    let started = |key, began: Option<std::time::Instant>| TraceItem::Helper {
+        step: step(key, "Reading shop.example", true),
+        name: "Hexa".into(),
+        tab: None,
+        began,
+        ended: None,
+    };
+    let items = [
+        TraceItem::Step(step(1, "Searched the web", false)),
+        started(10, Some(at(4))),
+        started(11, Some(split)),
+        started(12, None),
+    ];
+    let paged = pages::paged(&items);
+    let count = pages::split_at(&paged, 1).expect("a run of helpers");
+    assert_eq!(split_began(&paged[1..1 + count]), Some(split));
+    assert_eq!(split_began(&paged[..1]), None);
+
+    // At work it counts up to now; ended, it stands at its end however late it's drawn.
+    assert_eq!(helper_time(split, None, at(21)), "21 s");
+    assert_eq!(helper_time(split, None, at(72)), "1 min 12 s");
+    assert_eq!(helper_time(split, Some(at(30)), at(500)), "30 s");
+    assert_eq!(helper_time(split, None, split), "1 s");
+
+    // On the name line it's the note, which stands at the right.
+    let reading = step(10, "Reading shop.example", true);
+    let line = helper_line(&reading, &"Hexa".into(), None, Some("21 s".into())).expect("named");
+    assert_eq!((line.title.as_ref(), line.note.as_ref()), ("Hexa", "21 s"));
+    assert!(line.note_at_right());
 }
 
 /// A started helper its task gave no name has no empty line: its row appears with its first
@@ -3012,15 +3053,15 @@ fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
     // Started, with no step yet: its line has no words of its own.
     let began = step(10, "", true);
     assert!(matches!(
-        helper_row(&began, &none, None),
+        helper_row(&began, &none, None, None),
         HelperRow::Nothing
     ));
     let untitled = page("");
-    let row = helper_row(&began, &none, Some(&untitled));
+    let row = helper_row(&began, &none, Some(&untitled), None);
     assert!(matches!(row, HelperRow::Nothing));
     let titled = page("Lamps · Northwick Home");
     for on in [&began, &step(11, "Reading shop.example", true)] {
-        let HelperRow::Known(line) = helper_row(on, &none, Some(&titled)) else {
+        let HelperRow::Known(line) = helper_row(on, &none, Some(&titled), None) else {
             panic!("its page has a title");
         };
         assert_eq!(line.text(), "Lamps · Northwick Home");
@@ -3036,9 +3077,12 @@ fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
     assert_eq!(trace.helpers(), 2);
     // With a step and no titled page, the step's line.
     let reading = step(11, "Reading shop.example", true);
-    assert!(matches!(helper_row(&reading, &none, None), HelperRow::Step));
+    assert!(matches!(
+        helper_row(&reading, &none, None, None),
+        HelperRow::Step
+    ));
     // Named, it has its line from its start.
-    let row = helper_row(&step(10, "", true), &"Lamp prices".into(), None);
+    let row = helper_row(&step(10, "", true), &"Lamp prices".into(), None, None);
     assert!(matches!(row, HelperRow::Known(line) if line.text() == "Lamp prices"));
 }
 

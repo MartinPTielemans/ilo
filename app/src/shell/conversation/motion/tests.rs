@@ -350,6 +350,8 @@ fn with_helpers(helpers: usize, steps: usize) -> Line {
         step: step(100 + at, "Reading shop.example", true),
         name: "".into(),
         tab: None,
+        began: None,
+        ended: None,
     });
     trace.items.splice(0..0, lines);
     Line::Trace(trace)

@@ -339,6 +339,8 @@ struct Seen {
     started: Option<Instant>,
     /// How long the task's trace was as its CLI said it ended: a step after it isn't its own.
     ended: Option<usize>,
+    /// When its CLI said it ended, where the time on its line stops.
+    ended_at: Option<Instant>,
 }
 
 /// A page opened while a task's helpers were at work, by the step that opened it. A helper's
@@ -434,6 +436,11 @@ impl Helpers {
                 at: seen.started?,
             })
         })
+    }
+
+    /// When its CLI said the helper started and, once it has, ended: its line's time (screen 4c).
+    pub fn times(&self, helper: usize) -> (Option<Instant>, Option<Instant>) {
+        (self.seen.get(helper)).map_or((None, None), |seen| (seen.started, seen.ended_at))
     }
 
     /// Whether its CLI said the helper ended.
@@ -656,6 +663,7 @@ impl Agents {
                 tabs: Vec::new(),
                 started: None,
                 ended: None,
+                ended_at: None,
             }),
             (Helper::On(tab), Some(helper)) => task.helpers.on(helper, tab),
             (Helper::Opens, Some(helper)) => task.helpers.opens(helper),
@@ -666,7 +674,9 @@ impl Agents {
                 self.count_search(agent);
             }
             (Helper::Ended, Some(helper)) => {
-                task.helpers.seen[helper].ended.get_or_insert(trace);
+                let seen = &mut task.helpers.seen[helper];
+                seen.ended.get_or_insert(trace);
+                seen.ended_at.get_or_insert_with(Instant::now);
                 task.helpers.opening.retain(|each| *each != helper);
             }
             _ => {}
@@ -715,6 +725,7 @@ impl Agents {
                 tabs: Vec::new(),
                 started: Some(Instant::now()),
                 ended: None,
+                ended_at: None,
             }),
         }
         task.helpers.started += 1;

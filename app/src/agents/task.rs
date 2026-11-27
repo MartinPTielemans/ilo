@@ -384,6 +384,10 @@ pub enum TraceItem {
         name: SharedString,
         /// The page it works on, by its tab.
         tab: Option<u64>,
+        /// When its CLI said it started, and when it ended, or for a stretch that's over, that
+        /// stretch's end: its line's time stops there (screen 4c).
+        began: Option<Instant>,
+        ended: Option<Instant>,
     },
 }
 
@@ -5324,6 +5328,7 @@ impl<'a> Stretch<'a> {
                 Together::Helper { helper, key, on } => {
                     let all = self.helpers;
                     let page = |key: usize| all.and_then(|all| all.opened_at(key));
+                    let (began, ended) = all.map_or((None, None), |all| all.times(helper));
                     TraceItem::Helper {
                         step: match on {
                             Some(on) => helper_step(key, on),
@@ -5334,6 +5339,8 @@ impl<'a> Stretch<'a> {
                             Some((at, step)) => step.did.tab.or_else(|| page(at)),
                             None => all.and_then(|all| all.page(helper)),
                         },
+                        began,
+                        ended,
                     }
                 }
             })
@@ -5341,7 +5348,11 @@ impl<'a> Stretch<'a> {
         // A stretch that's over has nothing under way, a helper's line neither: what its
         // assistant does with helpers once a turn ends or is interrupted isn't ilo's to show.
         if !running {
+            let over = ended.into_iter().chain(end).max();
             for item in &mut items {
+                if let TraceItem::Helper { ended, .. } = item {
+                    *ended = ended.or(over);
+                }
                 if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
                     step.running = false;
                     if let Opens::Steps(steps) = &mut step.opens {

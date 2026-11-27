@@ -91,7 +91,9 @@ fn line(run: &Run, agent: &str, line: Value, cx: &mut TestAppContext) {
 fn helpers_of(trace: &Trace) -> Vec<(&str, Option<u64>, bool)> {
     (trace.items.iter())
         .filter_map(|item| match item {
-            TraceItem::Helper { step, name, tab } => Some((name.as_ref(), *tab, step.running)),
+            TraceItem::Helper {
+                step, name, tab, ..
+            } => Some((name.as_ref(), *tab, step.running)),
             _ => None,
         })
         .collect()
@@ -581,7 +583,8 @@ fn a_card_says_where_its_status_is_its_words_fuller_form(cx: &mut TestAppContext
 /// it opens is its own, never a step of the task's nor a group of them, and has its own step on
 /// the card from when it's open. Once its CLI says it ended, its page has no step of its own,
 /// so its row and its line say it's done, and the count stays the number that started, as the
-/// line of the stretch that's over counts it.
+/// line of the stretch that's over counts it. Its line's time runs from its start and stops as it
+/// ends, and every helper's has stopped once its stretch is over.
 #[gpui::test]
 fn a_helper_shows_and_counts_from_its_start(cx: &mut TestAppContext) {
     let (run, agent) = with_helpers("start", cx);
@@ -630,10 +633,26 @@ fn a_helper_shows_and_counts_from_its_start(cx: &mut TestAppContext) {
     };
     assert_eq!(own(&run, cx), [30, PAGES[0].0]);
 
+    // Both started, so each line has its time from then; neither has ended.
+    let times = |trace: &Trace| -> Vec<(bool, bool)> {
+        (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Helper { began, ended, .. } => Some((began.is_some(), ended.is_some())),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        times(&live(&run, &agent, cx)),
+        [(true, false), (true, false)]
+    );
+
     // The first ends: its page has no step, its line isn't under way, and it still counts.
     told(&run, &agent, "toolu_a", Helper::Ended, cx);
     assert_eq!(own(&run, cx), [PAGES[0].0]);
     let trace = live(&run, &agent, cx);
+    // Its time stops there; the other's goes on.
+    assert_eq!(times(&trace), [(true, true), (true, false)]);
     assert_eq!(trace.counted(), (2, Counted::Helpers));
     assert_eq!(card(&run, cx).status, trace.line());
     // A step of the task's own on that page afterwards is the task's.
@@ -649,6 +668,8 @@ fn a_helper_shows_and_counts_from_its_start(cx: &mut TestAppContext) {
     assert!(trace.took.is_some() && !trace.running);
     assert_eq!(trace.counted(), (2, Counted::Helpers));
     assert!(helpers_of(&trace).iter().all(|(.., running)| !running));
+    // Over, every helper's time has stopped.
+    assert_eq!(times(&trace), [(true, true), (true, true)]);
 }
 
 /// A helper's step under way keeps moving while the task's own step waits on the user (#4320):

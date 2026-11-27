@@ -165,6 +165,8 @@ mod tests {
             },
             name: "".into(),
             tab: None,
+            began: None,
+            ended: None,
         };
         let items = [
             step(0, None),

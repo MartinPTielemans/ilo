@@ -3442,12 +3442,14 @@ step-ring-stroke = 1.6
 # its knot at `trace-glyph` in the icon slot, `trace-gap` before its name at `trace-text` on
 # `helper-name-line` in the text's ink; under the name at its indent, `helper-quiet-top` below the
 # name's top, one quiet line at `helper-quiet-text` on `helper-quiet-line`, the step it's on as a
-# step's line says it. Done, its knot stands at `knot-done`.
+# step's line says it. Done, its knot stands at `knot-done`. At the name line's right, its time
+# from the split at `helper-time` in text-3, which stops as it ends.
 helper-above = 4.0
 helper-name-line = 16.0
 helper-quiet-top = 20.0
 helper-quiet-text = 12.0
 helper-quiet-line = 17.0
+helper-time = 12.0
 knot-done = 0.6
 trace-below = 12.0
 # What the assistant itself says in a trace, an opened thought, has one form (spec-thread-stage.md,

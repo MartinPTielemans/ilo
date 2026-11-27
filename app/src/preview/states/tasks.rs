@@ -148,14 +148,17 @@ pub(crate) fn bench_yours() -> bool {
 /// one that handed its page to the user. None is `running` once the turn is over.
 fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     let sites = helper_tabs();
-    let helper = |at: usize, tool: &str, did: &str, running| TraceItem::Helper {
+    // Each started 21 s before the bench opens, as on screen 4c, and one that's done ended then.
+    let now = std::time::Instant::now();
+    let began = now.checked_sub(std::time::Duration::from_secs(21));
+    let helper = |at: usize, tool: &str, did: &str, under_way| TraceItem::Helper {
         step: TraceStep {
             kind: Default::default(),
             key: 10 + at,
             glyph: browser::agents::tools::step_glyph(tool),
             title: format!("{did} {}", sites[at].1).into(),
             description: "".into(),
-            running,
+            running: under_way,
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
@@ -164,6 +167,8 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
         },
         name: HELPER_NAMES[at].into(),
         tab: Some(sites[at].0),
+        began,
+        ended: (!running).then_some(now),
     };
     (0..count)
         .map(|at| match (at == HELPER_WAITING && waits, running) {
