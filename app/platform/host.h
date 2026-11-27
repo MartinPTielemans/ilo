@@ -788,14 +788,12 @@ void host_set_first_run_frame(double width, double height, double radius);
 // shown, or not at all where either window is no longer the one it answered for, the card then
 // growing to the window as it is. With the frame, on that same turn, it puts the held browser
 // window right under first run's, all but transparent, neither key nor main, so the UI and its
-// pages draw it before the card gives way to it (host_set_first_run_reveal). It starts no timer.
-bool host_grow_first_run(void);
-
-// Mac only: the opacity, 0 to 1, of the browser window under a grown first run's window, and of
-// the glass behind first run's card, said on each frame of a grown exit. The window keeps it when
-// Chromium puts a new window's opacity back at its first frame. Nothing where no window is under
-// first run's.
-void host_set_first_run_reveal(double window, double glass);
+// pages draw it before it takes the card's place at host_show_window, whole in one frame. It
+// stays unseen when Chromium puts a new window's opacity back at its first frame. An overlay
+// shown over it there, or over the held window, waits unseen too, neither key nor taking clicks,
+// and comes in over |reveal| seconds once the window is shown, as its content does, the keys
+// typed meanwhile given to it. It starts no timer.
+bool host_grow_first_run(double reveal);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
 // screen the browser window opens on, and takes the launch window down: until first run ends it's

@@ -356,6 +356,10 @@ pub(super) struct Onboarding {
     pub(super) ending: Option<Instant>,
     /// The host's answer, once the exit has asked, to whether it grows first run's window.
     grows: Option<bool>,
+    /// Whether the exit grows the card to the browser window, as the press that ended the flow
+    /// found: the window's content and the new tab's bar, opened then, wait under the card until
+    /// the window takes its place.
+    grown_exit: bool,
     /// Light or dark where check.sh says, else the window's.
     light: Option<bool>,
     /// The step has come all the way and said so.
@@ -618,6 +622,7 @@ impl Shell {
             progress: (0., 0., now),
             ending: None,
             grows: None,
+            grown_exit: false,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
                 "dark" => Some(false),
@@ -862,10 +867,18 @@ impl Shell {
                 if !still {
                     onboarding.grows = Some(self.browser.grows_first_run());
                 }
+                onboarding.grown_exit = onboarding.grown(still);
                 if !onboarding.replay {
                     resume::clear(cx);
                 }
             }
+        }
+        // Where the card grows to the browser window, the window's first Space and its bar, as ⌘T
+        // has it, open now, under the card, so the window takes the card's place with them drawn
+        // and they come in with its content (content_shown).
+        if self.onboarding.as_ref().is_some_and(|o| o.grown_exit) {
+            self.show_hint(cx);
+            self.run(Command::NewTab, "onboarding", cx);
         }
         if let Some(on) = help {
             if self.browser.daily_count(cx).is_some_and(|kept| kept != on) {
@@ -1356,6 +1369,25 @@ impl Shell {
         })
     }
 
+    /// How far the browser window's content has come in, 0 to 1: none while first run's card
+    /// grows to the window, which shows its tint alone under it, then in over `reveal` from the
+    /// frame the window takes the card's place (first-run v9 §10). Whole otherwise.
+    pub(super) fn content_shown(&self) -> f32 {
+        if self.onboarding.as_ref().is_some_and(|o| o.grown_exit) {
+            return 0.;
+        }
+        let Some(since) = self.content_since else {
+            return 1.;
+        };
+        let at = self
+            .clock
+            .now()
+            .saturating_duration_since(since)
+            .as_secs_f32()
+            / crate::tokens::shell::onboarding::exit::REVEAL;
+        if at >= 1. { 1. } else { ease_in_out(at) }
+    }
+
     /// The card in first run's `window` while it shows, stepping its motion; none once it has
     /// ended, as the window goes.
     pub(super) fn onboarding_layer(
@@ -1366,9 +1398,9 @@ impl Shell {
         let rest = self.onboarding_rest(cx);
         let glass = self.blurred;
         let still = crate::motion::still(cx);
-        // The grown card ends as the browser window draws most of itself: its tint, with the card
-        // the pages lie in over it.
-        let grown_fill = crate::palette::composite(self.window_tint(), self.palette.page);
+        // The grown card ends on the browser window's ground with none of its content, its tint,
+        // so the window takes its place unseen.
+        let grown_fill = self.window_tint();
         let viewport = window.viewport_size();
         let viewport = (f32::from(viewport.width), f32::from(viewport.height));
         let onboarding = self.onboarding.as_mut()?;
@@ -1380,23 +1412,34 @@ impl Shell {
         });
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
-        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still));
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still, viewport));
         if ended {
-            // A grown exit ends with the browser window whole under a card and glass faded out,
-            // so its last frame draws no card, as the cross-fade's doesn't.
-            if onboarding.grown(still) {
-                self.browser.reveal_first_run(1., 0.);
-            }
+            // A grown card stays drawn on the frame it ends on, at the window's frame and corners
+            // and on its tint alone, and the browser window takes its place whole as that frame
+            // is drawn, its content coming in from there: so only one glass is ever on screen,
+            // and no frame shows neither. A faded card's last frame draws none.
+            let last = onboarding.grown(still).then(|| {
+                let plate = exit::frame(onboarding.exit_length(still), true, viewport).plate;
+                let (_, _, w, h, radius) = plate;
+                if onboarding.shaped != Some((w, h, radius)) {
+                    self.browser.shape_first_run(w, h, radius);
+                }
+                (plate, (w, h, radius))
+            });
+            let grown_exit = onboarding.grown_exit;
             self.onboarding = None;
+            if last.is_some() {
+                self.content_since = Some(self.clock.now());
+            }
             // check.sh waits for this line.
             log!("browser: onboarding done");
             // The window goes and the browser window comes, once this frame is drawn, with the
-            // first Space and the command bar up, as ⌘T has it. Not for a quit, whose closing
-            // window can draw the frame the fade ends in.
+            // first Space and the command bar up, as ⌘T has it, unless they came at the press.
+            // Not for a quit, whose closing window can draw the frame the fade ends in.
             let first_run = self.first_run;
             let shell = cx.entity();
-            let quit = super::quit_gone_ahead();
-            if !quit {
+            let opens_bar = !super::quit_gone_ahead() && !grown_exit;
+            if opens_bar {
                 self.show_hint(cx);
             }
             cx.defer(move |cx| {
@@ -1406,13 +1449,23 @@ impl Shell {
                     let browser = shell.read(cx).browser.clone();
                     browser.end_first_run(handle.into(), cx);
                 }
-                if !quit {
+                if opens_bar {
                     shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
                 }
             });
+            // The browser window draws its content's first frame.
+            cx.notify();
             #[cfg(test)]
-            exit::DRAWN.with_borrow_mut(|drawn| drawn.push(None));
-            return None;
+            exit::DRAWN.with_borrow_mut(|drawn| {
+                drawn.push(last.map(|(plate, glass)| (plate, grown_fill, glass)))
+            });
+            return last.map(|(plate, _)| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(card::plate(plate, grown_fill, inks.rim()))
+                    .into_any_element()
+            });
         }
         if onboarding.keys.is_none() {
             let id = window.window_handle().window_id();
@@ -1543,11 +1596,6 @@ impl Shell {
         let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
-        }
-        // Said on each grown frame; the host keeps it on the window through Chromium's first frame
-        // of it (host_set_first_run_reveal).
-        if let Some(exit) = exit.as_ref().filter(|_| growing && onboarding.grown(still)) {
-            self.browser.reveal_first_run(exit.window, exit.glass);
         }
         // The glass is the system's and reaches the screen a frame after the card drawn with it,
         // so the exit draws the card in the shape its glass was given the frame before, and fill

@@ -1593,6 +1593,9 @@ pub struct Shell {
     in_hint: bool,
     /// While the hint shows, what takes it away at the first key.
     hint_keys: Option<gpui::Subscription>,
+    /// When the window took the place of first run's grown card, while its content comes in
+    /// (`content_shown`).
+    content_since: Option<Instant>,
     /// The press under way was on a target that opens the command bar while it was open, so the
     /// click that follows only closes it.
     press_closed_bar: bool,
@@ -2242,6 +2245,7 @@ impl Shell {
             importing: None,
             in_hint: false,
             hint_keys: None,
+            content_since: None,
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
@@ -5061,6 +5065,14 @@ impl Render for Shell {
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         let empty_card = self.empty_card(cx);
+        let shown = self.content_shown();
+        // Drawn each frame while it comes in, and then never again.
+        if self.content_since.is_some() {
+            match shown < 1. {
+                true => window.request_animation_frame(),
+                false => self.content_since = None,
+            }
+        }
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5128,39 +5140,46 @@ impl Render for Shell {
                     }
                 }),
             )
-            .child(self.window_background())
-            .child(self.leave_listener(cx))
-            .child(self.ui_press_listener(cx))
-            // The page views go over the cards, as native views. A task the page area shows takes
-            // the card's place, the Space's page pushed out of the window (task_area.rs).
-            .when(normal, |shell| {
-                shell
-                    .children(self.cards())
-                    .children(self.little_bar(cx))
-                    .children(
-                        self.little
-                            .is_some()
-                            .then(|| self.question_card(cx))
-                            .flatten(),
-                    )
-                    .children(self.picture_element(cx))
-                    .children(empty_card)
-                    .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
-                    .children(self.pane_gaps(cx))
-                    .children(self.pane_handles(cx))
-            })
-            .children(task_area)
-            .children(self.side_panel(cx))
-            .children(under)
-            .children(sidebar)
-            .children(over)
-            .children(edge)
-            .children(own_buttons)
-            .child(self.scroll_listener(true, cx))
-            .child(self.navigate_listener(cx))
-            .children(self.reveal_edge(cx))
-            .children(self.resize_bands(cx))
-            .children(self.task_announcer())
+            // All it draws over its tint, which comes in after first run's grown card.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when(shown < 1., |content| content.opacity(shown))
+                    .child(self.window_background())
+                    .child(self.leave_listener(cx))
+                    .child(self.ui_press_listener(cx))
+                    // The page views go over the cards, as native views. A task the page area shows takes
+                    // the card's place, the Space's page pushed out of the window (task_area.rs).
+                    .when(normal, |shell| {
+                        shell
+                            .children(self.cards())
+                            .children(self.little_bar(cx))
+                            .children(
+                                self.little
+                                    .is_some()
+                                    .then(|| self.question_card(cx))
+                                    .flatten(),
+                            )
+                            .children(self.picture_element(cx))
+                            .children(empty_card)
+                            .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
+                            .children(self.pane_gaps(cx))
+                            .children(self.pane_handles(cx))
+                    })
+                    .children(task_area)
+                    .children(self.side_panel(cx))
+                    .children(under)
+                    .children(sidebar)
+                    .children(over)
+                    .children(edge)
+                    .children(own_buttons)
+                    .child(self.scroll_listener(true, cx))
+                    .child(self.navigate_listener(cx))
+                    .children(self.reveal_edge(cx))
+                    .children(self.resize_bands(cx))
+                    .children(self.task_announcer()),
+            )
     }
 }
 

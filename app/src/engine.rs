@@ -2383,21 +2383,14 @@ impl Browser for Engine {
     fn grows_first_run(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            unsafe { platform::host_grow_first_run() }
+            // The bar's overlay comes in with the window's content.
+            let reveal = crate::tokens::shell::onboarding::exit::REVEAL;
+            unsafe { platform::host_grow_first_run(reveal.into()) }
         }
         #[cfg(not(target_os = "macos"))]
         {
             false
         }
-    }
-
-    fn reveal_first_run(&self, window: f32, glass: f32) {
-        #[cfg(target_os = "macos")]
-        unsafe {
-            platform::host_set_first_run_reveal(window.into(), glass.into())
-        };
-        #[cfg(not(target_os = "macos"))]
-        let _ = (window, glass);
     }
 
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
