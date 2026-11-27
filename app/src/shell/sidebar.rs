@@ -267,7 +267,7 @@ impl Shell {
             return cx.notify();
         }
         self.resize = None;
-        self.sidebar_hidden = true;
+        self.set_sidebar_hidden(true, cx);
         self.sidebar_motion = None;
         self.sidebar_hover(false, cx);
         self.recent_downloads_gone(cx);
@@ -349,7 +349,7 @@ impl Shell {
             return;
         }
         let from = self.card_left();
-        self.sidebar_hidden = !self.sidebar_hidden;
+        self.set_sidebar_hidden(!self.sidebar_hidden, cx);
         self.sidebar_motion = Some((from, crate::motion::start(cx)));
         self.sidebar_hover(false, cx);
         self.recent_downloads_gone(cx);
@@ -574,7 +574,7 @@ impl Shell {
             return false;
         }
         self.conceal_now(cx);
-        self.sidebar_hidden = false;
+        self.set_sidebar_hidden(false, cx);
         self.sidebar_motion = None;
         // The pointer that kept the panel out is over the sidebar, so its tools stay as they were.
         self.sidebar_hover(true, cx);
@@ -936,6 +936,9 @@ impl Shell {
     pub(super) fn sidebar_hover(&mut self, hovered: bool, cx: &mut Context<Self>) {
         let hovered = hovered && !self.sidebar_hidden;
         if hovered != self.sidebar_hovered {
+            if !hovered {
+                self.keep_space_scroll(cx);
+            }
             self.sidebar_hovered = hovered;
             self.hover_changed = true;
             cx.notify();

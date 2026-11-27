@@ -16,7 +16,7 @@ use crate::theme::Appearance;
 use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
-    ShownPageDialog, browser::WindowButton,
+    SavedView, ShownPageDialog, browser::WindowButton,
 };
 
 mod resting_bar;
@@ -135,6 +135,9 @@ pub(crate) struct Recorder {
     pub(super) full_screen: Cell<bool>,
     /// Whether the window can't stay on top, as under Wayland.
     pub(super) no_stay_on_top: Cell<bool>,
+    /// What the window kept of its view, as the core keeps it for the next launch (#4415).
+    pub(super) view: RefCell<SavedView>,
+    pub(super) space_scrolls: RefCell<HashMap<u64, f32>>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) threads: Cell<Option<bool>>,
@@ -1744,6 +1747,34 @@ impl Browser for Recorder {
     }
 
     fn set_sidebar_width(&self, _: f32, _: &mut App) {}
+
+    fn saved_view(&self) -> SavedView {
+        self.view.borrow().clone()
+    }
+
+    fn keep_sidebar_hidden(&self, hidden: bool, _: &mut App) {
+        self.view.borrow_mut().sidebar_hidden = hidden;
+    }
+
+    fn keep_on_top(&self, on: bool, _: &mut App) {
+        self.view.borrow_mut().on_top = on;
+    }
+
+    fn keep_recent_tabs(&self, tabs: &[u64], _: &mut App) {
+        self.view.borrow_mut().recent = tabs.to_vec();
+    }
+
+    fn saved_space_scroll(&self, space: u64) -> f32 {
+        self.space_scrolls
+            .borrow()
+            .get(&space)
+            .copied()
+            .unwrap_or(0.)
+    }
+
+    fn keep_space_scroll(&self, space: u64, offset: f32, _: &mut App) {
+        self.space_scrolls.borrow_mut().insert(space, offset);
+    }
 
     fn hide_reveal(&self, _: &mut App) {}
 

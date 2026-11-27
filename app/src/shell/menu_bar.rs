@@ -123,6 +123,7 @@ impl Shell {
         // check.sh reads this line.
         log!("browser: stays on top {}", self.on_top as u8);
         self.browser.set_on_top(self.on_top, cx);
+        self.browser.keep_on_top(self.on_top, cx);
         self.update_menus(cx);
     }
 

@@ -30,6 +30,7 @@ use browser::menu;
 use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
+use browser::shell::SavedView;
 use browser::shell::{
     self, Archived, BarTab, Broom, Browser, Command, Download, DownloadAction, DownloadState,
     Folders, LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry,
@@ -1872,6 +1873,22 @@ impl Browser for Fake {
     }
 
     fn set_sidebar_width(&self, _: f32, _: &mut App) {}
+
+    fn saved_view(&self) -> SavedView {
+        SavedView::default()
+    }
+
+    fn keep_sidebar_hidden(&self, _: bool, _: &mut App) {}
+
+    fn keep_on_top(&self, _: bool, _: &mut App) {}
+
+    fn keep_recent_tabs(&self, _: &[u64], _: &mut App) {}
+
+    fn saved_space_scroll(&self, _: u64) -> f32 {
+        0.
+    }
+
+    fn keep_space_scroll(&self, _: u64, _: f32, _: &mut App) {}
 
     fn detent(&self, _: &mut App) {}
 

@@ -1008,13 +1008,14 @@ fn open(cx: &mut App) {
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
     let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
-    let title = Section::OPENS.name().into();
+    let opens = kept_section();
+    let title = opens.name().into();
     let options = WindowOptions {
         show: false,
         focus: false,
         ..browser::settings_column::window_options(bounds, title)
     };
-    SHOWN_SECTION.set(Section::OPENS.name());
+    SHOWN_SECTION.set(opens.name());
     let window = cx.open_window(options, |window, cx| {
         let settings = view(cx);
         settings.update(cx, |settings, cx| {
@@ -1215,7 +1216,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             version,
             nightly,
             _agents: agents,
-            section: Section::OPENS,
+            section: kept_section(),
             focus: cx.focus_handle(),
             dark,
             appearance: shell::app_appearance(cx),
@@ -1518,6 +1519,8 @@ impl Settings {
         });
         window.set_window_title(section.name());
         SHOWN_SECTION.set(section.name());
+        let name = CString::new(section.name()).unwrap_or_default();
+        unsafe { bc::bc_set_settings_section(name.as_ptr()) };
         cx.notify();
     }
 
@@ -5785,6 +5788,11 @@ fn set_ad_block_filters(filters: &[String]) {
         return;
     };
     unsafe { bc::bc_set_ad_block_filters(filters.as_ptr()) };
+}
+
+/// The page the last launch's Settings was left at (#4415), else the one it opens on.
+fn kept_section() -> Section {
+    Section::named(&core_string(bc::bc_settings_section)).unwrap_or(Section::OPENS)
 }
 
 /// A string the core's `copy` copies, as bc_crash_reports_collector does.

@@ -140,6 +140,7 @@ mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents, send_past_stand_ins};
+mod kept_view;
 mod picture;
 mod recent_downloads;
 mod recent_tabs;
@@ -184,7 +185,7 @@ pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks,
 pub use battery::PAUSED;
 pub use broom::Broom;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Setting, Split, Trouble, Volume, WindowButton,
+    Browser, Folders, MediaAction, Page, SavedView, Setting, Split, Trouble, Volume, WindowButton,
     WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
@@ -1499,6 +1500,9 @@ pub struct Shell {
     /// The list's scroll, and the sidebar's top-left corner in the window the last press was in,
     /// for where the pointer is in them.
     list_scroll: ScrollHandle,
+    /// How far down each Space's list was left scrolled, in points, this run's or the last's
+    /// (kept_view).
+    space_scrolls: HashMap<u64, f32>,
     sidebar_origin: Rc<Cell<Point<Pixels>>>,
     /// The frames the favorites' tiles and the folders' plates were last drawn in, in the window,
     /// for their tooltips to hang from.
@@ -2178,7 +2182,7 @@ impl Shell {
         let sidebar_width = browser
             .saved_sidebar_width()
             .map_or(SIDEBAR_WIDTH, |width| width.clamp(SIDEBAR_MIN, SIDEBAR_MAX));
-        Self {
+        let mut shell = Self {
             browser,
             focus_handle: cx.focus_handle(),
             reveal_focus: cx.focus_handle(),
@@ -2226,6 +2230,7 @@ impl Shell {
             tile_slides: HashMap::new(),
             list_slide: None,
             list_scroll: ScrollHandle::new(),
+            space_scrolls: HashMap::new(),
             sidebar_origin: Rc::default(),
             tip_frames: Rc::default(),
             preview_row: None,
@@ -2536,7 +2541,9 @@ impl Shell {
             blank: false,
             blank_targets: Vec::new(),
             little: None,
-        }
+        };
+        shell.read_view(cx);
+        shell
     }
 
     /// A private window's shell (docs/ux-spec.md › Profiles › Incognito): it shows `space` alone,
@@ -3301,11 +3308,15 @@ impl Shell {
             _ => log!("browser: space {space}"),
         }
         self.end_hovers(cx);
+        if space != self.space {
+            self.keep_space_scroll(cx);
+        }
         let before = std::mem::replace(&mut self.space, space);
         self.bar_follows |= before != space;
         self.live_after_switch |= before != space;
         if before != space {
             self.unchoose(cx);
+            self.scroll_to_space(space);
         }
         // Arc says again how to leave full screen in each Space it shows there.
         if before != space && self.full_screen && !self.page_fullscreen {
@@ -3886,6 +3897,8 @@ impl Shell {
             }
             self.recent.retain(|&other| other != tab);
             self.recent.insert(0, tab);
+            // Not during a walk, which shows nothing until it ends here.
+            self.browser.keep_recent_tabs(&self.recent, cx);
         }
     }
 

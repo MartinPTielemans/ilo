@@ -747,6 +747,19 @@ pub trait Browser {
     fn saved_sidebar_width(&self) -> Option<f32>;
     /// Keeps the docked sidebar's width for the next launch.
     fn set_sidebar_width(&self, width: f32, cx: &mut App);
+    /// How the last launch left the window, as the core brought it back: a new window's is a
+    /// new one's (#4415).
+    fn saved_view(&self) -> SavedView;
+    /// Keeps whether the docked sidebar is hidden, for the next launch.
+    fn keep_sidebar_hidden(&self, hidden: bool, cx: &mut App);
+    /// Keeps whether the window stays on top, for the next launch.
+    fn keep_on_top(&self, on: bool, cx: &mut App);
+    /// Keeps the window's tabs most recently shown first, for ⌃Tab after the next launch.
+    fn keep_recent_tabs(&self, tabs: &[u64], cx: &mut App);
+    /// How far down `space`'s list the last launch left it scrolled, in points.
+    fn saved_space_scroll(&self, space: u64) -> f32;
+    /// Keeps how far down `space`'s list is scrolled, in points, for the next launch.
+    fn keep_space_scroll(&self, space: u64, offset: f32, cx: &mut App);
     fn hide_reveal(&self, cx: &mut App);
     /// Whether ⌥ pressed alone brings the hidden sidebar out, as the user chose.
     fn option_reveals_sidebar(&self) -> bool;
@@ -1468,4 +1481,16 @@ pub struct Folders {
     pub icons: HashMap<u64, SharedString>,
     /// What fills each Live Folder; plain folders aren't here.
     pub live: HashMap<u64, LiveSource>,
+}
+
+/// How the user left a window, which the core keeps with it for the next launch and never syncs
+/// (Browser::saved_view, #4415).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedView {
+    /// Whether its docked sidebar was hidden.
+    pub sidebar_hidden: bool,
+    /// Whether it stayed on top of other apps' windows.
+    pub on_top: bool,
+    /// Its tabs, most recently shown first, as ⌃Tab walks them.
+    pub recent: Vec<u64>,
 }

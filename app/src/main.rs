@@ -410,6 +410,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
             start.elapsed().as_secs_f64() * 1000.
         );
         leave_agent_space(window);
+        // The core gave the window the view the last launch kept as it brought it back.
+        shell.update(cx, |shell, _, cx| shell.read_view(cx)).ok();
     } else {
         unsafe { bc::bc_window_show_space(window, create_space("Space 1", 0)) };
     }

@@ -775,3 +775,13 @@ fn the_pages_are_in_the_owners_groups() {
     assert_eq!(Section::all().last(), Some(Section::About));
     assert!(Section::all().all(|page| page.name() != "Appearance"));
 }
+
+/// Each page comes back by the name the core kept for it, and a page since gone opens none.
+#[test]
+fn a_kept_page_comes_back_by_its_name() {
+    for page in Section::all() {
+        assert_eq!(Section::named(page.name()), Some(page));
+    }
+    assert_eq!(Section::named("Appearance"), None);
+    assert_eq!(Section::named(""), None);
+}

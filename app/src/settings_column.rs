@@ -102,9 +102,14 @@ impl Section {
     /// The rows above the groups, under the search.
     pub const TOP: [Section; 1] = [Section::Overview];
 
-    /// The page Settings opens on when no page is named (S1). Within a run it keeps the page it
-    /// was left at, and a call naming a page shows that one.
+    /// The page Settings opens on when no page is named and the last launch kept none (S1).
+    /// Within a run it keeps the page it was left at, and a call naming a page shows that one.
     pub const OPENS: Section = Section::Overview;
+
+    /// The page `name` names, as `name()` gives it: how the core keeps the last page shown.
+    pub fn named(name: &str) -> Option<Section> {
+        Section::all().find(|page| page.name() == name)
+    }
 
     /// The heading over each of `GROUPS`, in its order.
     pub const LABELS: [&'static str; 3] = ["Personal", "Agents", "Features"];

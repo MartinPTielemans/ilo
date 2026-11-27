@@ -1141,6 +1141,7 @@ impl Shell {
     /// watched, and the session keeps for the window the Space the core shows. The same close
     /// asked again keeps what the first kept: with its question up the view is aside already.
     pub(super) fn about_to_close(&mut self, cx: &mut Context<Self>) {
+        self.keep_space_scroll(cx);
         let kept = self.task_closing.take();
         if kept.as_ref().is_some_and(|kept| kept.aside.is_some()) {
             self.task_closing = kept;

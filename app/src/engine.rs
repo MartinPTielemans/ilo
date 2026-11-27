@@ -2,7 +2,7 @@
 //! answers.
 
 use super::*;
-use browser::shell::LiveSource;
+use browser::shell::{LiveSource, SavedView};
 use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
@@ -1658,6 +1658,39 @@ impl Browser for Engine {
 
     fn set_sidebar_width(&self, width: f32, _: &mut App) {
         unsafe { bc::bc_window_set_sidebar_width(self.window, width.into()) };
+    }
+
+    fn saved_view(&self) -> SavedView {
+        let count = unsafe { bc::bc_window_recent_tabs(self.window, std::ptr::null_mut(), 0) };
+        let mut recent = vec![0; count];
+        let count =
+            unsafe { bc::bc_window_recent_tabs(self.window, recent.as_mut_ptr(), recent.len()) };
+        recent.truncate(count);
+        SavedView {
+            sidebar_hidden: unsafe { bc::bc_window_sidebar_hidden(self.window) },
+            on_top: unsafe { bc::bc_window_on_top(self.window) },
+            recent,
+        }
+    }
+
+    fn keep_sidebar_hidden(&self, hidden: bool, _: &mut App) {
+        unsafe { bc::bc_window_set_sidebar_hidden(self.window, hidden) };
+    }
+
+    fn keep_on_top(&self, on: bool, _: &mut App) {
+        unsafe { bc::bc_window_set_on_top(self.window, on) };
+    }
+
+    fn keep_recent_tabs(&self, tabs: &[u64], _: &mut App) {
+        unsafe { bc::bc_window_set_recent_tabs(self.window, tabs.as_ptr(), tabs.len()) };
+    }
+
+    fn saved_space_scroll(&self, space: u64) -> f32 {
+        unsafe { bc::bc_window_space_scroll(self.window, space) as f32 }
+    }
+
+    fn keep_space_scroll(&self, space: u64, offset: f32, _: &mut App) {
+        unsafe { bc::bc_window_set_space_scroll(self.window, space, offset.into()) };
     }
 
     fn detent(&self, _: &mut App) {
