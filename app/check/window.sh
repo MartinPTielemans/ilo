@@ -21,7 +21,8 @@
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
-# the page goes to its place in one step when the motion is over by its first frame. The
+# the page goes to its place in one step when the motion is over by its first frame. On the Mac a
+# press in the strip at the hidden sidebar's edge leaves the page the keyboard. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -139,6 +140,7 @@ else
   selfie_launch "$url" "$out/window-selfie.log"
   echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
 fi
+launched=$(date +%s)
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -985,6 +987,15 @@ expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focuse
 moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
+# A press in the strip at the hidden sidebar's edge isn't a press in the UI: the strip brings the
+# sidebar out on hover alone, so the page keeps the keyboard. The Mac's driver names the page's
+# view; on Linux the strip is also the band that resizes the window.
+if [ "$(uname)" = Darwin ]; then
+  send click 1 400
+  send warp
+  send state
+  in_browser RenderWidgetHostViewCocoa "a press in the strip at the hidden sidebar's edge"
+fi
 send key s cmd
 moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"
@@ -1471,6 +1482,65 @@ rest_cpu() {
       for (i = 1; i <= n; i++) if (kinds[i] in to)
         printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
+# uBlock Origin's own work after launch, which a rest would take for the sidebar's (#4198): its list
+# updater starts a set time after launch, and each list it changes re-arms its selfie, written a set
+# time after the last change, or by an alarm 17 s after that. Each writes its stores, through the
+# browser's pool. ublock_settled waits, polling, until it has nothing left to do: past the updater's
+# start, its stores unwritten for longer than the selfie's delay and its alarm, and its process flat
+# over 2 s within the rest's own 0.02 s. Both rests come after it, so they read the same uBlock
+# Origin. The delays are the ones the app bundles. $ublock_written is its stores' last write.
+if [ -d "$app/ublock" ]; then
+  ublock_bundle="$app/ublock"
+else
+  ublock_bundle="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
+fi
+# ublock_delay <name>: $delay, the seconds the bundled uBlock Origin's hidden setting <name> holds.
+ublock_delay() {
+  delay=$(grep -o "$1: [0-9]*" "$ublock_bundle/js/background.js" 2> /dev/null | head -1 | cut -d' ' -f2)
+  [ -n "$delay" ] ||
+    fail "the bundled uBlock Origin's js/background.js in $ublock_bundle no longer names $1, which the rests wait out (#4198)"
+}
+ublock_written() {
+  ublock_written=$(ublock_stores_written) ||
+    fail "uBlock Origin's stores in $profile_dir couldn't be read for when they were last written"
+  # The launch before the run's left them, so none means the wait would watch nothing.
+  [ "$ublock_written" != 0 ] ||
+    fail "uBlock Origin has no stores in $profile_dir for the rests to wait on (#4198)"
+}
+ublock_stores_written() {
+  local ublock=oghkpboejbohceocapipmnjifoklonij
+  python3 -I -c 'import os, sys
+print(int(max([os.path.getmtime(os.path.join(r, f)) for d in sys.argv[1:] for r, _, fs in os.walk(d) for f in fs] or [0])))' \
+    "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" \
+    "$profile_dir/Default/Local Extension Settings/$ublock"
+}
+ublock_cpu() {
+  renderer_cpu | awk '$3 == "extension" { t += $2 } END { printf "%.2f", t }'
+}
+ublock_settled() {
+  local update selfie up quiet from to waited=0
+  ublock_delay autoUpdateDelayAfterLaunch
+  update=$delay
+  ublock_delay selfieDelayInSeconds
+  selfie=$((delay + 17))
+  while :; do
+    up=$(($(date +%s) - launched))
+    ublock_written
+    quiet=$(($(date +%s) - ublock_written))
+    if [ "$up" -gt "$update" ] && [ "$quiet" -gt "$selfie" ]; then
+      from=$(ublock_cpu)
+      sleep 2 # the window uBlock Origin's process is read flat over
+      to=$(ublock_cpu)
+      awk -v from="$from" -v to="$to" 'BEGIN { exit !(to - from <= 0.02) }' && break
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -lt 300 ] ||
+      fail "uBlock Origin didn't settle in 300 s for the rests: the browser up $up s, past its updater's start at $update s; its stores last written $quiet s ago, against its selfie's $selfie s; its process took $(ublock_cpu) s in all (#4198)"
+    sleep 1 # polls the stores and the clock
+  done
+  echo "window: uBlock Origin settled $up s into the launch, its stores unwritten for $quiet s and its process flat"
+}
+ublock_settled
 # The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
 rest_cpu docked
 docked_cpu=$rest docked_kinds=$rest_kinds docked_renderers=$rest_renderers
@@ -1480,8 +1550,11 @@ send move 400 300
 reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
 hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
+ublock_written
+written_before=$ublock_written
 rest_cpu out
 out_cpu=$rest
+ublock_written
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
   "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)." \
   "Renderers docked: $docked_renderers; out: $rest_renderers"
@@ -1489,8 +1562,11 @@ if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 
   # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
+  # Whether uBlock Origin wrote its stores in the rest after all, which would make it the work.
+  [ "$ublock_written" = "$written_before" ] ||
+    sampled=", uBlock Origin's stores written in the rest"
   [ ! -s "$out/window-rest-out-sample.txt" ] ||
-    sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
+    sampled="$sampled, the browser's stacks over the rest in window-rest-out-sample.txt"
   [ ! -s "$out/window-rest-out-renderer-sample.txt" ] ||
     sampled="$sampled, the busiest renderer's in window-rest-out-renderer-sample.txt"
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds; renderers $rest_renderers), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"

@@ -981,6 +981,9 @@ alert_up $favorite "the Favorite"
 # right-press moves the X focus off the alert, which took the keys back from the menu (#3616).
 post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
+# AppKit puts the menu's window on screen some frames after it's shown, taking the keyboard then: an
+# Escape before went to the alert under it and cancelled that instead (restore.sh's choose_drawn).
+expect '^browser: menu drawn ' "the tile's menu over the Favorite's alert didn't come on screen"
 send key escape
 expect '^browser: menu window hidden$' "Escape didn't close the tile's menu over the Favorite's alert"
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
@@ -989,6 +992,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
 fi
 post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab again"
+expect '^browser: menu drawn ' "the tile's menu over the Favorite's alert didn't come on screen again"
 send choose "$(cased 'Close Tab')"
 expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
 expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"

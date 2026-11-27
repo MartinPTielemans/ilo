@@ -17,8 +17,9 @@ use crate::agents::tier::Tier;
 use crate::product::PRODUCT;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
-/// numbered by run, then keeps what it's sent and never answers. Asked to purge, it writes what
-/// it was asked and ends with the status in its `.code`, or well.
+/// numbered by run, then keeps what it's sent and never answers. Runs started at once each claim a
+/// number of their own, since making a folder is atomic where looking for a file isn't. Asked to
+/// purge, it writes what it was asked and ends with the status in its `.code`, or well.
 #[cfg(unix)]
 const STAND_IN: &str = r#"#!/bin/sh
 if [ "$1" = purge ]; then
@@ -26,7 +27,7 @@ if [ "$1" = purge ]; then
   exit "$(cat "$0.code" 2>/dev/null || echo 0)"
 fi
 run=1
-while [ -e "$0.args.$run" ]; do run=$((run + 1)); done
+until mkdir "$0.run.$run" 2>/dev/null; do run=$((run + 1)); done
 pwd > "$0.dir.$run"
 printf '%s\n' "$@" > "$0.args.$run"
 exec cat > "$0.in.$run"
@@ -77,6 +78,7 @@ impl Run {
         for left in ["args", "dir", "in"] {
             std::fs::remove_file(beside(&program, &format!("{left}.1"))).unwrap();
         }
+        std::fs::remove_dir(beside(&program, "run.1")).unwrap();
         Run::again(profile, program, cx)
     }
 

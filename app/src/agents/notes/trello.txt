@@ -1,0 +1,11 @@
+source: https://support.atlassian.com/trello/docs/keyboard-shortcuts-in-trello/
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+Shift+? lists every key. b finds a board by a few letters of its name. f opens a board's card filter and x clears it. j and k, or the arrows, select the card below or above. Over a card, t edits its title, n adds a card under it and c archives it. z undoes and Shift+Z redoes.
+
+Know before you start
+c archives the card under the pointer, so keep it off cards the user means to keep.
+Undo can't bring back a deleted card, list or label.
+The user can turn the keys off. If a key does nothing, click instead.
