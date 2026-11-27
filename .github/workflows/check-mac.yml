@@ -81,8 +81,9 @@ env:
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
   # no run has checked yet; a dispatched one always does. And the runs it does, dealt by their times
-  # on this runner (.github/scripts/runs-mac.tsv) across as many check jobs as they need, up to the
-  # five macOS jobs a free account runs at once.
+  # on this runner (.github/scripts/runs-mac.tsv) across as many check jobs as they need, up to
+  # four: a free account runs five macOS jobs at once, and an engine build holds one for hours, so a
+  # fifth waited for one of the four anyway (hosted-checks NEED 1, 11-27).
   gate:
     if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
     runs-on: ubuntu-24.04
@@ -124,7 +125,7 @@ jobs:
           all) todo=$(.github/scripts/runs.sh all) ;;
           *) todo=$RUNS ;;
           esac
-          jobs=$(.github/scripts/runs.sh jobs 5 $todo)
+          jobs=$(.github/scripts/runs.sh jobs 4 $todo)
           if [ "$jobs" = 1 ]; then shards='[0]'; else shards="[$(seq -s, 1 "$jobs")]"; fi
           echo "todo= $(echo $todo) " | tee -a "$GITHUB_OUTPUT"
           echo "shards=$shards" | tee -a "$GITHUB_OUTPUT"
