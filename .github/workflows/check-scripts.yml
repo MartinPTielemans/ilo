@@ -15,6 +15,7 @@
 # grep finds those.
 # runs.sh deals the Mac's and Windows' check runs across their jobs (#3917): for each OS, each list
 # and each job count its workflow uses, the job checks that each run is in exactly one job's share.
+# The Mac's job count comes from its runs' times (runs-mac.tsv), so each from one to five is checked.
 # tools/check-lints.py checks the runs and the app's log lines they read: a "check.sh reads this
 # line" marker over a line no run reads, a bare sleep that says no window it waits out, and a
 # none_since straight after the input it's about (#2196).
@@ -106,9 +107,10 @@ jobs:
           fi
           exit $status
 
-      # For the default runs and all, over the jobs the workflow's matrix has for them: each of the
-      # runs the check does in exactly one job's share, and each of check.sh's runs too, as each job
-      # gives its share a result line. Under bash 3.2, as the Mac's check job runs runs.sh.
+      # For the default runs and all, over the jobs the workflow's matrix has for them, or on the Mac
+      # any it may have: each of the runs the check does in exactly one job's share, and each of
+      # check.sh's runs too, as each job gives its share a result line. Under bash 3.2, as the Mac's
+      # check job runs runs.sh, dealing by the times it does.
       - name: Each run in one job's share
         run: |
           runs() { ~/bash32/bash .github/scripts/runs.sh "$@"; }
@@ -116,8 +118,18 @@ jobs:
           status=0
           for os in mac windows; do
             file=.github/workflows/check-$os.yml
-            # The matrix's jobs for runs=all and for the default runs, as "1, 2, 3, 4;1, 2, 3".
-            counts=$(sed -n "s/.*inputs.runs == 'all' && '\[\([0-9, ]*\)\]' || inputs.runs == '' && '\[\([0-9, ]*\)\]'.*/\1;\2/p" "$file")
+            # The matrix's jobs for runs=all and for the default runs, as "1, 2, 3, 4;1, 2, 3", or the
+            # Mac's from one to five, dealt by their times.
+            times=
+            case $os in
+            mac)
+              times=.github/scripts/runs-mac.tsv
+              counts='1 2 3 4 5;1 2 3 4 5'
+              grep -q 'RUN_TIMES: ../.github/scripts/runs-mac.tsv' "$file" ||
+                { echo "::error file=$file::The check job doesn't deal by .github/scripts/runs-mac.tsv"; status=1; }
+              ;;
+            windows) counts=$(sed -n "s/.*inputs.runs == 'all' && '\[\([0-9, ]*\)\]' || inputs.runs == '' && '\[\([0-9, ]*\)\]'.*/\1;\2/p" "$file") ;;
+            esac
             [ -n "$counts" ] || { echo "::error file=$file::No shard matrix for runs=all and the default runs"; status=1; continue; }
             # The default runs, as the workflow's runs step makes them.
             case $os in
@@ -131,39 +143,42 @@ jobs:
             windows) default=$(awk '/^ *WINDOWS_RUNS: >-$/ { on = 1; next } on && !/^        / { exit } on' "$file") ;;
             esac
             for list in all default; do
-              if [ "$list" = all ]; then todo=$all of=${counts%;*}; else todo=$default of=${counts#*;}; fi
-              of=$(echo "$of" | tr ',' '\n' | grep -c .)
+              if [ "$list" = all ]; then todo=$all ofs=${counts%;*}; else todo=$default ofs=${counts#*;}; fi
+              # Windows' one count, as its matrix lists its jobs; the Mac's each in turn.
+              [ "$os" = mac ] || ofs=$(echo "$ofs" | tr ',' '\n' | grep -c .)
               todo=" $(echo $todo) "
-              shares=
-              sizes=
-              for n in $(seq "$of"); do
-                share=$(runs shard "$n" "$of" $todo)
-                shares="$shares $share"
-                done=0
-                for run in $share; do
-                  case $todo in *" $run "*) done=$((done + 1)) ;; esac
+              for of in $ofs; do
+                shares=
+                sizes=
+                for n in $(seq "$of"); do
+                  share=$(RUN_TIMES=$times runs shard "$n" "$of" $todo)
+                  shares="$shares $share"
+                  done=0
+                  for run in $share; do
+                    case $todo in *" $run "*) done=$((done + 1)) ;; esac
+                  done
+                  sizes="$sizes $done"
                 done
-                sizes="$sizes $done"
+                for run in $all; do
+                  count=$(printf '%s\n' $shares | grep -cxF -- "$run" || true)
+                  case $count in
+                  1) ;;
+                  0) echo "::error file=$file::$os, $list runs over $of jobs: $run is in no job's share" ;;
+                  *) echo "::error file=$file::$os, $list runs over $of jobs: $run is in $count jobs' shares" ;;
+                  esac
+                  [ "$count" = 1 ] || status=1
+                done
+                for run in $todo; do
+                  case " $all " in
+                  *" $run "*) ;;
+                  *)
+                    echo "::error file=$file::$os, $list runs: $run, which check.sh doesn't have, is in no job's share"
+                    status=1
+                    ;;
+                  esac
+                done
+                echo "$os, $list runs over $of jobs, runs done in each:$sizes"
               done
-              for run in $all; do
-                count=$(printf '%s\n' $shares | grep -cxF -- "$run" || true)
-                case $count in
-                1) ;;
-                0) echo "::error file=$file::$os, $list runs over $of jobs: $run is in no job's share" ;;
-                *) echo "::error file=$file::$os, $list runs over $of jobs: $run is in $count jobs' shares" ;;
-                esac
-                [ "$count" = 1 ] || status=1
-              done
-              for run in $todo; do
-                case " $all " in
-                *" $run "*) ;;
-                *)
-                  echo "::error file=$file::$os, $list runs: $run, which check.sh doesn't have, is in no job's share"
-                  status=1
-                  ;;
-                esac
-              done
-              echo "$os, $list runs over $of jobs, runs done in each:$sizes"
             done
           done
           exit $status
