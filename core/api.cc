@@ -30,6 +30,8 @@
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/agent_space_rule.h"
+#include "browser_core/agent_tabs_close.h"
+#include "browser_core/agent_tabs_close_rule.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
 #include "browser_core/arrange_rule.h"
@@ -88,6 +90,7 @@
 #include "browser_core/search.h"
 #include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
+#include "browser_core/settings_values.h"
 #include "browser_core/share.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
@@ -2211,6 +2214,59 @@ void bc_set_notification_prompts(bool on) {
   browser_core::UserSettings().notification_prompts = on;
   browser_core::ApplyEveryday(browser_core::Everyday::kNotificationPrompts);
   browser_core::SessionChanged();
+}
+
+bool bc_block_third_party_cookies(void) {
+  return browser_core::UserSettings().values.block_third_party_cookies;
+}
+
+void bc_set_block_third_party_cookies(bool block) {
+  browser_core::UserSettings().values.block_third_party_cookies = block;
+  browser_core::ApplyEveryday(browser_core::Everyday::kThirdPartyCookies);
+  browser_core::SessionChanged();
+}
+
+bool bc_spell_check(void) {
+  return browser_core::UserSettings().values.spell_check;
+}
+
+void bc_set_spell_check(bool on) {
+  browser_core::UserSettings().values.spell_check = on;
+  browser_core::ApplyEveryday(browser_core::Everyday::kSpellCheck);
+  browser_core::SessionChanged();
+}
+
+size_t bc_languages(char* languages, size_t capacity) {
+  return CopyString(browser_core::EverydayLanguages(), languages, capacity);
+}
+
+bool bc_set_languages(const char* languages) {
+  std::optional<std::string> list =
+      browser_core::settings_values::Languages(languages ? languages : "");
+  if (!list || !browser_core::ChromiumTakesLanguages(*list)) {
+    return false;
+  }
+  browser_core::UserSettings().values.languages = std::move(list);
+  browser_core::ApplyEveryday(browser_core::Everyday::kLanguages);
+  browser_core::SessionChanged();
+  return true;
+}
+
+double bc_agent_tabs_close_after(void) {
+  return browser_core::UserSettings().values.agent_tabs_close_after;
+}
+
+void bc_set_agent_tabs_close_after(double seconds) {
+  browser_core::UserSettings().values.agent_tabs_close_after =
+      browser_core::agent_tabs_close_rule::Choice(seconds);
+  browser_core::SessionChanged();
+  browser_core::ThreadTabsRearm();
+}
+
+void bc_agent_set_working(const char* agent, bool working) {
+  if (agent && *agent) {
+    browser_core::ThreadWorking(agent, working);
+  }
 }
 
 bool bc_ad_blocking(void) {

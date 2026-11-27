@@ -26,6 +26,7 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page_area.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_tabs_close.h"
 #include "browser_core/agent_space_page.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -387,6 +388,7 @@ void Seen(bc_id tab) {
     seen->LeftSight();
   }
   ScheduleAutoArchive();
+  ThreadTabHidden(tab);
 }
 
 // Has |contents|'s page, and its docked DevTools, stretch the frame they last drew to fill their

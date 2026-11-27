@@ -558,7 +558,8 @@ typedef struct bc_agent_activity {
   // The agent's id, as its client gives it.
   const char* agent;
   bc_id tab;
-  // What it asked to do, as the agent code names it, such as "navigate".
+  // What it asked to do, as the agent code names it, such as "navigate", or "close_idle_tab" for a
+  // tab of a quiet thread's the core closed (bc_agent_tabs_close_after).
   const char* action;
   // Why the core refused it, for the user and the agent to read, or empty if the agent may act.
   const char* refused;
@@ -2063,6 +2064,25 @@ BC_EXPORT bool bc_agent_release_tab(const char* agent, bc_id tab);
 // how many it had. Agent code calls it.
 BC_EXPORT size_t bc_agent_disconnected(const char* agent);
 
+// Agents › Close a thread's tabs: how long, in seconds, a ⌘T thread waits once it's quiet before
+// its own tabs close, or 0 for Never. One of 0, 300, 600, 900 (the default), 1800, 3600 and 7200,
+// which bc_set_agent_tabs_close_after takes any other as the nearest of. It counts from the
+// thread's last activity: a call bc_agent_may_act let it make, a tab bc_agent_open_tab opened for
+// it, or the end of its run. Then its Today tabs close, each asked as bc_agent_close_tab asks
+// without discard, so a page that asks to stay stays, with an agent_activity entry whose action is
+// "close_idle_tab". Never one the user handed it, holds or pinned; one a window shows closes once
+// none does. Its Space stays. Each thread has one wall-clock timer, armed only while it's quiet and
+// has a tab of its own, so nothing polls. A change applies at once, from each thread's last
+// activity. The core keeps it with the Spaces, and it stays with the computer. The user's: agents
+// get none.
+BC_EXPORT double bc_agent_tabs_close_after(void);
+BC_EXPORT void bc_set_agent_tabs_close_after(double seconds);
+// The app's ⌘T thread with the id |agent| started a run, or ended one. Only the agents it names
+// are threads whose tabs close by bc_agent_tabs_close_after; an outside agent's never do. While a
+// run is under way nothing counts. The app names each of its threads at launch, with false for
+// one not running, whose count starts then.
+BC_EXPORT void bc_agent_set_working(const char* agent, bool working);
+
 // Opens a tab loading the http(s) |url| at the top of the Today tabs of the Space in |profile| of
 // the agent with the id |agent|, or with 0 of its Space made last, without showing it: no window
 // shows another Space or tab, and no page takes the keyboard, because of it. Returns 0, opening
@@ -3287,6 +3307,20 @@ BC_EXPORT void bc_set_relay_calls(bool on);
 // it with the Spaces. The user's: agents get none.
 BC_EXPORT bool bc_auto_picture_in_picture(void);
 BC_EXPORT void bc_set_auto_picture_in_picture(bool on);
+// Security & Privacy › Third-party cookies: Block All blocks them in every window, and Allow, the
+// default, is Chromium's own, which blocks them in private windows only. Follows the account.
+BC_EXPORT bool bc_block_third_party_cookies(void);
+BC_EXPORT void bc_set_block_third_party_cookies(bool block);
+// General › Spell check: on by default, as Chromium's is. Follows the account.
+BC_EXPORT bool bc_spell_check(void);
+BC_EXPORT void bc_set_spell_check(bool on);
+// General › Languages, the pages' accept-languages: BCP 47 tags in order, joined by commas
+// ("en-US,nl"), copied as bc_space_name does. Until the user chooses, they're the start
+// profile's, as Chromium has them from the system. Once chosen they follow the account.
+BC_EXPORT size_t bc_languages(char* languages, size_t capacity);
+// Takes |languages| in their order, without spaces or repeats, and returns whether it did: not an
+// empty list, nor one with a tag that isn't one or that Chromium doesn't take.
+BC_EXPORT bool bc_set_languages(const char* languages);
 
 // Crash reports. Crashpad writes a minidump of every crash in the profile folder, and the core sends
 // one only while the user has Settings › Privacy › Send Crash Reports on, which is off by default:

@@ -19,6 +19,7 @@
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
+#include "browser_core/settings_values.h"
 #include "browser_core/sync_guard.h"
 #include "browser_core/sync_settings.pb.h"
 #include "browser_core/webrtc.h"
@@ -89,6 +90,7 @@ std::map<std::string, Entity> Current() {
   add(kLittleArchiveAfter).set_number(settings.little_archive_after.InSecondsF());
   add(kHoverKinds).set_number(settings.hover_kinds);
   add(kAppearance).set_number(settings.appearance);
+  settings_values::ToEntities(settings.values, all);
   return all;
 }
 
@@ -111,6 +113,7 @@ void Set(const Entity& entity, Settings& settings) {
       (number == 0 || number == 1 || number == 2)) {
     settings.appearance = static_cast<int>(number);
   }
+  settings_values::FromEntity(entity, settings.values);
 }
 
 // Gives the device the settings that came from the account, and does what each changed asks, as
@@ -121,8 +124,14 @@ void Apply(const std::vector<Entity>& entities) {
     Set(entity, UserSettings());
   }
   const std::map<std::string, Entity> after = Current();
+  // The languages have no entity until the user chooses them, so one may be in |after| alone.
   const auto changed = [&](const std::string& name) {
-    return before.at(name).SerializeAsString() != after.at(name).SerializeAsString();
+    const auto was = before.find(name);
+    const auto is = after.find(name);
+    const auto bytes = [](const auto& it, const auto& all) {
+      return it == all.end() ? std::string() : it->second.SerializeAsString();
+    };
+    return bytes(was, before) != bytes(is, after);
   };
   bool any = false;
   for (const auto& [name, entity] : after) {
@@ -133,6 +142,8 @@ void Apply(const std::vector<Entity>& entities) {
     // check.sh reads it.
     if (entity.has_on()) {
       LOG(ERROR) << "browser: sync settings took " << name << (entity.on() ? " on" : " off");
+    } else if (entity.has_text()) {
+      LOG(ERROR) << "browser: sync settings took " << name << " " << entity.text();
     } else {
       LOG(ERROR) << "browser: sync settings took " << name << " " << entity.number();
     }
@@ -154,6 +165,15 @@ void Apply(const std::vector<Entity>& entities) {
   }
   if (changed("notification_prompts")) {
     ApplyEveryday(Everyday::kNotificationPrompts);
+  }
+  if (changed(settings_values::kBlockThirdPartyCookies)) {
+    ApplyEveryday(Everyday::kThirdPartyCookies);
+  }
+  if (changed(settings_values::kSpellCheck)) {
+    ApplyEveryday(Everyday::kSpellCheck);
+  }
+  if (changed(settings_values::kLanguages)) {
+    ApplyEveryday(Everyday::kLanguages);
   }
   if (changed(kLittleArchiveAfter)) {
     ScheduleAutoArchive();

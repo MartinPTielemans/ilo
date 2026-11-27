@@ -329,6 +329,30 @@ source_set("archive_rule") {
   deps = [ "//base" ]
 }
 
+# When a ⌘T thread's own tabs close once it's quiet, apart so browser_core_unittests tests the
+# rule alone.
+source_set("agent_tabs_close_rule") {
+  sources = [
+    "agent_tabs_close_rule.cc",
+    "agent_tabs_close_rule.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+# Settings' values over Chromium's preferences and the close time: defaults, the session file and
+# what follows the account, apart so browser_core_unittests tests them alone.
+source_set("settings_values") {
+  sources = [
+    "settings_values.cc",
+    "settings_values.h",
+  ]
+  deps = [ ":sync_settings_proto" ]
+  public_deps = [
+    ":agent_tabs_close_rule",
+    "//base",
+  ]
+}
+
 # What a Live Folder asks GitHub and what it takes from the answer, apart so
 # browser_core_unittests tests the rule alone (#2979).
 source_set("live_folder_rule") {
@@ -994,6 +1018,8 @@ source_set("browser_core") {
     "agent_devices.h",
     "agent_close.cc",
     "agent_close.h",
+    "agent_tabs_close.cc",
+    "agent_tabs_close.h",
     "agent_file_field.cc",
     "agent_file_field.h",
     "agent_page.cc",
@@ -1192,6 +1218,8 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":agent_tabs_close_rule",
+    ":settings_values",
     ":ad_block_carry",
     ":ad_block_list_check",
     ":native_ad_block_lists",
@@ -1381,6 +1409,7 @@ source_set("browser_core") {
     "//components/password_manager/core/browser/ui",
     "//components/password_manager/core/browser/ui:credential_ui_entry",
     "//components/password_manager/core/common",
+    "//components/language/core/browser",
     "//components/performance_manager",
     "//components/permissions",
     "//components/policy/core/common",
@@ -1393,6 +1422,7 @@ source_set("browser_core") {
     "//components/search_engines",
     "//components/services/storage/public/mojom",
     "//components/sessions",
+    "//components/spellcheck/browser",
     "//components/sync/base",
     "//components/strings:components_branded_strings_grit",
     "//components/strings:components_strings_grit",
@@ -1597,6 +1627,7 @@ test("browser_core_unittests") {
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_close_rule_unittest.cc",
+    "agent_tabs_close_rule_unittest.cc",
     "held_page_rule_unittest.cc",
     "tab_background_unittest.cc",
     "agent_file_field_rule_unittest.cc",
@@ -1638,6 +1669,7 @@ test("browser_core_unittests") {
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
     "shortcut_key_unittest.cc",
+    "settings_values_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -1692,6 +1724,9 @@ test("browser_core_unittests") {
     ":board_store",
     ":ax_text",
     ":agent_close_rule",
+    ":agent_tabs_close_rule",
+    ":settings_values",
+    ":sync_settings_proto",
     ":held_page_rule",
     ":tab_background",
     ":agent_file_field_rule",

@@ -10,6 +10,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/settings_values.h"
 #include "browser_core/space.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "ui/gfx/geometry/rect.h"
@@ -246,6 +247,9 @@ struct Settings {
   // unnamed Space's name row. The app draws both; the core keeps them so they follow the account.
   int appearance = 0;
   bool space_header = false;
+  // Third-party cookies, spell check and the languages, which the core writes into every profile
+  // (ApplyEveryday), and how long a ⌘T thread's own tabs wait once it's quiet (agent_tabs_close.h).
+  settings_values::Values values;
 };
 
 // The user's settings. Call SessionChanged after changing them.
