@@ -72,6 +72,16 @@ impl Inks {
         self.text(if self.light { t::LIGHT_GROUP } else { t::GROUP })
     }
 
+    /// What's picked: the one look's flat plate of the ink, a step weaker in Light (#4401).
+    pub(super) fn selected(&self) -> Rgba {
+        use crate::tokens::selected::plate;
+        self.text(if self.light {
+            plate::LIGHT
+        } else {
+            plate::DARK
+        })
+    }
+
     /// A field's fill, and the recovery words' plate.
     pub(super) fn field(&self) -> Rgba {
         self.text(if self.light { t::LIGHT_FIELD } else { t::FIELD })

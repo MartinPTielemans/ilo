@@ -1,7 +1,8 @@
 //! Bring your stuff (first-run-v9 §5), on the import view's own state (crate::import, bring.rs):
-//! the browsers found in a row, the one picked flying to its slot, a chip for each kind it has with
-//! its count, strands from the icon through each chip to the knot, and as an import writes each
-//! kind its strand draws. Then the favourites, as the step's second state.
+//! the browsers found in a row, none picked until the user picks one (#4449), which lifts in its
+//! cell on the selected plate; a copy of its icon at the flow's left end, a chip for each kind it
+//! has with its count, strands from the copy through each chip to the knot, and as an import
+//! writes each kind its strand draws. Then the favourites, as the step's second state.
 
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,7 @@ use gpui::{
 };
 
 use super::card::{self, Inks};
-use super::{Shell, Step, cubic_bezier, lerp};
+use super::{Shell, Step, cubic_bezier};
 use crate::import::read::Kind;
 use crate::import::{Bring, Bringing, Chip, ImportView};
 use crate::product::PRODUCT;
@@ -21,8 +22,8 @@ use crate::tokens::shell::onboarding::card as t;
 /// The step's motion, the card's own: the view keeps what is picked and written.
 #[derive(Default)]
 pub(super) struct BringMotion {
-    /// The browser drawn in the slot, the one it took over from, and when it was picked.
-    pub(super) flight: Option<(Option<usize>, usize, Instant)>,
+    /// The browser picked last and when, its icon lifting in its cell from then.
+    pub(super) lift: Option<(usize, Instant)>,
     /// Each kind written as the card shows it, its strand drawing from then.
     written: Vec<(Kind, Instant)>,
     /// When the card said All here., the import over and every strand drawn.
@@ -33,12 +34,6 @@ pub(super) struct BringMotion {
     going: bool,
     /// The last frame drew something moving, so the card asks for another.
     pub(super) moving: bool,
-}
-
-/// MOVE, the curve a thing moving takes.
-fn moving(x: f32) -> f32 {
-    let [x1, y1, x2, y2] = t::MOVE;
-    cubic_bezier(x1, y1, x2, y2, x.clamp(0., 1.))
 }
 
 /// DRAW, the curve a cord drawing takes.
@@ -131,10 +126,7 @@ impl Shell {
         let [_, _, slot] = t::BRING_SLOT;
         let pixels = (slot * window.scale_factor()).round() as u32;
         let view = self.bring_view()?;
-        Some(view.update(cx, |view, cx| {
-            view.bring_first(cx);
-            view.card_state(pixels)
-        }))
+        Some(view.update(cx, |view, _| view.card_state(pixels)))
     }
 
     /// The step as this frame draws it: what the view has, paced as the card shows it.
@@ -148,7 +140,7 @@ impl Shell {
         Some(bring)
     }
 
-    /// The card's motion follows what the view says: a new pick flies, each kind written takes its
+    /// The card's motion follows what the view says: a new pick lifts, each kind written takes its
     /// time at least the step's gap after the one before, and once all are drawn, All here.
     fn bring_pace(&mut self, bring: &Bring) {
         let Some(onboarding) = self.onboarding.as_mut() else {
@@ -157,10 +149,9 @@ impl Shell {
         let now = onboarding.clock.now();
         let motion = &mut onboarding.bring;
         if let Some(picked) = bring.picked
-            && motion.flight.map(|(_, to, _)| to) != Some(picked)
+            && motion.lift.map(|(at, _)| at) != Some(picked)
         {
-            let from = motion.flight.map(|(_, to, _)| to);
-            motion.flight = Some((from, picked, now));
+            motion.lift = Some((picked, now));
         }
         let Bringing::Running { chips, done, .. } = &bring.state else {
             motion.written.clear();
@@ -267,18 +258,16 @@ impl Shell {
         }
     }
 
-    /// Whether the step is drawing: a flight, a strand or the knot's gap.
+    /// Whether the step is drawing: a pick's lift, a strand or the knot's gap.
     pub(super) fn bring_moving(&self, bring: Option<&Bring>) -> bool {
         let Some(onboarding) = self.onboarding.as_ref() else {
             return false;
         };
         let now = onboarding.clock.now();
         let motion = &onboarding.bring;
-        let [out, _, _, _] = t::BRING_FLIGHT;
-        // The first pick, as the step comes, is in its slot already: only one from another flies.
-        let flying = (motion.flight).is_some_and(|(from, _, at)| {
-            from.is_some() && now.saturating_duration_since(at).as_secs_f32() < out
-        });
+        let [rise, _] = t::BRING_LIFT;
+        let lifting = (motion.lift)
+            .is_some_and(|(_, at)| now.saturating_duration_since(at).as_secs_f32() < rise);
         // A stalled import's knot stands still until it's asked again.
         let running = matches!(
             bring.map(|b| &b.state),
@@ -287,11 +276,12 @@ impl Shell {
         let [_, close] = t::BRING_LAP;
         let closing = (motion.all_here)
             .is_none_or(|at| now.saturating_duration_since(at).as_secs_f32() < close + t::BRING_ON);
-        flying || (running && closing)
+        lifting || (running && closing)
     }
 
-    /// The step's controls over the whole card: the row of browsers, the slot, the chips and their
-    /// strands, and the knot; or what keeps the browser from being read.
+    /// The step's controls over the whole card: the row of browsers, the picked one's copy, the
+    /// chips and their strands, and the knot; the line asking for a pick before one; or what keeps
+    /// the browser from being read.
     pub(super) fn bring_controls(
         &mut self,
         bring: Option<&Bring>,
@@ -310,17 +300,20 @@ impl Shell {
         div()
             .absolute()
             .inset_0()
-            .child(self.bring_browsers(bring, running, inks, cx))
-            .children(self.bring_slot(bring, still, now, inks))
+            .child(self.bring_browsers(bring, running, still, now, inks, cx))
+            .children(self.bring_copy(bring, inks))
             .children(self.bring_kinds(bring, still, now, inks, cx))
             .into_any_element()
     }
 
-    /// The browsers found in a row, the one picked ringed, the rest past five behind More….
+    /// The browsers found in a row, the rest past five behind More…. The one picked keeps its icon
+    /// in its cell, lifted on the one look's selected plate (#4401), so the row never has a gap.
     fn bring_browsers(
         &self,
         bring: &Bring,
         running: bool,
+        still: bool,
+        now: Instant,
         inks: Inks,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -332,6 +325,19 @@ impl Shell {
         let cells = bring.browsers.len().min(shown) + usize::from(past);
         let left = (t::WIDTH - cells as f32 * cell) / 2.;
         let a11y = self.a11y;
+        let [reach, corners] = t::BRING_PICKED;
+        let [rise, lift] = t::BRING_LIFT;
+        let lifted = (self.onboarding.as_ref())
+            .and_then(|o| o.bring.lift)
+            .filter(|(at, _)| bring.picked == Some(*at))
+            .map_or(0., |(_, since)| match still {
+                true => lift,
+                false => {
+                    lift * super::arrive(now.saturating_duration_since(since).as_secs_f32() / rise)
+                }
+            });
+        // check.sh clicks a browser where this says it is.
+        let logged = (self.bring_view()).map(|view| view.read(cx).card_drawn());
         let plate = |name: &str, icon: Option<std::sync::Arc<gpui::RenderImage>>| match icon {
             Some(icon) => gpui::img(icon)
                 .size(px(size))
@@ -345,6 +351,7 @@ impl Shell {
             div()
                 .id(("onboarding-browser", at))
                 .when(a11y, |cell| named_check(cell, spoken, picked))
+                .relative()
                 .w(px(cell))
                 .flex()
                 .flex_col()
@@ -354,17 +361,26 @@ impl Shell {
                 .when(!running, |cell| {
                     cell.on_click(cx.listener(move |shell, _, _, cx| shell.bring_pick(at, cx)))
                 })
+                .when(picked, |cell| {
+                    cell.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(-reach))
+                            .bottom(px(-reach))
+                            .rounded(px(corners))
+                            .bg(inks.selected()),
+                    )
+                })
                 .child(
                     div()
+                        .relative()
+                        .top(px(if picked { -lifted } else { 0. }))
                         .size(px(size))
                         .rounded(px(size * t::BRING_PLATE[0]))
-                        .when(picked, |plate| {
-                            plate
-                                .border(px(t::RING))
-                                .border_color(inks.text(t::BRING_RING))
-                        })
-                        // The icon has flown to the slot; its cell keeps the ring.
-                        .when(!picked, |cell| cell.child(plate(name, icon.clone()))),
+                        .child(plate(name, icon.clone()))
+                        .children(self.place(Step::Import, icon_place(at))),
                 )
                 .child(
                     div()
@@ -376,6 +392,11 @@ impl Shell {
                         .child(name.clone()),
                 )
                 .children(self.place(Step::Import, browser_place(at)))
+                .children(logged.clone().map(|logged| {
+                    crate::settings_rows::drawn(format!("import-browser {name}"), logged)
+                        .absolute()
+                        .inset_0()
+                }))
                 .into_any_element()
         });
         let mut cells: Vec<AnyElement> = row.collect();
@@ -486,76 +507,44 @@ impl Shell {
         cx.notify();
     }
 
-    /// The icon in its slot, and the one picked before flying back to its cell.
-    fn bring_slot(&self, bring: &Bring, still: bool, now: Instant, inks: Inks) -> Vec<AnyElement> {
-        let Some(motion) = self.onboarding.as_ref().map(|o| &o.bring) else {
-            return Vec::new();
-        };
-        let Some((from, to, at)) = motion.flight else {
-            return Vec::new();
-        };
-        let [top, size, cell] = t::BRING_ROW;
+    /// A copy of the picked browser's icon at the flow's left end, where its strands start: the
+    /// row keeps its own (#4449), and another pick swaps it with the counts.
+    fn bring_copy(&self, bring: &Bring, inks: Inks) -> Option<AnyElement> {
+        let (name, image) = bring.browsers.get(bring.picked?)?;
         let [slot_x, slot_y, slot] = t::BRING_SLOT;
-        let [out, back, arc, lift] = t::BRING_FLIGHT;
-        let shown = t::BRING_SHOWN as usize;
-        let past = bring.browsers.len() > shown;
-        let cells = bring.browsers.len().min(shown) + usize::from(past);
-        let left = (t::WIDTH - cells as f32 * cell) / 2.;
-        // An icon in More…'s list flies from More…'s cell.
-        let cell_at = |index: usize| {
-            let index = index.min(shown);
-            (left + index as f32 * cell + (cell - size) / 2., top)
+        let plate = match image {
+            Some(image) => gpui::img(image.clone()).size(px(slot)).into_any_element(),
+            None => letter_plate(name, slot, inks).into_any_element(),
         };
-        let elapsed = now.saturating_duration_since(at).as_secs_f32();
-        let icon = |index: usize, along: f32, going: bool| -> Option<AnyElement> {
-            let (name, image) = bring.browsers.get(index)?;
-            let (cx0, cy0) = cell_at(index);
-            let from = (cx0, cy0 - lift);
-            let to = (slot_x, slot_y);
-            let (from, to) = if going { (from, to) } else { (to, (cx0, cy0)) };
-            let along = if still { 1. } else { along };
-            // An arc through a point `arc` over the midpoint.
-            let mid = ((from.0 + to.0) / 2., (from.1 + to.1) / 2. - arc);
-            let u = 1. - along;
-            let x = u * u * from.0 + 2. * u * along * mid.0 + along * along * to.0;
-            let y = u * u * from.1 + 2. * u * along * mid.1 + along * along * to.1;
-            let sized = match going {
-                true => lerp(size, slot, along),
-                false => lerp(slot, size, along),
-            };
-            let plate = match image {
-                Some(image) => gpui::img(image.clone()).size(px(sized)).into_any_element(),
-                None => letter_plate(name, sized, inks).into_any_element(),
-            };
-            Some(
-                card::at(x, y)
-                    .size(px(sized))
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 0., t::BRING_SHADOW[0] * along),
-                        offset: point(px(0.), px(sized * t::BRING_SHADOW[1])),
-                        blur_radius: px(sized * t::BRING_SHADOW[2]),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-                    .rounded(px(sized * t::BRING_PLATE[0]))
-                    .child(plate)
-                    .into_any_element(),
+        let step = self.onboarding.as_ref().map_or(Step::Import, |o| o.step);
+        Some(
+            card::at(slot_x, slot_y)
+                .size(px(slot))
+                .rounded(px(slot * t::BRING_PLATE[0]))
+                .child(plate)
+                .children(self.place(step, "copy"))
+                .into_any_element(),
+        )
+    }
+
+    /// Before a pick, in the flow's place: the one line that asks for one.
+    fn bring_unpicked(&self, inks: Inks) -> AnyElement {
+        let [_, centre, ..] = t::BRING_CHIP;
+        let [_, size, height] = t::LINE;
+        card::at(0., centre - height / 2.)
+            .w(px(t::WIDTH))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .relative()
+                    .text_size(px(size))
+                    .line_height(px(height))
+                    .text_color(inks.text(t::TEXT_3))
+                    .child(PICK_A_BROWSER)
+                    .children(self.place(Step::Import, "pick-a-browser")),
             )
-        };
-        let mut drawn = Vec::new();
-        if let Some(from) = from
-            && elapsed < back
-            && from != to
-        {
-            drawn.extend(icon(from, moving(elapsed / back), false));
-        }
-        // The first pick, as the step comes, is in its slot already.
-        let along = match from {
-            Some(_) => super::arrive(elapsed / out),
-            None => 1.,
-        };
-        drawn.extend(icon(to, along, true));
-        drawn
+            .into_any_element()
     }
 
     /// The chips in their column, the strands through them and the knot, or what keeps the browser
@@ -568,6 +557,9 @@ impl Shell {
         inks: Inks,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        if bring.picked.is_none() {
+            return vec![self.bring_unpicked(inks)];
+        }
         if let Some(said) = bring_held(bring) {
             return vec![self.bring_again(said, inks, cx)];
         }
@@ -791,7 +783,7 @@ impl Shell {
     }
 
     /// The favourites, the step's second state: up to eight tiles, a click leaving one out, with
-    /// the landed icon and the knot staying either side.
+    /// the picked icon's copy and the knot staying either side.
     pub(super) fn bring_tiles(
         &mut self,
         bring: Option<&Bring>,
@@ -888,12 +880,7 @@ impl Shell {
                     .children(self.place(Step::Favorites, tile_place(at))),
             )
         });
-        let still = true;
-        let now = self.onboarding.as_ref().map(|o| o.clock.now());
-        let landed = match (bring, now) {
-            (Some(bring), Some(now)) => self.bring_slot(bring, still, now, inks),
-            _ => Vec::new(),
-        };
+        let landed = bring.and_then(|bring| self.bring_copy(bring, inks));
         div()
             .absolute()
             .inset_0()
@@ -923,6 +910,17 @@ fn letter_plate(name: &str, size: f32, inks: Inks) -> gpui::Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(inks.text(1.))
         .child(letter)
+}
+
+/// The line in the flow's place until a browser is picked (#4449).
+pub(super) const PICK_A_BROWSER: &str = "Pick a browser to see what comes over.";
+
+/// What a test calls a browser's icon in its cell.
+fn icon_place(at: usize) -> &'static str {
+    ["icon 0", "icon 1", "icon 2", "icon 3", "icon 4"]
+        .get(at)
+        .copied()
+        .unwrap_or("icon")
 }
 
 /// What a test calls a browser's cell, a chip and a tile.

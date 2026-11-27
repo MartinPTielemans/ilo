@@ -7,7 +7,8 @@
 # assistants (2) while the build has the threads' setting, with Just the Browser where nobody is
 # signed in; Bring your stuff (3), which lists the made-up Arc in src/import/fixture (a made-up
 # Chrome on Linux), never the Mac's own browsers, with what comes from it as chips, which a click
-# leaves out and another brings back, and Skip; Your favorites (3b), once an import offers sites;
+# leaves out and another brings back, once a click on its icon has picked it, as the step picks
+# none for the user; and Skip; Your favorites (3b), once an import offers sites;
 # Your first Space (4), whose → picks the next palette; Other apps (5) while an agent program is
 # found, whose command switch a launch in a made-up home turns on and off, writing the command's
 # skill there and taking it away; and step 6, always last, whose Help improve the dark pass turns
@@ -52,11 +53,16 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# The import's list says what comes from the browser used last as chips: a click on the fixture's
-# $chip leaves it out and another brings it back, keeping the step. Captured as
-# onboarding-$1-import-chips.png with it left out.
+# The import step picks no browser for the user (#4449): a click on the fixture's $found picks it,
+# and its list says what comes from it as chips: a click on $chip leaves it out and another
+# brings it back, keeping the step. Captured as onboarding-$1-import-chips.png with it left out.
 import_choices() {
   local at
+  ! grep -q '^browser: import pick ' "$log" || fail "$1: the import step picked a browser before a click"
+  at=$(drawn "import-browser $found") || fail "$1: the import step drew no $found"
+  send click $at
+  expect "^browser: import pick $found\$" "$1: a click on $found didn't pick it"
+  await "^browser: import read $found: " || fail "$1: picking $found didn't read it"
   at=$(drawn "import-chip $chip") || fail "$1: the import's list drew no $chip chip"
   send click $at
   expect "^browser: import chip $chip false\$" "$1: a click on $chip didn't leave it out"
@@ -514,8 +520,11 @@ pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding started$' || fail "favorites: the first launch didn't start the onboarding"
 walk_steps 3 "favorites: "
-# The step reads the browser used last as it comes, and ↩ imports what its chips have on.
-await '^browser: import pick Chrome$' || fail "favorites: the import step didn't pick the made-up Chrome"
+# A click on the made-up Chrome picks it, as the step picks none (#4449), and ↩ imports what its
+# chips have on.
+at=$(drawn "import-browser Chrome") || fail "favorites: the import step drew no Chrome"
+send click $at
+expect '^browser: import pick Chrome$' "favorites: a click on the made-up Chrome didn't pick it"
 await '^browser: import read Chrome: ' || fail "favorites: picking Chrome didn't read it"
 send key return
 expect '^browser: onboarding import button via return$' "favorites: ↩ at the import didn't press its button"

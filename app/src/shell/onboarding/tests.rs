@@ -1590,6 +1590,23 @@ fn importing_from(
     &mut VisualTestContext,
     Entity<crate::import::ImportView>,
 ) {
+    let (shell, cx, view) = at_import(browser, cx);
+    // Nothing is picked as the step comes (#4449): the user picks the browser used last.
+    click("browser 0", cx);
+    cx.run_until_parked();
+    settle(&shell, cx);
+    (shell, cx, view)
+}
+
+/// The card at the import step, from `browser`, with nothing picked.
+fn at_import(
+    browser: Rc<crate::import::tests::Browser>,
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    &mut VisualTestContext,
+    Entity<crate::import::ImportView>,
+) {
     let (shell, cx, host) = first_window(cx);
     *host.import.borrow_mut() = Some(browser);
     host.sync_server.set(true);
@@ -2662,10 +2679,53 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
-/// The browsers found are a row, the one used last first; a click on another reads it, and it
-/// flies to the slot as the one before goes back.
+/// The import step picks nothing for the user (#4449): the row shows each browser with its icon,
+/// the flow's place asks for a pick, and Import does nothing until there is one.
 #[gpui::test]
-fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
+fn the_import_step_opens_with_nothing_picked(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = at_import(Rc::new(Browser::new(None)), cx);
+    assert_eq!(brought(&view, cx).picked, None, "nothing is picked");
+    assert!(
+        placed("icon 0", cx).is_some(),
+        "the browser's icon is in its cell"
+    );
+    assert!(
+        placed("pick-a-browser", cx).is_some(),
+        "the line asks for a pick in the flow's place"
+    );
+    assert!(
+        placed("copy", cx).is_none() && placed("chip 0", cx).is_none(),
+        "no flow before a pick"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.running()).is_none(),
+        "Import waits for a pick"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    click("browser 0", cx);
+    cx.run_until_parked();
+    settle(&shell, cx);
+    assert_eq!(brought(&view, cx).picked, Some(0), "the click picked it");
+    assert!(
+        placed("pick-a-browser", cx).is_none(),
+        "the flow takes the line's place"
+    );
+    assert!(
+        placed("copy", cx).is_some(),
+        "its copy at the flow's left end"
+    );
+    assert!(placed("icon 0", cx).is_some(), "and the row keeps its own");
+    assert!(placed("chip 0", cx).is_some(), "with what comes from it");
+}
+
+/// The browsers found are a row, the one used last first; a click on another reads it, and its
+/// icon lifts in its cell while every icon in the row stays drawn, at each frame of the lift,
+/// and the copy at the flow's left end is the new pick's (#4449).
+#[gpui::test]
+fn a_browser_clicked_is_read_and_lifts_in_its_cell(cx: &mut TestAppContext) {
     use crate::import::Bringing;
     use crate::import::sources::{Os, Roots};
     use crate::import::tests::{Browser, chrome, firefox_dir, places_file, used};
@@ -2697,13 +2757,27 @@ fn a_browser_clicked_is_read_and_flies_to_the_slot(cx: &mut TestAppContext) {
         "and read it, not {:?}",
         bring.state
     );
-    let flight = card(&shell, cx, |o| {
-        o.bring.flight.map(|(from, to, _)| (from, to))
-    });
-    assert_eq!(
-        flight,
-        Some((Some(0), 1)),
-        "Chrome goes back as Firefox flies"
+    let lift = card(&shell, cx, |o| o.bring.lift.map(|(at, _)| at));
+    assert_eq!(lift, Some(1), "Firefox lifts");
+    let [rise, height] = t::BRING_LIFT;
+    let mut tops = Vec::new();
+    for _ in 0..5 {
+        for at in ["icon 0", "icon 1", "copy"] {
+            assert!(placed(at, cx).is_some(), "{at} is drawn at every frame");
+        }
+        let top = |at: &str, cx: &mut VisualTestContext| f32::from(placed(at, cx).unwrap().top());
+        tops.push(top("icon 0", cx) - top("icon 1", cx));
+        waited(cx, rise / 4.);
+        shell.update(cx, |_, cx| cx.notify());
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+    }
+    assert!(
+        tops.windows(2).all(|two| two[1] >= two[0] - 0.01),
+        "it rises and never falls: {tops:?}"
+    );
+    assert!(
+        (tops.last().unwrap() - height).abs() < 0.5,
+        "it rests {height} over the others: {tops:?}"
     );
     std::fs::remove_dir_all(home).unwrap();
 }

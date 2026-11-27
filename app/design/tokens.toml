@@ -2673,16 +2673,17 @@ space-pad = [10.0, 92.0, 8.0, 8.0]
 space-dots = [15.0, 11.0, 270.0, 70.0]
 space-start = [1.0, 0.7, 0.4, 0.3]
 # Bring your stuff (v9 §5). The browsers found: their icons' top, size and cell width, the names'
-# size, line and gap under the icon, how many show before More…, and the ring's alpha the picked
-# cell keeps.
+# size, line and gap under the icon, and how many show before More….
 bring-row = [102.0, 44.0, 72.0]
 bring-name = [11.0, 14.0, 4.0]
 bring-shown = 5.0
-bring-ring = 0.25
-# The slot the picked icon lands in: its left, top and size; its flight there in seconds, back in
-# seconds, the arc's height over the midpoint, and the lift it starts with.
+# A pick (#4449): the one look's selected plate (#4401) under its icon and name, reaching this far
+# over and under them, at these corners; its icon lifts in its cell over these seconds (ARRIVE)
+# to this height, and never leaves the row.
+bring-picked = [8.0, 12.0]
+bring-lift = [0.42, 6.0]
+# The copy of the picked icon at the flow's left end, where its strands start: left, top and size.
 bring-slot = [118.0, 260.0, 64.0]
-bring-flight = [0.42, 0.3, 80.0, 6.0]
 # The chips: the column's centre x, the centre line's y, a chip's width, height, corners and
 # pitch; the glyph's size, the words' size; a chip left out at this alpha.
 bring-chip = [372.0, 292.0, 172.0, 26.0, 9.0, 30.0]
@@ -2701,10 +2702,9 @@ bring-on = 0.9
 # The Safari notice: its left and width.
 bring-notice = [214.0, 448.0]
 # An app icon's plate: its corners as a share of its size, the letter standing in for an icon and
-# More…'s glyph at these shares of it; the flying icon's shadow at most this alpha, its drop and
-# blur as shares of its size; a chip's sides and the gap after its glyph as shares of its height.
+# More…'s glyph at these shares of it; a chip's sides and the gap after its glyph as shares of its
+# height.
 bring-plate = [0.22, 0.45, 0.4]
-bring-shadow = [0.25, 0.1, 0.25]
 bring-chip-inset = [0.333333, 0.25]
 # The favourites' tiles: width, height, corners and gap; four in a row; the plate, the name's size
 # and line, and the check disc.
