@@ -24,6 +24,7 @@ use crate::tokens::icon_picker::{
     HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
 use crate::tokens::palette::LIGHT_PLATE_GRAY;
+use crate::tokens::palette::NEEDS_YOU;
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
@@ -33,18 +34,17 @@ pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
 };
 use crate::tokens::palette::{
-    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_MATERIAL_LIFT,
-    LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_GREY, LIGHT_MATERIAL_OVER_WHITE,
-    LIGHT_MATERIAL_SOLID, LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, MATERIAL_LIFT,
-    MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE, MATERIAL_SOLID, NEUTRAL,
-    NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
+    DIALOG_DARK, DIALOG_LIGHT, LIGHT_MATERIAL_LIFT, LIGHT_MATERIAL_OVER_BLACK,
+    LIGHT_MATERIAL_OVER_GREY, LIGHT_MATERIAL_OVER_WHITE, LIGHT_MATERIAL_SOLID, LIGHT_SPACE_TINT,
+    LIGHT_STAND_IN, MATERIAL_LIFT, MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE,
+    MATERIAL_SOLID, OVERLAY_LIGHT, SPACE_TINT, STAND_IN,
 };
-use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 use crate::tokens::palette::{
     FLOAT_MATERIAL, FLOAT_MATERIAL_MORE, LIGHT_FLOAT_MATERIAL, LIGHT_FLOAT_MATERIAL_MORE,
 };
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, OVERLAY_DARK, PAPER};
+use crate::tokens::palette::{LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{STATE_HOVERED, STATE_PRESSED, STATE_SELECTED_HOVERED};
 pub use crate::tokens::selected::plate::DARK as STATE_SELECTED;
@@ -73,7 +73,7 @@ const WHITE: Rgba = Rgba {
     b: 1.,
     a: 1.,
 };
-/// Nothing: the glows of a Space without a colour.
+/// Nothing: the tint of a Space without a colour.
 const CLEAR: Rgba = Rgba {
     r: 0.,
     g: 0.,
@@ -113,12 +113,8 @@ pub const TARGET_ACCENT: f32 = 0.15;
 /// Where on a swatch its colours are checked: across its gradient's line and down it.
 const ALONG: [f32; 9] = [0., 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.];
 const DOWN: [f32; 9] = ALONG;
-/// How strong the foot's glow and the far one are where the window is checked: anywhere from none
-/// to their centres, as text may lie anywhere under them. The tests check finer steps.
-const FOOT: [f32; 5] = [0., 0.25, 0.5, 0.75, 1.];
-const FAR: [f32; 2] = [0., 1.];
-/// The window between those points can dip a little under them, so what's checked at them has
-/// this much to spare.
+/// What's checked at the window's grounds has this much to spare, as rounding to 8 bits and the
+/// grain can take a little off it.
 const BETWEEN: f32 = 0.05;
 
 /// Which way a window looks: dark, Paper over its material under black, or light, Ink over its
@@ -220,12 +216,11 @@ impl Tone {
         })
     }
 
-    /// How opaque a theme's colours lie over the window at the intensity a theme starts with, and
-    /// a neutral one's.
-    fn gradient_alphas(self) -> (f32, f32) {
+    /// How opaque a Space's colour lies over the window at the intensity a theme starts with.
+    fn space_tint(self) -> f32 {
         match self {
-            Tone::Dark => (GRADIENT_ALPHA, NEUTRAL_GRADIENT_ALPHA),
-            Tone::Light => (LIGHT_GRADIENT_ALPHA, LIGHT_NEUTRAL_GRADIENT_ALPHA),
+            Tone::Dark => SPACE_TINT,
+            Tone::Light => LIGHT_SPACE_TINT,
         }
     }
 
@@ -611,13 +606,11 @@ pub struct Palette {
     /// The window's ground where it has to be opaque, under rows it covers or in the reveal's
     /// panel over the page.
     pub underlay: Rgba,
-    /// How opaque the Space's colour lies at the centre of the glow from the sidebar's foot; 0
-    /// without a theme.
+    /// How opaque the Space's colour lies over the window's glass; 0 without a theme.
     pub layer_alpha: f32,
-    /// The glows' colours, each at its alpha at its centre: the main colour from the sidebar's
-    /// foot and the second, faint, from the window's top right. Clear without a theme.
-    pub glow: Rgba,
-    pub far_glow: Rgba,
+    /// The Space's colour: its main colour at `layer_alpha`, laid flat over the whole window, with
+    /// no gradient and no glow (#4402). Clear without a theme.
+    pub space_tint: Rgba,
     /// The tab shown's colour: the Space's main colour, or the colour nearest it at its hue on
     /// which the ink reads; none without a theme, which takes the selected plate.
     pub shown: Option<Rgba>,
@@ -666,6 +659,9 @@ pub struct Palette {
     /// The shade of a dark window's plate under the pointer: what its text asks, or as much of
     /// it as leaves the plate telling from the window.
     pub pointed_shade: f32,
+    /// Amber, the chrome's one colour of its own, for a thread or an agent that waits on the user
+    /// (#4401), taken towards the ink only as far as its words need to read on the window.
+    pub needs_you: Rgba,
 }
 
 /// A plate primary text sits on over the window. The window stays as see-through as the user's
@@ -749,13 +745,9 @@ impl Palette {
         let main = rgb(theme.main_color());
         let shown = solve_shown(main, tone, &window.samples(layer_alpha));
         let mut palette = Palette::with(layer_alpha, &window, Some(shown));
-        palette.glow = Rgba {
+        palette.space_tint = Rgba {
             a: layer_alpha,
             ..main
-        };
-        palette.far_glow = Rgba {
-            a: window.far_at(layer_alpha),
-            ..window.far
         };
         let accent = palette.solve_accent(main, &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
@@ -790,8 +782,7 @@ impl Palette {
             glass: window.glass,
             underlay: tone.stand_in(),
             layer_alpha,
-            glow: CLEAR,
-            far_glow: CLEAR,
+            space_tint: CLEAR,
             shown,
             ink,
             text_floor: 0.,
@@ -811,6 +802,7 @@ impl Palette {
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
             pointed_shade: 0.,
+            needs_you: rgb(NEEDS_YOU),
         };
         // Text and glyphs on what floats read on it, over the material, and on a control's plate
         // under the pointer.
@@ -837,6 +829,8 @@ impl Palette {
         let solid = palette.grounds_on(&[over(tone.solid(), palette.tint, palette.tint.a)], 0.);
         let solid_gray = least_alpha(ink, &solid, gray_text(Transparency::Less) + BETWEEN);
         palette.gray_floor = palette.gray_floor.max(solid_gray);
+        let plain = window.samples(palette.layer_alpha);
+        palette.needs_you = reading(rgb(NEEDS_YOU), ink, &plain, TEXT + BETWEEN);
         palette
     }
 
@@ -1063,8 +1057,7 @@ impl Palette {
             tint: mix(self.tint, other.tint),
             glass: self.glass + (other.glass - self.glass) * t,
             layer_alpha: self.layer_alpha + (other.layer_alpha - self.layer_alpha) * t,
-            glow: near.glow,
-            far_glow: near.far_glow,
+            space_tint: near.space_tint,
             shown: match (self.shown, other.shown) {
                 (Some(from), Some(to)) => Some(mix(from, to)),
                 _ => near.shown,
@@ -1092,6 +1085,8 @@ impl Palette {
                 from + (to - from) * t
             }),
             pointed_shade: self.pointed_shade + (other.pointed_shade - self.pointed_shade) * t,
+            // Through a change of look the ink's ends jump, so its amber is the nearer one's.
+            needs_you: near.needs_you,
         }
     }
 
@@ -1288,20 +1283,19 @@ impl Palette {
         )
     }
 
-    /// The window's colour over its ground, `foot` of the way to the foot glow's full strength and
-    /// `far` of the way to the far one's, with each one's alpha: what to lay over the ground there.
-    pub fn glow_at(&self, foot: f32, far: f32) -> Rgba {
-        let (foot, far) = (
-            Rgba {
-                a: self.glow.a * foot,
-                ..self.glow
-            },
-            Rgba {
-                a: self.far_glow.a * far,
-                ..self.far_glow
-            },
-        );
-        composite(foot, far)
+    /// The other look's ink: Ink on a dark window and Paper on a light one, the main button's
+    /// label on its fill of the ink (#4401).
+    pub fn other_ink(&self) -> Rgba {
+        match self.tone {
+            Tone::Dark => rgb(INK),
+            Tone::Light => rgb(PAPER),
+        }
+    }
+
+    /// What the keyboard is on, a row in the command bar, the tab switcher, a menu or Settings'
+    /// list: the flat plate of the ink, a step weaker on a light window (#4401).
+    pub fn flat_plate(&self) -> Hsla {
+        self.plate(self.toned(STATE_SELECTED, LIGHT_STATE_SELECTED))
     }
 
     /// A plate under a row or a field, the ink at `alpha`.
@@ -1338,23 +1332,23 @@ impl Palette {
         )
     }
 
-    /// The window where its foot's glow is `foot` of its full strength and the far one `far` of
-    /// its, as it's seen over a black and over a white backdrop.
-    pub fn window_at(&self, foot: f32, far: f32) -> [Rgba; 2] {
-        let glow = self.glow_at(foot, far);
+    /// The window, its Space's tint and all, as it's seen over a black and over a white backdrop:
+    /// the same everywhere on it, as the tint is flat.
+    pub fn window(&self) -> [Rgba; 2] {
+        let tint = self.space_tint;
         let grounds = self.tone.grounds(self.tint);
-        grounds.map(|ground| over(ground, glow, glow.a))
+        grounds.map(|ground| over(ground, tint, tint.a))
     }
 
     /// The window over a grey backdrop at black, grey 128 and white, the three its material was
-    /// measured over, where its glows are `foot` and `far` of their full strength, with `lift` of
-    /// the most a desktop picture lifts the material. Everything over the material lies over it
-    /// evenly, so over a grey between two of these the window is as far between theirs.
-    pub fn window_over_greys(&self, foot: f32, far: f32, lift: f32) -> [Rgba; 3] {
-        let glow = self.glow_at(foot, far);
+    /// measured over, with `lift` of the most a desktop picture lifts the material. Everything
+    /// over the material lies over it evenly, so over a grey between two of these the window is as
+    /// far between theirs.
+    pub fn window_over_greys(&self, lift: f32) -> [Rgba; 3] {
+        let tint = self.space_tint;
         self.tone.materials(lift).map(|material| {
             let ground = over(material, self.tint, self.tint.a);
-            over(ground, glow, glow.a)
+            over(ground, tint, tint.a)
         })
     }
 
@@ -1657,15 +1651,13 @@ impl Swatch {
     }
 }
 
-/// The theme's window, worked out once: how opaque its glows are and their colours, and the
-/// colours its swatch runs through.
+/// The theme's window, worked out once: how opaque its tint is and its colour, and the colours its
+/// swatch runs through.
 struct Window {
     tone: Tone,
-    /// The foot's glow at its centre, and the far one's at the theme's own alpha.
+    /// The tint's alpha, the theme's own.
     alpha: f32,
-    far_alpha: f32,
     main: Rgba,
-    far: Rgba,
     grain: f32,
     swatch: Vec<Rgba>,
     /// Where the Space's glass sits on its Transparency bar.
@@ -1722,9 +1714,7 @@ impl Window {
             tone,
             glass,
             alpha: 0.,
-            far_alpha: 0.,
             main: BLACK,
-            far: BLACK,
             grain: 0.,
             swatch: vec![BLACK],
         }
@@ -1738,51 +1728,22 @@ impl Window {
             .flat_map(|&along| DOWN.iter().map(move |&y| Layer::of(theme, along, y)))
             .map(|layer| layer.over(BLACK, 1.))
             .collect();
-        let alpha = layer_alpha(theme, tone);
-        let (colored, _) = tone.gradient_alphas();
         Window {
             tone,
-            alpha,
-            far_alpha: FAR_GLOW * alpha / colored,
+            alpha: layer_alpha(theme, tone),
             main: colors[0],
-            far: colors.get(1).copied().unwrap_or(colors[0]),
             grain: theme.grain,
             swatch,
             glass,
         }
     }
 
-    /// The far glow's alpha where the foot's is `alpha`, as `fit` may fade them together.
-    fn far_at(&self, alpha: f32) -> f32 {
-        match self.alpha > 0. {
-            true => self.far_alpha * alpha / self.alpha,
-            false => 0.,
-        }
-    }
-
-    /// The window at every point checked over both backdrops: its ground, with the foot's glow
-    /// at `alpha` at its centre and the far one with it, each anywhere from none to full.
+    /// The window over both backdrops, its ground with the tint at `alpha` over it: the same
+    /// anywhere text may lie, as the tint is flat.
     fn samples(&self, alpha: f32) -> Vec<Rgba> {
-        let far_alpha = self.far_at(alpha);
         (self.tone.grounds(self.tone.tint(self.glass)))
             .into_iter()
-            .flat_map(|ground| {
-                FOOT.iter().flat_map(move |&foot| {
-                    FAR.iter().map(move |&far| {
-                        let glow = composite(
-                            Rgba {
-                                a: alpha * foot,
-                                ..self.main
-                            },
-                            Rgba {
-                                a: far_alpha * far,
-                                ..self.far
-                            },
-                        );
-                        over(ground, glow, glow.a)
-                    })
-                })
-            })
+            .map(|ground| over(ground, self.main, alpha))
             .collect()
     }
 
@@ -1793,9 +1754,9 @@ impl Window {
 
     /// The theme's alpha, its own, or lower by the least steps at which the ink reads as text on
     /// the window over both backdrops, grain and all, and the end of the scale the ink runs toward
-    /// stands out on the whole window, so an accent always exists. The colour only adds its glow:
+    /// stands out on the whole window, so an accent always exists. The colour only adds its tint:
     /// the window keeps the glass it has without a theme, never shaded toward the tint (#4090),
-    /// and a plate the ink can't read on takes its own shade (`solve_ground`). With no glow left
+    /// and a plate the ink can't read on takes its own shade (`solve_ground`). With no tint left
     /// it's the window without a theme, which reads.
     fn fit(&self) -> f32 {
         let (ink, end) = (self.tone.ink(), self.tone.end());
@@ -1830,16 +1791,10 @@ fn solve_shown(main: Rgba, tone: Tone, samples: &[Rgba]) -> Rgba {
     nearest(main, passes).unwrap_or(ink)
 }
 
-/// How opaque `theme`'s colours lie over a window of `tone`, as a Space's colour alone does at
-/// the intensity a theme starts with, less for a neutral one.
+/// How opaque `theme`'s main colour lies over a window of `tone`: the Space's tint at the
+/// intensity a theme starts with, and in proportion to the picker's Intensity.
 fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
-    let saturation = Hsla::from(rgb(theme.main_color())).s;
-    let (colored, neutral) = tone.gradient_alphas();
-    let alpha = if saturation < NEUTRAL {
-        neutral
-    } else {
-        colored
-    };
+    let alpha = tone.space_tint();
     let at = |intensity: f32| INTENSITY_FLOOR + INTENSITY_SPAN * intensity;
     alpha * at(theme.intensity) / at(DEFAULT_INTENSITY)
 }
@@ -1912,6 +1867,19 @@ pub fn ink_on(fill: Rgba) -> Rgba {
 
 /// The least alpha, in 25ths, at which `ink` over each of `grounds` reaches `minimum`; 1 where
 /// none does.
+/// `color` taken towards `ink` the least step that reads at `minimum` on every one of `grounds`,
+/// or all the way.
+fn reading(color: Rgba, ink: Rgba, grounds: &[Rgba], minimum: f32) -> Rgba {
+    (0..=50)
+        .map(|step| over(color, ink, step as f32 / 50.))
+        .find(|&at| {
+            grounds
+                .iter()
+                .all(|&ground| contrast(at, ground) >= minimum)
+        })
+        .unwrap_or(ink)
+}
+
 fn least_alpha(ink: Rgba, grounds: &[Rgba], minimum: f32) -> f32 {
     (0..=25)
         .map(|step| step as f32 / 25.)

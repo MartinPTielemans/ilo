@@ -415,6 +415,24 @@ fn a_click_starts_a_sort_only_where_the_broom_says_it_would(cx: &mut TestAppCont
     assert!(shell.read_with(cx, |shell, _| shell.new_tab));
 }
 
+/// The browser's start reads the Shell back, as the app's does for the Space to sort, so the
+/// click and the command (the menu item's and the bar entry's way in) ask for it only once their
+/// own turn with the Shell has ended: asked from inside it, the read aborted the app (#4397).
+#[gpui::test]
+fn a_sort_starts_once_the_shell_is_free_to_be_read(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11, 12, 13], Some(Broom::Idle));
+    host.reads_shell(shell.downgrade());
+    let glyph = frame(&shell, cx, FRAME);
+    assert_eq!(click(cx, &host, glyph), ["start broom"]);
+
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::SortIntoFolders, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert!(host.take().contains(&"start broom".to_owned()));
+}
+
 /// A browser with no broom, as one whose core can't make today's folders has: no glyph, no
 /// item in the divider's menu or the Tabs menu, no bar entry, and the command run anyway asks
 /// for no sort.

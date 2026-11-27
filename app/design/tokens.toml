@@ -383,18 +383,17 @@ button-radius = 6.0
 label-x = 12.0
 chip-end = 12.0
 chip-gap = 8.0
-# Ink plates where Arc's are indigo. Under the pointer it lightens, as white 0.1 over it does
-# (Arc 1.170 rec, ⌘Q's dialog).
+# Ink plates where Arc's are indigo: Cancel and the others are [button]'s secondary, which
+# lightens under the pointer as white 0.1 over it does (Arc 1.170 rec, ⌘Q's dialog). The fields
+# and the checkbox keep this fill and their border.
 cancel-fill = 0.1
 cancel-hovered = 0.16
 cancel-border = 0.2
 cancel-text = 0.9
-# The action, which darkens under the pointer and sits on a ledge of its own colour at 0.2.
+# What can't be undone is red, and darkens under the pointer. Any other action, such as Quit or
+# adding an extension, is [button]'s main one (#4402). Neither has a shadow of its own.
 action = 0xe1492c
 action-hovered = 0xcc4126
-action-ledge = 0xe149_2c33
-# Any other action, such as Quit or adding an extension, has the Space's accent (#319), on a
-# ledge of it at 0.2, and the palette's hovered and pressed accents.
 chip-height = 20.0
 chip-radius = 6.0
 # Ink 0.14 over the button, so it lightens with it.
@@ -428,9 +427,9 @@ text = 0xffffff
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light
 # ones; and one drop shadow. Resting sits on the window: favorite tiles, library cards, pictures
 # of pages. A popover opens from something and closes on a click outside: menus, the Site
-# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar, and the command bar
-# over the URL field, a row tall. A modal takes the keyboard: the centred command bar, the dialog,
-# the icon and theme pickers. A shadow's blur is CSS's, twice the Gaussian's standard deviation,
+# Controls, the toast, the zoom HUD, tooltips, the link target, the find bar, the tab switcher
+# and the command bar, centred or over the URL field (#4402). A modal takes the keyboard and
+# stands as a window: Settings, the dialog, the icon and theme pickers. A shadow's blur is CSS's, twice the Gaussian's standard deviation,
 # which is what the host's layers take halved.
 outline = 0x0000_00b3
 outline-blur = 1.0
@@ -857,7 +856,7 @@ reveal = 1.5
 # which changes the window's glass only, and opaque where the host has none. Its rim, 1 pt inside
 # its edge, and its two shadows, wide and close, are the same in both looks.
 fill = 0x3030_36eb
-light-fill = 0xf6f5_f1eb
+light-fill = 0xf5f5_f6eb
 rim = 0xffff_ff1a
 light-rim = 0x0000_001f
 shadow = 0x0000_0080
@@ -931,12 +930,12 @@ light-top-light = 0xffff_ff80
 light-top-light-end = 0xffff_ff24
 light-inner-rim = 0xffff_ffb8
 top-light-stop = 0.46
-dark-label = 0xf3f0_e8eb
+dark-label = 0xf2f2_f3eb
 # Shortcuts and chevrons, at the least alpha that holds 4.5:1 on [floating]'s dark fill and down
 # its glass's light.
-dark-secondary = 0xf3f0_e89a
-dark-line = 0xf3f0_e81a
-dark-disabled = 0xf3f0_e861
+dark-secondary = 0xf2f2_f39a
+dark-line = 0xf2f2_f31a
+dark-disabled = 0xf2f2_f361
 # A destructive item's label: Delete Space, a folder or a profile, Delete from Archive. The dark
 # look's red is 0xf07a63 taken towards the label's ink only as far as 4.5:1 on [floating]'s dark
 # fill needs.
@@ -950,13 +949,13 @@ light-disabled = 0x1616_1861
 light-destructive = 0xc236_2bff
 # A destructive item's highlight, with a Paper label on it.
 destructive-fill = 0xb326_1eff
-destructive-label = 0xf3f0_e8ff
+destructive-label = 0xf2f2_f3ff
 # Ink over the destructive highlight while the button is down on it.
 pressed = 0x1616_182e
-# The others' highlight is a neutral plate, never the Space's accent (#4090): the look's label ink
-# at `plate`, and at `plate-pressed` while the button is down on it, under the label in its ink.
-plate = 0.11
-plate-pressed = 0.17
+# The others' highlight is the flat plate of [selected.plate] (#4402), never the Space's accent
+# (#4090): the look's label ink at its strength, `pressed-step` stronger while the button is down
+# on it, under the label in its ink.
+pressed-step = 0.06
 # A Space's swatch in Move to (#320), before its name: its gradient, ringed by the palette's rule
 # for a swatch's ring (palette.rs) against the panel.
 swatch = 10.0
@@ -1017,7 +1016,7 @@ sheet = 20.0
 ink = 0x161618
 paper = 0xf2f2f3
 # The window is the HUD window's material, behind the window, under black at `tint` on a dark
-# window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
+# window and white at `light-tint` on a light one, then the Space's tint (#4087). How see-through
 # it is is the user's, in three levels: Less, Standard (`tint`) and More. 0.44 is the dark scale's
 # floor, where Paper at 0.6 still holds 3:1, so there's no level under it and none between.
 tint-less = 0.64
@@ -1077,33 +1076,19 @@ stand-in = 0x303030
 # at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
 # HUD window's under those settings.
 material-solid = 0x333332
-# A Space's colour is to be a faint tint of the sidebar's glass, a few percent of it, flat: no
-# gradient, drawing nothing of its own, and never on a mark (#4401, #4400). The glow below goes
-# when the sidebar takes it (#4402).
+# A Space's colour is a faint tint of the sidebar's glass: its main colour at `space-tint` over
+# the whole window (`light-space-tint` on a light one), at the intensity a theme starts with and in
+# proportion to the picker's Intensity. It is flat, with no gradient and no glow, draws nothing of
+# its own and is never on a mark (#4401, #4400, #4402). The picker stays for now: a theme's other
+# colours stay stored and unused.
 space-tint = 0.04
 light-space-tint = 0.03
-# The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
-# ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
-# main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
-# way out; and a faint one `far-glow-width` by `far-glow-height` on the top right, the second
-# colour (or the main one) at `far-glow`, gone by `far-glow-fade`. The alphas are at the intensity
-# a theme starts with; a neutral theme's, under this HSL saturation, is a third as strong.
-gradient-alpha = 0.36
-neutral-gradient-alpha = 0.12
-neutral = 0.1
-glow-width = 560.0
-glow-height = 460.0
-glow-fade = 0.72
-far-glow-width = 380.0
-far-glow-height = 260.0
-far-glow = 0.1
-far-glow-fade = 0.7
 # What floats over the window: the command bar, a menu and the theme picker's panel, and a
 # dialog.
 overlay-dark = 0x1d1d1d
 dialog-dark = 0x272727
 # The light window: the same material under white, at each level (#4087), and its stand-in, as
-# the dark one's. The glow is a little fainter on it (#4089).
+# the dark one's.
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
@@ -1132,8 +1117,6 @@ light-overlay-fill-more = 0.62
 light-dialog-fill-less = 0.87
 light-dialog-fill = 0.77
 light-dialog-fill-more = 0.55
-light-gradient-alpha = 0.32
-light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as
 # the dark dialog is a step lighter than the dark overlay (ours). Every grey of the chrome is
 # neutral, the warm blacks and creams gone (#4401): each grey at its warm one's luminance, so
@@ -1142,8 +1125,9 @@ light-neutral-gradient-alpha = 0.11
 overlay-light = 0xf2f2f3
 dialog-light = 0xf9f9f9
 # The one colour of the chrome's own, amber, says a thread or an agent waits on you (#4401): the
-# knot and its words, nowhere else. Colour otherwise stays in favicons and pages, red for what
-# destroys, and the makers' logos.
+# knot and its words, nowhere else. Where its words wouldn't read at 4.5:1 on the window it's
+# taken towards the ink only as far as they need (#4402), as the menu's red is. Colour otherwise
+# stays in favicons and pages, red for what destroys, and the makers' logos.
 needs-you = 0xf5a524
 # ilo green, which a Board's page alone still takes, as its accent (copy-board.sh, [board]). A
 # Space without a theme no longer wears it: its accent is the text's ink with the other look's ink
@@ -1260,6 +1244,7 @@ search-placeholder = 0.66
 search-clear = 18.0
 search-clear-glyph = 10.0
 search-clear-fill = 0.2
+search-clear-ink = 0.9
 search-dimmed = 0.35
 found-flash = 0.12
 found-flash-time = 0.6
@@ -1333,10 +1318,11 @@ knob = 16.0
 knob-inset = 2.0
 switch-off = 0.2
 switch-off-light = 0.16
-# Buttons, as drawn: 26 tall at the control radius, their title 12 in at medium. A pop-up is its
-# value at its start, 10 in, where its menu puts the chosen item's, and its chevrons 6 after it and
-# 8 from its end in the quiet ink, on a button's plate. Under the pointer, a step toward pressed,
-# which is the shown plate, as an open pop-up's is.
+# Buttons are [button]'s three kinds (#4402), their title 12 in at medium: a secondary on its
+# plate, an icon one bare, and the main one. A pop-up is its value at its start, 10 in, where its
+# menu puts the chosen item's, and its chevrons 6 after it and 8 from its end in the quiet ink, on
+# a secondary's plate. Under the pointer, a step toward pressed, which is the shown plate, as an
+# open pop-up's is. Fields and chips keep the control radius.
 control-height = 26.0
 control-padding = 12.0
 control-radius = 6.0
@@ -1346,8 +1332,6 @@ chevrons-end = 8.0
 chevrons-gap = 6.0
 chevrons-alpha = 0.6
 button-glyph = 13.0
-control = 0.1
-control-light = 0.1
 control-hovered = 0.14
 control-hovered-light = 0.13
 control-pressed = 0.2
@@ -1391,12 +1375,14 @@ working = 14.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
 # Ours: a checkbox, as the dialog's, 8 before its name, ticked in the look's on colour with its
-# knob's colour for the tick (Settings' neutral, the first launch's accent and white);
+# knob's colour for the tick (Settings' neutral, the first launch's accent and `ground-knob`);
 # and a disclosure, such as the import's Choose folders, its chevron 4 after its words.
 check-box = 16.0
 check-radius = 6.0
 check-gap = 8.0
 check-glyph = 12.0
+# The knob, and the main button's label, on the first launch's ground, whose `on` is its accent.
+ground-knob = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
 # Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
@@ -1608,7 +1594,7 @@ panel-radius = 10.0
 title-size = 22.0
 title-line = 28.0
 own-page = 0x1d1d21a8
-light-own-page = 0xfbfaf7a8
+light-own-page = 0xfafa_fba8
 # The drawing's #FFFFFF0F, 1 wide inside its edge; in light the ink at the drawn tiles' strength.
 page-line-width = 1.0
 page-line = 0xffffff0f
@@ -2058,10 +2044,10 @@ form-pill = 0.1
 create-unnamed = 0.4
 # The reveal panel's radius, the plates' 12 and their 8 in (ours), and its frame as the window's
 # (#4089): a 0.5 pt line of black at `reveal-border` round it and a 1 pt rim of white at
-# `reveal-rim` inside it, `reveal-rim-width` wide. Its shadow is its window's, which the OS draws.
+# `reveal-rim` inside it, `reveal-rim-width` wide, both as colours. Its shadow is its window's, which the OS draws.
 reveal-radius = 20.0
-reveal-border = 0.6
-reveal-rim = 0.1
+reveal-border = 0x0000_0099
+reveal-rim = 0xffff_ff1a
 reveal-rim-width = 1.0
 window-button-y = 24.0
 window-button-size = 14.0
@@ -2077,6 +2063,7 @@ window-button-zoom = 0x58bb18
 windows-button-plate = 22.0
 windows-button-glyph = 10.0
 windows-close-hovered = 0xc42b1c
+windows-close-glyph = 0xffffff
 # The bar over a Little ilo window's card (Arc's Little Arc), ours until Arc's is measured. Its row
 # is the header's, with the window buttons, and the card starts under it where the main window's
 # URL field does, so the page has the room under the row the header leaves. The buttons are the
@@ -2337,7 +2324,7 @@ title-height = 36.0
 # The Spaces section (Arc 1.170 cap, one Space, and rec, three): a card per Space starts 28 after
 # the column, 240 wide, 24 apart and as tall as the window less 48 above and below, with Arc's
 # blue + 33 after the last, 30 across and halfway down, and the Library ends 37 after it, so it's
-# 216 + 264 a Space wide. The card is the Space's gradient at radius 16, with its list drawn as
+# 216 + 264 a Space wide. The card is the Space's tint at radius 16, with its list drawn as
 # the sidebar draws it, under its name's field. Arc's card has no search field over it.
 spaces-left = 28.0
 spaces-inset = 48.0
@@ -3830,8 +3817,8 @@ foot-row = 28.0
 
 [tab-switcher]
 # ⌃Tab held shows the Space's recent tabs (#2954). Arc's was never recorded, so it's ours: ⌘T's
-# panel in ⌘T's place, at its width, radius and modal elevation, with its rows (command-bar), and
-# no field. The list sits the rows' own inset (command-bar list-x) inside the panel on every side.
+# panel in ⌘T's place, at its width and radius, on the floating level (#4402), with its rows
+# (command-bar) and the flat plate for the chosen one, and no field. The list sits the rows' own inset (command-bar list-x) inside the panel on every side.
 # This many rows show; past them the list scrolls the least that shows the selected row whole, and
 # a cut edge fades over command-bar field-fade.
 rows = 8
@@ -4048,13 +4035,16 @@ hue-start = 0.4
 light-top = 0.9
 light-bottom = 0.1
 # The handles and the line between them: the main one 28 ringed 2.5 in white, the others 22 ringed
-# 2, each with a shadow, the line 3 wide.
+# 2, each with a shadow `handle-shadow-y` down at a CSS blur of `handle-shadow-blur`, the line
+# 3 wide.
 line = 3.0
 main-handle = 28.0
 main-ring = 2.5
 handle = 22.0
 handle-ring = 2.0
 handle-shadow = 0x00000080
+handle-shadow-y = 3.0
+handle-shadow-blur = 10.0
 # The Points chip and the value field, 8 in from the pad's foot: the chip's discs 14 apart by 6, the
 # chosen one ringed 1.5 in white, then the plus while there's room for a colour; the field 64 wide.
 chip-inset = 8.0
@@ -4070,7 +4060,8 @@ plus = 12.0
 plus-stroke = 1.4
 field-width = 64.0
 # The bars: a label row, then 4 under it a track 12 tall across the panel's inside less the label's
-# 2 each side, rimmed as drawn, with a white thumb 20 round on it; 9 between bars. Each track's
+# 2 each side, rimmed as drawn, with a white thumb 20 round on it, its shadow `thumb-shadow-y`
+# down at a CSS blur of `thumb-shadow-blur`; 9 between bars. Each track's
 # picture runs from its left to its right.
 bar-gap = 9.0
 bar-label-gap = 4.0
@@ -4078,6 +4069,8 @@ track = 12.0
 track-rim = 0.08
 thumb = 20.0
 thumb-shadow = 0x00000080
+thumb-shadow-y = 2.0
+thumb-shadow-blur = 6.0
 track-angle = 90.0
 # Intensity's track, as drawn: the Space's first colour from this much to full by 62% of the way,
 # then the second. With no colour (Open) the bar is dimmed to this and doesn't move.
