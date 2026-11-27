@@ -10,8 +10,9 @@
 # first, as no one answers macOS's Automation prompt there, so a script is answered or refused by
 # the app, not held at the prompt; scripting-tcc.txt says what TCC held. Never on a Mac with it on.
 # tccd takes the responsible process of the shell that launches the app, sshd-keygen-wrapper over
-# ssh, as both the client and the object of the script's Apple Events, so that pair is granted too,
-# while no prompt is up, and the run fails naming the row if TCC doesn't then hold it.
+# ssh, as both the client and the object of the script's Apple Events, so that pair and that
+# process's pair with the app are granted too, while no prompt is up, and the run fails naming the
+# row if TCC doesn't then hold it.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: scripting: AppleScript is the Mac's alone."
@@ -81,18 +82,21 @@ if responsible:
     if base is None:
         sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect object"
                  f" {responsible}, auth_value 2, and no Apple Events row to make it from")
-    row = dict(zip(names, base))
-    # A path, as client and object, allowed by the user (reason 0), with no code requirement.
-    row.update(client=responsible, client_type=1, indirect_object_identifier=responsible,
-               indirect_object_identifier_type=1, auth_value=2, auth_reason=0, flags=0, csreq=None,
-               indirect_object_code_identity=None)
-    tcc.execute(f"insert or replace into access ({', '.join(names)})"
-                f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
+    # The path as client, allowed by the user (reason 0), with no code requirement, of itself and
+    # of the app: a shell detached from sshd is its own responsible process, which no row
+    # copied from System Events' above names, and its prompt asks for the app.
+    for (obj, obj_type) in ((responsible, 1), (target, 0)):
+        row = dict(zip(names, base))
+        row.update(client=responsible, client_type=1, indirect_object_identifier=obj,
+                   indirect_object_identifier_type=obj_type, auth_value=2, auth_reason=0, flags=0,
+                   csreq=None, indirect_object_code_identity=None)
+        tcc.execute(f"insert or replace into access ({', '.join(names)})"
+                    f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
     tcc.commit()
-    held = tcc.execute(pair + " and auth_value = 2", [responsible, responsible]).fetchone()
-    if held is None:
-        sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect object"
-                 f" {responsible}, auth_value 2")
+    for obj in (responsible, target):
+        if tcc.execute(pair + " and auth_value = 2", [responsible, obj]).fetchone() is None:
+            sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect"
+                     f" object {obj}, auth_value 2")
 tcc.commit()
 print(len(rows))
 EOF
