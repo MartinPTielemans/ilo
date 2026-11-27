@@ -4398,6 +4398,66 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     assert!(bar.calls().contains(&"task codex book a table".to_string()));
 }
 
+/// ↩ pressed before the browser has learned which agents are ready isn't lost: the thread starts
+/// on the first ready one as soon as the browser learns it, as if ↩ came then.
+#[gpui::test]
+fn enter_before_the_agents_are_learned_starts_the_thread_once_they_are(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    let started = |bar: &Bar| (bar.calls().iter()).any(|call| call.starts_with("task "));
+    assert!(!started(&bar), "a thread started with no agent learned");
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(
+        bar.calls().contains(&"task claude pick a seat".to_string()),
+        "the ↩ was lost: {:?}",
+        bar.calls()
+    );
+}
+
+/// A held ↩ goes with the ask: one left before the agents are learned starts nothing, and nor
+/// does one whose look finds none ready.
+#[gpui::test]
+fn a_held_enter_goes_with_the_ask(cx: &mut TestAppContext) {
+    let started = |bar: &Bar| (bar.calls().iter()).any(|call| call.starts_with("task "));
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    bar.keys("escape");
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(!started(&bar), "a left ask started: {:?}", bar.calls());
+
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    *bar.host.agents.borrow_mut() = agents(&[]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(
+        !started(&bar),
+        "none ready, yet one started: {:?}",
+        bar.calls()
+    );
+    // An agent signed in later starts nothing on the ↩ that found none.
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(!started(&bar), "a spent ↩ started later: {:?}", bar.calls());
+}
+
 /// A Little ilo window's Spaces menu is the compact bar where it was asked for, listing its Spaces
 /// alone, each with its mark. What's typed filters them by a word's start and asks the core for
 /// nothing, no key goes to a page or a search, and ↩ runs Move to Space for the one selected.
