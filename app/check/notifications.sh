@@ -17,10 +17,13 @@
 # What macOS keeps of the leave to notify of the app and of its alert helper, the two that post, as
 # "<id> allowed|refused <flags>" lines. On macOS 26 it's in usernoted's own preferences, by bundle
 # id, where bit 25 of an app's flags is Settings' Allow Notifications; ncprefs holds none (#2396).
+# macOS 14 keeps the same entries in ncprefs, and no usernoted file (#4468).
 kept_answers() {
   python3 -I -c '
 import os, plistlib, sys
 path = os.path.expanduser("~/Library/Group Containers/group.com.apple.usernoted/Library/Preferences/group.com.apple.usernoted.plist")
+if not os.path.exists(path):
+    path = os.path.expanduser("~/Library/Preferences/com.apple.ncprefs.plist")
 try:
     with open(path, "rb") as f:
         apps = plistlib.load(f).get("apps", [])
