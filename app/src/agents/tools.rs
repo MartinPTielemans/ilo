@@ -106,16 +106,66 @@ pub const PAGE_LOG_FAILED: &str = "page_log";
 pub const NEEDS_DEVELOPER_MODE: &str = "The console needs Developer Mode for this site, which only the user can turn on, in the site's menu.";
 
 /// page_log's answer: the core's log as it came, then for a page not in Developer Mode the sentence
-/// that says what's missing. The core's log is cut at the answer's limit with room left for it.
+/// that says what's missing. A log too long for the answer's limit loses whole entries, oldest
+/// first, so the JSON stays whole, and says how many (PL5); PL3 always comes last and whole.
 pub fn page_log_answer(log: String, developer_mode: bool) -> String {
-    if developer_mode {
-        return capped(log);
-    }
-    if log.is_empty() {
+    let after = |left_out: usize| {
+        let mut said = String::new();
+        if left_out > 0 {
+            said += &match left_out {
+                1 => "\n\nLeft out 1 older entry to fit.".to_string(),
+                n => format!("\n\nLeft out {n} older entries to fit."),
+            };
+        }
+        if !developer_mode {
+            said += &format!("\n\n{NEEDS_DEVELOPER_MODE}");
+        }
+        said
+    };
+    if log.is_empty() && !developer_mode {
         return NEEDS_DEVELOPER_MODE.to_string();
     }
-    let room = NEEDS_DEVELOPER_MODE.chars().count() + 2;
-    format!("{}\n\n{NEEDS_DEVELOPER_MODE}", capped_after(log, room))
+    let fits = |json: &str, left_out: usize| {
+        json.chars().count() + after(left_out).chars().count() <= MAX_ANSWER
+    };
+    if fits(&log, 0) {
+        return log + &after(0);
+    }
+    // The core's log is always an object of lists, oldest first; one that isn't is cut as any
+    // answer is.
+    let Ok(Value::Object(mut whole)) = serde_json::from_str::<Value>(&log) else {
+        return capped_after(log, after(0).chars().count()) + &after(0);
+    };
+    let mut left_out = 0;
+    // Counted as it's written out again, so an entry's own length takes off what it adds.
+    let mut length = Value::Object(whole.clone()).to_string().chars().count();
+    loop {
+        // The oldest of the longer list goes, so neither list empties while the other is long.
+        let longest = (whole.iter_mut())
+            .filter_map(|(_, value)| value.as_array_mut())
+            .filter(|list| !list.is_empty())
+            .max_by_key(|list| list.len());
+        let Some(list) = longest else {
+            let json = Value::Object(whole).to_string();
+            return capped_after(json, after(left_out).chars().count()) + &after(left_out);
+        };
+        // An entry and its comma; writing the whole log out again for each would be slow on a
+        // large one, so the JSON is made once the count says it fits.
+        length = length.saturating_sub(list.remove(0).to_string().chars().count() + 1);
+        left_out += 1;
+        if fits_length(length, &after(left_out)) {
+            let json = Value::Object(whole.clone()).to_string();
+            if fits(&json, left_out) {
+                return json + &after(left_out);
+            }
+            length = json.chars().count();
+        }
+    }
+}
+
+/// Whether a log of `length` characters and what's `after` it fit in an answer.
+fn fits_length(length: usize, after: &str) -> bool {
+    length + after.chars().count() <= MAX_ANSWER
 }
 
 /// `text`, cut at `MAX_ANSWER` characters, saying so.

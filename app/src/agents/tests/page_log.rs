@@ -183,3 +183,71 @@ fn no_tool_reaches_developer_mode_or_its_list() {
         }
     }
 }
+
+/// A log longer than an answer loses whole entries, oldest first, and no more than it must: the
+/// JSON left still parses, the count line says how many went, and PL3 comes last and whole.
+#[test]
+fn a_log_too_long_for_an_answer_loses_whole_entries_oldest_first() {
+    let request = |at: usize| json!({ "method": "GET", "status": 404, "url": format!("https://example.com/{at}/{}", "a".repeat(80)) });
+    let message =
+        |at: usize| json!({ "level": "error", "text": format!("m{at} {}", "b".repeat(60)) });
+    let log = json!({
+        "developer_mode": false,
+        "requests": (0..200).map(request).collect::<Vec<_>>(),
+        "console": (0..40).map(message).collect::<Vec<_>>(),
+    })
+    .to_string();
+    assert!(
+        log.chars().count() > tools::MAX_ANSWER,
+        "the log fits already"
+    );
+    let answer = tools::page_log_answer(log, false);
+    assert!(
+        answer.chars().count() <= tools::MAX_ANSWER,
+        "{} characters",
+        answer.chars().count()
+    );
+    let pl3 = format!("\n\n{NEEDS_DEVELOPER_MODE}");
+    assert!(answer.ends_with(&pl3), "PL3 isn't last and whole: {answer}");
+    let rest = &answer[..answer.len() - pl3.len()];
+    let (json, said) = rest.rsplit_once("\n\n").expect("no line before PL3");
+    let left_out: usize = said
+        .strip_prefix("Left out ")
+        .and_then(|said| said.strip_suffix(" older entries to fit."))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("not PL5's count line: {said}"));
+    let kept: Value = serde_json::from_str(json).expect("the JSON left doesn't parse");
+    let (requests, console) = (
+        kept["requests"].as_array().unwrap(),
+        kept["console"].as_array().unwrap(),
+    );
+    assert_eq!(
+        200 + 40 - requests.len() - console.len(),
+        left_out,
+        "the count is wrong"
+    );
+    // Whole entries, and the newest of each list kept: what went was the oldest.
+    assert_eq!(requests.last(), Some(&request(199)));
+    assert_eq!(console.last(), Some(&message(39)));
+    let first = 200 - requests.len();
+    assert!(
+        (requests.iter())
+            .zip(first..)
+            .all(|(kept, at)| *kept == request(at)),
+        "a request was cut"
+    );
+    // No more than it must: one entry fewer left out would pass the limit.
+    let mut more = kept.clone();
+    more["requests"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, request(first - 1));
+    let back = format!(
+        "{more}\n\nLeft out {} older entries to fit.{pl3}",
+        left_out - 1
+    );
+    assert!(
+        back.chars().count() > tools::MAX_ANSWER,
+        "it left out more than it had to"
+    );
+}
