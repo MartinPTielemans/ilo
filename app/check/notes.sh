@@ -6,8 +6,9 @@
 # only the app frames one, as a part of its own ahead of the page's, and a second answer on that
 # site has none. The page's outline or its text has each of the landmark's words. A note
 # with no landmark has facts only an account shows, so the run lists it as unproven, which a
-# thread run with and without it, by the owner, settles. It needs the network and the sites, so
-# it runs only when named: ./check.sh notes.
+# thread run with and without it, by the owner, settles. A landmark whose page lands on Google's
+# consent page, as some networks get, is skipped and said, never passed: the check answers no
+# consent page. It needs the network and the sites, so it runs only when named: ./check.sh notes.
 
 log="$out/notes.log"
 step=0
@@ -104,6 +105,7 @@ id=10
 seen=" "
 failed=""
 proven=""
+skipped=""
 while IFS="$(printf '\t')" read -r name url words; do
   id=$((id + 2))
   case "$seen" in *" $name "*) first=0 ;; *) first=1 ;; esac
@@ -111,6 +113,19 @@ while IFS="$(printf '\t')" read -r name url words; do
   url_json=$(python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$url")
   opened=$(answer "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"open_tab\",\"arguments\":{\"url\":$url_json}}}")
   printf '%s\n' "$opened" > "$out/notes-$id.json"
+  # Where the tab landed, the open's "URL:" line.
+  landed=$(printf '%s\n' "$opened" | python3 -I -c '
+import json, re, sys
+parts = json.load(sys.stdin).get("result", {}).get("content", [])
+found = re.search(r"^URL: (\S+)", "\n".join(part.get("text", "") for part in parts), re.M)
+print(found.group(1) if found else "")') || landed=""
+  case "$landed" in
+    https://consent.google.com/*)
+      skipped="$skipped
+  $name, $url: it landed on Google's consent page, $landed, which this network gets and the check never answers"
+      continue
+      ;;
+  esac
   tab=$(printf '%s\n' "$opened" | sed -n 's/.*Opened tab \([0-9]*\)\..*/\1/p' | head -1)
   text=""
   if [ -n "$tab" ]; then
@@ -132,3 +147,4 @@ exec 3>&-
 quit
 [ -z "$failed" ] || fail "a note's landmarks are gone from its site, or its note didn't come:$failed"
 echo "notes: landmarks found, each site's note first and once, for${proven%,}; unproven, needing an account: $(tr '\n' ',' < "$out/notes-unproven.txt" | sed 's/,$//; s/,/, /g')"
+[ -z "$skipped" ] || echo "skip: notes, landmarks not judged:$skipped"
