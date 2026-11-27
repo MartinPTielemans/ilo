@@ -1129,8 +1129,8 @@ fn a_page_watched_since_the_close_goes_back_for_the_question(cx: &mut TestAppCon
     );
 }
 
-/// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
-/// asks, and once the archive is cleared (#4202).
+/// Clear Archive with a task's view shown leaves it standing: with nothing to clear, and once the
+/// archive is cleared, which it does at once, with its undo (#4202, #4409).
 #[gpui::test]
 fn clear_archive_leaves_the_tasks_view(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -1152,16 +1152,8 @@ fn clear_archive_leaves_the_tasks_view(cx: &mut TestAppContext) {
         shell.set_archive(vec![tab], cx);
         shell.run(Command::ClearArchive, "ui", cx);
     });
-    let asked = host.confirming.borrow_mut().take();
-    let (message, _, confirmed) = asked.expect("Clear Archive didn't ask");
-    assert_eq!(message, "Clear the archive?");
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.task_shown()),
-        shown,
-        "the view closed as it asked"
-    );
-    cx.update(|_, cx| confirmed(cx));
     cx.run_until_parked();
+    assert!(host.confirming.borrow().is_none(), "Clear Archive asked");
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
         shown,
