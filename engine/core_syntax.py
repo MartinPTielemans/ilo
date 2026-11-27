@@ -24,7 +24,10 @@ check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each cor
   headers are first brought to the branch's own patches, as engine/tree.sh brings a tree, so a core
   change that needs a new engine patch is checked with it (#2747). A file whose target's packed
   flags find no header it includes is checked again with the core's flags, as the branch may have
-  given its target a dependency the pack's build files don't have yet (#3868).
+  given its target a dependency the pack's build files don't have yet (#3868). A core/ beside the
+  engine dir is the core the packed engine was built from: where the branch's .proto, .mojom or
+  BUILD.gn files differ from it, the pack's generated headers and flags can't stand for them, and a
+  red names them as needing a new pack (#4378).
 check --platform linux <pack dir> <checkout> <engine dir>: the same against a Linux pack, with
   each file its build compiled, tests included. Where the pack can't stand for the engine, as the
   branch needs an engine patch the packed headers don't take or changes what the engine generates
@@ -402,11 +405,29 @@ def engine_patches(src, checkout, built, mac=True):
     return lines, None, unpacked
 
 
+def core_generates(core):
+    """The core's files the build generates headers or takes flags from, each with its text."""
+    names = files_under(core, ".", lambda name: bool(GENERATES.search(name)))
+    return {name: open(os.path.join(core, name), "rb").read() for name in names}
+
+
+def stale_core(built, checkout):
+    """The branch's core files the build generates headers or takes flags from that differ from the
+    core the packed engine was built from, beside its engine dir, or none without that core."""
+    before = os.path.join(os.path.dirname(os.path.abspath(built)), "core")
+    if not os.path.isdir(before):
+        return []
+    had, has = core_generates(before), core_generates(os.path.join(checkout, "core"))
+    changed = [name for name in had.keys() | has.keys() if had.get(name) != has.get(name)]
+    return sorted("core/" + name for name in changed)
+
+
 def check(pack_dir, checkout, built=None, linux=False):
     src = os.path.join(pack_dir, "src")
     engine_lines, error, unpacked = (
         engine_patches(src, checkout, built, mac=not linux) if built else ([], None, [])
     )
+    stale = stale_core(built, checkout) if built and not linux else []
     # Where the pack can't stand for the engine, a tree of the branch's own can, which Core on Linux
     # prepares instead.
     if linux and (error or unpacked):
@@ -507,6 +528,16 @@ def check(pack_dir, checkout, built=None, linux=False):
 
     os_name = "Linux" if linux else "the Mac"
     lines = [*engine_lines, f"Checked {len(jobs)} core files for {os_name}; {len(failed)} failed."]
+    if stale:
+        pack = " ".join(["The pack", *filter(None, [os.environ.get("PACK")])])
+        why = (
+            f"{pack} predates this branch's {', '.join(stale)}, which the engine generates headers "
+            "or takes flags from, so an error from those needs a new pack: an Engine on macOS run "
+            "on a tree that has them."
+        )
+        lines.append(why)
+        if failed:
+            print(f"::error::{why}")
     if failed:
         lines.append("Failed: " + ", ".join(failed) + ".")
     if checked:
