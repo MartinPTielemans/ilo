@@ -1031,6 +1031,17 @@ impl Shell {
                 .is_some_and(|page| !matches!(page.zoom, Zoom::In(_)))
     }
 
+    /// The size the core makes each agent's page at: a watch's at rest, beside the conversation,
+    /// or the whole card while a page is full screen, where the watch is (`page_part`), so the
+    /// page watched is never scaled up from a smaller one (#4441).
+    pub(super) fn agent_page_size(&self) -> Size<Pixels> {
+        let (card, _) = self.page_frame(self.viewport);
+        match self.page_fullscreen {
+            true => watched(card).size,
+            false => watch_size(card),
+        }
+    }
+
     /// The card's part a page watched has: all of it, or its left while the user stands on it.
     fn page_part(&self, card: Bounds<Pixels>) -> Bounds<Pixels> {
         match self.task_standing() {

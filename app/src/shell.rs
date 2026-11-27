@@ -2940,7 +2940,7 @@ impl Shell {
 
     /// Lays the page out at `page_frame`, unless it's there already or held.
     fn lay_out_page(&mut self, cx: &mut Context<Self>) {
-        let watch = task_area::watch_size(self.page_frame(self.viewport).0);
+        let watch = self.agent_page_size();
         if self.agent_page_sized != Some(watch) {
             self.agent_page_sized = Some(watch);
             self.browser.set_agent_page_size(watch, cx);

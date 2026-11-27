@@ -2765,6 +2765,39 @@ fn a_web_link_from_a_threads_page_opens_in_the_users_space(cx: &mut TestAppConte
     }
 }
 
+/// While a page is full screen, a watch has the whole card, so the core is told the card's size for
+/// an agent's page, and the size beside the conversation again once it's back (#4441).
+#[gpui::test]
+fn an_agents_page_takes_the_cards_size_while_a_page_is_full_screen(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let said =
+        |size: gpui::Size<Pixels>| format!("{}x{}", f32::from(size.width), f32::from(size.height));
+    let card = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0)
+    };
+    draw(&shell, cx);
+    host.take();
+
+    shell.update_in(cx, |shell, window, cx| {
+        shell.set_page_fullscreen(true, window, cx)
+    });
+    draw(&shell, cx);
+    let full = card(&shell, cx);
+    assert_eq!(agent_page_sizes(&host.take()), [said(full.size)]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.agent_page_sized),
+        Some(full.size)
+    );
+
+    shell.update_in(cx, |shell, window, cx| {
+        shell.set_page_fullscreen(false, window, cx)
+    });
+    draw(&shell, cx);
+    let back = card(&shell, cx);
+    assert_ne!(back, full, "the card didn't come back from full screen");
+    assert_eq!(agent_page_sizes(&host.take()), [said(split(back).0.size)]);
+}
+
 /// The size the shell tells the core a thread's page has watched here, from `calls`.
 fn agent_page_sizes(calls: &[String]) -> Vec<String> {
     (calls.iter())
