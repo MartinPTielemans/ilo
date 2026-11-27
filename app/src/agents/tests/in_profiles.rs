@@ -222,7 +222,7 @@ fn a_picked_open_uses_the_hosts_pick_then_the_window_rule(cx: &mut TestAppContex
     );
     assert_eq!(
         logged_in(&agents, cx).unwrap().why,
-        "the first profile it may use"
+        "the first allowed profile"
     );
 }
 

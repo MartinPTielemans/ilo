@@ -443,7 +443,7 @@ impl Agents {
         match why {
             Why::History => "where you last used it".into(),
             Why::Window => "your current window's profile".into(),
-            Why::First => "the first profile it may use".into(),
+            Why::First => "the first allowed profile".into(),
             Why::Asked if is_task(agent) => "as the thread asked".into(),
             Why::Asked if self.nameless(agent) => "as the app asked".into(),
             Why::Asked => format!("as {} asked", self.agent_name(agent)),
