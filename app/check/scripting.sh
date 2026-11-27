@@ -9,9 +9,9 @@
 # In a check VM with System Integrity Protection off the run lets osascript control the app
 # first, as no one answers macOS's Automation prompt there, so a script is answered or refused by
 # the app, not held at the prompt; scripting-tcc.txt says what TCC held. Never on a Mac with it on.
-# Over ssh, tccd takes the app's responsible process, sshd-keygen-wrapper, as both the client and
-# the object of the script's Apple Events, so that pair is granted too, and the run fails naming
-# the row if TCC doesn't then hold it.
+# tccd takes the responsible process of the shell that launches the app, sshd-keygen-wrapper over
+# ssh, as both the client and the object of the script's Apple Events, so that pair is granted too,
+# while no prompt is up, and the run fails naming the row if TCC doesn't then hold it.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: scripting: AppleScript is the Mac's alone."
@@ -34,8 +34,33 @@ else
   granted=
   if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ] && csrutil status | grep -q disabled; then
     cat > "$out/scripting-grant.py" << 'EOF'
-import sqlite3, sys
-db, target, responsible = sys.argv[1:]
+import ctypes, os, sqlite3, sys
+db, target, shell = sys.argv[1:]
+
+def responsible_for(pid):
+    """The path of the process macOS holds responsible for |pid|, or None where it won't say."""
+    try:
+        system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        get = system.responsibility_get_pid_responsible_for_pid
+    except (OSError, AttributeError):
+        return None
+    get.argtypes, get.restype = [ctypes.c_int], ctypes.c_int
+    system.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    responsible = get(pid)
+    path = ctypes.create_string_buffer(4096)
+    if responsible <= 0 or system.proc_pidpath(responsible, path, len(path)) <= 0:
+        return None
+    return os.fsdecode(path.value)
+
+responsible = responsible_for(int(shell))
+# A shell it won't say of: sshd-keygen-wrapper is what macOS's sshd starts each session's shell
+# under.
+if responsible is None and os.environ.get("SSH_CONNECTION"):
+    responsible = "/usr/libexec/sshd-keygen-wrapper"
+# An app's own process is a bundle to tccd, not a path, and the pair below is a path's.
+if responsible and ".app/Contents/" in responsible:
+    responsible = None
+print(f"responsible for the shell: {responsible or 'none'}", file=sys.stderr)
 # tccd may hold the database, so it waits for its lock (#2966).
 tcc = sqlite3.connect(db, timeout=30)
 names = [column[1] for column in tcc.execute("pragma table_info(access)")]
@@ -50,15 +75,17 @@ for row in rows:
 if responsible:
     pair = ("select * from access where service = 'kTCCServiceAppleEvents' and client = ?"
             " and indirect_object_identifier = ?")
+    # Any Apple Events row gives the columns this macOS's table has; the pair's own are set.
     base = tcc.execute("select * from access where service = 'kTCCServiceAppleEvents'"
-                       " and client = ? limit 1", [responsible]).fetchone()
+                       " order by client = ? desc limit 1", [responsible]).fetchone()
     if base is None:
         sys.exit(f"TCC holds no kTCCServiceAppleEvents row, client {responsible}, indirect object"
-                 f" {responsible}, auth_value 2, and no row of that client's to make it from")
+                 f" {responsible}, auth_value 2, and no Apple Events row to make it from")
     row = dict(zip(names, base))
     # A path, as client and object, allowed by the user (reason 0), with no code requirement.
-    row.update(indirect_object_identifier=responsible, indirect_object_identifier_type=1,
-               auth_value=2, auth_reason=0, flags=0, csreq=None, indirect_object_code_identity=None)
+    row.update(client=responsible, client_type=1, indirect_object_identifier=responsible,
+               indirect_object_identifier_type=1, auth_value=2, auth_reason=0, flags=0, csreq=None,
+               indirect_object_code_identity=None)
     tcc.execute(f"insert or replace into access ({', '.join(names)})"
                 f" values ({', '.join('?' * len(names))})", [row[name] for name in names])
     tcc.commit()
@@ -69,15 +96,16 @@ if responsible:
 tcc.commit()
 print(len(rows))
 EOF
-    # sshd-keygen-wrapper is the process macOS's sshd starts each session's shell under.
-    responsible=
-    [ -z "${SSH_CONNECTION:-}" ] || responsible=/usr/libexec/sshd-keygen-wrapper
+    # A prompt tccd still shows writes its row back refused when it times out, over the grant, so
+    # tccd goes first, and its prompts with it.
+    killall tccd 2> /dev/null || true
     granted=$(python3 -I "$out/scripting-grant.py" \
-      "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$app_id" "$responsible" \
+      "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$app_id" "$$" \
       2> "$out/scripting-grant.err") ||
       fail "the VM's TCC database couldn't let osascript control the app: $(tail -1 \
         "$out/scripting-grant.err")"
-    echo "granted: $granted clients" >> "$out/scripting-tcc.txt"
+    echo "granted: $granted clients; $(grep '^responsible for the shell: ' "$out/scripting-grant.err")" \
+      >> "$out/scripting-tcc.txt"
     # TCC's daemon reads the database again as it starts, on the next request.
     killall tccd 2> /dev/null || true
   fi
