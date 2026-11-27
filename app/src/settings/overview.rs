@@ -102,7 +102,6 @@ impl Settings {
                     .focus_visible(ring(look.ink))
                     .child(self.drawn("overview show dismissed".into()))
                     .on_click(cx.listener(|settings: &mut Self, _, _, cx| {
-                        // check.sh reads this line.
                         log!("browser: loose ends brought back");
                         if let Some(put_away) = &mut settings.put_away {
                             put_away.bring_back_all();
