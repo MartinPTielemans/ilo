@@ -4114,7 +4114,7 @@ impl Settings {
         key: &'static str,
         hint: String,
         accent: Rgba,
-        cx: &mut Context<Self>,
+        cx: &App,
     ) -> Vec<Block> {
         let look = &self.look;
         let model = agents.read(cx);
