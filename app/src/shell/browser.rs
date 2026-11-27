@@ -994,13 +994,15 @@ pub trait Browser {
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
-    /// profile and the others while there's more than one.
+    /// hanging from `place` in a window of `window`'s size, headed by the tab's `favicon`, listing
+    /// `extensions`, with the tab's profile and the others while there's more than one.
+    #[allow(clippy::too_many_arguments)]
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
+        favicon: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<crate::site_controls::Extension>,
         profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,

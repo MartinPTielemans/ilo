@@ -2005,12 +2005,13 @@ impl Browser for Engine {
         tab: u64,
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
+        favicon: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<site_controls::Extension>,
         profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
+            move |cx| site_controls::show(tab, place, window, favicon, extensions, profiles, cx),
             cx,
         );
     }

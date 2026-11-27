@@ -1,6 +1,6 @@
 # check.sh runs this at 80.
 # A Space the driver makes for an agent, through the core as agent code will, is never the user's
-# to see (#1080): the window keeps it apart, as a task's, out of the switcher, the Spaces menu and
+# to see (#1080): the window keeps it apart, as a task's, out of the Space button's menu, the Spaces menu and
 # ⌃1 to ⌃9, and the agent's work shows on its card instead. With the Spaces menu open on the Mac,
 # making it puts no menu bar up under the menu. The agent may act only on the tabs of its own
 # Space: not on the user's. The core refuses an agent ad blocking, passwords, DevTools, a
@@ -74,7 +74,7 @@ post agentspace claude-code Claude Code
 expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
 agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: task space $agent Claude Code\$" "the window didn't keep the agent's Space apart"
-grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
+grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the Space button's menu"
 grep '^browser: spaces ' "$log" | tail -1 | grep -qw "$agent" && fail "the window lists the agent's Space"
 if [ -n "$mac" ]; then
   none_since '^browser: menu bar put up' || fail "the menu bar was put up with the menu still open"
@@ -84,7 +84,7 @@ send agentspace task-1 Find a flight
 expect '^browser: made space [1-9][0-9]* for agent task-1$' "the driver didn't make the task's Space"
 task=$(grep '^browser: made space .* for agent task-1$' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: task space $task Find a flight\$" "the window didn't keep the task's Space apart"
-grep -q "^browser: added space $task " "$log" && fail "the task's Space reached the switcher"
+grep -q "^browser: added space $task " "$log" && fail "the task's Space reached the Space button's menu"
 grep '^browser: spaces ' "$log" | tail -1 | grep -qw "$task" && fail "the window lists the task's Space"
 send menubar Spaces
 expect '^browser: menu bar Spaces: ' "the Spaces menu didn't come"
@@ -783,7 +783,7 @@ PY
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$commanded$tasks_found. The user's tab came from the run's own server."
+  echo "ok: $made, the Space button's menu and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$commanded$tasks_found. The user's tab came from the run's own server."
 else
-  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$commanded$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the Space button's menu, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$commanded$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi

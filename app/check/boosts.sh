@@ -121,8 +121,8 @@ $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 send click $((bx + bw - 18)) $((by + 18))
 expect "^browser: boost card $tab closed\$" "the card's × didn't close it"
-# A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the +'s menu
-# after New Note; each opens the card.
+# A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the Space button's
+# menu after New Note; each opens the card.
 post rightclick $(row 0)
 expect "^browser: menu shown .*, $(cased 'Mute (disabled), Edit Boost…, Add Split View'), " \
   "the tab's menu didn't offer Edit Boost… after Mute"
@@ -130,16 +130,14 @@ expect '^browser: menu drawn ' "the tab's menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/boost-tab-menu.png" || fail "no window to capture"
 send choose "$(cased 'Edit Boost…')"
 expect "^browser: boost card $tab opened\$" "the tab menu's Edit Boost… opened no card"
-send layout
-height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
-post click 204 $((height - 25))
+# The Space button is where the footer logged it: its menu lists the Spaces before New Space….
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
 plus=$(cased "New Space…, New Folder…, New Split View, New Board, New Note, Edit Boost…")
-expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
-expect '^browser: menu drawn ' "the +'s menu didn't draw"
-../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
+expect "^browser: menu shown \(.*, \)\{0,1\}$plus\(, .*\)\{0,1\}\$" "the Space button's menu didn't offer Edit Boost…"
+expect '^browser: menu drawn ' "the Space button's menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-space-menu.png" || fail "no window to capture"
 send choose "$(cased 'Edit Boost…')"
-expect "^browser: boost card $tab opened\$" "the +'s Edit Boost… opened no card"
+expect "^browser: boost card $tab opened\$" "the Space button's Edit Boost… opened no card"
 
 # A second window on the site, which takes the editor's changes as they're made.
 send key n cmd
@@ -164,7 +162,7 @@ both_are() {
   fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
 }
 
-# Customize…, the left of the two on the last line of the card the +'s Edit Boost… left open,
+# Customize…, the left of the two on the last line of the card the Space button's Edit Boost… left open,
 # beside Arrange, opens the editor in its place. Its clicks are in its points: its arrow 13 wide,
 # then the card, whose field is 340 wide and 176 tall, 8.5 in and 48 down.
 send layout
@@ -245,11 +243,11 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
-  "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
+  "the tab's menu and the Space button's offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
   "Advanced grew the card, Contrast's and Brightness's filtered the page and Reset put them back;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
-  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png," \
+  "$out/boost-tab-menu.png, $out/boost-space-menu.png, $out/boost-editor.png," \
   "$out/boost-edited.png, $out/boost-advanced.png"

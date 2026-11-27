@@ -26,15 +26,21 @@ pub const PROGRAM: &str = if cfg!(windows) {
     "ilo-command"
 };
 
-/// What the agent types, the link's name in the bin folder: the product's name.
-pub const LINK: &str = env!("PRODUCT_NAME");
+/// What the agent types, the link's name in the bin folder: the product's name, or the rework's
+/// copy's own (build.rs).
+pub const LINK: &str = env!("COMMAND_NAME");
 
 /// The agent file's name in the profile directory.
-pub const FILE: &str = concat!(env!("PRODUCT_NAME"), "-command");
+pub const FILE: &str = concat!(env!("COMMAND_NAME"), "-command");
 
 /// The command's name from before it took the product's: its link's, and its agent file's with
-/// "-command", which Add Again takes away when they're still the command's.
-pub const OLD_LINK: &str = env!("APP_NAME");
+/// "-command", which Add Again takes away when they're still the command's. The rework's copy
+/// never had another.
+pub const OLD_LINK: &str = if cfg!(feature = "rework") {
+    LINK
+} else {
+    env!("APP_NAME")
+};
 
 /// Whether the command's name `new` is another than its `old` one. A build whose name and product
 /// are one has nothing old to take away: its old link and file are the ones Add just wrote.

@@ -1436,6 +1436,7 @@ impl Browser for Fake {
         tab: u64,
         place: site_controls::Place,
         window: Size<Pixels>,
+        favicon: Option<Arc<gpui::Image>>,
         extensions: Vec<site_controls::Extension>,
         profiles: Option<site_controls::Profiles>,
         cx: &mut App,
@@ -1447,7 +1448,7 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
-            site_controls::show(tab, place, window, extensions, profiles, cx);
+            site_controls::show(tab, place, window, favicon, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
     }
@@ -3432,7 +3433,8 @@ fn main() {
                 };
                 dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
             }
-            // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
+            // PREVIEW_ICON_PICKER=<glyph:name, emoji, or empty> shows the icon picker for a Space
+            // with that glyph or none, and for a tab with an emoji, as a Space's offers no emoji.
             if let Ok(icon) = states::var("PREVIEW_ICON_PICKER") {
                 let left = x as f32 + 40.;
                 let top = y as f32 + 120.;
@@ -3450,7 +3452,10 @@ fn main() {
                 .is_some()
                 {
                     let picked: icon_picker::Picked = Rc::new(|_, _| {});
-                    let subject = icon_picker::Subject::Space(1);
+                    let subject = match browser::space_icon::SpaceIcon::parse(&icon) {
+                        browser::space_icon::SpaceIcon::Emoji(_) => icon_picker::Subject::Tab(1),
+                        _ => icon_picker::Subject::Space(1),
+                    };
                     icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
                 }
             }

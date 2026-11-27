@@ -109,6 +109,8 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // The three buttons' corner (#4401), between a control's and a row's.
+    "button.radius",
     // Stop's square in a thread's composer's round button, which rounds a glyph, not a corner.
     "shell.conversation.composer-square-radius",
     "icon-picker.arrow-tip-radius",
@@ -605,10 +607,13 @@ fn type_is_on_the_scale() {
             super::shell::trouble::WORDS_SIZE,
         ),
         (
-            "site_controls::HEADING_SIZE",
-            super::site_controls::HEADING_SIZE,
+            "site_controls::LABEL_SIZE",
+            super::site_controls::LABEL_SIZE,
         ),
-        ("site_controls::LINK_SIZE", super::site_controls::LINK_SIZE),
+        (
+            "site_controls::CONNECTION_SIZE",
+            super::site_controls::CONNECTION_SIZE,
+        ),
         ("site_controls::NAME_SIZE", super::site_controls::NAME_SIZE),
         ("toast::TEXT_SIZE", super::toast::TEXT_SIZE),
         ("tooltip::TEXT_SIZE", super::tooltip::TEXT_SIZE),
@@ -620,4 +625,34 @@ fn type_is_on_the_scale() {
             "{name} is {size}, off the scale {scale:?}"
         );
     }
+}
+
+/// The chrome has one grey, neutral, and one colour of its own, amber (#4401): none of the warm
+/// blacks and creams it had, no site's colour on the command bar's rows, and no green for an agent
+/// at work. The Board's page keeps its own.
+#[test]
+fn the_chrome_has_no_warm_grey_and_no_colour_but_amber() {
+    let toml = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("design/tokens.toml"))
+        .unwrap();
+    let warm = ["f3f0e8", "1f1d17", "2a2720", "fbf9f4", "e7e5df"];
+    let (mut table, mut found) = ("", Vec::new());
+    for line in toml.lines().map(str::trim) {
+        if line.starts_with('[') {
+            table = line;
+            assert_ne!(
+                table, "[command-bar.site-colors]",
+                "the site colours are back"
+            );
+        } else if table != "[board]" && !line.starts_with('#') {
+            let lower = line.to_ascii_lowercase();
+            if warm.iter().any(|grey| lower.contains(grey)) || line.starts_with("status-agent") {
+                found.push(format!("{table} {line}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "warm greys or retired colours:\n{}",
+        found.join("\n")
+    );
 }
