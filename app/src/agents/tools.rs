@@ -115,6 +115,78 @@ pub const MAX_ANSWER: usize = 12_000;
 /// `MAX_ANSWER` for which page it is and what an action did.
 pub const MAX_TEXT: usize = 10_000;
 
+/// page_log's description (#4377): what it gives, and that Developer Mode is the user's to turn on.
+const PAGE_LOG: &str = "What the page reported since it loaded: failed requests, and in Developer Mode the console and full requests. Only the user can turn Developer Mode on, in the site's menu.";
+/// The log's action for a page_log call that read a page in Developer Mode, and for any other:
+/// the step's words differ, as what it read does.
+pub const CONSOLE: &str = "console";
+pub const PAGE_LOG_FAILED: &str = "page_log";
+/// What a page_log answer adds, for a page not in Developer Mode, to the core's log.
+pub const NEEDS_DEVELOPER_MODE: &str = "The console needs Developer Mode for this site, which only the user can turn on, in the site's menu.";
+
+/// page_log's answer: the core's log as it came, then for a page not in Developer Mode the sentence
+/// that says what's missing. A log too long for the answer's limit loses whole entries, oldest
+/// first, so the JSON stays whole, and says how many (PL5); PL3 always comes last and whole.
+pub fn page_log_answer(log: String, developer_mode: bool) -> String {
+    let after = |left_out: usize| {
+        let mut said = String::new();
+        if left_out > 0 {
+            said += &match left_out {
+                1 => "\n\nLeft out 1 older entry to fit.".to_string(),
+                n => format!("\n\nLeft out {n} older entries to fit."),
+            };
+        }
+        if !developer_mode {
+            said += &format!("\n\n{NEEDS_DEVELOPER_MODE}");
+        }
+        said
+    };
+    if log.is_empty() && !developer_mode {
+        return NEEDS_DEVELOPER_MODE.to_string();
+    }
+    let fits = |json: &str, left_out: usize| {
+        json.chars().count() + after(left_out).chars().count() <= MAX_ANSWER
+    };
+    if fits(&log, 0) {
+        return log + &after(0);
+    }
+    // The core's log is always an object of lists, oldest first; one that isn't is cut as any
+    // answer is.
+    let Ok(Value::Object(mut whole)) = serde_json::from_str::<Value>(&log) else {
+        return capped_after(log, after(0).chars().count()) + &after(0);
+    };
+    let mut left_out = 0;
+    // Counted as it's written out again, so an entry's own length takes off what it adds.
+    let mut length = Value::Object(whole.clone()).to_string().chars().count();
+    loop {
+        // The oldest of the longer list goes, so neither list empties while the other is long.
+        let longest = (whole.iter_mut())
+            .filter_map(|(_, value)| value.as_array_mut())
+            .filter(|list| !list.is_empty())
+            .max_by_key(|list| list.len());
+        let Some(list) = longest else {
+            let json = Value::Object(whole).to_string();
+            return capped_after(json, after(left_out).chars().count()) + &after(left_out);
+        };
+        // An entry and its comma; writing the whole log out again for each would be slow on a
+        // large one, so the JSON is made once the count says it fits.
+        length = length.saturating_sub(list.remove(0).to_string().chars().count() + 1);
+        left_out += 1;
+        if fits_length(length, &after(left_out)) {
+            let json = Value::Object(whole.clone()).to_string();
+            if fits(&json, left_out) {
+                return json + &after(left_out);
+            }
+            length = json.chars().count();
+        }
+    }
+}
+
+/// Whether a log of `length` characters and what's `after` it fit in an answer.
+fn fits_length(length: usize, after: &str) -> bool {
+    length + after.chars().count() <= MAX_ANSWER
+}
+
 /// `text`, cut at `MAX_ANSWER` characters, saying so.
 pub fn capped(text: String) -> String {
     capped_after(text, 0)
@@ -594,6 +666,16 @@ fn shared() -> Value {
                     "from": { "type": "integer", "minimum": 0, "description": "The character to start at, for the part after one an answer ended, as it says. 0 by default." },
                     "tab": tab,
                 },
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": true },
+        },
+        {
+            "name": "page_log",
+            "title": "Page log",
+            "description": PAGE_LOG,
+            "inputSchema": {
+                "type": "object",
+                "properties": { "tab": tab },
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
@@ -1122,6 +1204,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             site("the page"),
         ),
         "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
+        CONSOLE => (
+            "Reading the console on",
+            "Read the console on",
+            "Couldn't read the console on",
+            site("the page"),
+        ),
+        PAGE_LOG_FAILED => (
+            "Reading failed requests on",
+            "Read failed requests on",
+            "Couldn't read failed requests on",
+            site("the page"),
+        ),
         "screenshot" => (
             "Looking at",
             "Looked at",
@@ -1315,7 +1409,7 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
     };
     match did.tool.as_str() {
         "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot"
-        | "upload" => step_title(&on("pages"), tense),
+        | "upload" | CONSOLE | PAGE_LOG_FAILED => step_title(&on("pages"), tense),
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
             step_title(&on("pages"), tense)
         }
@@ -1328,7 +1422,7 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
 /// A step's glyph, by its tool, from the shell's one family.
 pub fn step_glyph(tool: &str) -> &'static str {
     match tool {
-        "read_page" | "snapshot" => "icons/text-align-start.svg",
+        "read_page" | "snapshot" | CONSOLE | PAGE_LOG_FAILED => "icons/text-align-start.svg",
         "click" => "icons/mouse-pointer-2.svg",
         "type" => "icons/type.svg",
         "select" => "icons/chevrons-up-down.svg",
@@ -1461,6 +1555,8 @@ pub fn describe(action: &str) -> &'static str {
         "list_tabs" => "Listed its tabs",
         "list_profiles" => "Looked at your profiles",
         "read_page" => "Read the page",
+        CONSOLE => "Read the console",
+        PAGE_LOG_FAILED => "Read failed requests",
         "open_tab" => "Opened a page",
         "navigate" => "Went to a page",
         SEARCHED | PROGRAM_SEARCHED => "Searched the web",

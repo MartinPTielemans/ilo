@@ -22,13 +22,14 @@ pub(super) const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key
 /// request's changes by their own row, and a close of a tab of the user's gives it back as it is.
 /// Any other is refused there below Full access (`stopped_in_use`), so one made later is refused
 /// on such a page until it's placed here.
-pub(super) const IN_USE_ANSWERS: [&str; 26] = [
+pub(super) const IN_USE_ANSWERS: [&str; 27] = [
     "list_tabs",
     "list_profiles",
     "list_split",
     "open_tab",
     "snapshot",
     "read_page",
+    "page_log",
     "scroll",
     "screenshot",
     "wait",
