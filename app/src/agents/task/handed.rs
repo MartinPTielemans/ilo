@@ -403,7 +403,8 @@ impl Agents {
     /// Whether `tab` is one the app would hand from the user's Space `from` to a thread of the
     /// Space `own`: the user's own tab, in the Space the window shows, never a private window's
     /// and never one of another profile than the thread's, on a page on the web, as every page a
-    /// thread has.
+    /// thread has, and one the core says it gives now, so no tab is offered that the give would
+    /// refuse (#4278).
     fn fits(&self, own: u64, from: u64, tab: u64, cx: &App) -> bool {
         self.space_fits(own, from) && self.tab_fits(from, tab, cx)
     }
@@ -416,14 +417,16 @@ impl Agents {
 
     /// What `fits` asks of `tab` itself.
     fn tab_fits(&self, from: u64, tab: u64, cx: &App) -> bool {
-        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none()
+        self.browser.shows(tab, from, cx)
+            && self.browser.off_limits(tab, cx).is_none()
+            && self.browser.may_be_given(tab, cx)
     }
 
     /// Whether the composer may offer `tab`, and keep its chip, seen from the user's Space
     /// `space_in_view`: for a reply to `agent`'s thread, or with none for a thread not yet
-    /// started. As far as the app knows: the core refuses the rest at the give. A read of what
-    /// the app has, which asks nothing of the tab and makes nothing happen in it; for the
-    /// composer alone, when its menu of the user's tabs opens and for a chip before the send,
+    /// started. The core's rule as it is now: a page that changes before the send may still be
+    /// refused at the give. A read, which asks nothing of the tab and makes nothing happen in it;
+    /// for the composer alone, when its menu of the user's tabs opens and for a chip before the send,
     /// and in no tool's answer or log line.
     pub fn still_fits(&self, agent: Option<&str>, tab: u64, space_in_view: u64, cx: &App) -> bool {
         !(self.fits_among(agent, space_in_view, &[tab], cx)).is_empty()

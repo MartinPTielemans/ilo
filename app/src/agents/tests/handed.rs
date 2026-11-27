@@ -2084,8 +2084,9 @@ fn a_threads_own_page_keeps_its_title_beside_a_handed_tab(cx: &mut TestAppContex
 }
 
 /// The composer offers a tab, and keeps its chip, only while the app would hand it: the user's
-/// own tab on the web, in the Space in view, of the thread's profile and no private window's. It
-/// is a read that leaves nothing; the core's own refusals are met at the give.
+/// own tab on the web, in the Space in view, of the thread's profile and no private window's, and
+/// one the core says it gives now. It is a read that leaves nothing; a page that changes after
+/// the menu opened is met at the give.
 #[gpui::test]
 fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     let run = run("handed-fits", cx);
@@ -2098,18 +2099,20 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
         (16, USERS, "Settings", "chrome://settings/"),
         (17, OTHER_PROFILE, "Work mail", "https://mail.example/"),
         (18, USERS, "Upload", "https://files.example/"),
+        (19, USERS, "Call", "https://call.example/"),
     ]);
     run.browser.private.borrow_mut().push(PRIVATE);
     (run.browser.profiles.borrow_mut()).push((OTHER_PROFILE, "Profile 2"));
     run.browser.not_given.borrow_mut().insert(18);
+    run.browser.ungivable.borrow_mut().insert(19);
     let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
     run.ran(1);
     let fits = |agent: Option<&str>, space: u64, tab: u64, cx: &mut TestAppContext| {
         run.agents
             .read_with(cx, |agents, cx| agents.still_fits(agent, tab, space, cx))
     };
-    // A tab elsewhere, the outside agent's own, one not open, a private window's and one off the
-    // web: none, for a thread to start or for this one.
+    // A tab elsewhere, the outside agent's own, one not open, a private window's, one off the web
+    // and one the core says it won't give: none, for a thread to start or for this one.
     for (space, tab) in [
         (USERS, 13),
         (USERS, 20),
@@ -2117,6 +2120,7 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
         (USERS, 99),
         (PRIVATE, 15),
         (USERS, 16),
+        (USERS, 19),
     ] {
         assert!(!fits(None, space, tab, cx), "tab {tab} from {space}");
         assert!(
@@ -2127,7 +2131,8 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     // Another profile's tab is one for a thread started there, and none for this one.
     assert!(fits(None, OTHER_PROFILE, 17, cx));
     assert!(!fits(Some(&agent), OTHER_PROFILE, 17, cx));
-    // What only the core refuses is offered, and its chip says so at the send.
+    // One the core refuses only at the give, as its page changed since, is offered, and its chip
+    // says so at the send.
     for tab in [TRAINS.0, 18] {
         assert!(fits(None, USERS, tab, cx));
         assert!(fits(Some(&agent), USERS, tab, cx));
@@ -2145,6 +2150,26 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     (run.agents).update(cx, |agents, cx| agents.set_threads(false, cx));
     assert!(!fits(None, USERS, TRAINS.0, cx));
     assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
+}
+
+/// A tab picked while the core gave it, whose page has since become one it won't give, as a call
+/// that started sharing the screen, isn't asked of the core's give at the send: its chip says it
+/// wasn't handed, and the others go (#4278).
+#[gpui::test]
+fn a_picked_tab_the_core_wont_give_now_is_not_handed(cx: &mut TestAppContext) {
+    let run = run("handed-ungivable", cx);
+    const CALL: u64 = 19;
+    (run.browser.tabs.borrow_mut()).push((CALL, USERS, "Call", "https://call.example/"));
+    let offered = |cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            agents.fits_among(None, USERS, &[SEATS.0, CALL, TRAINS.0], cx)
+        })
+    };
+    assert_eq!(offered(cx), [SEATS.0, CALL, TRAINS.0]);
+    run.browser.ungivable.borrow_mut().insert(CALL);
+    assert_eq!(offered(cx), [SEATS.0, TRAINS.0]);
+    send(&run, ASKED, USERS, &[SEATS.0, CALL, TRAINS.0], cx).expect("started");
+    assert_eq!(given(&run), [SEATS.0, TRAINS.0]);
 }
 
 /// The composer's menu of the user's tabs asks once for them all: its answer is the tabs

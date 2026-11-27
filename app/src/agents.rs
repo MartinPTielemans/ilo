@@ -337,6 +337,11 @@ pub trait Browser {
     /// pages until it goes back (bc_tab_give_to_agent). Whether it moved: the core refuses the
     /// tabs it never gives, whatever asks. The user's send alone calls it (task/handed.rs).
     fn give_tab(&self, tab: u64, space: u64, cx: &mut App) -> bool;
+    /// Whether the core would give the user's `tab` to an agent's Space of its own profile now
+    /// (bc_tab_may_be_given), by the rule the give keeps: yes or no, never why. The composer's
+    /// alone, as its menu of the user's tabs opens and before the send; no tool's answer or log
+    /// line has it.
+    fn may_be_given(&self, tab: u64, cx: &App) -> bool;
     /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
     /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
     fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
