@@ -331,7 +331,7 @@ fn a_waiting_lines_words_are_its_kinds_never_the_pages() {
         (refused(Why::SignIn, Some(Tier::Work)), "Sign in · maat.pt"),
         (
             refused(Why::SignInBank, Some(Tier::Full)),
-            "Bank sign-in · maat.pt",
+            "Sensitive site · maat.pt",
         ),
         (refused(Why::Act, Some(Tier::Work)), "Needs Work on pages"),
         (refused(Why::Bank, Some(Tier::Full)), "Needs Full access"),
