@@ -53,12 +53,25 @@ fn main() {
     let product = root.join("branding/product");
     let product_text = std::fs::read_to_string(&product).expect("no branding/product");
     println!("cargo:rustc-env=PRODUCT_NAME={}", product_text.trim());
+    println!("cargo:rerun-if-changed={}", product.display());
+    // What agents know the browser by, the ilo command's link and the MCP server's name: the
+    // product's, and the rework's copy its own (branding/rework/command), so the two never share
+    // an agent's config, a link or a skill with the woven that ships.
+    let command = match std::env::var_os("CARGO_FEATURE_REWORK") {
+        Some(_) => {
+            let file = root.join("branding/rework/command");
+            println!("cargo:rerun-if-changed={}", file.display());
+            std::fs::read_to_string(&file).expect("no branding/rework/command")
+        }
+        None => product_text.clone(),
+    };
+    let command = command.trim();
+    println!("cargo:rustc-env=COMMAND_NAME={command}");
     // The variable that names the command's agent, from the command's name (agents::command).
     println!(
         "cargo:rustc-env=PRODUCT_AS={}_AS",
-        product_text.trim().to_uppercase()
+        command.to_uppercase().replace('-', "_")
     );
-    println!("cargo:rerun-if-changed={}", product.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).
     for (file, variable) in [

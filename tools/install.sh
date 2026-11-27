@@ -8,7 +8,9 @@
 # --rework installs the copy `app/build.sh rework` made instead, the owner's daily copy of the
 # rework, as its own app beside the daily one: branding/rework's name and id, whose profile folder
 # and Keychain items are its own. It refuses a rework branding, a build or an app already in the
-# folder that is the daily app's, so it never replaces the daily app.
+# folder that is the daily app's, or the product's that ships (woven.app, an app.woven.* id but
+# app.woven.rework), so it never replaces either. It stops, never asking, where the folder would
+# need a password.
 # --dry-run says what it would install where, and changes nothing.
 # Usage: tools/install.sh [--rework] [--dry-run] [folder]
 set -e
@@ -27,8 +29,16 @@ name=$daily_name id=$daily_id build="app/build.sh prod"
 if [ -n "$rework" ]; then
   name=$(cat "$root/branding/rework/name") id=$(cat "$root/branding/rework/id")
   build="app/build.sh rework"
+  product=$(cat "$root/branding/product" 2>/dev/null || echo "$daily_name")
   if [ "$name" = "$daily_name" ] || [ "$id" = "$daily_id" ]; then
     echo "branding/rework names the daily app ($daily_name, $daily_id); the rework's copy never installs as it." >&2
+    exit 1
+  fi
+  ships=
+  [ "$name" != "$product" ] || ships=1
+  case $id in "app.$product.rework") ;; "app.$product."*) ships=1 ;; esac
+  if [ -n "$ships" ]; then
+    echo "branding/rework names the product that ships ($name, $id); the rework's copy is app.$product.rework, never $product.app." >&2
     exit 1
   fi
 fi
@@ -51,6 +61,11 @@ fi
 # Swapping the bundle under a running Chromium would mix its helpers' versions.
 if pgrep -f "$target/Contents" > /dev/null; then
   echo "$name in $to is running. Quit it first." >&2
+  exit 1
+fi
+# A folder the user can't write would need an administrator's password, which nothing here asks.
+if [ ! -w "$to" ] || { [ -e "$target" ] && [ ! -w "$target" ]; }; then
+  echo "$target would need a password to replace. Nothing was installed." >&2
   exit 1
 fi
 if [ -n "$dry" ]; then

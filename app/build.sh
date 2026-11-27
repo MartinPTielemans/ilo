@@ -194,8 +194,9 @@ if [ "${1:-}" = prod ] || [ "${1:-}" = rework ]; then
     name=$(cat branding/rework/name)
     features="--features rework"
     unset UPDATE_PUBLIC_KEY
-    if [ "$id" = "$(cat branding/id)" ] || [ "$name" = "$(cat branding/name)" ]; then
-      echo "branding/rework names the daily app's id or name." >&2
+    if [ "$id" = "$(cat branding/id)" ] || [ "$name" = "$(cat branding/name)" ] ||
+      [ "$name" = "$(cat branding/product)" ]; then
+      echo "branding/rework names the daily app's id or name, or the product's." >&2
       exit 1
     fi
   else
