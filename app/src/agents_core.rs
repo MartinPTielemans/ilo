@@ -43,8 +43,9 @@ impl Browser for Core {
         let (Ok(id), Ok(named)) = (CString::new(agent), CString::new(agent_name)) else {
             return 0;
         };
-        let space =
-            unsafe { bc::bc_space_create_for_agent(named.as_ptr(), id.as_ptr(), named.as_ptr()) };
+        let space = unsafe {
+            bc::bc_space_create_for_agent(named.as_ptr(), id.as_ptr(), named.as_ptr(), 0)
+        };
         // check.sh reads this line, as the driver's agentspace writes it.
         browser::log!("browser: made space {space} for agent {agent}");
         space
@@ -155,7 +156,7 @@ impl Browser for Core {
         let (Ok(agent), Ok(url)) = (CString::new(agent), CString::new(url)) else {
             return 0;
         };
-        call(|| unsafe { bc::bc_agent_open_tab(agent.as_ptr(), url.as_ptr()) })
+        call(|| unsafe { bc::bc_agent_open_tab(agent.as_ptr(), 0, url.as_ptr()) })
     }
 
     fn navigate(&self, agent: &str, tab: u64, url: &str, _: &mut App) -> bool {

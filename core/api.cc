@@ -29,6 +29,7 @@
 #include "browser_core/agent_permissions.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_space_rule.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
 #include "browser_core/arrange_rule.h"
@@ -295,6 +296,28 @@ Profile* LoadedProfile(bc_id profile_id) {
   // ProfileFor gives the first profile for one that isn't loaded.
   Profile* profile = dir.empty() ? nullptr : browser_core::ProfileFor(dir);
   return profile && browser_core::DirOf(profile) == dir ? profile : nullptr;
+}
+
+// The folder of the profile |profile_id| names, or with 0 the start profile's: empty for one that
+// isn't a profile.
+std::string FolderOf(bc_id profile_id) {
+  return profile_id ? browser_core::ProfileDir(profile_id)
+                    : browser_core::DirOf(browser_core::StartProfile());
+}
+
+// The agent |agent|'s Space in the profile whose folder is |profile|, or with an empty one the
+// agent's last made, as agent_space_rule finds it; null for none.
+browser_core::Space* AgentSpace(std::string_view agent, std::string_view profile) {
+  const std::vector<browser_core::Space*> all = browser_core::Space::All();
+  std::vector<browser_core::agent_space_rule::AgentSpace> spaces;
+  spaces.reserve(all.size());
+  for (browser_core::Space* each : all) {
+    const std::string_view agent_id =
+        each->agent() ? std::string_view(each->agent()->id) : std::string_view();
+    spaces.push_back({.agent = agent_id, .profile = each->profile()});
+  }
+  const int at = browser_core::agent_space_rule::AgentSpaceIn(spaces, agent, profile);
+  return at < 0 ? nullptr : all[static_cast<size_t>(at)];
 }
 
 }  // namespace
@@ -645,13 +668,23 @@ void bc_space_move(bc_id space, bc_id after) {
   browser_core::Space::MoveAfter(space, after);
 }
 
-bc_id bc_space_create_for_agent(const char* name, const char* agent, const char* agent_name) {
-  if (!agent || !*agent || !agent_name || !*agent_name) {
+bc_id bc_space_create_for_agent(const char* name,
+                                const char* agent,
+                                const char* agent_name,
+                                bc_id profile) {
+  const std::string dir = FolderOf(profile);
+  if (!agent || !*agent || !agent_name || !*agent_name || dir.empty()) {
     return 0;
+  }
+  if (browser_core::Space* own = AgentSpace(agent, dir)) {
+    return own->id();
   }
   browser_core::Space* space = browser_core::Space::Create(
       name ? name : "", 0, browser_core::Space::Agent{.id = agent, .name = agent_name});
-  space->SetProfile(browser_core::DirOf(browser_core::StartProfile()));
+  // In its profile from the start, so no tab ever opens in it with another's sign-ins; until the
+  // profile has loaded, bc_agent_open_tab there opens nothing.
+  space->SetProfile(dir);
+  browser_core::LoadProfiles({dir}, base::DoNothing());
   return space->id();
 }
 
@@ -924,17 +957,14 @@ void bc_file_field_drop(bc_id field) {
   browser_core::AgentFileField::Drop(field);
 }
 
-bc_id bc_agent_open_tab(const char* agent, const char* url) {
+bc_id bc_agent_open_tab(const char* agent, bc_id profile, const char* url) {
   const GURL target(url ? url : "");
-  if (!agent || !*agent || !target.SchemeIsHTTPOrHTTPS()) {
+  // A profile named that isn't one has no folder, and so no Space.
+  const std::string dir = profile ? browser_core::ProfileDir(profile) : std::string();
+  if (!agent || !*agent || !target.SchemeIsHTTPOrHTTPS() || (profile && dir.empty())) {
     return 0;
   }
-  browser_core::Space* space = nullptr;
-  for (browser_core::Space* each : browser_core::Space::All()) {
-    if (each->agent() && each->agent()->id == agent) {
-      space = each;
-    }
-  }
+  browser_core::Space* space = AgentSpace(agent, dir);
   // The window showing the agent's Space, or else the first of the user's, for its Browser.
   browser_core::Window* window = nullptr;
   for (browser_core::Window* each : browser_core::Window::All()) {
@@ -942,11 +972,16 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
       window = each;
     }
   }
-  Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
+  // Only the Space's own profile, loaded: never the one Chrome gives in its place meanwhile.
+  Profile* given = space ? browser_core::ProfileFor(space->profile()) : nullptr;
+  Profile* in = given && browser_core::agent_space_rule::OpensIn(space->profile(),
+                                                                browser_core::DirOf(given))
+                    ? given
+                    : nullptr;
   // The agent's from before its page starts, so its first request is an agent's (#2660).
   int64_t load = 0;
   content::WebContents* contents =
-      window && profile ? window->OpenHeld(*space, profile, target, &load) : nullptr;
+      window && in ? window->OpenHeld(*space, in, target, &load) : nullptr;
   if (!contents) {
     return 0;
   }
@@ -1239,6 +1274,19 @@ bool bc_profile_list_history(bc_id profile,
                              const char* text,
                              size_t max) {
   return browser_core::ListHistory(LoadedProfile(profile), profile, request, before, text, max);
+}
+
+void bc_profile_pick_for_site(const bc_id* profiles,
+                              size_t count,
+                              const char* url,
+                              uint64_t request) {
+  std::vector<std::pair<bc_id, Profile*>> given;
+  given.reserve(profiles ? count : 0);
+  for (size_t i = 0; profiles && i < count; ++i) {
+    // Only a loaded profile's: LoadedProfile never loads one, and is never a private session's.
+    given.emplace_back(profiles[i], LoadedProfile(profiles[i]));
+  }
+  browser_core::PickProfileForSite(given, GURL(url ? url : ""), request);
 }
 
 bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {

@@ -5,6 +5,12 @@
 #ifndef BROWSER_CORE_AGENT_SPACE_RULE_H_
 #define BROWSER_CORE_AGENT_SPACE_RULE_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <string_view>
+#include <vector>
+
 namespace browser_core::agent_space_rule {
 
 // The tab a page is in when it asks.
@@ -86,6 +92,41 @@ struct Candidate {
 // Whether such a tab may be listed in it: a Space of the user's, of the tab's own profile, that is
 // no window's own. The first that may is the user's first Space (Listed::kInTheUsersFirstSpace).
 bool TakesATabWithNowhereElse(const Candidate& space);
+
+// An agent's Space as the core looks for the one a tab opens in: its agent's id and its profile's
+// folder, in the order the Spaces were made.
+struct AgentSpace {
+  std::string_view agent;
+  std::string_view profile;
+};
+
+// Which of |spaces| is the agent |agent|'s in the profile whose folder is |profile|, or -1 for
+// none. An agent has one Space a profile, the first made there. An empty |profile| asks for the
+// agent's Space as before profiles were named: the last made, wherever it is (#4376).
+int AgentSpaceIn(const std::vector<AgentSpace>& spaces,
+                 std::string_view agent,
+                 std::string_view profile);
+
+// Whether a tab may open in a Space of the profile whose folder is |profile| when Chrome gives the
+// profile whose folder is |given|: only that one. Chrome gives the first profile for one that
+// hasn't loaded, and a page opened there would use another profile's sign-ins.
+bool OpensIn(std::string_view profile, std::string_view given);
+
+// A profile as the pick for an agent's tab weighs it (#4376, bc_profile_pick_for_site).
+struct Candidate {
+  uint64_t profile = 0;
+  // Its place among the profiles the app gave, which breaks a tie.
+  size_t order = 0;
+  // Read only where its history has loaded, and never a private session's, which keeps none.
+  bool loaded = false;
+  bool private_session = false;
+  // Its last visit to the URL's site, microseconds since 1970, or 0 for none.
+  int64_t last_visit = 0;
+};
+
+// The profile whose history visited the site last, of those loaded and not private, the first
+// given on a tie; or 0 for none.
+uint64_t Picked(const std::vector<Candidate>& candidates);
 
 }  // namespace browser_core::agent_space_rule
 

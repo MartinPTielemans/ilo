@@ -3440,7 +3440,7 @@ fn run_command(line: &str) -> Option<()> {
             (!name.is_empty()).then_some(())?;
             let (agent_c, name_c) = (CString::new(agent).ok()?, CString::new(name).ok()?);
             let space = unsafe {
-                bc::bc_space_create_for_agent(name_c.as_ptr(), agent_c.as_ptr(), name_c.as_ptr())
+                bc::bc_space_create_for_agent(name_c.as_ptr(), agent_c.as_ptr(), name_c.as_ptr(), 0)
             };
             log!("browser: made space {space} for agent {agent}");
             Some(())
@@ -3473,7 +3473,7 @@ fn run_command(line: &str) -> Option<()> {
             let agent = words.next()?;
             let url = words.next()?;
             let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
-            let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
+            let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), 0, url_c.as_ptr()) };
             (tab != 0).then_some(())?;
             log!("browser: agent {agent} opened {tab}");
             Some(())

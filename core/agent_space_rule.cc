@@ -40,4 +40,39 @@ bool TakesATabWithNowhereElse(const Candidate& space) {
   return !space.agents && !space.a_windows_own && space.of_the_tabs_profile;
 }
 
+int AgentSpaceIn(const std::vector<AgentSpace>& spaces,
+                 std::string_view agent,
+                 std::string_view profile) {
+  int found = -1;
+  for (size_t at = 0; at < spaces.size(); ++at) {
+    if (agent.empty() || spaces[at].agent != agent) {
+      continue;
+    }
+    if (profile.empty()) {
+      found = static_cast<int>(at);
+    } else if (spaces[at].profile == profile) {
+      return static_cast<int>(at);
+    }
+  }
+  return found;
+}
+
+bool OpensIn(std::string_view profile, std::string_view given) {
+  return !profile.empty() && profile == given;
+}
+
+uint64_t Picked(const std::vector<Candidate>& candidates) {
+  const Candidate* best = nullptr;
+  for (const Candidate& each : candidates) {
+    if (!each.profile || !each.loaded || each.private_session || each.last_visit <= 0) {
+      continue;
+    }
+    if (!best || each.last_visit > best->last_visit ||
+        (each.last_visit == best->last_visit && each.order < best->order)) {
+      best = &each;
+    }
+  }
+  return best ? best->profile : 0;
+}
+
 }  // namespace browser_core::agent_space_rule
