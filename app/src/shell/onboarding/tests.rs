@@ -3145,10 +3145,10 @@ fn a_cut_line_keeps_the_rows_height_and_is_read_whole(cx: &mut TestAppContext) {
     }
 }
 
-/// A signed-in row on the card has the check disc and its ⋯, not Settings' mark, and the foot's
-/// right is Next in Just the Browser's place.
+/// A signed-in row on the card has the check disc alone: no ⋯, which opened Settings, and no mark
+/// (#4448). The foot's right is Next in Just the Browser's place.
 #[gpui::test]
-fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
+fn a_signed_in_row_has_its_disc_alone(cx: &mut TestAppContext) {
     use crate::agents::ready::{Found, Ready};
     let (shell, cx, host) = first_window(cx);
     host.threads.set(Some(true));
@@ -3179,7 +3179,11 @@ fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
     );
     let said = read(cx);
     let named = |name: &str| said.iter().any(|(_, said, _)| said == name);
-    assert!(named("Claude options"), "Claude's ⋯ in {said:?}");
+    assert!(!named("Claude options"), "no ⋯ in {said:?}");
+    assert!(
+        !said.iter().any(|(_, name, _)| name.ends_with(" options")),
+        "no row has a ⋯ in {said:?}"
+    );
     assert!(
         !said
             .iter()
@@ -3188,6 +3192,13 @@ fn a_signed_in_row_has_its_disc_and_more_and_no_mark(cx: &mut TestAppContext) {
     );
     assert!(placed("just-the-browser", cx).is_none());
     assert!(placed("main", cx).is_some(), "Next");
+    host.take();
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    assert!(
+        !host.take().iter().any(|call| call == "agents settings"),
+        "first run opened Settings"
+    );
 }
 
 mod exit;

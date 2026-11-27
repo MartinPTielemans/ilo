@@ -2481,8 +2481,8 @@ impl Shell {
             let shown = Cli::ALL.map(|cli| (cli, card_row(model, cli, pressed.contains(&cli))));
             let rows = shown.map(|(cli, shown)| {
                 let (agents, shell) = (agents.clone(), shell.clone());
-                // As Settings' rows do, but for its ⋯ menu, which is Settings' own, so it opens
-                // there.
+                // As Settings' rows do. The card draws neither the mark nor a ⋯ (#4448), so
+                // nothing here opens Settings.
                 let act = move |act: Act, _: &mut Window, cx: &mut gpui::App| match act {
                     Act::Get => {
                         let url = [cli.install_page().to_string()];
@@ -2497,14 +2497,7 @@ impl Shell {
                             .ok();
                     }
                     Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
-                    // The card draws no mark.
-                    Act::Mark => {}
-                    Act::Menu => {
-                        let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
-                            shell.browser.agents_settings(cx);
-                        };
-                        shell.update(cx, open).ok();
-                    }
+                    Act::Mark | Act::Menu => {}
                 };
                 first_run_row(
                     &look,
@@ -2680,7 +2673,7 @@ fn card_words(
         // The wait's own line, which Settings › Models says too (FR19), and an install's (AS2–AS4).
         Offer::Cancel | Offer::Install | Offer::TryInstall => shown.line,
         Offer::TryAgain => "Sign-in didn't finish.".into(),
-        _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
+        _ => format!("Your {} plan", cli.account_name()),
     };
     crate::agents::sign_in::Shown { line, offer }
 }
