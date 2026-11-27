@@ -51,7 +51,7 @@ fn waiting(wait: Wait, site: &str) -> SharedString {
         Wait::Refused(Why::Message, _) => "Paused before sending".into(),
         Wait::Refused(Why::Download, _) => "Paused before downloading".into(),
         Wait::Refused(Why::Discard, _) => "Paused before discarding text".into(),
-        Wait::Refused(Why::SignInBank, _) => at_site("Sensitive site", site),
+        Wait::Refused(Why::SignInSensitive, _) => at_site("Sensitive site", site),
         Wait::Refused(Why::Fenced | Why::Never, _) => at_site(NEEDS_YOU, site),
         Wait::Refused(_, Some(level)) => format!("Needs {}", level.label()).into(),
         Wait::Refused(_, None) => "Needs more access".into(),

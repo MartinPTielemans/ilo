@@ -8160,7 +8160,7 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Stopped at chase.com", Dot::Waiting)
         );
-        assert_eq!(card.wait, Wait::Refused(Why::Bank, Some(Tier::Full)));
+        assert_eq!(card.wait, Wait::Refused(Why::Sensitive, Some(Tier::Full)));
         assert!(card.question.is_none(), "a refusal asked");
         // One state, one word: the conversation's header follows the card.
         assert_eq!(
