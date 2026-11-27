@@ -252,6 +252,28 @@ fn task_tools() -> Vec<Value> {
             "annotations": own,
         }),
         json!({
+            "name": "put_in_folder",
+            "title": "Put in a folder",
+            "description": "Put tabs the user handed you for your task into a folder of their Today tabs, when sorting their tabs is what they asked. Each goes into the folder when it's back with them, at your task's end or when they take it back; until then it stays with you. A folder of that name they already have takes it, letter case aside; a new folder is made once two tabs are back for it. Name 8 folders at most for one task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tabs": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "description": "The tabs to put in the folder, from those the user handed you, by their ids from list_tabs.",
+                    },
+                    "folder": {
+                        "type": "string",
+                        "maxLength": crate::broom::LONGEST_NAME,
+                        "description": "The folder's name, in one to three words for what its tabs share, plain text of 24 characters at most.",
+                    },
+                },
+                "required": ["tabs", "folder"],
+            },
+            "annotations": own,
+        }),
+        json!({
             "name": "finish",
             "title": "Finish",
             "description": "End the task with its result, and its summary for the user's sidebar. Give tabs only when the user must act there themselves: pay, sign, submit, or take over a session, such as a checkout only they may finish. Otherwise give none.",
@@ -985,7 +1007,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         return stopped;
     }
     // A tab of the user's that went to a thread or came back: its one sentence too.
-    if let Some(handed) = super::task::handed::entry(&did.tool, &did.site) {
+    if let Some(handed) = super::task::handed::entry(&did.tool, &did.site, &did.target) {
         return handed;
     }
     let site = |none: &str| match did.site.is_empty() {
@@ -1372,6 +1394,8 @@ pub fn describe(action: &str) -> &'static str {
         "separate_tab" => "Separated a tab from its split view",
         "list_split" => "Looked over a split view",
         "sort_tabs_by_site" => "Sorted its tabs by site",
+        // A placeholder until the lead's row (#4278).
+        "put_in_folder" => "Put tabs in a folder",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

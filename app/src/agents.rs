@@ -316,6 +316,11 @@ pub trait Browser {
     /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
     /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
     fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
+    /// Puts `tab`, a Today tab of the user's in no folder, into the today's folder of its Space
+    /// named `name`, letter case aside, at its end; else makes a today's folder of that name of
+    /// those of `with` that are Today tabs of that Space in no folder, then `tab`
+    /// (bc_folder_create_today), which takes two. Whether it's in one now.
+    fn put_in_today_folder(&self, tab: u64, with: &[u64], name: &str, cx: &mut App) -> bool;
     /// Whether `tab`'s page is using the camera or the microphone, as the core last said of it
     /// (bc_tab_state). Asked of an agent's own page only, for what a task below Full access may
     /// do there (access.rs): no tool's answer and no log line has it.
@@ -2761,6 +2766,9 @@ impl Agents {
                 }
             }
             "title" => self.name_task(&agent, connection, id, &arguments, at, reply, cx),
+            "put_in_folder" if is_task(&agent) => {
+                self.put_in_folder((&agent, connection, id), &arguments, reply, cx);
+            }
             "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
             }
@@ -5801,7 +5809,7 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match (task::handed::entry(action, site), site.is_empty()) {
+            let doing = match (task::handed::entry(action, site, target), site.is_empty()) {
                 (Some(whole), _) => whole,
                 (None, true) => tools::describe(action).to_string(),
                 (None, false) => format!("{} · {site}", tools::describe(action)),

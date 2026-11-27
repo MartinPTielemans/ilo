@@ -340,6 +340,32 @@ impl Browser for Core {
         unsafe { bc::bc_tab_return_from_agent(tab) }
     }
 
+    fn put_in_today_folder(&self, tab: u64, with: &[u64], called: &str, cx: &mut App) -> bool {
+        let space = self.space_of(tab, cx);
+        let today = tabs(bc::bc_space_today, space);
+        let loose = |tab: &u64| today.contains(tab) && unsafe { bc::bc_folder_of(*tab) } == 0;
+        if space == 0 || !loose(&tab) {
+            return false;
+        }
+        let lower = called.to_lowercase();
+        let same = |folder: &u64| name(bc::bc_folder_name, *folder).to_lowercase() == lower;
+        let folders = today.iter().map(|&each| unsafe { bc::bc_folder_of(each) });
+        if let Some(folder) = folders.filter(|&folder| folder != 0).find(same) {
+            unsafe { bc::bc_tab_move(tab, false, folder, usize::MAX) };
+            return true;
+        }
+        let mut tabs: Vec<u64> = (with.iter().copied())
+            .filter(|each| *each != tab && loose(each))
+            .collect();
+        tabs.push(tab);
+        let Some(called) = CString::new(called).ok().filter(|_| tabs.len() >= 2) else {
+            return false;
+        };
+        unsafe {
+            bc::bc_folder_create_today(space, called.as_ptr(), tabs.as_ptr(), tabs.len()) != 0
+        }
+    }
+
     fn in_use(&self, tab: u64, cx: &App) -> bool {
         // Every window's shell has every Space's tabs, each with the state the core last gave.
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));

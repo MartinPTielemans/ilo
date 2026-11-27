@@ -91,6 +91,8 @@ struct Made {
     not_returned: RefCell<HashSet<u64>>,
     /// The tabs whose page is using the camera or the microphone.
     in_use: RefCell<HashSet<u64>>,
+    /// The today's folders of the user's Spaces: each one's Space, name and tabs, in order.
+    folders: RefCell<Vec<(u64, String, Vec<u64>)>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
 }
@@ -270,6 +272,46 @@ impl Browser for Made {
     // As the core does, without a dialog.
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+        for (_, _, tabs) in self.folders.borrow_mut().iter_mut() {
+            tabs.retain(|each| *each != tab);
+        }
+    }
+
+    /// As the core does, of a tab of a Space of the user's: into its folder of that name, letter
+    /// case aside, else into a new one with the loose tabs of `with` there, which takes two.
+    fn put_in_today_folder(&self, tab: u64, with: &[u64], name: &str, cx: &mut App) -> bool {
+        let space = self.space_of(tab, cx);
+        let foldered = |each: u64| {
+            let folders = self.folders.borrow();
+            folders.iter().any(|(_, _, tabs)| tabs.contains(&each))
+        };
+        let users = |each: u64| {
+            let space = self.space_of(each, cx);
+            space != 0 && !self.agent_spaces.borrow().values().any(|own| *own == space)
+        };
+        if !users(tab) || foldered(tab) {
+            return false;
+        }
+        let mut folders = self.folders.borrow_mut();
+        let same = |(at, called, _): &&mut (u64, String, Vec<u64>)| {
+            *at == space && called.to_lowercase() == name.to_lowercase()
+        };
+        if let Some((_, _, tabs)) = folders.iter_mut().find(same) {
+            tabs.push(tab);
+            return true;
+        }
+        drop(folders);
+        let mut tabs: Vec<u64> = (with.iter().copied())
+            .filter(|&each| each != tab && self.space_of(each, cx) == space && !foldered(each))
+            .collect();
+        tabs.push(tab);
+        if tabs.len() < 2 {
+            return false;
+        }
+        self.folders
+            .borrow_mut()
+            .push((space, name.to_string(), tabs));
+        true
     }
 
     fn file_field_drop(&self, field: u64) {
@@ -3824,7 +3866,9 @@ fn every_tool_and_step_is_in_one_class() {
         "run_steps",
     ];
     // Arranges the agent's own tabs. A close that would lose what a page holds is judged Discard.
-    const ARRANGES: [&str; 8] = [
+    // A handed tab's folder is judged by its own rule, from Work on pages up (task/handed.rs).
+    const ARRANGES: [&str; 9] = [
+        "put_in_folder",
         "close_tab",
         "split_tabs",
         "add_to_split",
