@@ -2604,6 +2604,7 @@ impl Shell {
                     })
                     .child(dashed_square(palette.glyph(CARD_SLOT_DASH)).size_full()),
             )
+            .child(self.said_place("slot", id))
             .child(icon);
         let name = match renaming {
             // A click in the field places the caret, and mustn't reach the card.
