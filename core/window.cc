@@ -2141,9 +2141,10 @@ content::WebContents* Window::OpenHeld(Space& space,
   MakeHeldBy(space, params);
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
-  // Where a window watches the strip, it starts the page as Navigate inserts the tab, and the
-  // start below finds it started: the load is read from whichever start made it, and from none
-  // before this open or after it.
+  // The start below makes the load, once the page has its size; where another window watches the
+  // strip, it may have started the page as Navigate inserted the tab, and the start below finds it
+  // started: the load is read from whichever start made it, and from none before this open or after
+  // it.
   secure_connections_rule::Ask(g_started);
   Navigate(&params);
   content::WebContents* made = params.navigated_or_inserted_contents;
@@ -3554,10 +3555,15 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     return;
   }
   // Each tab has Chrome's tab helpers now: a tab made before them observes theirs, and a tab
-  // MakeHeldBy made is its Space's and starts its page, one this window opens itself too.
+  // MakeHeldBy made is its Space's and starts its page. One this window opens itself starts once
+  // Navigate has returned and the page has its size (OpenHeld): the tab strip sizes a tab added
+  // behind only after telling its observers, and a page started here is made at the user's page's
+  // size and laid out again at the agent's (#4355).
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
     Tab::HelpersArrived(inserted.contents);
-    HeldLoad::Start(inserted.contents);
+    if (!opening_tab_) {
+      HeldLoad::Start(inserted.contents);
+    }
   }
   // Whichever tab comes next, so it never marks a later one.
   const bc_id agents_source = std::exchange(agents_source_, 0);
