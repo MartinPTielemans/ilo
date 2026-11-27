@@ -12,7 +12,8 @@ use serde_json::Value;
 use super::give::{self, Reach};
 use super::read::{self, Kind, Picture, TEXT_ROOM, Unread};
 pub use super::read::{
-    LINES, MOST_PAGES, MOST_PICTURES, PDF_BROKEN, PDF_LOCKED, PDF_READ, Pdf, PdfRead, pdf_answer,
+    LINES, MOST_PAGES, MOST_PICTURES, PDF_BROKEN, PDF_LOCKED, PDF_READ, PDF_TIMEOUT, Pdf, PdfRead,
+    pdf_answer,
 };
 use super::words::{self, Step, Unopened};
 use super::{Listed, Op, Refused, shown_name};
@@ -254,6 +255,7 @@ fn unopened(why: Unread) -> Option<Unopened> {
     Some(match why {
         Unread::Locked => Unopened::Locked,
         Unread::Damaged => Unopened::Damaged,
+        Unread::TimedOut => Unopened::TimedOut,
         Unread::Bytes => Unopened::PdfOver,
         Unread::Pixels => Unopened::PixelsOver,
         Unread::Broken => Unopened::NotPicture,

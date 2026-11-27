@@ -76,9 +76,10 @@ pub enum Unread {
     Broken,
     /// A PDF with a password (BC_PDF_LOCKED).
     Locked,
-    /// A PDF the engine couldn't open, or didn't within its time, which it doesn't tell apart
-    /// (BC_PDF_BROKEN).
+    /// A PDF the engine couldn't open (BC_PDF_BROKEN).
     Damaged,
+    /// A PDF the engine didn't read within its time (BC_PDF_TIMEOUT).
+    TimedOut,
     /// The read was dropped before its answer (BC_PDF_CLOSED).
     Stopped,
     /// Pages asked from `from` (from 1) of a PDF of `pages`.
@@ -169,6 +170,7 @@ pub struct Pdf {
 pub const PDF_READ: i32 = 0;
 pub const PDF_LOCKED: i32 = 1;
 pub const PDF_BROKEN: i32 = 2;
+pub const PDF_TIMEOUT: i32 = 4;
 
 /// A PDF's pages as the assistant gets them: their text, the pictures for the model alone, and
 /// which pages they are, `(a, b, n)` from 1, where they aren't the whole of it.
@@ -188,6 +190,7 @@ pub fn pdf_answer(pdf: &Pdf, first: usize) -> Result<PdfRead, Unread> {
         PDF_READ => {}
         PDF_LOCKED => return Err(Unread::Locked),
         PDF_BROKEN => return Err(Unread::Damaged),
+        PDF_TIMEOUT => return Err(Unread::TimedOut),
         _ => return Err(Unread::Stopped),
     }
     let total = pdf.page_count;

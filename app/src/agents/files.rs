@@ -887,12 +887,12 @@ pub mod words {
         format!("Only pages {a}\u{2013}{b} of {n} are included. Read more with pages.")
     }
 
-    /// Why a PDF or a picture wasn't read (PD2, PD3, PD5–PD7). PD4's, a PDF that took too long,
-    /// waits on the core telling it apart from one that won't open (BC_PDF_BROKEN is both).
+    /// Why a PDF or a picture wasn't read (PD2–PD7).
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Unopened {
         Locked,
         Damaged,
+        TimedOut,
         PdfOver,
         PixelsOver,
         NotPicture,
@@ -903,6 +903,7 @@ pub mod words {
         let reason = match why {
             Unopened::Locked => "it's locked with a password".into(),
             Unopened::Damaged => "it couldn't be opened".into(),
+            Unopened::TimedOut => "it took too long to open".into(),
             Unopened::PdfOver => "it's over 200 MB".into(),
             Unopened::PixelsOver => "it's over 64 megapixels".into(),
             Unopened::NotPicture => format!("it isn't a picture {PRODUCT} can open"),
@@ -918,6 +919,7 @@ pub mod words {
                 "Not done: this PDF is locked with a password, and {PRODUCT} doesn't unlock it. Ask the user for a copy without one, or go on without it."
             ),
             Unopened::Damaged => "Not done: this PDF couldn't be opened. Go on without it.".into(),
+            Unopened::TimedOut => "Not done: this PDF took too long to open. Ask for fewer pages with pages, or go on without it.".into(),
             Unopened::PdfOver => format!("Not done: {PRODUCT} reads PDFs up to 200 MB."),
             Unopened::PixelsOver => {
                 format!("Not done: {PRODUCT} reads pictures up to 64 megapixels.")

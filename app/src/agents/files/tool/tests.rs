@@ -303,12 +303,18 @@ fn a_page_that_doesnt_fit_is_the_next_reads() {
 fn a_pdf_or_picture_not_read_says_why() {
     let not = |result| pdf_answer(&pdf(result, 0, &[]), 0).unwrap_err();
     assert_eq!(
-        (not(PDF_LOCKED), not(PDF_BROKEN), not(3)),
-        (Unread::Locked, Unread::Damaged, Unread::Stopped)
+        (not(PDF_LOCKED), not(PDF_BROKEN), not(PDF_TIMEOUT), not(3)),
+        (
+            Unread::Locked,
+            Unread::Damaged,
+            Unread::TimedOut,
+            Unread::Stopped
+        )
     );
     let lines = [
         (Unread::Locked, "it's locked with a password".to_string()),
         (Unread::Damaged, "it couldn't be opened".to_string()),
+        (Unread::TimedOut, "it took too long to open".to_string()),
         (Unread::Bytes, "it's over 200 MB".to_string()),
         (Unread::Pixels, "it's over 64 megapixels".to_string()),
         (
@@ -331,6 +337,11 @@ fn a_pdf_or_picture_not_read_says_why() {
     assert_eq!(
         told(NotRead::Unread(Unread::Bytes)),
         format!("Not done: {PRODUCT} reads PDFs up to 200 MB.")
+    );
+    // One that took too long is told so, and how to ask for less, not that it won't open.
+    assert_eq!(
+        told(NotRead::Unread(Unread::TimedOut)),
+        "Not done: this PDF took too long to open. Ask for fewer pages with pages, or go on without it."
     );
     assert_eq!(
         line("scan.pdf", Err(NotRead::Unread(Unread::Stopped))),
@@ -357,6 +368,7 @@ fn what_the_assistant_is_told_names_no_level() {
         NotRead::Unread(Unread::Broken),
         NotRead::Unread(Unread::Locked),
         NotRead::Unread(Unread::Damaged),
+        NotRead::Unread(Unread::TimedOut),
         NotRead::Unread(Unread::Stopped),
         NotRead::Unread(Unread::Past { pages: 4, from: 9 }),
         NotRead::Failed,
