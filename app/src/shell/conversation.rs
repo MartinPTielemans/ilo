@@ -105,8 +105,10 @@ fn said_ink(palette: &super::Palette) -> Hsla {
     palette.text(TITLE)
 }
 
-/// The stage's fill, the conversation's ground in the page area: also the fill of the shown
-/// thread's card, a shape of its own beside it (task_cards.rs).
+/// The page's plate, which the shown thread's card in the sidebar takes, a shape of its own
+/// (task_cards.rs), until the lifted pane takes its place (#4398). The conversation itself draws
+/// no plate: its column is the chrome the user steers from, on the window's glass as the sidebar
+/// is, and the page is the one card (the owner, 27 Nov, #4396).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }
@@ -4900,7 +4902,6 @@ impl Render for TalkView {
             .on_action(cx.listener(Self::ilo_back))
             .on_action(cx.listener(Self::ilo_leave))
             .size_full()
-            .bg(stage_fill(&palette))
             .flex()
             .justify_center()
             // A press here is the conversation's, not the window background's, which moves the

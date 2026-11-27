@@ -5191,11 +5191,7 @@ impl Shell {
                 scaled(bounds),
                 radius,
                 meets_sidebar.then_some(self.right),
-                rgba(match self.palette.tone {
-                    Tone::Dark => PAGE_OUTLINE,
-                    Tone::Light => PAGE_OUTLINE_LIGHT,
-                })
-                .into(),
+                self.page_outline_ink(),
             ),
         };
         let panes = self.panes(self.selected);
@@ -5229,6 +5225,15 @@ impl Shell {
             })
         });
         outlines.chain(cards).collect()
+    }
+
+    /// The line round a page's card where it faces the window, in either look.
+    pub(super) fn page_outline_ink(&self) -> Hsla {
+        rgba(match self.palette.tone {
+            Tone::Dark => PAGE_OUTLINE,
+            Tone::Light => PAGE_OUTLINE_LIGHT,
+        })
+        .into()
     }
 
     /// The sidebar: the header's buttons, the URL field and the Space's tabs, or the Create a
