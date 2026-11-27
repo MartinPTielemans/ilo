@@ -52,10 +52,10 @@ constexpr net::NetworkTrafficAnnotationTag kDailyCount =
           "has changed, at most once per UTC day, while Settings › Privacy › Send a Daily Usage "
           "Count is on. One that fails waits for the next launch that day; a missed day is lost."
         data:
-          "The browser's version and channel (release or nightly), the OS, its major version, the "
-          "chip (arm64 or x64), and whether this is the copy's first run, its first count today "
-          "(always), this ISO week and this month. No ID, no cookie, nothing about pages, tabs, "
-          "Spaces, agents, accounts or settings."
+          "The browser's version and channel (release, nightly or rework), the OS, its major "
+          "version, the chip (arm64 or x64), and whether this is the copy's first run, its first "
+          "count today (always), this ISO week and this month. No ID, no cookie, nothing about "
+          "pages, tabs, Spaces, agents, accounts or settings."
         destination: OTHER
         destination_other: "The server the build names, ilo's own in official builds, which "
           "anyone can host."
@@ -151,7 +151,7 @@ void Send(std::string_view version,
           bool monthly,
           base::OnceCallback<void(bool)> sent) {
   if (!Endpoint().is_valid() || Loader() || !g_browser_process || !IsVersion(version) ||
-      (channel != "release" && channel != "nightly")) {
+      (channel != "release" && channel != "nightly" && channel != "rework")) {
     Answer(std::move(sent), false);
     return;
   }

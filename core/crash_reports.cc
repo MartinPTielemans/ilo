@@ -27,6 +27,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "browser_core/crash_report_fields.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 #include "build/build_config.h"
@@ -67,6 +68,10 @@ using crashpad::CrashReportDatabase;
 // Not Chrome's --crash-test, which crashes the browser before its first window.
 constexpr char kCrashTest[] = "crash-after-start";
 constexpr char kCollector[] = "crash-upload-url";
+// The build's version and channel (release, nightly or rework), which the app passes with the
+// collector.
+constexpr char kRelease[] = "crash-release";
+constexpr char kChannel[] = "crash-channel";
 
 constexpr net::NetworkTrafficAnnotationTag kCrashReport =
     net::DefineNetworkTrafficAnnotation("browser_core_crash_report", R"(
@@ -85,7 +90,8 @@ constexpr net::NetworkTrafficAnnotationTag kCrashReport =
           "modules and Crashpad's annotations: the browser's version, its switches but those "
           "naming the user's folders, its features and field trials, the GPU, the extensions' "
           "IDs and the event it was handling. For a Sentry collector, a field saying to keep no "
-          "IP address with the report."
+          "IP address with the report, and the browser's version and channel (release, nightly "
+          "or rework)."
         destination: OTHER
         destination_other: "The collector the build names, which anyone can host."
       }
@@ -161,10 +167,17 @@ bool LeftOutSwitch(const std::string& flag) {
          std::ranges::contains(kLeftOut, std::string_view(flag).substr(2, flag.find('=') - 2));
 }
 
-// For a Sentry collector, which takes the report's IP address from its connection and keeps it
-// with the report, with the place it gives: to take none. Other collectors leave the field.
-constexpr char kSentryFields[] =
-    R"({"sdk":{"name":"browser_core","version":"1","settings":{"infer_ip":"never"}}})";
+// Sentry's fields: for a Sentry collector, which takes the report's IP address from its connection
+// and keeps it with the report, with the place it gives, to take none; and the build's version and
+// channel the app names, so the rework's copy's crashes and a nightly's stay apart from a
+// release's. Other collectors leave the field.
+const std::string& Fields() {
+  static const base::NoDestructor<std::string> fields([] {
+    const base::CommandLine* line = base::CommandLine::ForCurrentProcess();
+    return SentryFields(line->GetSwitchValueASCII(kRelease), line->GetSwitchValueASCII(kChannel));
+  }());
+  return *fields;
+}
 
 struct Unsent {
   crashpad::UUID uuid;
@@ -299,7 +312,7 @@ void Send(int round, bool asked, std::optional<Unsent> report) {
   net::AddMultipartValueForUploadWithFileName("upload_file_minidump",
                                               report->uuid.ToString() + ".dmp", report->minidump,
                                               boundary, "application/octet-stream", &body);
-  net::AddMultipartValueForUpload("sentry", kSentryFields, boundary, "", &body);
+  net::AddMultipartValueForUpload("sentry", Fields(), boundary, "", &body);
   net::AddMultipartFinalDelimiterForUpload(boundary, &body);
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = Collector();
