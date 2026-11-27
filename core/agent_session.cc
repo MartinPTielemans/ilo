@@ -14,6 +14,7 @@
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_permissions.h"
 #include "browser_core/handed.h"
+#include "browser_core/held_page.h"
 #include "browser_core/host.h"
 #include "browser_core/secure_connections.h"
 #include "browser_core/space.h"
@@ -132,6 +133,8 @@ std::string RefusedAction(std::string_view action) {
 
 void Hold(bc_id tab) {
   Held().insert(tab);
+  // The pages it moves to are read for the app, which ends a hand-off once one is past the step.
+  held_page::Watch(tab);
   // Chrome kept its saved logins from the agent's page, which is the user's now.
   FillForUser(tab);
 }
@@ -140,6 +143,7 @@ bool HandBack(bc_id tab) {
   if (!Held().erase(tab)) {
     return false;
   }
+  held_page::Unwatch(tab);
   // Where the user left a tab they handed the agent is where its history is theirs up to.
   handed::BoundHistory(tab);
   handed::PassedOn(tab);

@@ -1035,6 +1035,28 @@ typedef struct bc_arrange_state bc_arrange_state;
 typedef struct bc_arrange_element bc_arrange_element;
 typedef struct bc_point_element bc_point_element;
 
+// The words that say a page asks the user to prove they're human, lowercase, each ending in a
+// newline. An element's own name holding one, in any case, such as a frame's title, is a
+// CAPTCHA's: the agent's outline and bc_held_page's captcha read this list alone.
+#define BC_CAPTCHA_WORDS "captcha\nnot a robot\nverify you are human\nsecurity challenge\n"
+
+// What a held tab's page has that's the user's to do, for the app to end a hand-off once the page
+// has moved past the sign-in (held_page). No text, value or address of the page's, and never an
+// agent's to see.
+typedef struct bc_held_page {
+  // The page, one more for each page the tab commits after the hold began, from 1, so the app can
+  // tell a new page from one it was told of.
+  uint64_t document;
+  // A password field the user can reach, in the forms the password manager saw rendered or
+  // autofill parsed.
+  bool password;
+  // A field autofill parsed as autocomplete="one-time-code".
+  bool one_time_code;
+  // An element whose own name, not its text, holds one of BC_CAPTCHA_WORDS, such as a frame titled
+  // "reCAPTCHA".
+  bool captcha;
+} bc_held_page;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -1743,9 +1765,15 @@ typedef struct bc_host {
   void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
   // bc_profile_pick_for_site's answer for |request|, once a call: |profile| and BC_PICK_HISTORY,
   // or 0 and 0 when none of the profiles had visited the site or a profile's history ended before
-  // it answered. Last, so the slots before it keep their places. The user's alone: an agent's
-  // answer names the profile it opened in and never why.
+  // it answered. The user's alone: an agent's answer names the profile it opened in and never why.
   void (*profile_picked)(void* context, uint64_t request, bc_id profile, int why);
+  // What a held tab's page has now (bc_held_page), from a task of its own: once each page the tab
+  // commits after the hold began has loaded and the password manager saw its forms rendered, then
+  // once more each time a later form or frame of that page turns one of its facts true. Held
+  // tabs only, never the page the hold began on, and nothing while the tab isn't held. A page the
+  // password manager sees nothing of, one not over http or https or an empty one, isn't reported.
+  // Last, so the slots before it keep their places.
+  void (*held_page)(void* context, bc_id tab, const bc_held_page* page);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
