@@ -10,7 +10,7 @@ use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip};
 use crate::agents::Step;
 use crate::agents::task::Wait;
-use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
+use crate::agents::task::Word;
 use crate::agents::tier::{Tier, Why};
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
@@ -40,12 +40,6 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
-        visited: Vec::new(),
-        ended_time: Default::default(),
-        fuller: false,
-        lead: 0,
-        finding: Default::default(),
-        told: Default::default(),
     }
 }
 
@@ -267,7 +261,6 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     assert_eq!(second_line(&waits, Form::Waits, "").as_ref(), "Needs you");
     let mut ended = card(4, Dot::Ended);
     ended.status = "Stopped after 6 steps".into();
-    ended.fuller = true;
     for card in [&done, &asks, &ended] {
         for form in [Form::Working, Form::Waits, Form::Unseen, Form::Rest] {
             let (line, told) = (second_line(card, form, ""), spoken(card, form, ""));
@@ -424,7 +417,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
         let with = |dot: Dot, pages: &[u64]| Card {
             status: status.into(),
             title: status.into(),
-            finding: status.into(),
+            line: Some(status.into()),
             ..paged(1, dot, pages)
         };
         assert_eq!(
@@ -483,53 +476,6 @@ fn a_cards_look_is_its_tasks_state_alone() {
     assert_eq!(Form::of(&retry, false), Form::Rest);
 }
 
-/// A done task's finding is the first paragraph of its last answer as plain text: a link is its
-/// words, formatting and line breaks go, a right-to-left override is written out as the title's
-/// is (#3690), and it's kept to FINDING_KEPT characters.
-#[test]
-fn the_finding_is_plain_and_capped() {
-    let said = |who: Who, text: &str| Message {
-        who,
-        text: text.to_string().into(),
-        at: Instant::now(),
-    };
-    let answer = "## Booked\n\n**Taberna** for [two at 20:00](https://taberna.example/booking), \
-                  by the `window`.\nSee <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
-                  The second paragraph isn't shown.";
-    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
-    assert_eq!(found.as_ref(), "Booked");
-    let answer = "**Taberna** for [two at 20:00](https://taberna.example/booking), by the \
-                  `window`.\n- See <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
-                  The second paragraph isn't shown.";
-    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
-    assert_eq!(
-        found.as_ref(),
-        "Taberna for two at 20:00, by the window. See https://taberna.example/menu.\\u{202E}fdp.exe"
-    );
-    assert!(!found.contains('\u{202E}') && !found.contains('\n'));
-    // The last answer, not a question or the user's reply after it.
-    let messages = [
-        said(Who::Result, "The first."),
-        said(Who::User, "And the second?"),
-        said(Who::Agent, "The second."),
-        said(Who::Asked, "Which one?"),
-    ];
-    assert_eq!(finding(&messages).as_ref(), "The second.");
-    // None, with no answer.
-    assert!(finding(&[said(Who::User, "Book it")]).is_empty());
-    let long = "word ".repeat(100);
-    let found = finding(&[said(Who::Result, &long)]);
-    assert_eq!(found.chars().count(), FINDING_KEPT + 1);
-    assert!(found.ends_with('…'));
-    // Told, it's the same answer's first line as the conversation tells it: whole words up to
-    // TOLD_KEPT, with no mark of the cut.
-    let answer = [said(Who::Result, &long)];
-    assert_eq!(told(&answer), told_line(&long).unwrap());
-    assert!(told(&answer).chars().count() <= TOLD_KEPT && !told(&answer).ends_with('…'));
-    assert!(long.starts_with(told(&answer).as_ref()));
-    assert!(told(&[said(Who::User, "Book it")]).is_empty());
-}
-
 /// A thread that finished out of sight is one line with the dot, as one at work is, and a screen
 /// reader hears its title and the dot's word, a thread's row, never its answer or when it ended,
 /// which the line doesn't draw. Shown, it rests, and says its title alone. An ended one with its
@@ -539,15 +485,15 @@ fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) 
     use crate::tokens::shell::task_card::LINE;
     let answer = "Payment confirmed by the browser. Nothing else is needed.";
     let done = Card {
-        finding: answer.into(),
-        told: answer.into(),
-        ended_time: "10:42".into(),
+        status: answer.into(),
+        line: Some(answer.into()),
+        ended_at: Some("10:42".into()),
         ..paged(1, Dot::Done, &[1010])
     };
     let stopped = Card {
         title: "Book a table".into(),
         word: Word::Stopped,
-        ended_time: "10:43".into(),
+        ended_at: Some("10:43".into()),
         ..paged(2, Dot::Ended, &[1011])
     };
     let working = |card: &Card| Card {

@@ -60,9 +60,6 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
-/// How much of a done task's last answer its card keeps, before the card's three lines cut it
-/// (spec-thread-card).
-pub const FINDING_KEPT: usize = 160;
 /// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
@@ -649,14 +646,6 @@ pub struct Card {
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
-    /// Whether `status` is `word` in the fuller form ilo has for it, which its card's line says in
-    /// the word's place: how far a stopped task got, a session's receipt, the helpers at work.
-    /// Set where the status is made, so no place reads it off the words.
-    pub fuller: bool,
-    /// How much of `status` leads it: the step count while it works ("Step 5") and "Needs you"
-    /// while a step waits on the user, the one state that asks for them; zero for the rest. Set
-    /// where the status is made, as `fuller` is.
-    pub lead: usize,
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
@@ -679,17 +668,6 @@ pub struct Card {
     pub word: Word,
     /// Its pages now, in its Space's order: the icons on its card in the sidebar.
     pub pages: Vec<u64>,
-    /// Those of `pages` a step of its has been on, which its card shows at full strength.
-    pub visited: Vec<u64>,
-    /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
-    /// card's `Done · {time}`.
-    pub ended_time: SharedString,
-    /// Done, the first paragraph of its last answer as plain text (`finding`): from this run's
-    /// conversation, or after a quit the line its kept card read back. Empty when it isn't done,
-    /// ended with no answer, or came back with no line.
-    pub finding: SharedString,
-    /// Done, what a screen reader is told of its finding (`told`): empty with none.
-    pub told: SharedString,
     /// After a quit, the picture its kept card read back of its last page, which Latest tasks'
     /// plate shows: None for a task of this run, whose plate is its conversation's.
     pub kept_picture: Option<super::kept::cards::Plate>,
@@ -1570,29 +1548,17 @@ impl Agents {
             (State::Asking { .. }, None, _) => Wait::Asked,
             _ => Wait::Other,
         };
-        // With each status, whether it's its state's word in the fuller form (`Card::fuller`) and
-        // how much of it leads it (`Card::lead`).
-        let (status, dot, fuller, lead) = match (&task.state, &question) {
+        let (status, dot) = match (&task.state, &question) {
             (State::Working | State::Asking { .. }, Some(question)) => {
-                (needs_you(question), Dot::Waiting, false, NEEDS_YOU.len())
+                (needs_you(question), Dot::Waiting)
             }
             // A refusal the user hasn't settled says where it stopped, as its line says why.
-            (State::Working, None) if let Some(stop) = refused => (
-                format!("{STOPPED_AT} {}", stop.at).into(),
-                Dot::Waiting,
-                false,
-                0,
-            ),
-            (State::Working, None) => {
-                let (status, helpers, lead) = working(task);
-                (status, Dot::Working, helpers, lead)
+            (State::Working, None) if let Some(stop) = refused => {
+                (format!("{STOPPED_AT} {}", stop.at).into(), Dot::Waiting)
             }
-            (State::Asking { question, .. }, None) if asks => {
-                (question.clone(), Dot::Waiting, false, 0)
-            }
-            (State::Asking { .. }, None) => {
-                (NEEDS_YOU.into(), Dot::Waiting, false, NEEDS_YOU.len())
-            }
+            (State::Working, None) => (working(task), Dot::Working),
+            (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
+            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -1600,7 +1566,7 @@ impl Agents {
                     .ended
                     .map(|at| super::local_time(seconds(at)))
                     .unwrap_or_default();
-                (receipt(session, &at).into(), Dot::Done, true, 0)
+                (receipt(session, &at).into(), Dot::Done)
             }
             // The tick says it's done, so a finish with no line says the result's first words.
             (
@@ -1611,14 +1577,10 @@ impl Agents {
             ) => (
                 summary.clone().unwrap_or_else(|| first_words(result)),
                 Dot::Done,
-                false,
-                0,
             ),
-            (State::Limit { resets }, _) => {
-                (limit_words(&task.name, resets).into(), Dot::Ended, false, 0)
-            }
-            (State::Stopped, _) => (stopped(task), Dot::Ended, true, 0),
-            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended, false, 0),
+            (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
+            (State::Stopped, _) => (stopped(task), Dot::Ended),
+            (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
@@ -1647,8 +1609,6 @@ impl Agents {
             replies: task.session.is_none(),
             title: task.title.clone(),
             status,
-            fuller,
-            lead,
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
@@ -1661,21 +1621,6 @@ impl Agents {
             dot,
             wait,
             word: Word::of(&task.state, dot == Dot::Waiting),
-            visited: visited(task, &pages),
-            ended_time: (task.ended)
-                .map(|at| super::local_time(seconds(at)).into())
-                .unwrap_or_default(),
-            finding: match task.state {
-                State::Done { .. } => {
-                    (back_line.clone()).unwrap_or_else(|| finding(&task.messages))
-                }
-                _ => SharedString::default(),
-            },
-            told: match (&task.state, &back_line) {
-                (State::Done { .. }, Some(line)) => told_line(line).unwrap_or_default(),
-                (State::Done { .. }, None) => told(&task.messages),
-                _ => SharedString::default(),
-            },
             kept_picture: back.and_then(|back| back.plate.clone()),
             pages,
             tier: task.tier,
@@ -4475,99 +4420,6 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
-/// A done task's finding: the first paragraph of the agent's last answer, as plain text on one
-/// line, with no link, formatting or line break, kept to FINDING_KEPT characters and written out as
-/// its title is (#3690), so nothing in it can pose as ilo's words or turn the text around. It is
-/// the agent's words: shown on its card only, never logged.
-pub fn finding(messages: &[Message]) -> SharedString {
-    let Some(answer) = last_answer(messages) else {
-        return SharedString::default();
-    };
-    let paragraph: Vec<&str> = (answer.lines())
-        .map(str::trim)
-        .skip_while(|line| line.is_empty())
-        .take_while(|line| !line.is_empty())
-        .filter(|line| !line.starts_with("```"))
-        .map(|line| {
-            let line = line.trim_start_matches(['#', '>']).trim_start();
-            let unlisted = (line.split_once(". "))
-                .filter(|(number, _)| {
-                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
-                })
-                .map(|(_, rest)| rest);
-            match unlisted {
-                Some(rest) => rest,
-                None => (["- ", "* ", "+ "].iter())
-                    .find_map(|mark| line.strip_prefix(mark))
-                    .unwrap_or(line),
-            }
-        })
-        .collect();
-    let plain = plain_text(&paragraph.join(" "));
-    let kept = page::clip(&plain, FINDING_KEPT);
-    super::request::escaped(&kept, false).0.into()
-}
-
-/// What a screen reader is told of a done task's finding: its last answer's first line as the
-/// conversation tells it (`told_line`), up to TOLD_KEPT characters ending at a whole word, as
-/// nothing marks a cut in speech. Empty with no answer.
-pub fn told(messages: &[Message]) -> SharedString {
-    last_answer(messages)
-        .and_then(told_line)
-        .unwrap_or_default()
-}
-
-/// The agent's last answer, trimmed, if it gave one.
-fn last_answer(messages: &[Message]) -> Option<&str> {
-    (messages.iter().rev())
-        .filter(|message| matches!(message.who, Who::Agent | Who::Result))
-        .map(|message| message.text.trim())
-        .find(|text| !text.is_empty())
-}
-
-/// Markdown's inline marks taken out of `text`: a link or an image is its words, a bare link in
-/// angle brackets its address, and emphasis, code and strikethrough marks go. Runs of white space
-/// are one space.
-fn plain_text(text: &str) -> String {
-    let mut plain = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(c) = rest.chars().next() {
-        let opens = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
-        let link = opens.and_then(|inside| {
-            let (words, after) = inside.split_once("](")?;
-            let (_, after) = after.split_once(')')?;
-            (!words.contains(']')).then_some((words, after))
-        });
-        if let Some((words, after)) = link {
-            plain.push_str(words);
-            rest = after;
-            continue;
-        }
-        let autolink = (rest.strip_prefix('<'))
-            .and_then(|inside| inside.split_once('>'))
-            .filter(|(address, _)| {
-                address.contains("://") && !address.contains(char::is_whitespace)
-            });
-        if let Some((address, after)) = autolink {
-            plain.push_str(address);
-            rest = after;
-            continue;
-        }
-        if let Some(after) = ["**", "__", "~~"]
-            .iter()
-            .find_map(|mark| rest.strip_prefix(mark))
-        {
-            rest = after;
-            continue;
-        }
-        if !matches!(c, '*' | '`') {
-            plain.push(c);
-        }
-        rest = &rest[c.len_utf8()..];
-    }
-    plain.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// A result's first words for its card's line: its first line of text, or its state's word alone
 /// with none, which no card draws a second time.
 fn first_words(result: &str) -> SharedString {
@@ -4732,8 +4584,7 @@ fn last_finished(task: &Task) -> Option<SharedString> {
         .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
 }
 
-/// What a card's status leads with when a confirmation or a handoff waits on the user, the one
-/// status the card sets heavier (`Card::lead`).
+/// What a card's status leads with when a confirmation or a handoff waits on the user.
 pub const NEEDS_YOU: &str = "Needs you";
 /// A page the user took over, on the bar over it and its row at the sidebar's foot, and one whose
 /// task waits at a refused step, broke off, or went on without it.
@@ -4754,13 +4605,6 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
     steps
 }
 
-/// Those of `pages` a step of `task`'s has been on.
-fn visited(task: &Task, pages: &[u64]) -> Vec<u64> {
-    (pages.iter().copied())
-        .filter(|&tab| task.trace.iter().any(|step| step.did.tab == Some(tab)))
-        .collect()
-}
-
 /// Of a task's `pages` now, the last its steps acted on, else its last.
 fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
     (task.trace.iter().rev())
@@ -4772,29 +4616,24 @@ fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
 /// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
-/// step comes, never on a clock. With it, whether it's the helpers' line, the word Working in its
-/// fuller form (`Card::fuller`), and how much of it is the count that leads it (`Card::lead`).
-fn working(task: &Task) -> (SharedString, bool, usize) {
+/// step comes, never on a clock.
+fn working(task: &Task) -> SharedString {
     // With helpers at work, the conversation's live line, in its own words: their steps come in
     // turn, and a card that said each would flicker between them.
     let helpers = helpers_under_way(task);
     if helpers > 0 {
         let (title, counted) = summary(None, (helpers, Counted::Helpers));
-        return (format!("{title} · {counted}").into(), true, 0);
+        return format!("{title} · {counted}").into();
     }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
     // name, then what it's doing, whose room the step count would take (#3690).
     let step = |step: &Traced| tools::step_title(&step.did, tense(step));
     match (taken.first(), &task.session) {
-        (Some(first), Some(_)) => (format!("{} · {}", task.name, step(first)).into(), false, 0),
-        (Some(first), None) => {
-            let count = format!("Step {}", taken.len());
-            let lead = count.len();
-            (format!("{count} · {}", step(first)).into(), false, lead)
-        }
-        (None, Some(_)) => (format!("{} · no steps yet", task.name).into(), false, 0),
-        (None, None) => ("Thinking · no steps yet".into(), false, 0),
+        (Some(first), Some(_)) => format!("{} · {}", task.name, step(first)).into(),
+        (Some(first), None) => format!("Step {} · {}", taken.len(), step(first)).into(),
+        (None, Some(_)) => format!("{} · no steps yet", task.name).into(),
+        (None, None) => "Thinking · no steps yet".into(),
     }
 }
 

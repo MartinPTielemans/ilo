@@ -60,12 +60,6 @@ pub(super) fn card() -> Card {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
-        visited: Vec::new(),
-        ended_time: Default::default(),
-        fuller: false,
-        lead: 0,
-        finding: Default::default(),
-        told: Default::default(),
     }
 }
 

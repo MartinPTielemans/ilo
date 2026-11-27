@@ -1247,12 +1247,6 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
-        visited: Vec::new(),
-        ended_time: Default::default(),
-        fuller: false,
-        lead: 0,
-        finding: Default::default(),
-        told: Default::default(),
     };
     let hold = |why: &str, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| {
@@ -1854,12 +1848,6 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
-        visited: Vec::new(),
-        ended_time: Default::default(),
-        fuller: false,
-        lead: 0,
-        finding: Default::default(),
-        told: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card], cx);

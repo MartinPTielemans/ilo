@@ -436,10 +436,10 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     pictured(&run, &agent, tab, Some(picture()), cx);
     name_it(&run, &agent, "Lisbon seats", cx);
     run.finish(&agent, cx);
-    let finding = (run.agents).read_with(cx, |agents, cx| {
-        agents.card(agents.task(&agent).unwrap(), cx).finding
+    let line = (run.agents).read_with(cx, |agents, cx| {
+        agents.card(agents.task(&agent).unwrap(), cx).line
     });
-    assert_eq!(finding, "Two seats at 9:05, car 4.");
+    assert_eq!(line.as_deref(), Some("Two seats at 9:05, car 4."));
 
     quit(&run, cx);
     cx.run_until_parked();
@@ -455,15 +455,13 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     let first = kept(&next, cx);
     assert_eq!(first.title, "Lisbon seats");
     assert!(
-        first.finding.is_empty() && first.kept_picture.is_none(),
+        first.line.is_none() && first.kept_picture.is_none(),
         "{first:?}"
     );
 
     cx.run_until_parked();
     let card = kept(&next, cx);
-    assert_eq!(card.finding, "Two seats at 9:05, car 4.");
     assert_eq!(card.line.as_deref(), Some("Two seats at 9:05, car 4."));
-    assert!(!card.told.is_empty());
     assert_eq!(
         card.kept_picture.as_ref().map(|plate| plate.size),
         Some((2, 2))
@@ -471,7 +469,7 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     let back = (next.agents).read_with(cx, |agents, cx| {
         agents.card(agents.task(&past).unwrap(), cx)
     });
-    assert_eq!(back.finding, card.finding);
+    assert_eq!(back.line, card.line);
     for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
         assert!(
             !title.contains("car 4") && !about.contains("car 4"),
@@ -487,7 +485,7 @@ fn a_kept_cards_line_and_picture_come_back_after_a_quit(cx: &mut TestAppContext)
     let replied = (next.agents).read_with(cx, |agents, cx| {
         agents.card(agents.task(&past).unwrap(), cx)
     });
-    assert!(replied.finding.is_empty(), "{:?}", replied.finding);
+    assert!(replied.line.is_none(), "{:?}", replied.line);
     assert!(replied.kept_picture.is_none());
 }
 
@@ -557,7 +555,12 @@ fn removing_a_kept_task_takes_its_cards_line_and_picture(cx: &mut TestAppContext
     let findings = |next: &Run, cx: &mut TestAppContext| {
         (next.agents).read_with(cx, |agents, cx| {
             (agents.kept_cards(cx).into_iter())
-                .map(|card| (card.agent.to_string(), card.finding.to_string()))
+                .map(|card| {
+                    (
+                        card.agent.to_string(),
+                        card.line.unwrap_or_default().to_string(),
+                    )
+                })
                 .collect::<Vec<_>>()
         })
     };
@@ -572,9 +575,9 @@ fn removing_a_kept_task_takes_its_cards_line_and_picture(cx: &mut TestAppContext
     (next.agents).update(cx, |agents, cx| agents.remove_kept_task(&first, cx));
     cx.run_until_parked();
     let after = (next.agents).read_with(cx, |agents, cx| {
-        agents.card(agents.task(&first).unwrap(), cx).finding
+        agents.card(agents.task(&first).unwrap(), cx).line
     });
-    assert!(after.is_empty(), "{after:?}");
+    assert!(after.is_none(), "{after:?}");
     let other = findings(&next, cx);
     assert!(
         other
@@ -586,7 +589,7 @@ fn removing_a_kept_task_takes_its_cards_line_and_picture(cx: &mut TestAppContext
     cx.run_until_parked();
     let all = (next.agents).read_with(cx, |agents, cx| {
         (agents.tasks.tasks.iter())
-            .map(|task| agents.card(task, cx).finding.to_string())
+            .map(|task| agents.card(task, cx).line.unwrap_or_default().to_string())
             .collect::<Vec<_>>()
     });
     assert!(all.iter().all(String::is_empty), "{all:?}");

@@ -247,17 +247,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
-        visited: Vec::new(),
-        ended_time: Default::default(),
-        // Its ended task is the stopped one, whose status is how far it got.
-        fuller: dot == Dot::Ended,
-        // Its working task's status leads with its step's count.
-        lead: match dot {
-            Dot::Working => status.find(" · ").unwrap_or(0),
-            _ => 0,
-        },
-        finding: Default::default(),
-        told: Default::default(),
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
@@ -277,9 +266,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             replies: false,
             title: "Claude Code".into(),
             status: status.into(),
-            // Done, its status is its receipt.
-            fuller: dot == Dot::Done,
-            lead: 0,
             dot,
             wait: Default::default(),
             word: Word::for_dot(dot),
@@ -302,14 +288,11 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             let (_, site) = helper_tabs().swap_remove(HELPER_WAITING);
             cards[0].status =
                 format!("{} · Sign in to {site}", browser::agents::task::NEEDS_YOU).into();
-            cards[0].lead = browser::agents::task::NEEDS_YOU.len();
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
         }
         (Some(count), false) => {
             cards[0].status = helper_trace(count, false).line();
-            cards[0].fuller = true;
-            cards[0].lead = 0;
         }
         (None, _) => {}
     }
@@ -319,8 +302,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             browser::agents::task::NEEDS_YOU
         )
         .into();
-        cards[0].fuller = false;
-        cards[0].lead = browser::agents::task::NEEDS_YOU.len();
         cards[0].dot = Dot::Waiting;
     }
     // Each helper's page has its own step, which the strip under it and its tile say.
@@ -338,8 +319,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
     if let Some(name) = bench_ended() {
         cards[0].name = name.into();
         cards[0].status = "Two seats in row 12 are in your basket".into();
-        cards[0].fuller = false;
-        cards[0].lead = 0;
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
     }
@@ -351,16 +330,12 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
                 browser::agents::task::NEEDS_YOU
             )
             .into();
-            cards[0].fuller = false;
-            cards[0].lead = browser::agents::task::NEEDS_YOU.len();
             cards[0].dot = Dot::Waiting;
             cards[0].word = Word::NeedsYou;
             cards.truncate(1);
         }
         Some("interrupted") => {
             cards[0].status = "Claude Code isn't signed in.".into();
-            cards[0].fuller = false;
-            cards[0].lead = 0;
             cards[0].dot = Dot::Ended;
             cards[0].word = Word::Interrupted;
             cards[0].fix = Some((
