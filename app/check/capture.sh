@@ -279,8 +279,10 @@ expect '^browser: library section media$' "View Media… didn't open the Library
 expect '^browser: library captures [1-9][0-9]*$' "Media didn't list the capture saved"
 expect '^browser: library shown$' "the Library didn't settle open on Media"
 ../tools/window-screenshot.sh "$pid" "$out/library-media.png" || fail "no window to capture"
-# Rows from 112 + 8 across and 56 + 27 down, the heading over them; tiles 93.7 square.
-send click $((112 + 8 + 47)) $((56 + 27 + 47))
+# Rows from the Library's column, 228, + 8 across and 92 down, the heading over them; tiles 131
+# square at the window's 1280. The app logs no tile's frame, so the point is reckoned.
+tile="$((228 + 8 + 47)) $((92 + 47))"
+send click $tile
 expect "^browser: open media $named\$" "a click on the capture's tile didn't open it"
 expect '^browser: library hidden$' "opening the capture didn't close the Library"
 expect '^browser: loaded [0-9]* file://.*\.png$' "the capture's tab didn't load it"
@@ -290,7 +292,7 @@ media=$(sed -n 's|^browser: loaded \([0-9]*\) file://.*\.png$|\1|p' "$log" | tai
 # downloads' Move to Trash does, and out of Media.
 send menu 'View Media…'
 expect '^browser: library shown$' "View Media… didn't open the Library again"
-post rightclick $((112 + 8 + 47)) $((56 + 27 + 47))
+post rightclick $tile
 expect "^browser: menu shown $(cased 'Open, Delete')\$" \
   "a right-click on the capture's tile didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/media-menu.png" || fail "no window to capture"
@@ -318,7 +320,7 @@ if [ "${listed:-0}" -gt 0 ]; then
 fi
 left=$(grep '^browser: library captures ' "$log" | tail -1 | cut -d' ' -f4)
 while [ "$left" -gt 0 ]; do
-  post rightclick $((112 + 8 + 47)) $((56 + 27 + 47))
+  post rightclick $tile
   expect "^browser: menu shown $(cased 'Open, Delete')\$" \
     "a right-click on a capture left in Media didn't show its menu"
   send choose Delete
@@ -326,8 +328,10 @@ while [ "$left" -gt 0 ]; do
   expect "^browser: library captures $((left - 1))\$" "Media wasn't listed again after Delete"
   left=$((left - 1))
 done
-# Emptied, Media says what fills it in a line that wraps in the list's width, 12 in from its
-# edges at 112 and 416 (#828), as the window's light and dark, narrow and wide, show it.
+# Emptied, Media says what fills it in a line that wraps in the list's width, heading-x in from its
+# edges (#828): from the column's edge to the list's, as wide as library.rs's list_width gives it
+# in the window, from tokens.toml's [shell.library], as the window's light and dark, narrow and
+# wide, show it.
 expect '^browser: library empty media at ' "Media emptied didn't draw its line"
 send layout
 frame=$(grep '^browser: layout content' "$log" | tail -1 |
@@ -343,9 +347,16 @@ tone() {
 empty_media() {
   send resize $2 $3
   expect "^browser: drawn at $2x$3\$" "the window didn't draw at $2 by $3"
+  list_wide=$(($2 - $(token shell.library page-least) - $(token shell.library column-width)))
+  list_least=$(token shell.library archive-least)
+  list_most=$(token shell.library archive-width)
+  [ $list_wide -ge $list_least ] || list_wide=$list_least
+  [ $list_wide -le $list_most ] || list_wide=$list_most
+  line_from=$(($(token shell.library column-width) + $(token shell.library heading-x)))
+  line_to=$((line_from + list_wide - 2 * $(token shell.library heading-x)))
   set -- "$1" $(grep '^browser: library empty media at ' "$log" | tail -1 | cut -d' ' -f6,7,9)
-  [ "$2" -ge 124 ] && [ $(($2 + $3)) -le 404 ] ||
-    fail "Media's empty line is $3 wide at $2, past the list's 124 to 404"
+  [ "$2" -ge $line_from ] && [ $(($2 + $3)) -le $line_to ] ||
+    fail "Media's empty line is $3 wide at $2, past the list's $line_from to $line_to"
   empty_lines="$empty_lines$1 $4, "
   was=$(tone)
   ../tools/window-screenshot.sh "$pid" "$out/media-empty-$1-$was.png" || fail "no window to capture"

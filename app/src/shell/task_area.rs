@@ -1258,8 +1258,17 @@ impl Shell {
             return Some(layer.into_any_element());
         }
         if in_place {
+            // The page is the one card, its line round it where it faces the window as the
+            // user's own page's is: beside the conversation's column, which is the window's,
+            // that's all four sides (#4396). A page that takes the window has none.
+            let open =
+                (!self.task_standing() && self.card_left() == self.width()).then_some(self.right);
+            let ink = self.page_outline_ink();
+            let outline = (self.card_left() > 0.)
+                .then(|| super::card_outline(place, self.card_radius(), open, ink));
             // A page that died leaves its place to its card, as in the user's own Space.
             layer = layer
+                .children(outline)
                 .child(card(place, self.card_radius(), self.palette.page))
                 .children(self.crash_cards(place, cx));
         } else {

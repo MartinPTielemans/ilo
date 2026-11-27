@@ -50,12 +50,16 @@ jobs:
             .github/scripts/tree-proven.sh
             .github/scripts/ci-changes.cjs
             .github/scripts/ci-changes.test.cjs
+            .github/scripts/rework-head.sh
             .github/actions/ci-changes/
             tools/core-same.sh
             tools/core-same-test.sh
             tools/nightly-commit.sh
             tools/nightly-commit-test.sh
             tools/engine-fetch-test.sh
+            tools/update-order.py
+            tools/update-order-test.sh
+            app/platform/windows/package/version.sh
             engine/fetch.sh
             core/public/browser_core.h
           sparse-checkout-cone-mode: false
@@ -66,6 +70,8 @@ jobs:
       - run: tools/nightly-commit-test.sh
       # And the engine a checkout takes, the batch's at its landing (#2913).
       - run: tools/engine-fetch-test.sh
+      # And that an install of a release is offered the next by each updater's own rule (#4086).
+      - run: tools/update-order-test.sh
       # And the gate's answer for paths whose jobs aren't plain from their directory (#3800).
       - run: node --test .github/scripts/ci-changes.test.cjs
 

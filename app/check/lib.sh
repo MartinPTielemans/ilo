@@ -589,29 +589,29 @@ appearance() {
     -e "tell appearance preferences to set dark mode to $1" -e 'end tell' > /dev/null
 }
 # Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
-# Dock and Control Center do, keeping what they were in $bars for show_bars.
+# Dock and Control Center do, keeping what they were in $bars for show_bars. The Dock hides through
+# System Events, as Settings asks it to: the Dock's own autohide default, with the Dock restarted,
+# left a check VM's Dock on screen.
 hide_bars() {
-  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  system_events_answers || fail "System Events didn't answer, so the Dock couldn't hide"
+  bars=$(osascript -e 'tell application "System Events" to get autohide of dock preferences') ||
+    fail "System Events didn't say whether the Dock hides"
   bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
-  defaults write com.apple.dock autohide -bool true
+  osascript -e 'tell application "System Events" to set autohide of dock preferences to true' \
+    > /dev/null || fail "System Events didn't hide the Dock"
   defaults write -g _HIHideMenuBar -bool true
-  killall Dock 2>/dev/null || true
 }
 # Puts the Dock and the menu bar back as hide_bars found them.
 show_bars() {
   set -- $bars
   bars=
-  case $1 in
-    none) defaults delete com.apple.dock autohide ;;
-    1) defaults write com.apple.dock autohide -bool true ;;
-    *) defaults write com.apple.dock autohide -bool false ;;
-  esac
+  osascript -e "tell application \"System Events\" to set autohide of dock preferences to $1" \
+    > /dev/null || echo "show_bars: System Events didn't put the Dock's autohide back to $1" >&2
   case $2 in
     none) defaults delete -g _HIHideMenuBar ;;
     1) defaults write -g _HIHideMenuBar -bool true ;;
     *) defaults write -g _HIHideMenuBar -bool false ;;
   esac
-  killall Dock 2>/dev/null || true
 }
 quit() {
   quit_app
@@ -765,6 +765,28 @@ expect_soon() {
   done
   ran_out "$1" "$step"
   fail "$2"
+}
+# expect, for a line matching $1 logged after the first line since the last command matching $3,
+# which the app logs as it starts what $1 ends. One before it is from earlier: a glide nothing
+# waited for can end after the command is sent and before the app gets to it (#4059, #4067).
+expect_after() {
+  wait_begins
+  for _ in $(seq 100); do
+    logged_after "$1" "$3" && return 0
+    [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged_after "$1" "$3" || {
+      ran_out "$1" "$step" exited
+      fail "the app exited: $2"
+    }
+    sleep 0.1
+  done
+  ran_out "$1" "$step"
+  fail "$2"
+}
+# A line matching $1 was logged after the first line matching $2 since the last command was sent.
+logged_after() {
+  local at
+  at=$(since | grep -n "$2" | head -1 | cut -d: -f1)
+  [ -n "$at" ] && since | tail -n +$((at + 1)) | grep -q "$1"
 }
 # A line matching $1 was logged after the last command was sent, or after command $2.
 logged() {
@@ -1227,8 +1249,10 @@ runner_cpu() {
 }
 
 # The page view keeps the sidebar's 228 points on its left and 8 on its other sides, over GPUI's
-# view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
-# sidebar hidden ("inset") it's 8 in from every side.
+# view, which fills the window. A full-screen page ("fills") covers the whole window, and so does
+# one with the sidebar hidden ("inset"), with no rim: the card's radius, shell.card-radius, goes
+# with its rim, none of which shows then (Shell::card_radius), so the page has the window's own
+# corners and no radius of its own.
 check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
@@ -1245,7 +1269,7 @@ check_layout() {
   # Rounded as the card's corners, square when it fills the window.
   expected_radius=10
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
-  [ "${2:-}" = inset ] && expected="8,8 $((width - 16))x$((height - 16))"
+  [ "${2:-}" = inset ] && expected="0,0 $content" && expected_radius=
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
   [ "$radius" = "$expected_radius" ] ||
     fail "$1: the page's corners have a radius of ${radius:-0}, not ${expected_radius:-0}"
@@ -1299,7 +1323,7 @@ expect_lists() {
   expect "^browser: pinned $1\$" "$3: the pinned tabs are \"$(pinned)\", not \"$1\""
   expect "^browser: today $2\$" "$3: Today is \"$(today)\", not \"$2\""
 }
-# What the footer's + menu ends with to add from the desktop: one item where the system's open
+# What the Space button's menu ends with to add from the desktop: one item where the system's open
 # panel picks files and folders together, the Mac's, else one for each.
 plus_adds() {
   if [ "$(uname)" = Darwin ]; then
@@ -1425,6 +1449,13 @@ display_bounds() {
     const frame = (own || screens[0]).frame;
     [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
      frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
+}
+# The value design/tokens.toml gives <key> in its [<section>], as the app is built with it, a whole
+# number without its ".0": so a check measures the look the app has, not a copy of it.
+token() {
+  awk -v section="[$1]" -v key="$2" '
+    /^\[/ { in_section = ($0 == section) }
+    in_section && $1 == key && $2 == "=" { sub(/\.0$/, "", $3); print $3; exit }' design/tokens.toml
 }
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
@@ -1630,4 +1661,127 @@ other_app_closes() {
   wait "$other_app" || true
   other_app=
   other_app_token=
+}
+# The perf runs' own measures, which perf, perf-native and perf-threads share.
+# Writes the perf runs' page in the check's site, and sets $page to it. Its page is Ardia's: 60
+# boxes, 120 paragraphs and a clock each second, which puts in its title when it first painted
+# ("<id> fcp <ms>") and, each time it's shown, two frames after it became visible
+# ("<id> shown <n> <ms>"), both in Unix ms.
+perf_page() {
+  cat > "$out/site/perf.html" << 'HTML'
+<!doctype html><meta charset=utf-8><title>loading</title>
+<style>
+body { font: 14px/1.4 sans-serif; margin: 16px }
+.box { display: inline-block; width: 72px; height: 40px; margin: 4px; border-radius: 6px }
+</style>
+<h1>ilo perf page</h1><p id=clock></p><div id=boxes></div><div id=text></div>
+<script>
+const id = location.search.slice(1);
+for (let i = 0; i < 60; i++) {
+  const box = document.createElement("div");
+  box.className = "box";
+  box.style.background = `hsl(${i * 6} 60% 60%)`;
+  boxes.append(box);
+}
+for (let i = 0; i < 120; i++) {
+  const p = document.createElement("p");
+  p.textContent = `Paragraph ${i}: the quick brown fox jumps over the lazy dog, again and again.`;
+  text.append(p);
+}
+setInterval(() => clock.textContent = new Date().toLocaleTimeString(), 1000);
+// Unix ms as the shell's clock reads it: Date.now() is the system's clock now, where timeOrigin's is
+// the one the renderer took at its start, which a VM's clock drifts from, by 70 ms in 10 minutes.
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (entry.name == "first-contentful-paint") {
+      document.title = `${id} fcp ${at(entry.startTime)}`;
+      performance.mark(document.title);
+    }
+  }
+}).observe({ type: "paint", buffered: true });
+// Each stamp is also a mark, which a trace with blink.user_timing has on its own clock, to pair the
+// trace's events with the run's Unix ms.
+const stamped = (n) => requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.title = `${id} shown ${n} ${Date.now()}`;
+  performance.mark(document.title);
+}));
+let shown = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState == "visible") {
+    stamped(++shown);
+  }
+});
+// A page loaded again in its tab as it's shown, as a tab without its page gets it back, has no
+// visibilitychange, so it's stamped shown 0. A new tab's page, which perf times to its paint, isn't.
+if (document.visibilityState == "visible" && performance.getEntriesByType("navigation")[0]?.type != "navigate") {
+  stamped(0);
+}
+</script>
+HTML
+  page="${site}perf.html"
+}
+# Sets $stamp to Unix time in ms. Bash 5 has it in EPOCHREALTIME, which Git Bash's is, as a process
+# start there takes tens of ms; Linux's sh is dash, so date, and the Mac's bash 3.2 and BSD date have
+# neither, so Perl.
+if [ -n "${EPOCHREALTIME:-}" ]; then
+  perf_clock=bash
+elif [ "$(uname)" = Darwin ]; then
+  perf_clock=perl
+else
+  perf_clock=date
+fi
+perf_stamp() {
+  case $perf_clock in
+    bash)
+      stamp=$EPOCHREALTIME
+      stamp_us=${stamp#*[.,]}
+      stamp="${stamp%[.,]*}${stamp_us%???}"
+      ;;
+    perl) stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000') ;;
+    *) stamp=$(date +%s%3N) ;;
+  esac
+}
+# Sorts the numbers on standard input, one a line, and says their median, range and count, each
+# number as $1 formats it.
+perf_stats() {
+  sort -n | awk -v f="$1" '{ v[NR] = $1 } END {
+    if (!NR) { print "no samples"; exit }
+    m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+    printf "median " f " (" f "–" f ", n=%d)", m, v[1], v[NR], NR }'
+}
+# Says row $1, labelled $2, measured as $3, against its target $4, and keeps it for the summary.
+perf_row() {
+  echo "perf: $2: $3; target $4"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
+}
+# Snapshots what the browser's processes use, or those of $snap_procs, as $1.
+perf_snap() {
+  # shellcheck disable=SC2086 # kinds, or nothing
+  python3 -I check/usage.py snap "${snap_procs:-$procs}" "$perf_dir/$1.json" ${2:-} ||
+    fail "the browser's usage didn't read"
+}
+# Waits until $1, in Unix seconds, checking the app is still there.
+perf_until() {
+  while [ "$(date +%s)" -lt "$1" ]; do
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+}
+# Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats,
+# and $wake_kinds to the minute's wakeups a second by kind of process.
+perf_idle() {
+  files=
+  for n in 0 1 2 3 4 5 6; do
+    [ "$n" = 0 ] || perf_until $(($(date +%s) + 10))
+    perf_snap "$1-$n"
+    files="$files $perf_dir/$1-$n.json"
+  done
+  # shellcheck disable=SC2086 # the files, a word each
+  python3 -I check/usage.py idle $files > "$perf_dir/$1.txt"
+  cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
+  wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
+  cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
+  # Which processes wake, as the CPU's kinds say which spend it.
+  wake_kinds=$(python3 -I check/usage.py wake-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json")
 }

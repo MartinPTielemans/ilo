@@ -299,11 +299,14 @@ else
   expect '^browser: zoom hud shown$' "⌘- didn't show the zoom HUD"
   send layout
   # The HUD's window reaches 40 past its pill on every side, for the popover level's shadow, so the
-  # pill sits 116 in from the content's right and 60 down.
+  # pill's right edge is the find bar's, its window 138 left of that, its top 8 under the bar's
+  # foot.
   hud=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 178x122$' |
     sed 's/^browser: layout child //')
-  [ "$hud" = "$((content - 156)),20 178x122" ] ||
-    fail "the zoom HUD is at ${hud:-nowhere} in a window $content wide, under the find bar"
+  bar=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 300x32$' |
+    sed 's/^browser: layout child \([0-9]*\),\([0-9]*\) .*/\1 \2/')
+  [ -n "$bar" ] && [ "$hud" = "$((${bar% *} + 300 - 138)),$((${bar#* } + 32 + 8 - 40)) 178x122" ] ||
+    fail "the zoom HUD is at ${hud:-nowhere}, the find bar at ${bar:-nowhere}: not under it"
   ../tools/window-screenshot.sh "$pid" "$out/zoom.png" || fail "no window to capture"
   send menu "Zoom In"
   expect '^browser: command zoom-in via ui$' "the View menu's Zoom In didn't reach the UI"

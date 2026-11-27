@@ -342,6 +342,8 @@ pub(super) struct Onboarding {
     /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
     /// behind (`exit::behind`).
     shaped: Option<(f32, f32, f32)>,
+    /// Whether the exit has drawn a frame of its grow, past the content's fade.
+    growing: bool,
     /// Help › Welcome plays the card again, which keeps no step to resume at.
     replay: bool,
     /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
@@ -609,6 +611,7 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
+            growing: false,
             replay,
             pressed: Vec::new(),
             signing: Vec::new(),
@@ -1054,7 +1057,13 @@ impl Shell {
         if !onboarding.pressed.contains(&cli) {
             onboarding.pressed.push(cli);
         }
-        let known = agents.read(cx).found(cli) == Ready::SignedOut;
+        // Signed out it signs in; missing where its maker's installer is known, it installs first
+        // (AS1). Otherwise its look comes first, and the row says what that found.
+        let known = match agents.read(cx).found(cli) {
+            Ready::SignedOut => true,
+            Ready::NotFound => cli.installs(),
+            _ => false,
+        };
         if !known && !onboarding.signing.contains(&cli) {
             onboarding.signing.push(cli);
         }
@@ -1377,20 +1386,13 @@ impl Shell {
         });
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
-        let length = onboarding.exit_length(still);
-        let ended = exiting.is_some_and(|at| at >= length);
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still));
         if ended {
-            // A grown card stays drawn on the frame it ends on. First run's window, the size of
-            // the browser's by now, is on screen until the browser window is, and a frame of it
-            // without its card is its glass bare.
-            let last = (onboarding.grown(still)).then(|| {
-                let plate = exit::frame(length, true, viewport).plate;
-                let (_, _, w, h, radius) = plate;
-                if onboarding.shaped != Some((w, h, radius)) {
-                    self.browser.shape_first_run(w, h, radius);
-                }
-                (plate, (w, h, radius))
-            });
+            // A grown exit ends with the browser window whole under a card and glass faded out,
+            // so its last frame draws no card, as the cross-fade's doesn't.
+            if onboarding.grown(still) {
+                self.browser.reveal_first_run(1., 0.);
+            }
             self.onboarding = None;
             // check.sh waits for this line.
             log!("browser: onboarding done");
@@ -1404,26 +1406,19 @@ impl Shell {
                 self.show_hint(cx);
             }
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| {
-                    if let Some(handle) = first_run {
-                        shell.browser.end_first_run(handle.into(), cx);
-                    }
-                    if !quit {
-                        shell.run(Command::NewTab, "onboarding", cx);
-                    }
-                })
+                // Outside the shell's update, as the host draws the browser window, and with it
+                // the shell, before putting it on screen.
+                if let Some(handle) = first_run {
+                    let browser = shell.read(cx).browser.clone();
+                    browser.end_first_run(handle.into(), cx);
+                }
+                if !quit {
+                    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
+                }
             });
             #[cfg(test)]
-            exit::DRAWN.with_borrow_mut(|drawn| {
-                drawn.push(last.map(|(plate, glass)| (plate, grown_fill, glass)));
-            });
-            return last.map(|(plate, _)| {
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(card::plate(plate, grown_fill, inks.rim()))
-                    .into_any_element()
-            });
+            exit::DRAWN.with_borrow_mut(|drawn| drawn.push(None));
+            return None;
         }
         if onboarding.keys.is_none() {
             let id = window.window_handle().window_id();
@@ -1549,14 +1544,23 @@ impl Shell {
         let (_, _, w, h, radius) = plate;
         let shape = (w, h, radius);
         let before = onboarding.shaped.replace(shape);
+        let growing =
+            exiting.is_some_and(|at| at > crate::tokens::shell::onboarding::exit::CONTENT);
+        let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
         }
+        // Said on each grown frame, not only as it changes: until the window's first frame of its
+        // own, Chromium may put it back whole (host_set_first_run_reveal).
+        if let Some(exit) = exit.as_ref().filter(|_| growing && onboarding.grown(still)) {
+            self.browser.reveal_first_run(exit.window, exit.glass);
+        }
         // The glass is the system's and reaches the screen a frame after the card drawn with it,
         // so the exit draws the card in the shape its glass was given the frame before, and fill
-        // and glass grow together.
+        // and glass grow together. The grow's first shape follows the glass still through the
+        // content's fade and lands at once (f0053), so that frame's card is drawn in it.
         let plate = match (&exit, before) {
-            (Some(_), Some(before)) => exit::behind(before, viewport),
+            (Some(_), Some(before)) if !grow_starts => exit::behind(before, viewport),
             _ => plate,
         };
         if step == Step::Space {
@@ -2711,7 +2715,7 @@ fn card_row(
     let shown = agents.assistant_row(cli);
     let known = matches!(
         shown.offer,
-        Offer::Cancel | Offer::SignedIn | Offer::TryAgain
+        Offer::Cancel | Offer::SignedIn | Offer::TryAgain | Offer::TryInstall
     ) || agents.found(cli) == Ready::SignedIn;
     card_words(cli, shown, pressed || known)
 }
@@ -2719,8 +2723,9 @@ fn card_row(
 /// What an assistant's row says on the card (v9 §4), from what Settings › Models' row would:
 /// its maker's plan until `learned` is what the browser holds or a press found, then the wait,
 /// a failed or closed sign-in, or its maker's plan again once signed in, as no use is reported.
-/// Settings' own words (a missing program, a sign-in that needs a terminal) aren't the card's:
-/// its Sign In does what Settings' does.
+/// A program its row installs says so, as Settings' does (AS2–AS4); Settings' other words (a
+/// program with no installer known, a sign-in that needs a terminal) aren't the card's: its Sign In
+/// does what Settings' does.
 fn card_words(
     cli: crate::agents::runner::Cli,
     shown: crate::agents::sign_in::Shown,
@@ -2732,8 +2737,8 @@ fn card_words(
         false => Offer::SignIn,
     };
     let line = match offer {
-        // The wait's own line, which Settings › Models says too (FR19).
-        Offer::Cancel => shown.line,
+        // The wait's own line, which Settings › Models says too (FR19), and an install's (AS2–AS4).
+        Offer::Cancel | Offer::Install | Offer::TryInstall => shown.line,
         Offer::TryAgain => "Sign-in didn't finish.".into(),
         _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
     };

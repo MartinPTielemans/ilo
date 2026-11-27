@@ -1,17 +1,17 @@
 //! The popover that picks a Space's icon, Arc's: it hangs under the Space's name, its arrow at the
-//! icon, with Emoji | Icon at its top, and a trash button after it once there's an icon to remove,
-//! and under them the glyphs, or a search and a grid of emoji (docs/ux-spec.md › Spaces › Icon).
-//! A tab's hangs the same way from its favicon, and a folder's from its folder, each with the Emoji
-//! tab only, as their icons are emoji. GPUI can't draw over the page's native view, so it's a
-//! window of its own that the host shows over the browser window, as its child, with the keyboard,
-//! translucent over a blur in the shape drawn here. What it asks of its window goes through `Host`.
+//! icon, with Icon at its top, and a trash button after it once there's an icon to remove, and
+//! under them the glyphs (docs/ux-spec.md › Spaces › Icon). A Space's mark is a glyph only, so it
+//! offers no emoji (#4400). A tab's hangs the same way from its favicon, and a folder's from its
+//! folder, each with the Emoji tab only, a search and a grid of emoji, as their icons are emoji.
+//! GPUI can't draw over the page's native view, so it's a window of its own that the host shows
+//! over the browser window, as its child, with the keyboard, translucent over a blur in the shape
+//! drawn here. What it asks of its window goes through `Host`.
 
-use std::time::Instant;
 use std::{ops::Range, rc::Rc};
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
-    Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, Point, Rgba, ScrollStrategy, SharedString,
+    KeyBinding, MouseButton, PathBuilder, Pixels, Point, Rgba, ScrollStrategy, SharedString,
     Stateful, Subscription, TitlebarOptions, UniformListScrollHandle, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     accesskit::Role, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
@@ -21,8 +21,8 @@ use gpui::{
 use crate::{
     dismissal::{By, Close, Why},
     elevation::Level,
-    palette::{INK, Palette, STATE_HOVERED, STATE_PRESSED},
-    shell::{KEY_CONTEXT, cubic_bezier},
+    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    shell::KEY_CONTEXT,
     space_icon::{self, GLYPHS, SpaceIcon, has_icon},
     text_input::{self, Colors, TextInput},
 };
@@ -67,9 +67,6 @@ use crate::tokens::icon_picker::PITCH;
 use crate::tokens::icon_picker::PLATE;
 use crate::tokens::icon_picker::PLATE_RADIUS;
 use crate::tokens::text;
-/// Arc's switch between Emoji and Icon slides the content a card's width over 0.2 s, easing out
-/// (Arc 1.170 rec at 2×).
-const SLIDE: f32 = 0.2;
 
 /// What the picker asks of its window.
 pub trait Host {
@@ -114,10 +111,10 @@ impl Subject {
     }
 
     /// The tabs it offers: a tab's custom icon takes the favicon's place, and a folder's the
-    /// folder's, so each is a character the row draws, and the Icon tab's glyphs are a Space's.
+    /// folder's, so each is a character the row draws, and a Space's mark is a glyph only.
     fn tabs(self) -> &'static [Tab] {
         match self {
-            Subject::Space(_) => &[Tab::Emoji, Tab::Icon],
+            Subject::Space(_) => &[Tab::Icon],
             Subject::Tab(_) | Subject::Folder(_) => &[Tab::Emoji],
         }
     }
@@ -148,8 +145,6 @@ struct Picking {
     selected: Option<usize>,
     /// Whether the six skin tones are out along the search.
     tones: bool,
-    /// While the content slides from one tab's to the other's: the tab it slides from, and when.
-    slide: Option<(Tab, Instant)>,
     /// Whether it has drawn on screen since it was shown, before which a click finds nothing.
     drawn: bool,
     _edit: Option<Subscription>,
@@ -261,16 +256,9 @@ pub fn corners() -> [(f32, f32, f32); 6] {
     ]
 }
 
-/// The tab the picker opens on for a Space with `icon`: the emoji's if it has one.
-pub fn tab_for(icon: &str) -> Tab {
-    match SpaceIcon::parse(icon) {
-        SpaceIcon::Emoji(_) => Tab::Emoji,
-        _ => Tab::Icon,
-    }
-}
-
 /// Shows the picker for `subject`, which has `icon`, its arrow at `anchor`, the middle of the
-/// icon's slot in browser window `over`, with the chosen segment in the Space's accent. `picked`
+/// icon's slot in browser window `over`, with its segment in the Space's accent. A Space whose
+/// icon is an emoji, kept from before marks were glyphs only, opens with no glyph chosen. `picked`
 /// gets the icon the user picks. A context menu in a window behind another asks for it there.
 pub fn show(
     over: u64,
@@ -286,10 +274,7 @@ pub fn show(
     };
     window
         .update(cx, |picker, window, cx| {
-            let tab = match subject {
-                Subject::Space(_) => tab_for(&icon),
-                Subject::Tab(_) | Subject::Folder(_) => Tab::Emoji,
-            };
+            let tab = subject.tabs()[0];
             // check.sh reads this line.
             log!("browser: icon picker for {subject} on {}", tab.name());
             picker.picking = Some(Picking {
@@ -301,7 +286,6 @@ pub fn show(
                 grid: Grid::default(),
                 selected: None,
                 tones: false,
-                slide: None,
                 drawn: false,
                 _edit: None,
             });
@@ -363,19 +347,6 @@ pub fn open_for(cx: &App) -> Option<Subject> {
     picker.picking.as_ref().map(|picking| picking.subject)
 }
 
-/// How far right the old tab's content and the new one's are, `progress` (0 to 1) into a switch
-/// from `from` to `to`: the content moves the way the segment chosen is from the other, so Icon's
-/// comes in from the right.
-fn slid(from: Tab, to: Tab, progress: f32) -> (f32, f32) {
-    let way = match (from, to) {
-        (Tab::Emoji, Tab::Icon) => -1.,
-        (Tab::Icon, Tab::Emoji) => 1.,
-        _ => 0.,
-    };
-    let t = cubic_bezier(0., 0., 0.58, 1., progress.clamp(0., 1.));
-    (way * WIDTH * t, way * WIDTH * (t - 1.))
-}
-
 impl Tab {
     fn name(self) -> &'static str {
         match self {
@@ -390,9 +361,6 @@ impl IconPicker {
         let Some(picking) = &mut self.picking else {
             return;
         };
-        if picking.tab != tab {
-            picking.slide = Some((picking.tab, crate::motion::start(cx)));
-        }
         picking.tab = tab;
         picking.tones = false;
         picking._edit = None;
@@ -659,51 +627,38 @@ impl IconPicker {
         }
     }
 
-    /// Emoji | Icon, and the trash button after it if there's an icon to remove.
+    /// The one kind of icon it picks, Icon for a Space and Emoji for a tab or a folder, as a chosen
+    /// segment, and the trash button after it if there's an icon to remove.
     fn top(&self, picking: &Picking, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let a11y = self.a11y;
-        let segment = |tab: Tab, label: &'static str| {
-            let chosen = picking.tab == tab;
-            div()
-                .id(label)
-                .when(a11y, |segment| {
-                    segment
-                        .role(Role::Tab)
-                        .aria_label(label)
-                        .aria_selected(chosen)
-                })
-                .w(px(SEGMENT_WIDTH))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(SEGMENTS_RADIUS))
-                .when(chosen, |segment| {
-                    let (fill, label) = crate::palette::current(cx).accent_on_dark();
-                    segment.bg(fill).text_color(label)
-                })
-                // The other takes the ladder under the pointer (ours: Arc's isn't recorded), in Ink, away
-                // from its white label, which reads on the track with no more room, as the
-                // accent's states move away from theirs.
-                .when(!chosen, |segment| {
-                    segment
-                        .hover(|style| style.bg(Hsla::from(rgb(INK)).opacity(STATE_HOVERED)))
-                        .active(|style| style.bg(Hsla::from(rgb(INK)).opacity(STATE_PRESSED)))
-                })
-                .child(label)
-                .on_click(cx.listener(move |picker, _, window, cx| {
-                    if picker
-                        .picking
-                        .as_ref()
-                        .is_some_and(|picking| picking.tab != tab)
-                    {
-                        // check.sh reads this line.
-                        log!("browser: icon picker on {}", tab.name());
-                        picker.show_tab(tab, window, cx);
-                    }
-                }))
+        let label = match picking.tab {
+            Tab::Emoji => "Emoji",
+            Tab::Icon => "Icon",
         };
-        let trash = has_icon(&picking.icon).then(|| {
+        let (fill, ink) = crate::palette::current(cx).accent_on_dark();
+        let segment = div()
+            .id(label)
+            .when(a11y, |segment| {
+                segment
+                    .role(Role::Tab)
+                    .aria_label(label)
+                    .aria_selected(true)
+            })
+            .w(px(SEGMENT_WIDTH))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(SEGMENTS_RADIUS))
+            .bg(fill)
+            .text_color(ink)
+            .child(label);
+        // A Space draws no emoji, so one kept from before is no icon to take away there.
+        let shows = match picking.subject {
+            Subject::Space(_) => space_icon::has_glyph(&picking.icon),
+            _ => has_icon(&picking.icon),
+        };
+        let trash = shows.then(|| {
             div()
                 .id("icon-picker-trash")
                 .when(a11y, |trash| {
@@ -743,10 +698,7 @@ impl IconPicker {
                     .flex()
                     .rounded(px(SEGMENTS_RADIUS))
                     .bg(rgba(SEGMENTS_FILL))
-                    .children(picking.subject.tabs().iter().map(|&tab| match tab {
-                        Tab::Emoji => segment(tab, "Emoji"),
-                        Tab::Icon => segment(tab, "Icon"),
-                    })),
+                    .child(segment),
             )
             .children(trash)
     }
@@ -1083,17 +1035,6 @@ impl Render for IconPicker {
             .key_context(KEY_CONTEXT)
             .size_full()
             .font_family(crate::face::UI);
-        // The slide's progress, while the content slides.
-        let slide = self.picking.as_mut().and_then(|picking| {
-            let (from, start) = picking.slide?;
-            let progress = start.elapsed().as_secs_f32() / SLIDE;
-            if progress >= 1. {
-                picking.slide = None;
-                return None;
-            }
-            window.request_animation_frame();
-            Some((from, progress))
-        });
         // AppKit puts the window on screen some frames after it's asked to, and only then does
         // GPUI draw it, as the theme picker's.
         if let Some(picking) = self.picking.as_mut().filter(|picking| !picking.drawn) {
@@ -1117,20 +1058,11 @@ impl Render for IconPicker {
         .top_0()
         .left_0()
         .size_full();
-        let mut content = |tab, x: f32| {
-            let pane = match tab {
-                Tab::Icon => self.glyphs(picking, cx).into_any_element(),
-                Tab::Emoji => self.emoji_grid(picking, cx).into_any_element(),
-            };
-            div().absolute().top_0().left(px(x)).size_full().child(pane)
+        let pane = match picking.tab {
+            Tab::Icon => self.glyphs(picking, cx).into_any_element(),
+            Tab::Emoji => self.emoji_grid(picking, cx).into_any_element(),
         };
-        let content = match slide {
-            Some((from, progress)) => {
-                let (old, new) = slid(from, picking.tab, progress);
-                vec![content(from, old), content(picking.tab, new)]
-            }
-            None => vec![content(picking.tab, 0.)],
-        };
+        let content = div().absolute().top_0().left_0().size_full().child(pane);
         let top = self.top(picking, cx);
         root.child(
             div()
@@ -1155,7 +1087,7 @@ impl Render for IconPicker {
                 .font_weight(FontWeight::MEDIUM)
                 .child(card)
                 .child(top)
-                .children(content),
+                .child(content),
         )
     }
 }

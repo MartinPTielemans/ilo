@@ -112,7 +112,8 @@ void host_set_window_little(void* ui_view, bool grows);
 void host_grow_little_window(void* ui_view);
 
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
-// app the active one.
+// app the active one. One already under first run's (host_grow_first_run) comes whole to the
+// front with the keyboard.
 void host_show_window(void* ui_view);
 
 // Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
@@ -753,6 +754,21 @@ void host_show_reveal(void* ui_view, double width);
 // Hides |ui_view|'s reveal window.
 void host_hide_reveal(void* ui_view);
 
+// Makes the window of |edge_knot_view| the edge knot of |ui_view|'s window: the tab the hidden
+// sidebar leaves at the window's edge while a thread needs the user. It shows over the page and
+// never takes the keyboard, a click on it included. The window reaches |margin| points past the tab
+// on every side but the window's edge, for its shadow, which the UI draws, and the margin lets the
+// mouse through to the page. It starts hidden.
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin);
+
+// Shows |ui_view|'s edge knot window with its tab flush with its browser window's edge on the
+// sidebar's side, |top| points down the content, |width| points across and |height| tall, or moves
+// it there if it shows.
+void host_show_edge_knot(void* ui_view, double top, double width, double height);
+
+// Hides |ui_view|'s edge knot window.
+void host_hide_edge_knot(void* ui_view);
+
 // Makes the window of |settings_view| the Settings window: a standard one, dark, that can show
 // over the browser window in full screen. It starts hidden.
 void host_add_settings(void* settings_view);
@@ -785,9 +801,16 @@ void host_set_first_run_frame(double width, double height, double radius);
 // queue's next turn, as the ask comes while the UI handles the press: in one step, with the glass
 // and the shadow kept where the card is and the UI's picture at the new size drawn before any is
 // shown, or not at all where either window is no longer the one it answered for, the card then
-// growing to the window as it is. It starts no timer and orders nothing in: the browser window
-// stays held until first run ends.
+// growing to the window as it is. With the frame, on that same turn, it puts the held browser
+// window right under first run's, all but transparent, neither key nor main, so the UI and its
+// pages draw it before the card gives way to it (host_set_first_run_reveal). It starts no timer.
 bool host_grow_first_run(void);
+
+// Mac only: the opacity, 0 to 1, of the browser window under a grown first run's window, and of
+// the glass behind first run's card. The UI says both on each frame of a grown exit, the window's
+// again though unchanged, as Chromium may put a new window's opacity back at its first frame.
+// Nothing where no window is under first run's.
+void host_set_first_run_reveal(double window, double glass);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
 // screen the browser window opens on, and takes the launch window down: until first run ends it's

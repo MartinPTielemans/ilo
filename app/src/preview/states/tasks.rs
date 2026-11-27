@@ -2,6 +2,7 @@
 
 use crate::*;
 use browser::agents::runner::Cli;
+use browser::product::PRODUCT;
 
 /// The first task's Space, apart from the ids the rest of the preview takes.
 pub(crate) const FIRST_TASK: u64 = 9001;
@@ -85,7 +86,14 @@ pub(crate) fn task_pages(at: usize) -> Vec<(u64, &'static str, &'static str)> {
 /// =open is the working task's, with four pages, the other two closed.
 pub(crate) fn group_state() -> Option<String> {
     let state = states::var("PREVIEW_TASKS").ok()?;
-    let one = ["done", "needs-you", "stopped", "interrupted", "two"];
+    let one = [
+        "done",
+        "needs-you",
+        "stopped",
+        "interrupted",
+        "not-installed",
+        "two",
+    ];
     one.contains(&state.as_str()).then_some(state)
 }
 
@@ -351,6 +359,18 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
     }
+    // The bench's thread whose run ilo ended over its tools (AP17): interrupted, its card saying
+    // why as its line does.
+    if states::var("PREVIEW_TASK").is_ok_and(|state| state == "not-our-tools") {
+        let name = cards[0].name.clone();
+        cards[0].status =
+            format!("{PRODUCT} stopped {name}: it started with tools {PRODUCT} doesn't allow.")
+                .into();
+        cards[0].fuller = false;
+        cards[0].lead = 0;
+        cards[0].dot = Dot::Ended;
+        cards[0].word = Word::Interrupted;
+    }
     // One group's state (`group_state`): the task it's of, alone, or with the one beside it.
     match group_state().as_deref() {
         Some("needs-you") => {
@@ -374,6 +394,19 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             cards[0].fix = Some((
                 browser::agents::runner::Cli::Claude,
                 browser::agents::sign_in::Offer::SignIn,
+            ));
+            cards.truncate(1);
+        }
+        // Its assistant's program missing, the card's fix is its row's Install and Sign In (#4100).
+        Some("not-installed") => {
+            cards[0].status = "Claude isn't installed.".into();
+            cards[0].fuller = false;
+            cards[0].lead = 0;
+            cards[0].dot = Dot::Ended;
+            cards[0].word = Word::Interrupted;
+            cards[0].fix = Some((
+                browser::agents::runner::Cli::Claude,
+                browser::agents::sign_in::Offer::Install,
             ));
             cards.truncate(1);
         }
@@ -424,6 +457,10 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         page: Some(OnPage {
             tab: (key != 0).then_some(FIRST_TASK + 200),
             site: "tickets.example".into(),
+            title: match key {
+                0 => "".into(),
+                _ => WORKING_PAGES[0].0.into(),
+            },
             went: key == 0,
         }),
         says: "".into(),
@@ -452,7 +489,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         agent,
         name: "Claude".into(),
         title: title.into(),
-        about: "Claude · Working".into(),
+        about: format!("{PRODUCT} · Working").into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -482,6 +519,13 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
+    // PREVIEW_TASK_PAGES=<n> keeps its first n pages: 0 shows it with no rail (#4396).
+    if let Some(count) = states::var("PREVIEW_TASK_PAGES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+    {
+        talk.tabs.truncate(count);
+    }
     talk
 }
 
@@ -514,9 +558,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
     let pages = task_pages(at);
     talk.title = card.title.clone();
     talk.asked = ASKED[at].into();
+    let name = browser::agents::task::head_name(&card.name, !card.replies);
     talk.about = match card.word {
-        Word::Done => format!("{} · Done at 14:02", card.name).into(),
-        word => format!("{} · {}", card.name, word.after_name()).into(),
+        Word::Done => format!("{name} · Done at 14:02").into(),
+        word => format!("{name} · {}", word.after_name()).into(),
     };
     talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
     talk.on = None;
@@ -536,6 +581,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             page: Some(OnPage {
                 tab: (key != 0).then_some(pages[0].0),
                 site: site(pages[0].2),
+                title: match key {
+                    0 => "".into(),
+                    _ => pages[0].1.into(),
+                },
                 went: key == 0,
             }),
             says: "".into(),
@@ -654,7 +703,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             ]
         }
         "yours" => {
-            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            talk.about = format!("{PRODUCT} · {}", browser::agents::task::NEEDS_YOU).into();
             talk.on = None;
             vec![
             done(0, before),
@@ -706,7 +755,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             use browser::agents::task::ilo::{LeftOut, Reach};
             let folder = || gpui::SharedString::from("Lisbon trip");
             let said = |key, kind| ilo(key, kind, true);
-            talk.about = format!("{} · Stopped", talk.name).into();
+            talk.about = format!("{PRODUCT} · Stopped").into();
             talk.stoppable = false;
             talk.on = None;
             vec![
@@ -764,7 +813,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 talk.model = Some(model(Cli::Codex, None));
             }
             talk.about = match ended {
-                true => format!("{} · Done at 14:02", talk.name).into(),
+                true => format!("{PRODUCT} · Done at 14:02").into(),
                 false => talk.about.clone(),
             };
             talk.stoppable = !ended;
@@ -793,13 +842,21 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             }
             lines
         }
+        // ilo ended the thread's run before its first answer, as it started with a tool that
+        // isn't the browser's (AP17): no step and no answer, only ilo's line.
+        "not-our-tools" => {
+            talk.about = format!("{PRODUCT} · {}", Word::Interrupted.after_name()).into();
+            talk.stoppable = false;
+            talk.on = None;
+            vec![line(100, IloKind::NotOurTools)]
+        }
         // A task a run of the browser before left (#4105), brought back from the Archive: all
         // there is of it is its title and how it ended, so where its messages would begin it says
         // where they are, over its reply field; or, with its profile deleted or left with no
         // Space, that, in the field's place. It ended on an earlier day, so it says the day.
         "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
-            talk.about = format!("{} · Done · 21 Nov", talk.name).into();
+            talk.about = format!("{PRODUCT} · Done · 21 Nov").into();
             talk.asked = "".into();
             talk.tabs.clear();
             talk.on = None;
@@ -820,7 +877,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         // the task's first page alone, as the task did; `helper_tabs` are the rest, which the
         // bench gives it once it shows.
         "helpers" => {
-            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            talk.about = format!("{PRODUCT} · {}", browser::agents::task::NEEDS_YOU).into();
             // One of several pages: its line names the page's site (O1).
             let (tab, site) = helper_tabs().remove(HELPER_WAITING);
             let yours = IloKind::Yours {
@@ -855,7 +912,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         ],
         // The turn ended with its helpers: the stretch is over, and no helper's line is under way.
         "helpers-ended" => {
-            talk.about = format!("{} · Done at 14:02", talk.name).into();
+            talk.about = format!("{PRODUCT} · Done at 14:02").into();
             talk.stoppable = false;
             talk.on = None;
             vec![
@@ -877,7 +934,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.
         "notes" => {
-            let github = &browser::agents::notes::NOTES[0];
+            let github = browser::agents::notes::note_for("https://github.com/").unwrap();
             let opened = TraceStep {
                 kind: Default::default(),
                 key: 10,

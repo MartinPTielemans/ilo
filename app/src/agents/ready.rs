@@ -23,6 +23,8 @@ pub enum Ready {
     #[default]
     Unknown,
     NotFound,
+    /// Installed, but older than the one the browser runs (AP27): no thread starts on it.
+    NeedsUpdate,
     SignedOut,
     SignedIn,
 }
@@ -32,6 +34,7 @@ impl Ready {
         match self {
             Ready::Unknown => "unknown",
             Ready::NotFound => "not-found",
+            Ready::NeedsUpdate => "needs-update",
             Ready::SignedOut => "signed-out",
             Ready::SignedIn => "signed-in",
         }
@@ -40,6 +43,7 @@ impl Ready {
     fn from_id(id: &str) -> Ready {
         match id {
             "not-found" => Ready::NotFound,
+            "needs-update" => Ready::NeedsUpdate,
             "signed-out" => Ready::SignedOut,
             "signed-in" => Ready::SignedIn,
             _ => Ready::Unknown,
@@ -199,7 +203,16 @@ fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
         .clone()
         .or_else(|| std::env::var("PATH").ok())
         .unwrap_or_default();
-    (find(cli.program(), &search), path)
+    let installed = || installed_at(cli, &super::clients::home());
+    (find(cli.program(), &search).or_else(installed), path)
+}
+
+/// Where its maker's installer puts `cli` in `home`, which a login shell's PATH may not have yet, as
+/// Claude Code's installer only says to add: ~/.local/bin (install.rs).
+#[cfg(not(windows))]
+fn installed_at(cli: Cli, home: &Path) -> Option<PathBuf> {
+    let program = (cli.installs()).then(|| home.join(".local/bin").join(cli.program()))?;
+    is_executable(&program).then_some(program)
 }
 
 #[cfg(windows)]
@@ -327,6 +340,22 @@ fn lines_of(output: impl std::io::Read + Send + 'static) -> mpsc::Receiver<Strin
 /// thread for it, and left after LIST_WAIT. `account/read` says an expired sign-in is out, where
 /// `codex login status` said in (#4099).
 fn codex_look(program: &Path, path: Option<&str>) -> (Ready, Option<String>, Option<Models>) {
+    // One older than the browser runs says so before any thread starts, rather than failing it.
+    let mut version = command(program);
+    version.arg("--version");
+    if let Some(path) = path {
+        version.env("PATH", path);
+    }
+    match version.stdin(Stdio::null()).stderr(Stdio::null()).output() {
+        Err(error) => {
+            log!("browser: codex couldn't run: {error}");
+            return (Ready::NotFound, None, None);
+        }
+        Ok(output) if !super::codex::fits_version(&String::from_utf8_lossy(&output.stdout)) => {
+            return (Ready::NeedsUpdate, None, None);
+        }
+        Ok(_) => {}
+    }
     let mut command = command(program);
     command
         .arg("app-server")

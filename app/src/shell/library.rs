@@ -22,18 +22,11 @@ use gpui::{
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry,
     NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY,
-    SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
-    URL_BUTTON_SIZE, What,
-    access::Accessible,
-    clear_label, dashed_square,
-    display_face::display_text,
-    divider_box, favicon, file_url, folder_icon,
-    header::TipSide,
-    host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
-    space_order::{Along, DraggedSpace},
-    split_plate, spring_to,
-    task_cards::number as task_number,
-    title,
+    SPACE_DRAGGED, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
+    access::Accessible, clear_label, dashed_square, display_face::display_text, divider_box,
+    favicon, file_url, folder_icon, header::TipSide, host, keystroke_label, plate, row_box,
+    selected_plate, space_order::DraggedSpace, split_plate, spring_to,
+    task_cards::number as task_number, title,
 };
 use crate::agents::task::{ArchivedTask, TaskAction};
 use crate::tokens::shell::EMOJI_SIZE;
@@ -735,6 +728,15 @@ impl Shell {
         !self.private || matches!(section, Section::Media | Section::Downloads)
     }
 
+    /// The section the Library opens on, by any way in: the last it showed, or a private window's
+    /// downloads where that's a section it hasn't.
+    pub(super) fn opening_section(&self) -> Section {
+        match self.has_section(self.section) {
+            true => self.section,
+            false => Section::Downloads,
+        }
+    }
+
     /// The downloads changed, all of them, newest first: the window keeps those it lists.
     pub fn set_downloads(&mut self, downloads: Vec<Download>, cx: &mut Context<Self>) {
         let downloads: Vec<Download> = downloads
@@ -1014,12 +1016,8 @@ impl Shell {
         if open == self.library_open || (open && (self.page_fullscreen || self.blank)) {
             return;
         }
-        // A private window's Library opens on its downloads where it last showed a section it
-        // hasn't.
-        if open && !self.has_section(self.section) {
-            self.section = Section::Downloads;
-        }
         if open {
+            self.section = self.opening_section();
             self.hide_link(cx);
         }
         let speed = self.library_step().map_or(0., |(_, speed)| speed);
@@ -2206,7 +2204,7 @@ impl Shell {
             .map(|space| {
                 let id = space.id;
                 self.space_card(space, cx)
-                    .left(px(self.space_slide(Along::Cards, id)))
+                    .left(px(self.space_slide(id)))
                     .when(self.space_dragged(id), |card| card.opacity(SPACE_DRAGGED))
             })
             .collect();
@@ -2270,11 +2268,11 @@ impl Shell {
             )
             .on_drag_move(
                 cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
-                    shell.drag_space_over(Along::Cards, event, cx)
+                    shell.drag_space_over(event, cx)
                 }),
             )
-            .children(self.space_drop_line(Along::Cards))
-            .child(self.space_drop_listener(Along::Cards, cx));
+            .children(self.space_drop_line())
+            .child(self.space_drop_listener(cx));
         self.with_card_keys(cards, cx)
     }
 
@@ -2355,7 +2353,7 @@ impl Shell {
             }
         });
         let rows: Vec<_> = rows.collect();
-        let field = self.card_field(space, &palette, Hsla::from(palette.underlay), cx);
+        let field = self.card_field(space, &palette, cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
         let half = URL_BUTTON_SIZE / 2.;
@@ -2467,7 +2465,7 @@ impl Shell {
             // GPUI holds the handle where it was pressed; the card is held that far into it.
             .on_drag(DraggedSpace, move |_, grab, _, cx| {
                 let grab = CARD_MORE_X - half + f32::from(grab.x);
-                Shell::start_space_drag(&shell, id, Along::Cards, CARD_WIDTH, grab, cx)
+                Shell::start_space_drag(&shell, id, CARD_WIDTH, grab, cx)
             })
             .child(
                 svg()
@@ -2500,8 +2498,8 @@ impl Shell {
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
     /// picker hangs from, its name, which a click puts in a field there to type over, and the
-    /// brush, which the theme picker opens beside. `behind` is the card's colour at its top, for
-    /// the swatch of a Space with no icon. At rest it's the icon and the name alone; its plate, the
+    /// brush, which the theme picker opens beside. A Space with no glyph shows its first letter in
+    /// the icon's place. At rest it's the icon and the name alone; its plate, the
     /// slot's dashes and the brush show with the pointer anywhere on the field, the slot and the
     /// brush too, at once as other hover plates do, and while the name is being typed over (#811)
     /// or a picker shows for the Space. They keep their places at rest, so nothing moves as they
@@ -2511,7 +2509,6 @@ impl Shell {
         &self,
         space: &Space,
         palette: &Palette,
-        behind: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let id = space.id;
@@ -2520,13 +2517,9 @@ impl Shell {
             .as_ref()
             .filter(|renaming| renaming.naming == Naming::Space(id) && renaming.in_library);
         let held = renaming.is_some() || self.card_picking(id);
-        // A Space without an icon shows its swatch in the icon's place.
-        let icon = space_icon_drawn(palette, &space.icon).unwrap_or_else(|| {
-            palette
-                .swatch
-                .draw(SPACE_SWATCH_SHOWN, &[behind.to_rgb()])
-                .into_any_element()
-        });
+        // A Space without a glyph, or with an emoji kept from before, shows its first letter there.
+        let ink = palette.text(super::SPACE_NAME);
+        let icon = crate::space_icon::mark(&space.icon, &space.name, super::SPACE_GLYPH, ink);
         let frames = self.slot_frames.clone();
         let slot = div()
             .id(("space-icon-slot", id))

@@ -1,0 +1,13 @@
+source: https://skat.dk/
+landmark: https://skat.dk/borger/aarsopgoerelse | Årsopgørelse
+landmark: https://skat.dk/borger/forskudsopgoerelse | Forskudsopgørelse
+checked: 2026-11-27
+holds: addresses
+---
+Go straight there
+/borger is for people and /erhverv for businesses.
+/borger/aarsopgoerelse is the annual statement, årsopgørelsen, and /borger/aarsopgoerelse/betal-restskat/betal-restskat how to pay what's owed. /borger/forskudsopgoerelse is the preliminary assessment, forskudsopgørelsen, and /borger/forskudsopgoerelse/tjek-og-ret-forskudsopgoerelsen how to check and correct it.
+/borger/fradrag is deductions, /borger/saadan-betaler-du-til-os how to pay, /borger/hovedkort-bikort-og-frikort tax cards, /det-mange-ringer-om what many call about and /kontakt how to get in touch.
+
+Know before you start
+The site is in Danish. Søg at the top opens its search, which asks that nothing personal, such as a CPR number, is typed in it.

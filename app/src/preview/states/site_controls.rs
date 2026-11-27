@@ -81,5 +81,7 @@ pub(crate) fn preview_site() -> Site {
             Ok("off") => Some(false),
             _ => None,
         },
+        // The "…" menu's Sensitive Site mark, unchecked (#4369).
+        sensitive: Some(false),
     }
 }

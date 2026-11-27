@@ -186,8 +186,8 @@ theme=$(grep "^browser: themed space $second " "$log" | tail -1 | cut -d' ' -f5-
 send key escape
 expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 ../tools/window-screenshot.sh "$pid" "$out/space-color.png" || fail "no window to capture"
-# Change Icon… in the Space's menu gives it an emoji from the icon picker's Emoji tab, found by a
-# search and picked with ↩, which a relaunch brings back.
+# Change Icon… in the Space's menu gives it a glyph from the icon picker, which has no Emoji tab for
+# a Space: the bolt, fifth in the grid's first row, which a relaunch brings back.
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
@@ -195,12 +195,9 @@ choose_drawn "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
 expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
-# Emoji, the left half of Emoji | Icon at the picker's top.
-send clickkey 92.5 39.5
-send insert seedling
-send key return
-expect "^browser: iconed space $second 🌱\$" \
-  "an emoji picked on the Emoji tab didn't become the Space's icon"
+send clickkey 151.75 76.25
+expect "^browser: iconed space $second glyph:bolt\$" \
+  "a glyph clicked in the icon picker didn't become the Space's icon"
 ../tools/window-screenshot.sh "$pid" "$out/space-icon.png" || fail "no window to capture"
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space"
@@ -296,7 +293,7 @@ grep -q "^browser: colored space $second $color\$" "$log" ||
   fail "the second Space came back without its colour"
 grep -qF "browser: themed space $second $theme" "$log" ||
   fail "the second Space came back without its theme"
-grep -q "^browser: iconed space $second 🌱\$" "$log" ||
+grep -q "^browser: iconed space $second glyph:bolt\$" "$log" ||
   fail "the second Space came back without its icon"
 await "^browser: space $first\$" || fail "the relaunch didn't show the first Space"
 # Without the tab closed before the quit.

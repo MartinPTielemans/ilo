@@ -1,6 +1,6 @@
 [package]
 name = "browser"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
@@ -43,6 +43,9 @@ incremental = false
 [features]
 # The build for daily use (`build.sh prod`): the user's profile and the real Keychain.
 prod = []
+# The owner's daily copy of the rework (`build.sh rework`): a prod build under branding/rework's
+# name and id, so its bundle, profile and Keychain items are its own, beside the daily app's.
+rework = ["prod"]
 
 [dependencies]
 gpui = { path = ".deps/zed/crates/gpui" }

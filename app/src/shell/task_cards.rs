@@ -37,7 +37,7 @@ use super::{
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
+use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word, head_name};
 use crate::agents::tier::Tier;
 use crate::needs_you::Told;
 use crate::palette::FIELD_PLATE as URL_FIELD;
@@ -117,10 +117,11 @@ fn chip(card: &Card) -> Option<Chip> {
     (card.fix.map(|(cli, offer)| Chip::Assistant(cli, offer))).or(card.retry.then_some(Chip::Retry))
 }
 
-/// The line a card says its task's state on, but at work and waiting: who works on the task, or
-/// Full access where it has that, and its state, in ilo's words alone. The agent's own words are
-/// the title's (#3690). The state is the task's one word, in the fuller form its card has for it
-/// where that names the same state: "Stopped after 6 steps", "Working · 3 helpers".
+/// The line a card says its task's state on, but at work and waiting: who works on the task as a
+/// thread's rows name it (`head_name`), or Full access where it has that, and its state, in ilo's
+/// words alone. The agent's own words are the title's (#3690). The state is the task's one word,
+/// in the fuller form its card has for it where that names the same state: "Stopped after 6
+/// steps", "Working · 3 helpers".
 #[cfg(test)]
 fn state_line(card: &Card) -> SharedString {
     state(card).0
@@ -136,7 +137,7 @@ fn state(card: &Card) -> (SharedString, usize) {
     };
     let (lead, led) = match card.tier {
         Tier::Full => (Tier::Full.label(), Tier::Full.label().len()),
-        _ => (card.name.as_ref(), 0),
+        _ => (head_name(&card.name, !card.replies), 0),
     };
     (format!("{lead} · {state}").into(), led)
 }
@@ -453,7 +454,6 @@ impl Shell {
         if cards == self.task_cards {
             return;
         }
-        let mut waits = false;
         // What a screen reader is told of a task that came to need the user or to be done.
         let (mut told, mut answered) = (None, false);
         let read = self.a11y && self.window_active;
@@ -464,7 +464,6 @@ impl Shell {
         let list = &mut self.task_list;
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
-            waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
             // The window in front tells it, and nothing where its notification was posted.
             if read
                 && was.is_none_or(|was| was.dot != card.dot)
@@ -545,6 +544,7 @@ impl Shell {
             }
         }
         let before = std::mem::replace(&mut self.task_cards, cards);
+        self.note_waiting();
         self.keep_plates(&before);
         self.area_takes_space();
         if let Some(said) = told {
@@ -556,12 +556,6 @@ impl Shell {
         }
         if answered {
             self.talk_answered(cx);
-        }
-        // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
-        // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.
-        // It isn't held out, as a task may wait a long while over the page.
-        if waits && self.can_reveal() {
-            self.set_revealed(true, cx);
         }
         // A conversation whose card went, dismissed, goes with it.
         if let Some(agent) = self.talk_agent()
@@ -968,7 +962,7 @@ impl Shell {
     fn run_chip(&mut self, agent: SharedString, chip: Chip, cx: &mut Context<Self>) {
         match chip {
             Chip::Retry => self.browser.task(agent, TaskAction::Retry, cx),
-            Chip::Assistant(cli, Offer::Get) => {
+            Chip::Assistant(cli, Offer::Get | Offer::Update) => {
                 log!("browser: assistant install page {} via sidebar", cli.id());
                 self.browser.open_page(cli.install_page(), cx);
             }

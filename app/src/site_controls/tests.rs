@@ -104,6 +104,7 @@ impl Host for Recorder {
             Run::ExtensionItem(id, item) => format!("extension {id} {item:?}"),
             Run::OpenInProfile(profile) => format!("open in profile {profile}"),
             Run::NewSpaceInProfile(profile) => format!("new space in profile {profile}"),
+            Run::Sensitive(on) => format!("sensitive {on}"),
         };
         self.push(format!("run {run} {tab}"));
     }
@@ -178,6 +179,7 @@ fn site() -> Site {
         arrangement_misfits: None,
         arrangement_off: None,
         recent: None,
+        sensitive: None,
     }
 }
 
@@ -271,7 +273,7 @@ impl Panel {
         let profiles = self.profiles.clone();
         self.cx
             .cx
-            .update(|cx| show(TAB, place, window, vec![extension()], profiles, cx));
+            .update(|cx| show(TAB, place, window, None, vec![extension()], profiles, cx));
         self.cx.run_until_parked();
     }
 
@@ -343,41 +345,33 @@ impl Panel {
     }
 }
 
-// The panel's places in its window, which is 236 pt wide under a beak 12.5 pt tall: the action
-// row's five places 10 pt in at y 22.5, 37, 37, 36, 37 and 37 pt wide with Share, the tiles closed
-// up from the left and the shield after them; the extensions' tiles from y 91.5, the "This site"
-// heading's cap at y 141.5, the lines 30 pt apart from y 158.5, and the footer at y 296.5. A
-// switch alone is a strip from y 62.5 that takes 40 pt, and pushes what's under it down.
-const SHARE: (f32, f32) = (28.5, 38.5);
-const CAPTURE: (f32, f32) = (73.5, 38.5);
-const CAPTURE_FULL_PAGE: (f32, f32) = (118., 38.5);
-/// The shield, after the three tiles of a site that can't have a Boost.
-const SHIELD: (f32, f32) = (162.5, 38.5);
-const STRIP: (f32, f32) = (118., 78.5);
-const STRIP_HEIGHT: f32 = 40.;
-const EXTENSION: (f32, f32) = (34., 107.5);
-const ADD: (f32, f32) = (90., 107.5);
-const EXTENSIONS_HEADING: (f32, f32) = (39., 73.);
-const MANAGE: (f32, f32) = (213., 73.);
-const SITE_HEADING: (f32, f32) = (39., 146.);
-const MORE_LINK: (f32, f32) = (218., 146.);
+// The panel's places in its window, which is 236 pt wide under a beak 12.5 pt tall (#4404): the
+// header from y 22.5, 36 pt tall, with "…" at its end; the tiles from y 68.5, four of 48 from x 10
+// with Share, the site's closed up from the left; "This site" at y 114.5 over its plate, whose
+// rows are 30 pt apart from y 134.5; for `site()`'s three rows, the extensions' grid from y 258.5,
+// and the foot's row from y 308.5.
+const SHARE: (f32, f32) = (34., 84.5);
+const CAPTURE: (f32, f32) = (90., 84.5);
+const CAPTURE_FULL_PAGE: (f32, f32) = (146., 84.5);
+const MORE: (f32, f32) = (212., 40.5);
+/// The extension's tile and +, under `site()`'s rows.
+const EXTENSION: (f32, f32) = (34., 274.5);
+const ADD: (f32, f32) = (90., 274.5);
+/// Reset permissions, in `site()`'s foot.
+const RESET_ROW: (f32, f32) = (118., 322.5);
+/// "This site", which takes no click.
+const SITE_LABEL: (f32, f32) = (40., 121.5);
+/// The site's plate's `index`th row.
 fn line(index: usize) -> (f32, f32) {
-    (99., 158.5 + index as f32 * ITEM_PITCH + 14.)
+    (118., 134.5 + index as f32 * ROW + ROW / 2.)
 }
-/// A line under a strip.
-fn line_under_strip(index: usize) -> (f32, f32) {
-    let (x, y) = line(index);
-    (x, y + STRIP_HEIGHT)
-}
-const LOCK: (f32, f32) = (29., 312.5);
-const MORE: (f32, f32) = (209., 312.5);
 
 /// Centred under its button at x 206, its top 9 pt under the URL field's bottom, which its beak
 /// reaches over.
 #[gpui::test]
 fn it_hangs_from_its_button_once_the_site_is_read(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
-    assert_eq!(panel.calls(), ["show 88 78.5 236 338.5"]);
+    assert_eq!(panel.calls(), ["show 88 78.5 236 346.5"]);
     let corners = panel.host.corners.take();
     assert_eq!(corners.first(), Some(&(118., 0., BEAK_TIP_RADIUS)));
     assert_eq!(corners.len(), 7);
@@ -392,7 +386,7 @@ fn it_keeps_inside_the_window(cx: &mut TestAppContext) {
         button: bounds(265., 49., 30., 30.),
     };
     let mut panel = Panel::at(cx, place, size(px(300.), px(800.)), site());
-    assert_eq!(panel.calls(), ["show 56 78.5 236 338.5"]);
+    assert_eq!(panel.calls(), ["show 56 78.5 236 346.5"]);
     assert_eq!(
         panel.host.corners.take()[0].0,
         WIDTH - (RADIUS + BEAK + BEAK_FOOT_RADIUS)
@@ -404,30 +398,28 @@ fn it_keeps_inside_the_window(cx: &mut TestAppContext) {
 fn in_the_corner_it_has_no_beak(cx: &mut TestAppContext) {
     let place = Place::Corner(point(px(18.), px(8.)));
     let mut panel = Panel::at(cx, place, window(), site());
-    assert_eq!(panel.calls(), ["show 18 8 236 326"]);
+    assert_eq!(panel.calls(), ["show 18 8 236 334"]);
     assert_eq!(panel.host.corners.take().len(), 4);
 }
 
-/// Arc's, measured, is 299 pt tall with two rows, under its beak. Ours keeps its tiles, headings
-/// and footer where Arc's are, with its tiles' padding 10 for corners concentric with the body's,
-/// and its two lines take 33 pt less than Arc's rows (#2334).
+/// Arc's order down the panel (#4404): the header, the tiles 10 under it, "This site" 14 under
+/// them over its plate, the extensions' label 14 under that, and without a permission to reset no
+/// foot, the grid 10 from the bottom.
 #[gpui::test]
-fn two_lines_take_less_than_arcs_two_rows(_: &mut TestAppContext) {
+fn the_header_the_tiles_the_site_then_the_extensions(_: &mut TestAppContext) {
     let two = Site {
         permissions: site().permissions[..2].to_vec(),
         reset: None,
         ..site()
     };
     let at = layout(&two, 0, false);
-    let found = (
-        at.tiles,
-        at.extensions_cap,
-        at.extensions,
-        at.site_cap,
-        at.lines,
-    );
-    assert_eq!(found, (10., 56., 79., Some(129.), 146.));
-    assert_eq!((at.divider, at.footer, at.height), (213., 224., 266.));
+    let found = (at.header, at.tiles, at.site_label, at.rows);
+    assert_eq!(found, (10., 56., Some(102.), 122.));
+    let found = (at.extensions_label, at.extensions, at.foot, at.height);
+    assert_eq!(found, (196., 216., None, 258.));
+    // A permission to reset brings the foot: a line 12 under the grid, its row 6 under the line.
+    let at = layout(&site(), 0, false);
+    assert_eq!((at.foot, at.height), (Some(290.), 334.));
 }
 
 #[gpui::test]
@@ -459,7 +451,7 @@ fn its_button_toggles_it(cx: &mut TestAppContext) {
     panel.changed(site());
     assert_eq!(
         panel.calls(),
-        [format!("read {TAB}"), "show 88 78.5 236 338.5".into()]
+        [format!("read {TAB}"), "show 88 78.5 236 346.5".into()]
     );
 }
 
@@ -469,36 +461,31 @@ fn share_hangs_its_menu_from_its_tile(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
     panel.click(SHARE);
-    panel.ran("share 98 101 37 32");
+    panel.ran("share 98 147 48 32");
 }
 
-/// Without a share sheet, as on Linux, there's no Share tile to do nothing: the row is four places
-/// of 48, the captures closing up from the left and the shield after them.
+/// Without a share sheet, as on Linux, there's no Share tile to do nothing: the row is three
+/// places of 66.7, the captures closing up from the left (#4404).
 #[gpui::test]
 fn share_is_left_out_where_the_system_cant_share(cx: &mut TestAppContext) {
     let host = Recorder {
         no_share_sheet: true,
         ..Recorder::default()
     };
-    let blocking = Site {
-        ad_blocking: Some(true),
-        ..site()
-    };
-    let mut panel = Panel::on(host, cx, under_button(), window(), blocking);
+    let mut panel = Panel::on(host, cx, under_button(), window(), site());
     panel.calls();
-    for x in [34., 90., 146., 202.] {
-        panel.hover((x, 38.5));
+    for x in [43., 118., 192.] {
+        panel.hover((x, 84.5));
     }
     assert_eq!(
         panel.host.tips.take(),
         [
-            "Capture a Portion of This Page at 122 133",
-            "Capture Full Page at 178 133",
-            "Ads and trackers blocked at 234 133",
+            "Capture a Portion of This Page at 131.5 179",
+            "Capture Full Page at 206 179",
             "none"
         ]
     );
-    panel.click((90., 38.5));
+    panel.click((118., 84.5));
     panel.ran("CaptureFullPage");
 }
 
@@ -530,7 +517,7 @@ fn a_tile_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
     // Under each tile's middle in the browser window, and Share's leave, after Notes came, leaves
     // Notes'.
     let tips = panel.host.tips.take();
-    assert_eq!(tips, ["Share at 116.5 133", "Notes at 122 202", "none"]);
+    assert_eq!(tips, ["Share at 122 179", "Notes at 122 369", "none"]);
 }
 
 /// Its popup hangs from the tile, in the browser window.
@@ -539,7 +526,7 @@ fn an_extension_runs_as_its_toolbar_button(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
     panel.click(EXTENSION);
-    panel.ran("extension abc 98 170 48 32");
+    panel.ran("extension abc 98 337 48 32");
 }
 
 /// A right-click on a tile gives its menu: Move to Top, which the first tile has done, then the
@@ -625,7 +612,7 @@ fn the_grid_takes_the_extensions_the_core_reports_once_open(cx: &mut TestAppCont
     );
     // The second's tile is where + was, and runs it.
     panel.click(ADD);
-    panel.ran("extension def 154 170 48 32");
+    panel.ran("extension def 154 337 48 32");
 }
 
 /// Another tab's extensions don't reach the panel.
@@ -655,35 +642,6 @@ fn the_add_tile_opens_the_extensions_page(cx: &mut TestAppContext) {
     panel.calls();
     panel.click(ADD);
     panel.ran("ManageExtensions");
-}
-
-/// "Manage" shows on the Extensions heading under the pointer, and opens the extensions page.
-#[gpui::test]
-fn manage_shows_on_the_extensions_heading(cx: &mut TestAppContext) {
-    let mut panel = Panel::new(cx, site());
-    panel.calls();
-    panel.click(MANAGE);
-    assert!(panel.calls().is_empty());
-    panel.hover(EXTENSIONS_HEADING);
-    panel.click(MANAGE);
-    panel.ran("ManageExtensions");
-}
-
-/// "More" shows on the "This site" heading under the pointer, and opens Chrome's settings for the
-/// site.
-#[gpui::test]
-fn more_shows_on_the_site_heading(cx: &mut TestAppContext) {
-    let mut panel = Panel::new(cx, site());
-    panel.calls();
-    panel.click(MORE_LINK);
-    assert!(panel.calls().is_empty());
-    panel.hover(SITE_HEADING);
-    // Not the other heading's.
-    panel.click(MANAGE);
-    assert!(panel.calls().is_empty());
-    panel.hover(SITE_HEADING);
-    panel.click(MORE_LINK);
-    panel.ran("site settings");
 }
 
 #[gpui::test]
@@ -767,8 +725,8 @@ fn a_policys_device_stays(cx: &mut TestAppContext) {
     );
 }
 
-/// A site kept for Safari's engine has its switch, a strip alone, and its menu's Off turns it off;
-/// On, which it is, does nothing.
+/// A site kept for Safari's engine has its row, the plate's first, which says On, and its menu's
+/// Off turns it off; On, which it is, does nothing.
 #[gpui::test]
 fn the_engine_switch_turns_safaris_engine_off(cx: &mut TestAppContext) {
     let mut panel = Panel::new(
@@ -780,17 +738,17 @@ fn the_engine_switch_turns_safaris_engine_off(cx: &mut TestAppContext) {
     );
     panel.calls();
     panel.host.answer.set(Some(0));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(panel.calls(), ["menu On*, Off"]);
     panel.host.answer.set(Some(1));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(
         panel.calls(),
         ["menu On*, Off", &format!("system engine {TAB} false")]
     );
     // The lines follow, under the strip.
     panel.host.answer.set(Some(1));
-    panel.click(line_under_strip(1));
+    panel.click(line(2));
     assert_eq!(
         panel.calls(),
         [
@@ -814,10 +772,10 @@ fn the_engine_switch_offers_safaris_engine(cx: &mut TestAppContext) {
     );
     panel.calls();
     panel.host.answer.set(Some(1));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(panel.calls(), ["menu On, Off*"]);
     panel.host.answer.set(Some(0));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(
         panel.calls(),
         ["menu On, Off*", &format!("system engine {TAB} true")]
@@ -828,7 +786,7 @@ fn the_engine_switch_offers_safaris_engine(cx: &mut TestAppContext) {
     });
     panel.calls();
     panel.host.answer.set(None);
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(panel.calls(), ["menu On*, Off"]);
 }
 
@@ -844,7 +802,7 @@ fn after_off_the_engine_switch_offers_on(cx: &mut TestAppContext) {
     );
     panel.calls();
     panel.host.answer.set(Some(1));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(
         panel.calls(),
         ["menu On*, Off", &format!("system engine {TAB} false")]
@@ -855,15 +813,15 @@ fn after_off_the_engine_switch_offers_on(cx: &mut TestAppContext) {
     });
     panel.calls();
     panel.host.answer.set(Some(0));
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(
         panel.calls(),
         ["menu On, Off*", &format!("system engine {TAB} true")]
     );
 }
 
-/// A site the core neither keeps nor offers Safari's engine for has no switch for it: its first line
-/// is the first permission's.
+/// A site the core neither keeps nor offers Safari's engine for has no row for it: its plate's
+/// first is the first permission's.
 #[gpui::test]
 fn without_the_offer_there_is_no_engine_switch(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
@@ -873,9 +831,8 @@ fn without_the_offer_there_is_no_engine_switch(cx: &mut TestAppContext) {
     assert_eq!(panel.calls(), ["menu Allow, Block, Ask*"]);
 }
 
-/// A site with logins has a line for them over the permissions, under the engine's strip; Remove closes the
-/// panel for the browser window to ask, Never's way back acts at once, and the last item opens them
-/// all in Settings.
+/// A site with logins has a row for them, the plate's last; Remove closes the panel for the browser
+/// window to ask, Never's way back acts at once, and the last item opens them all in Settings.
 #[gpui::test]
 fn the_passwords_line_removes_a_login_or_takes_back_never(cx: &mut TestAppContext) {
     let logins = vec![login("me", false), login("", true)];
@@ -890,13 +847,13 @@ fn the_passwords_line_removes_a_login_or_takes_back_never(cx: &mut TestAppContex
     panel.calls();
     let menu = "menu Remove “me”…, Offer to Save Passwords, , All Passwords…";
     panel.host.answer.set(Some(1));
-    panel.click(line_under_strip(0));
+    panel.click(line(4));
     assert_eq!(
         panel.calls(),
         [menu, &format!("allow saving {TAB} example.com")]
     );
     panel.host.answer.set(Some(0));
-    panel.click(line_under_strip(0));
+    panel.click(line(4));
     let remove = format!("run remove login example.com me {TAB}");
     assert_eq!(panel.calls(), [menu, "release", "stop", &remove, "hide"]);
     panel.show(under_button(), window());
@@ -907,7 +864,7 @@ fn the_passwords_line_removes_a_login_or_takes_back_never(cx: &mut TestAppContex
     });
     panel.calls();
     panel.host.answer.set(Some(2));
-    panel.click(line(0));
+    panel.click(line(3));
     let menu = "menu Remove “me”…, , All Passwords…";
     assert_eq!(
         panel.calls(),
@@ -921,8 +878,8 @@ fn the_passwords_line_removes_a_login_or_takes_back_never(cx: &mut TestAppContex
     );
 }
 
-/// The line says what the site keeps and pushes the permissions a line down; with none it isn't
-/// there.
+/// The row says what the site keeps, after the permissions, and makes the panel a row taller; with
+/// none it isn't there.
 #[gpui::test]
 fn the_passwords_line_shows_only_for_a_site_with_logins(cx: &mut TestAppContext) {
     let plain = Panel::new(cx, site()).calls();
@@ -937,9 +894,9 @@ fn the_passwords_line_shows_only_for_a_site_with_logins(cx: &mut TestAppContext)
     let with = panel.calls();
     let height =
         |calls: &[String]| -> f32 { calls[0].rsplit(' ').next().unwrap().parse().unwrap() };
-    assert_eq!(height(&with) - height(&plain), ITEM_PITCH);
+    assert_eq!(height(&with) - height(&plain), ROW);
     panel.host.answer.set(Some(1));
-    panel.click(line(2));
+    panel.click(line(1));
     assert_eq!(
         panel.calls(),
         [
@@ -949,10 +906,10 @@ fn the_passwords_line_shows_only_for_a_site_with_logins(cx: &mut TestAppContext)
     );
 }
 
-/// With every part: the shield last in the action row, Safari's engine's strip, then the lines,
-/// Passwords, the permissions, then Reset, the panel a strip and a line taller than without.
+/// With every part, the site's plate in its order: Block ads and trackers, Safari's engine, the
+/// permissions, then Passwords, the panel three rows taller than without.
 #[gpui::test]
-fn the_shield_the_switch_then_the_lines(cx: &mut TestAppContext) {
+fn ad_blocking_the_switches_the_permissions_then_passwords(cx: &mut TestAppContext) {
     let logins = vec![login("me", false)];
     let site = Site {
         system_engine: Some(true),
@@ -961,53 +918,44 @@ fn the_shield_the_switch_then_the_lines(cx: &mut TestAppContext) {
         ..site()
     };
     let mut panel = Panel::new(cx, site);
-    assert_eq!(panel.calls(), ["show 88 78.5 236 408.5"]);
+    assert_eq!(panel.calls(), ["show 88 78.5 236 436.5"]);
     panel.host.answer.set(None);
-    panel.click(SHIELD);
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("ad blocking {TAB} false")]);
-    panel.click(STRIP);
+    panel.click(line(1));
     assert_eq!(panel.calls(), ["menu On*, Off"]);
-    panel.click(line_under_strip(0));
-    assert_eq!(panel.calls(), ["menu Remove “me”…, , All Passwords…"]);
-    panel.click(line_under_strip(1));
+    panel.click(line(2));
     assert_eq!(panel.calls(), ["menu Allow, Block, Ask*"]);
-    panel.click(line_under_strip(2));
+    panel.click(line(3));
     assert_eq!(panel.calls(), ["menu Allow*, Block, Ask"]);
+    panel.click(line(5));
+    assert_eq!(panel.calls(), ["menu Remove “me”…, , All Passwords…"]);
 }
 
-/// Two switches or more are tiles two to a line, a glyph over its name, the third keeping its
-/// tile's size on a line of its own; each turns its setting as a strip does.
+/// Each switch is a row of the plate, Developer Mode, Safari's engine and the Boost in that
+/// order, each turning its setting at a click anywhere on it.
 #[gpui::test]
-fn two_switches_or_more_are_tiles(cx: &mut TestAppContext) {
+fn each_switch_is_a_row_of_the_sites_plate(cx: &mut TestAppContext) {
     let site = Site {
         developer_mode: Some(true),
         system_engine: Some(false),
         boostable: true,
-        boost: Some(true),
+        boost: Some(false),
         ..site()
     };
-    let at = layout(&site, 1, true);
-    // Two lines of 52 under the action row, 8 apart, and the gap over them.
-    assert_eq!(
-        at.extensions_cap - layout(&super::tests::site(), 1, true).extensions_cap,
-        120.
-    );
     let mut panel = Panel::new(cx, site);
     panel.calls();
-    panel.click((62., 88.5));
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("developer mode {TAB} false")]);
     panel.host.answer.set(None);
-    panel.click((174., 88.5));
+    panel.click(line(1));
     assert_eq!(panel.calls(), ["menu On, Off*"]);
-    panel.click((62., 148.5));
-    assert_eq!(panel.calls(), [format!("boost {TAB} false")]);
-    // The third's line has no second tile.
-    panel.click((174., 148.5));
-    assert!(panel.calls().is_empty());
+    panel.click((40., line(2).1));
+    assert_eq!(panel.calls(), [format!("boost {TAB} true")]);
 }
 
-/// A GitHub page's switch for what's recent in its cards (#3074) is a strip alone, which turns it
-/// off and on again, kept as the user left it.
+/// A GitHub page's switch for what's recent in its cards (#3074) is a row of the plate, which turns
+/// it off and on again, kept as the user left it.
 #[gpui::test]
 fn the_recent_switch_turns_the_sites_cards_rows_off_and_on(cx: &mut TestAppContext) {
     let mut panel = Panel::new(
@@ -1018,13 +966,13 @@ fn the_recent_switch_turns_the_sites_cards_rows_off_and_on(cx: &mut TestAppConte
         },
     );
     panel.calls();
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("recent {TAB} false")]);
-    panel.click(STRIP);
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("recent {TAB} true")]);
 }
 
-/// A value a policy set shows, but isn't the user's to change.
+/// A value a policy set shows, without a chevron, but isn't the user's to change.
 #[gpui::test]
 fn a_managed_value_has_no_menu(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
@@ -1034,11 +982,12 @@ fn a_managed_value_has_no_menu(cx: &mut TestAppContext) {
     assert!(panel.calls().is_empty());
 }
 
+/// The foot's row, while there's a permission to reset.
 #[gpui::test]
 fn reset_sets_the_permissions_back(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
-    panel.click(line(3));
+    panel.click(RESET_ROW);
     assert_eq!(panel.calls(), [format!("reset {TAB}")]);
 }
 
@@ -1081,9 +1030,6 @@ fn profiles() -> Profiles {
     }
 }
 
-/// The profile's chip, against "…": the middle of its last 32 pt, the chevron's end.
-const PROFILE: (f32, f32) = (170., LOCK.1);
-
 fn profiled(cx: &mut TestAppContext, site: Site) -> Panel {
     let host = Recorder::default();
     let mut panel = Panel::profiled(host, cx, under_button(), window(), site, Some(profiles()));
@@ -1097,7 +1043,8 @@ fn profiled(cx: &mut TestAppContext, site: Site) -> Panel {
 fn the_profile_chip_opens_the_page_in_another_profile(cx: &mut TestAppContext) {
     let mut panel = profiled(cx, site());
     panel.host.answer.set(Some(0));
-    panel.click(PROFILE);
+    let chip = panel.chip();
+    panel.click(chip);
     let calls = panel.calls();
     assert_eq!(calls[0], "menu Open in Work, New Space in Side…");
     assert_eq!(
@@ -1111,7 +1058,8 @@ fn the_profile_chip_opens_the_page_in_another_profile(cx: &mut TestAppContext) {
     );
     let mut panel = profiled(cx, site());
     panel.host.answer.set(Some(1));
-    panel.click(PROFILE);
+    let chip = panel.chip();
+    panel.click(chip);
     let calls = panel.calls();
     assert_eq!(
         calls[1..],
@@ -1124,81 +1072,74 @@ fn the_profile_chip_opens_the_page_in_another_profile(cx: &mut TestAppContext) {
     );
 }
 
-/// Beside the chip only a secure page's lock loses its words, to its glyph and a tooltip. Any
-/// other lock keeps them, and the chip gives way instead: its name cuts at its end, and with
-/// too little room goes, named in its tooltip whenever it's cut.
+/// The chip is before "…" in the header, and the site's name keeps its room: the chip's name cuts
+/// first, and with too little room goes, named in its tooltip whenever it's cut (#4404).
 #[gpui::test]
-fn beside_the_chip_only_a_secure_lock_loses_its_words(cx: &mut TestAppContext) {
-    let tip = |panel: &mut Panel, at| {
-        panel.hover(at);
+fn the_chips_name_gives_way_to_the_sites(cx: &mut TestAppContext) {
+    let tip = |panel: &mut Panel| {
+        let chip = panel.chip();
+        panel.hover(chip);
         let tips = panel.host.tips.take();
         tips.into_iter().find(|tip| !tip.starts_with("none"))
     };
-    let mut panel = profiled(cx, site());
-    assert!(tip(&mut panel, LOCK).is_some_and(|tip| tip.starts_with("Secure at ")));
-    assert_eq!(tip(&mut panel, PROFILE), None, "the whole name shows");
-    let not_secure = Site {
-        connection: Connection::NotSecure,
-        connection_summary: "Not secure".into(),
-        certificate: false,
+    // The tests' face is wide: "example.com" takes 102 of the header's 153.
+    let short = Site {
+        site: "a.io".into(),
         ..site()
     };
-    // Left of the chip's glyph and chevron, where only its name is.
-    let name = (PROFILE.0 - 60., PROFILE.1);
-    let mut panel = profiled(cx, not_secure);
-    assert_eq!(tip(&mut panel, LOCK), None, "the lock keeps its words");
-    assert!(tip(&mut panel, PROFILE).is_some_and(|tip| tip.starts_with("Personal at ")));
+    let mut panel = profiled(cx, short);
+    let (chip, shown) = panel.head().chip.expect("a chip with two profiles");
+    assert!(shown > 0., "the name shows beside a short site");
+    assert!(chip.right() <= panel.head().more.left());
+    let cut = panel.head().chip_cut;
     assert_eq!(
-        tip(&mut panel, name),
-        None,
-        "too little room: the name goes"
+        tip(&mut panel).is_some(),
+        cut,
+        "a tooltip only for a cut name"
     );
-    // The browser's own page names itself in fewer words, which leaves the name some room: in
-    // the tests' face, not all of it.
-    let own = Site {
-        site: "ilo".into(),
-        connection: Connection::Internal,
-        certificate: false,
-        ..site()
-    };
-    let mut panel = profiled(cx, own);
-    assert_eq!(tip(&mut panel, LOCK), None);
-    assert!(tip(&mut panel, name).is_some_and(|tip| tip.starts_with("Personal at ")));
+    // Too little room beside a longer name: the chip's goes.
+    let mut panel = profiled(cx, site());
+    assert_eq!(panel.head().chip.map(|(_, shown)| shown), Some(0.));
+    assert!(tip(&mut panel).is_some_and(|tip| tip.starts_with("Personal at ")));
+    let head = panel.head();
+    let (chip, _) = head.chip.unwrap();
+    assert!(f32::from(head.text.x) + head.room <= f32::from(chip.left()));
 }
 
-/// The keyboard reaches the chip after the lock, before "…", and space opens its menu.
+/// The keyboard reaches the chip after the connection's words, before "…", and space opens its
+/// menu.
 #[gpui::test]
 fn the_keyboard_reaches_the_profile_chip_before_more(cx: &mut TestAppContext) {
     let mut panel = profiled(cx, site());
-    panel.keys("shift-tab shift-tab");
+    panel.keys("tab tab");
+    assert_eq!(panel.keyed().0, Some(Stop::Profile));
     panel.host.tips.take();
     panel.keys("space");
     assert_eq!(panel.calls()[0], "menu Open in Work, New Space in Side…");
 }
 
-/// With one profile, or in a window with a Space of its own, the shell gives none, and the
-/// footer is the lock in words and "…" as before.
+/// With one profile, or in a window with a Space of its own, the shell gives none, and the header
+/// is the site and "…".
 #[gpui::test]
 fn with_one_profile_there_is_no_chip(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
-    panel.click(PROFILE);
-    assert_eq!(panel.calls(), Vec::<String>::new());
-    // "Secure" stays in words, with no tooltip standing in for them.
-    panel.hover(LOCK);
-    let tips = panel.host.tips.take();
-    assert!(tips.iter().all(|tip| tip.starts_with("none")), "{tips:?}");
+    assert_eq!(panel.head().chip, None);
 }
 
+/// The connection's words under the site's name, the words table's SC1, open the certificate.
 #[gpui::test]
 fn the_lock_shows_the_certificate(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
-    panel.click(LOCK);
+    assert_eq!(connection_words(&site()), Some("Secure"));
+    let lock = panel.placed("lock");
+    panel.click(lock);
     panel.ran("certificate");
 }
 
-/// A page with no certificate, as an http one, has nothing to show.
+/// A page with no certificate, as an http one, has nothing to show; one of the browser's own has
+/// no connection to name.
 #[gpui::test]
 fn without_a_certificate_the_lock_does_nothing(cx: &mut TestAppContext) {
     let plain = Site {
@@ -1208,9 +1149,25 @@ fn without_a_certificate_the_lock_does_nothing(cx: &mut TestAppContext) {
     };
     let mut panel = Panel::new(cx, plain.clone());
     panel.calls();
-    panel.click(LOCK);
+    let head = panel.head().lock.expect("the connection's words");
+    panel.click((f32::from(head.center().x), f32::from(head.center().y)));
     assert!(panel.calls().is_empty());
-    assert_eq!(lock_label(&plain), "Not secure");
+    assert_eq!(connection_words(&plain), Some("Not secure"));
+    let own = Site {
+        site: "ilo".into(),
+        connection: Connection::Internal,
+        certificate: false,
+        ..site()
+    };
+    panel.changed(own);
+    panel.calls();
+    assert_eq!(panel.head().lock, None);
+    assert!(
+        !panel
+            .places()
+            .iter()
+            .any(|place| place.starts_with("lock "))
+    );
 }
 
 /// A change the core reports, such as a reset that leaves nothing to reset, resizes the panel.
@@ -1222,14 +1179,16 @@ fn a_change_resizes_it(cx: &mut TestAppContext) {
         reset: None,
         ..site()
     });
-    assert_eq!(panel.calls(), ["height 308.5"]);
-    assert_eq!(panel.host.corners.take()[3], (WIDTH, 308.5, RADIUS));
+    // Nothing to reset: no foot.
+    assert_eq!(panel.calls(), ["height 300.5"]);
+    assert_eq!(panel.host.corners.take()[3], (WIDTH, 300.5, RADIUS));
+    assert!(!panel.places().iter().any(|place| place.contains("Reset")));
     // A report for another tab isn't this panel's.
     panel.cx.cx.update(|cx| changed(TAB + 1, site(), cx));
     assert!(panel.calls().is_empty());
 }
 
-/// With nothing to list, the "This site" heading goes, and the rule follows the extensions.
+/// With nothing to list, "This site" and its plate go, and the extensions follow the tiles.
 #[gpui::test]
 fn without_lines_there_is_no_site_heading(cx: &mut TestAppContext) {
     let bare = Site {
@@ -1238,12 +1197,12 @@ fn without_lines_there_is_no_site_heading(cx: &mut TestAppContext) {
         ..site()
     };
     let mut panel = Panel::new(cx, bare);
-    assert_eq!(panel.calls(), ["show 88 78.5 236 191.5"]);
+    assert_eq!(panel.calls(), ["show 88 78.5 236 176.5"]);
 }
 
-/// The shield, last in the action row, lets ads and trackers load on the site at a click, and
-/// blocks them again at the next; the core reloads the page and reports the site again. A plain
-/// site's panel has no switch, so the lines start under the extensions.
+/// Block ads and trackers, the site's plate's first row and a switch in the ink (#4404), lets ads
+/// and trackers load on the site at a click, and blocks them again at the next; the core reloads
+/// the page and reports the site again.
 #[gpui::test]
 fn the_shield_turns_ad_blocking_off_and_on_for_the_site(cx: &mut TestAppContext) {
     let mut panel = Panel::new(
@@ -1253,22 +1212,17 @@ fn the_shield_turns_ad_blocking_off_and_on_for_the_site(cx: &mut TestAppContext)
             ..site()
         },
     );
-    assert_eq!(panel.calls(), ["show 88 78.5 236 338.5"]);
-    panel.hover(SHIELD);
-    assert_eq!(
-        panel.host.tips.take(),
-        ["Ads and trackers blocked at 250.5 133"]
-    );
-    panel.click(SHIELD);
+    assert_eq!(panel.calls(), ["show 88 78.5 236 376.5"]);
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("ad blocking {TAB} false")]);
     panel.changed(Site {
         ad_blocking: Some(false),
         ..site()
     });
-    panel.click(SHIELD);
+    panel.click(line(0));
     assert_eq!(panel.calls(), [format!("ad blocking {TAB} true")]);
     panel.host.answer.set(Some(1));
-    panel.click(line(1));
+    panel.click(line(2));
     assert_eq!(
         panel.calls(),
         [
@@ -1278,8 +1232,8 @@ fn the_shield_turns_ad_blocking_off_and_on_for_the_site(cx: &mut TestAppContext)
     );
 }
 
-/// The places the panel logs for the Mac checks take their clicks: the tiles, the shield, each
-/// switch, each line, the lock and "…".
+/// The places the panel logs for the Mac checks take their clicks, by the names they had before
+/// #4404: the tiles, the shield, each switch, each line, Reset, the lock and "…".
 #[gpui::test]
 fn a_click_at_each_logged_place_lands_on_its_part(cx: &mut TestAppContext) {
     let busy = Site {
@@ -1334,15 +1288,15 @@ fn developer_mode_s_switch_shows_while_it_s_on(cx: &mut TestAppContext) {
         ..site()
     };
     let mut panel = Panel::new(cx, site.clone());
-    assert_eq!(panel.calls(), ["show 88 78.5 236 378.5"]);
-    panel.click(STRIP);
+    assert_eq!(panel.calls(), ["show 88 78.5 236 406.5"]);
+    panel.click(line(1));
     assert_eq!(panel.calls(), [format!("developer mode {TAB} false")]);
     let off = Site {
         developer_mode: Some(false),
         ..site
     };
     panel.changed(off.clone());
-    assert_eq!(panel.calls(), ["height 338.5"]);
+    assert_eq!(panel.calls(), ["height 376.5"]);
     let menu = "menu Clear Cache, Clear Cookies, Turn On Developer Mode, , Manage Extensions…, \
                 Add Extension…, , All Site Settings…";
     panel.host.answer.set(Some(2));
@@ -1359,14 +1313,49 @@ fn developer_mode_s_switch_shows_while_it_s_on(cx: &mut TestAppContext) {
     );
 }
 
-/// Where it isn't the user's to change, such as a private window, there's no shield: its place in
-/// the row is empty.
+/// "…" holds the user's mark of a sensitive site, checked while it's marked, which takes it off;
+/// a private window has none (#4369).
+#[gpui::test]
+fn the_sensitive_mark_is_a_checkmark_in_more(cx: &mut TestAppContext) {
+    let marked = Site {
+        sensitive: Some(true),
+        ..site()
+    };
+    let mut panel = Panel::new(cx, marked);
+    panel.calls();
+    panel.host.answer.set(Some(2));
+    panel.click(MORE);
+    let menu = "menu Clear Cache, Clear Cookies, Sensitive Site*, , Manage Extensions…, \
+                Add Extension…, , All Site Settings…";
+    assert_eq!(
+        panel.calls(),
+        [
+            menu,
+            "release",
+            "stop",
+            &format!("run sensitive false {TAB}"),
+            "hide"
+        ]
+    );
+    let private = more_items(&site());
+    assert!(!(private.iter()).any(|(item, _)| item.title.contains("Sensitive")));
+}
+
+/// Where it isn't the user's to change, such as a private window, there's no ad blocking row: the
+/// plate starts with the permissions.
 #[gpui::test]
 fn without_a_say_there_is_no_shield(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
-    panel.click(SHIELD);
-    assert!(panel.calls().is_empty());
+    assert!(
+        !panel
+            .places()
+            .iter()
+            .any(|place| place.starts_with("shield "))
+    );
+    panel.host.answer.set(None);
+    panel.click(line(0));
+    assert_eq!(panel.calls(), ["menu Allow, Block, Ask*"]);
 }
 
 #[gpui::test]
@@ -1427,6 +1416,30 @@ fn each_permission_has_its_glyph(_: &mut TestAppContext) {
 }
 
 impl Panel {
+    fn places(&mut self) -> Vec<String> {
+        self.cx.cx.update(|cx| {
+            let window = cx.global::<SiteControlsWindow>().0;
+            window.update(cx, |panel, _, _| panel.places()).unwrap()
+        })
+    }
+
+    /// Where the header's parts went as it last drew.
+    fn head(&mut self) -> Head {
+        self.cx.cx.update(|cx| {
+            let window = cx.global::<SiteControlsWindow>().0;
+            window
+                .update(cx, |panel, _, _| panel.open.as_ref().map(|open| open.head))
+                .unwrap()
+                .expect("an open panel")
+        })
+    }
+
+    /// The middle of the profile's chip.
+    fn chip(&mut self) -> (f32, f32) {
+        let (chip, _) = self.head().chip.expect("a chip");
+        (f32::from(chip.center().x), f32::from(chip.center().y))
+    }
+
     /// What the keyboard's ring is on, and the tooltip last asked for.
     fn keyed(&mut self) -> (Option<Stop>, Option<String>) {
         let keyed = self.cx.cx.update(|cx| {
@@ -1440,31 +1453,25 @@ impl Panel {
     }
 }
 
-/// Tab goes down the tiles, the extensions' tiles and +, the lines a click changes, past one a
-/// policy sets, and the footer's buttons, round from the last to the first and back with ⇧Tab;
-/// the arrows go the same way and stop at the ends. A tile, which is a glyph alone, is named by
-/// its tooltip (#1382).
+/// Tab goes down the panel (#1382): the connection's words, "…", the tiles, the site's rows a click
+/// changes, past one a policy sets, the extensions' tiles and +, then Reset permissions, round from
+/// the last to the first and back with ⇧Tab; the arrows go the same way and stop at the ends. A
+/// tile, which is a glyph alone, is named by its tooltip.
 #[gpui::test]
 fn tab_and_the_arrows_go_down_the_panel(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
     assert_eq!(panel.keyed().0, None, "a ring before a key");
     panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::Lock));
+    panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::More));
+    panel.keys("tab");
     let (keyed, tip) = panel.keyed();
     assert_eq!(keyed, Some(Stop::Tile("share")));
     assert!(tip.is_some_and(|tip| tip.starts_with("Share at ")));
     panel.keys("tab tab tab");
-    assert_eq!(
-        panel.keyed(),
-        (
-            Some(Stop::Extension("abc".into())),
-            Some("Notes at 122 202".into())
-        )
-    );
-    panel.keys("tab");
-    assert_eq!(panel.keyed().0, Some(Stop::AddExtension));
-    panel.keys("tab");
-    // The lines take it without a tooltip, which goes.
+    // The rows take it without a tooltip, which goes.
     assert_eq!(
         panel.keyed(),
         (Some(Stop::Permission(5)), Some("none".into()))
@@ -1473,36 +1480,33 @@ fn tab_and_the_arrows_go_down_the_panel(cx: &mut TestAppContext) {
     assert_eq!(panel.keyed().0, Some(Stop::Permission(WINDOWS)));
     panel.keys("tab");
     assert_eq!(
-        panel.keyed().0,
-        Some(Stop::Reset),
-        "the ring stopped on a line a policy sets"
+        panel.keyed(),
+        (
+            Some(Stop::Extension("abc".into())),
+            Some("Notes at 122 369".into())
+        ),
+        "the ring stopped on a row a policy sets"
     );
-    panel.keys("tab tab");
-    assert_eq!(panel.keyed().0, Some(Stop::More));
-    panel.keys("down");
-    assert_eq!(panel.keyed().0, Some(Stop::More), "↓ went past the last");
     panel.keys("tab");
-    assert_eq!(
-        panel.keyed().0,
-        Some(Stop::Tile("share")),
-        "Tab didn't go round"
-    );
+    assert_eq!(panel.keyed().0, Some(Stop::AddExtension));
+    panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::Reset));
+    panel.keys("down");
+    assert_eq!(panel.keyed().0, Some(Stop::Reset), "↓ went past the last");
+    panel.keys("tab");
+    assert_eq!(panel.keyed().0, Some(Stop::Lock), "Tab didn't go round");
     panel.keys("up");
-    assert_eq!(
-        panel.keyed().0,
-        Some(Stop::Tile("share")),
-        "↑ went past the first"
-    );
+    assert_eq!(panel.keyed().0, Some(Stop::Lock), "↑ went past the first");
     panel.keys("shift-tab");
-    assert_eq!(panel.keyed().0, Some(Stop::More), "⇧Tab didn't go round");
+    assert_eq!(panel.keyed().0, Some(Stop::Reset), "⇧Tab didn't go round");
     panel.keys("up");
-    assert_eq!(panel.keyed().0, Some(Stop::Lock));
+    assert_eq!(panel.keyed().0, Some(Stop::AddExtension));
     assert!(panel.calls().is_empty(), "moving the ring did something");
 }
 
-/// Space or return does what a click on the ringed stop does: a line's menu under it, a toggle,
-/// Reset, or a tile's or the lock's run, which closes the panel. The shield comes after the action
-/// tiles, named by its tooltip, and the switches after it.
+/// Space or return does what a click on the ringed stop does: a row's menu under it, a toggle,
+/// Reset, or a tile's or the lock's run, which closes the panel. Block ads and trackers comes after
+/// the tiles, and the switches after it.
 #[gpui::test]
 fn space_and_return_act_on_the_ringed_stop(cx: &mut TestAppContext) {
     let site = Site {
@@ -1513,22 +1517,15 @@ fn space_and_return_act_on_the_ringed_stop(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site);
     panel.calls();
     panel.host.answer.set(Some(1));
-    panel.keys("tab tab tab tab");
-    assert_eq!(
-        panel.keyed(),
-        (
-            Some(Stop::AdBlocking),
-            Some("Ads and trackers blocked at 250.5 133".into())
-        )
-    );
+    panel.keys("tab tab tab tab tab tab");
+    assert_eq!(panel.keyed().0, Some(Stop::AdBlocking));
     panel.keys("space");
     assert_eq!(panel.calls(), [format!("ad blocking {TAB} false")]);
     panel.keys("down");
     assert_eq!(panel.keyed().0, Some(Stop::DeveloperMode));
     panel.keys("enter");
     assert_eq!(panel.calls(), [format!("developer mode {TAB} false")]);
-    // Past the extension's tile and +, Location's line.
-    panel.keys("down down down enter");
+    panel.keys("down enter");
     assert_eq!(
         panel.calls(),
         [
@@ -1536,9 +1533,10 @@ fn space_and_return_act_on_the_ringed_stop(cx: &mut TestAppContext) {
             format!("set {TAB} 5 Block")
         ]
     );
-    panel.keys("down down space");
+    // Past Window management, the extension's tile and +.
+    panel.keys("down down down down space");
     assert_eq!(panel.calls(), [format!("reset {TAB}")]);
-    panel.keys("down enter");
+    panel.keys("tab enter");
     panel.ran("certificate");
 }
 
@@ -1548,16 +1546,15 @@ fn a_tile_runs_from_the_keyboard_and_a_click_takes_the_ring_away(cx: &mut TestAp
     let mut panel = Panel::new(cx, site());
     panel.calls();
     panel.keys("tab");
-    panel.click(SITE_HEADING);
+    panel.click(SITE_LABEL);
     assert_eq!(panel.keyed().0, None, "a click left the ring");
-    panel.keys("tab tab space");
+    panel.keys("tab tab tab tab space");
     panel.ran("CapturePortion");
 }
 
-/// VoiceOver reads each part of the panel by what it does (#1381): the tiles, the shield and the
-/// footer as buttons by their tooltips' names, the headings as headings, a switch as a switch, a
-/// line with a menu as a button that says its value and opens one, and a line a policy sets as
-/// dimmed. Its press on a line does what a click does, and its menu key on an extension gives the
+/// VoiceOver reads each part of the panel by what it does (#1381): the tiles and the header's
+/// buttons by their names, the labels as headings, a switch as a switch, a row with a menu as a
+/// button that says its value and opens one, and a row a policy sets as dimmed. Its press on a line does what a click does, and its menu key on an extension gives the
 /// tile's menu.
 #[gpui::test]
 fn voiceover_reads_the_panel(cx: &mut TestAppContext) {
@@ -1592,7 +1589,8 @@ fn voiceover_reads_the_panel(cx: &mut TestAppContext) {
     let (notes, _) = find(Role::Button, "Notes");
     find(Role::Heading, "Extensions");
     find(Role::Heading, "This site");
-    let (blocking, _) = find(Role::Button, "Ads and trackers blocked");
+    let (blocking, node) = find(Role::Switch, "Block ads and trackers");
+    assert_eq!(node.toggled(), Some(Toggled::True));
     let (_, boost) = find(Role::Switch, "Boost");
     assert_eq!(boost.toggled(), Some(Toggled::False));
     let (location, node) = find(Role::Button, "Location, Ask");
@@ -1600,7 +1598,7 @@ fn voiceover_reads_the_panel(cx: &mut TestAppContext) {
     assert!(!node.is_disabled());
     let (_, javascript) = find(Role::Button, "JavaScript, Allowed");
     assert!(javascript.is_disabled());
-    find(Role::Button, "Reset permissions");
+    find(Role::Button, "Reset Permissions");
     let (_, lock) = find(Role::Button, "Secure");
     assert!(!lock.is_disabled());
     let (_, more) = find(Role::Button, "More");

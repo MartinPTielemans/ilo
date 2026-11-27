@@ -22,10 +22,11 @@
 # On Linux two quick ⇧⌘T from the page, the second before the first's tab has its page focused,
 # reopen both tabs closed last.
 # Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
-# maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
-# its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
-# the tab. There ⇧⌦ takes a page out of history, as a click on the trash the pointer draws on its row
-# does, and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
+# maximizing and restoring, with no page, and ⌘T there puts the cursor in the bar it rests on.
+# Mute/Unmute Tab mutes a tab, its row shows a speaker while it plays, crossed out while it's muted,
+# and a click on it unmutes the tab. Over a page opened from that bar, ⇧⌦ takes a page out of
+# history, as a click on the trash the pointer draws on its row does, and ⌥⌘⌫ a search typed
+# before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
 # that loads once it's first shown, Tab on the row that hints a search engine, or a space after its
 # keyword, searches with that engine alone until ⌫ leaves, ↩ on a sum's row copies its result, and a
 # right-click in its field shows the field's menu, with Paste and Go. Site Search Settings opens
@@ -902,10 +903,21 @@ if windows; then
 fi
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window with no page didn't draw back at its size"
-# ⇧⌦ takes a page from history out of the rows.
+# The empty Space rests on its bar, and ⌘T puts the cursor in it, opening no floating bar over it.
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in an empty Space didn't reach the UI"
-expect '^browser: command bar shown$' "⌘T in an empty Space didn't open the command bar"
+expect '^browser: resting field has the keyboard$' "⌘T in an empty Space didn't give its resting bar the keyboard"
+none_since '^browser: command bar shown$' || fail "⌘T in an empty Space opened a floating bar over its resting bar"
+# The rows below need ⌘T's floating bar, whose own window has the trash's tooltip and closes on
+# Esc, so a page opened from the resting bar is under it.
+send insert 'data:text/html,<title>first</title>'
+send key return
+expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \
+  "the page from the empty Space's resting bar didn't load"
+expect '^browser: resting field dropped$' "the page from the empty Space's resting bar didn't take its place"
+# ⇧⌦ takes a page from history out of the rows.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T over a page didn't open the command bar"
 send type example
 expect '^browser: command bar completes "example" with "\.' \
   "the command bar didn't complete \"example\""
@@ -1488,7 +1500,8 @@ send key d cmd
 expect_lists "$shown_pinned $c $b $a" "$rest" "⌘D with rows chosen"
 send key z cmd
 expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after ⌘D on the chosen rows"
-expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+expect_after '^browser: rows settled$' "the rows didn't settle after ⌘Z" \
+  "^browser: today $c $b $a $rest\$"
 # A plain click lets them go, and ⌘-clicks choose them again.
 send click $(today_row 0)
 expect '^browser: chosen $' "a plain click on a row didn't let the chosen rows go"
@@ -1505,7 +1518,8 @@ expect "^browser: today $rest\$" "New Folder left a chosen row in Today: $(today
 send key escape
 send key z cmd
 expect_lists "$shown_pinned" "$c $b $a $rest" "⌘Z after New Folder on the chosen rows"
-expect '^browser: rows settled$' "the rows didn't settle after ⌘Z"
+expect_after '^browser: rows settled$' "the rows didn't settle after ⌘Z" \
+  "^browser: today $c $b $a $rest\$"
 send click $(today_row 1) cmd
 send click $(today_row 2) cmd
 expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once more"

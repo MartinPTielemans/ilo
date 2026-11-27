@@ -9,7 +9,8 @@
 # loads, and a busy session's commits are counted and never throttled (#2098). A's Little ilo tab
 # reaches B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists
 # A's tab, naming A, and opens it (#1234). B and C drop a plain bookmark the run's server sends. A
-# saves a login, which B lists, then removes, and A hears it go. 90 s after A's copy the clipboard
+# saves a login, which B lists, and which no device sends out again unchanged before B removes it,
+# as C's new profile did a minute in (#3949); A hears it go. 90 s after A's copy the clipboard
 # holds the words no longer. B and C sign out without asking, as the account has other devices, and
 # the server forgets them. On Linux under Xvfb and Wayland and on Windows, where each device's
 # window takes the foreground from the others' as the run drives it (#2114), and on the Mac, where
@@ -39,6 +40,16 @@ esac
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
 . check/ilo-server.sh
 
+# What a device's Preferences note of its password stores' move to OSCryptAsync, and whether both
+# are noted. Chromium moves an unmarked store a minute after the profile opens by saving every login
+# in it again, which sync sends out as changes, so a new profile, which holds none written the old
+# way, is marked as it's made (#3949).
+moved_notes() {
+  grep -o '"[a-z]*_store_migrated_to_os_crypt_async":[a-z]*' "$1/Default/Preferences" 2>/dev/null |
+    tr -d '"' | sort | tr '\n' ' ' || true
+}
+both="account_store_migrated_to_os_crypt_async:true profile_store_migrated_to_os_crypt_async:true "
+moved() { [ "$(moved_notes "$1")" = "$both" ]; }
 # The Spaces the device's window has, by the last list it logged.
 spaces() {
   grep '^browser: spaces ' "$log" | tail -1 | awk '{ print NF - 2 }'
@@ -218,6 +229,13 @@ send type $words
 send key return
 await '^browser: account On None$' || fail "C didn't turn sync on with the recovery words"
 await 'browser: sync service active$' || fail "C's sync didn't become active"
+# What C's new profile notes of its password stores, once Chromium has first written its
+# Preferences, which the login below checks.
+for _ in $(seq 300); do
+  [ ! -s "$PWD/$out/sync-devices-c/Default/Preferences" ] || break
+  sleep 0.1
+done
+c_moved=$(moved_notes "$PWD/$out/sync-devices-c")
 [ -z "$guarded" ] || await "browser: sync dropped an update of Bookmarks that isn't ciphertext$" ||
   fail "C didn't drop the server's plain bookmark"
 await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
@@ -425,10 +443,14 @@ await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's 
 forward
 send key n cmd alt
 expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window on A"
-# The new window has no page, so it rests on its field, which ⌘L gives the keyboard.
+# The new window has no page, and ⌘L opens the command bar inside it, whose field takes the keyboard
+# and whose URL loads in it (docs/ux-spec.md, Little Arc).
 send key l cmd
-expect '^browser: resting field has the keyboard$' \
-  "⌘L didn't give the Little ilo window's field the keyboard"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in A's Little ilo window"
+expect '^browser: command bar opens inside the window$' \
+  "⌘L didn't open the command bar inside A's Little ilo window"
+expect '^browser: field Search or enter address has the keyboard$' \
+  "⌘L's command bar in A's Little ilo window didn't give its field the keyboard"
 send insert "${site}login.html?users-own"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "A's Little ilo tab didn't load"
@@ -442,13 +464,13 @@ done
 grep -rqa 'login.html?agents-own' "$store_b" &&
   fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
 # B's command bar finds A's tab by its title and names A as Settings does, and never the agent's
-# (#1234). ↩ opens it in B, a tab of B's own.
+# (#1234). ↩ opens it in B, a tab of B's own. B's window shows no page, so ⌘T gives the keyboard to
+# its resting bar, the same bar as ⌘T's over a page, drawn in the empty Space (#4140).
 device b
 await "^browser: other computers' tabs [1-9]" ||
   fail "B's core never told the app of A's open tab, which B's sync store has"
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
+resting_key t "device B window"
 send type login
 expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on $label" \
   "B's command bar didn't list A's tab for \"login\""
@@ -463,7 +485,8 @@ done
 selected | grep -q "login.html?users-own\$" ||
   fail "↓ never selected A's tab in B's command bar: $(selected)"
 send key return
-expect '^browser: command bar hidden$' "↩ on A's tab didn't close B's command bar"
+expect "^browser: command bar go ${site}login.html?users-own\$" \
+  "↩ on A's tab didn't go to it from B's resting bar"
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab didn't open its page in B"
 
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
@@ -510,6 +533,29 @@ expect '^browser: settings tab Passwords$' "a click on Passwords didn't show B's
 await "^browser: passwords [0-9]*: $login\$" ||
   fail "B didn't get the login A saved: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-password.png" || fail "no window to capture"
+# No device changes the login before B removes it, so the server's entity stays the version A
+# committed. C got it within its first minute, when a store left unmarked would save it again: the
+# mark in C's Preferences says that moment is past, from C's start if its profile was made with it.
+unchanged=
+if engine_has ../engine/patches/ours/chromium-passwords-new-profile-moved.patch; then
+  committed() { stored "SELECT group_concat(version) FROM sync_entities WHERE data_type = 45873"; }
+  version=$(committed)
+  for _ in $(seq 900); do
+    ! moved "$PWD/$out/sync-devices-c" || break
+    sleep 0.1
+  done
+  moved "$PWD/$out/sync-devices-c" || fail "C's Preferences didn't note its password stores moved"\
+" to OSCryptAsync in 90 s: $(moved_notes "$PWD/$out/sync-devices-c") (at C's start: ${c_moved:-none})"
+  [ "$(committed)" = "$version" ] || fail "the server's login went from version $version, A's, to"\
+" $(committed) before B removed it, though no device changed it (#3949). C's Preferences noted at"\
+" its start: ${c_moved:-none}"
+  [ "$c_moved" = "$both" ] || fail "C's new profile didn't note at its start that its password"\
+" stores had nothing to move, so they saved their logins again a minute in (#3949): ${c_moved:-none}"
+  unchanged=" which no device sent out again unchanged (version $version throughout, C's Preferences"\
+" noted at its start: both),"
+else
+  echo "skip: sync-devices' unchanged logins (#3949). The engine lacks engine/patches/ours/chromium-passwords-new-profile-moved.patch, so a new profile's password stores save their logins again a minute in."
+fi
 post clickkey $(drawn "remove login 0")
 # Settings asks in an alert, the Mac's or Windows' task dialog, and on Linux, which has none, in its
 # dialog, as passwords' does.
@@ -592,7 +638,7 @@ echo "ok: A added B, C recovered with the copied words, which the clipboard let 
   "a busy run of 10 opens, 10 navigations and 10 closes on A in $busy_ms ms looked $busy_looks times," \
   "sent $busy_items, and the account's devices made $busy_commits commits of $busy_kept items, none throttled;" \
   "A's Little ilo tab reached B, whose command bar listed and opened it, and its agent's never did," \
-  "a login A saved reached B, whose removal reached A," \
+  "a login A saved reached B,$unchanged whose removal reached A," \
   "and B and C signed out, on a local ilo-server as $email. A synced, with no other user's" \
   "invitations: $types." \
   "Logs: $out/sync-devices-*.log"

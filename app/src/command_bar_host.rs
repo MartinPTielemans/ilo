@@ -428,7 +428,7 @@ fn start_thread(
         };
         let started = agents.start_task(cli, &asked, page, home, start, cx);
         if started.is_some() {
-            agents.remember_composer(home, tier, model.map(|model| (cli, model)));
+            agents.remember_start(home, cli, tier, model, effort);
         }
         // Its conversation takes the page's place as its card comes, which takes the slot; one
         // that didn't start leaves the slot empty and the page as it was.

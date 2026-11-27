@@ -15,7 +15,7 @@
 # in a second tab says it's open in the other, captured, and saves nothing; once the first closes,
 # the second takes it over and saves. A private window
 # has no New Board, and a Board's address there shows "This Board isn't here.", captured. New Board
-# from the File menu, the sidebar's +, the command bar, and its key with a Board's page and with
+# from the File menu, the Space button's menu, the command bar, and its key with a Board's page and with
 # the sidebar holding the keyboard, each makes one. Duplicate Board, from the bar at once after
 # typing, copies the Board with its last word, and a Board's row's menu duplicates it too, each
 # copy opening in a tab of its own, named as a copy. Japanese input as a Board's first keys is its
@@ -375,7 +375,7 @@ n=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$board" | cut -d: -f1)
 send key "$n" cmd
 expect "^browser: selected $board\( in .*\)\{0,1\}\$" "⌘$n didn't show the first Board's tab $board of \"$(today)\""
 
-# 1b: New Board from each of its places, the File menu, the sidebar's + and the command bar, and
+# 1b: New Board from each of its places, the File menu, the Space button's menu and the command bar, and
 # its key with the page focused and with the sidebar holding the keyboard. Each makes a Board, a
 # pinned tab whose name is there to type over, kept with ↩, which gives the page the keyboard.
 # made <how>: the Board New Board just made, named $1, its tab in $tab and its folder in $made_folder.
@@ -489,12 +489,9 @@ grep -q "^browser: zoom $tab " "$log" && fail "⌘− or ⌘0 in the Board zoome
 ../tools/window-screenshot.sh "$pid" "$out/board-first-note.png" || fail "no window to capture"
 archive "the File menu"
 
-# The sidebar's + offers New Board, and New Board's key from the Board's page makes another.
-send layout
-height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+# The Space button's menu offers New Board, and New Board's key from the Board's page makes another.
 # On Linux, a menu shown in the dispatch that hides the last one keeps the keyboard it took
-# (#3572): the + pressed while a row's menu shows opens its own in that menu's place, then ↓ rings
+# (#3572): the Space button pressed while a row's menu shows opens its own in that menu's place, then ↓ rings
 # one of its rows. On the Mac and Windows a press outside a menu goes no further than closing it.
 replaced=
 if [ "$(uname)" = Linux ]; then
@@ -502,17 +499,17 @@ if [ "$(uname)" = Linux ]; then
   post rightclick $(row 0)
   expect '^browser: menu shown ' "a right-click on the sidebar's first row didn't show its menu"
 fi
-post click 204 $((height - 25))
-expect "^browser: menu shown .*$(cased 'New Board')" "the sidebar's +$replaced didn't offer New Board"
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
+expect "^browser: menu shown .*$(cased 'New Board')" "the Space button's menu$replaced didn't offer New Board"
 if [ -n "$replaced" ]; then
-  expect '^browser: menu at .* closed by ' "the row's menu didn't close as the sidebar's + opened its own"
-  expect '^browser: menu window at ' "the + menu's window didn't take the keyboard"
+  expect '^browser: menu at .* closed by ' "the row's menu didn't close as the Space button opened its own"
+  expect '^browser: menu window at ' "the Space button's menu's window didn't take the keyboard"
   send key down
-  expect '^browser: menu highlights .* at ' "↓ in the + menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
+  expect '^browser: menu highlights .* at ' "↓ in the Space button's menu, opened in a row's menu's place, rang no row: it hasn't the keyboard"
 fi
 send choose "$(cased 'New Board')"
-expect '^browser: command new-board via ' "the + menu's New Board didn't run New Board"
-made porch "the sidebar's +"
+expect '^browser: command new-board via ' "the Space button's menu's New Board didn't run New Board"
+made porch "the Space button's menu"
 porch=$tab
 # Escape leaves the note's field for the page itself: in a text field on the Mac, ⌃⇧E is the text
 # system's select to the end of the line, which the field keeps.
@@ -533,7 +530,7 @@ top=$(today | cut -d' ' -f1)
 m=$(echo $(pinned) $(today) | tr ' ' '\n' | grep -nx "$top" | cut -d: -f1)
 switch "$m cmd" "$top"
 switch "$n cmd" "$porch"
-archive "the sidebar's +"
+archive "the Space button's menu"
 
 # The command bar finds New Board, and New Board's key with the sidebar holding the keyboard runs
 # it too.
@@ -884,8 +881,8 @@ offered=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
   grep '^browser: command bar \(commands\|lists\) "new board": ' | grep 'New Board' | head -1)
 [ -z "$offered" ] || fail "a private window's command bar offers New Board: $offered"
 send key escape
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the private window's command bar"
+# The private window's empty Space rests on its bar, which ⌘T gives the keyboard.
+resting_key t "private window"
 send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"
@@ -1024,7 +1021,7 @@ quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; New Board from the File menu, the" \
-  "sidebar's +, the command bar and its key with the page and the bar focused; duplicated from" \
+  "Space button's menu, the command bar and its key with the page and the bar focused; duplicated from" \
   "the bar with its last word and from its row's menu, each copy its own Board; Japanese kept as" \
   "the first note; ⌘C ⌘V and ⌘Z in the page saved; ⌘− the canvas's, not the page's;" \
   "Tab walked a Board's cards in reading order, the arrows moved them, Delete and ⌘Z saved," \

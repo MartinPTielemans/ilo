@@ -3,6 +3,8 @@
 //! to the user, a tab asked back and a change of access, with their buttons doing what they say.
 
 use super::kept::Run;
+use super::rewall::sent;
+use super::searches::titles;
 use super::*;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{Line, TaskAction};
@@ -95,8 +97,28 @@ fn a_refusal_counts_on_its_line_and_a_change_of_access_settles_it(cx: &mut TestA
     );
 }
 
+/// The thread's hand_off returns at once, which is #4363's: the tab is the user's until it's told
+/// otherwise, and calls on it are refused meanwhile.
+#[track_caller]
+fn returned_at_once(handed: mpsc::Receiver<ToolResult>, tab: u64) {
+    let now = handed.try_recv().expect("the hand-off waited");
+    assert!(!now.error, "{}", now.text);
+    assert!(
+        now.text
+            .starts_with(&format!("Tab {tab} is the user's now")),
+        "{}",
+        now.text
+    );
+}
+
+/// What Hand Back tells an agent of `tab`.
+fn handed_back(tab: u64) -> String {
+    format!("The user handed tab {tab} back. Take a snapshot to see where it is now.")
+}
+
 /// A step handed to the user is its tab's line, Hand Back and Not Now, with the page named only
-/// among several (O1). Hand Back gives the tab back and answers the call that waited, and the
+/// among several (O1). The thread's hand_off returns at once and the tab is the user's: a call on
+/// it is refused. Hand Back gives the tab back and tells the thread as a steer arrives, and the
 /// line keeps its words without its buttons.
 #[gpui::test]
 fn a_step_handed_over_is_its_tabs_line_until_hand_back(cx: &mut TestAppContext) {
@@ -104,6 +126,7 @@ fn a_step_handed_over_is_its_tabs_line_until_hand_back(cx: &mut TestAppContext) 
     let tab = PAGES[0].0;
     let reason = json!({ "tab": tab, "reason": "Sign in, please." });
     let handed = call(&run.agents, &agent, "hand_off", reason, cx);
+    returned_at_once(handed, tab);
     let [line] = &lines(&run, &agent, cx)[..] else {
         panic!("{:?}", lines(&run, &agent, cx));
     };
@@ -112,10 +135,16 @@ fn a_step_handed_over_is_its_tabs_line_until_hand_back(cx: &mut TestAppContext) 
         ilo::drawn(line, None),
         [IloButton::HandBack, IloButton::NotNow]
     );
-    assert!(handed.try_recv().is_err(), "the hand-off was answered");
+    let refused = call(&run.agents, &agent, "snapshot", json!({ "tab": tab }), cx);
+    assert!(refused.recv().unwrap().error, "it acted on the user's tab");
+    assert_eq!(
+        sent(&run, 1, 1).len(),
+        1,
+        "it was told before the tab came back"
+    );
 
     act(&run, &agent, TaskAction::HandBack(tab), cx);
-    assert!(!handed.recv().unwrap().error);
+    assert_eq!(sent(&run, 1, 2)[1], handed_back(tab));
     assert!(!run.browser.held.borrow().contains(&tab));
     let [line] = &lines(&run, &agent, cx)[..] else {
         panic!("{:?}", lines(&run, &agent, cx));
@@ -151,21 +180,65 @@ fn a_step_on_one_of_two_pages_names_its_site(cx: &mut TestAppContext) {
     );
 }
 
-/// Not Now leaves the tab the user's and tells the agent's call that waited they won't do the
-/// step now; its line settles.
+/// A hand-off whose page moved past the sign-in tells the thread what Hand Back does, and
+/// nothing of the page (#4361, #4363).
+#[gpui::test]
+fn a_page_that_moved_on_tells_the_thread_as_hand_back_does(cx: &mut TestAppContext) {
+    let (run, agent) = started("moved-on", 1, cx);
+    let tab = PAGES[0].0;
+    let reason = json!({ "tab": tab, "reason": "Sign in, please." });
+    returned_at_once(call(&run.agents, &agent, "hand_off", reason, cx), tab);
+    // As the server says once the answer went out, which ends the hand-off's step.
+    let answered = Event::Answered {
+        agent: agent.clone(),
+        id: 0,
+        at: std::time::Instant::now(),
+        error: None,
+        kind: None,
+        image: None,
+        notes: None,
+    };
+    (run.agents).update(cx, |agents, cx| agents.handle(answered, cx));
+    let page = crate::agents::HeldPage {
+        document: 2,
+        ..Default::default()
+    };
+    (run.agents).update(cx, |agents, cx| agents.held_page(tab, page, cx));
+    cx.run_until_parked();
+    assert_eq!(sent(&run, 1, 2)[1], handed_back(tab));
+    assert!(!run.browser.held.borrow().contains(&tab));
+    // Its trace says the step went on, after the hand-off's (HB2), and its log the tab came back
+    // (HB1); neither that the user finished.
+    let steps = titles(&run, &agent, cx);
+    assert_eq!(
+        steps[steps.len() - 2..],
+        [
+            "Handed you tickets.example",
+            "Went on when tickets.example moved past your step"
+        ]
+    );
+    let logged = (run.agents).read_with(cx, |agents, _| {
+        (agents.activity(&agent)).any(|entry| entry.action == crate::agents::tools::MOVED_ON)
+    });
+    assert!(logged, "the log doesn't say the tab came back");
+    assert_eq!(
+        crate::agents::tools::describe(crate::agents::tools::MOVED_ON),
+        "Took the tab back when the page moved on"
+    );
+}
+
+/// Not Now leaves the tab the user's and tells the thread they won't do the step now; its line
+/// settles.
 #[gpui::test]
 fn not_now_keeps_the_tab_and_answers_the_wait(cx: &mut TestAppContext) {
     let (run, agent) = started("not-now", 1, cx);
     let tab = PAGES[0].0;
     let reason = json!({ "tab": tab, "reason": "Sign in, please." });
-    let handed = call(&run.agents, &agent, "hand_off", reason, cx);
+    returned_at_once(call(&run.agents, &agent, "hand_off", reason, cx), tab);
     let key = lines(&run, &agent, cx)[0].key;
     act(&run, &agent, TaskAction::NotNow(key), cx);
-    let answer = handed.recv().unwrap();
-    assert!(
-        answer.error && answer.text.contains("won't do the step"),
-        "{answer:?}"
-    );
+    let told = &sent(&run, 1, 2)[1];
+    assert!(told.contains("won't do the step"), "{told}");
     assert!(
         run.browser.held.borrow().contains(&tab),
         "the tab went back"

@@ -44,7 +44,7 @@ use crate::tokens::text::SMALL;
 mod assistant;
 pub use assistant::{
     Act, SIGN_IN, SIGN_INS_STAY, another_agent_name_row, another_agent_row, assistant_name,
-    assistant_name_alone, assistant_row, first_run_row,
+    assistant_name_alone, assistant_row, first_run_row, installed_row,
 };
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
@@ -1196,6 +1196,29 @@ mod tests {
         );
     }
 
+    /// Settings clears its log in the frame that says it drew, after the frame has started: frames
+    /// drawn before the window was on screen logged the places first, and that frame logs each again
+    /// after its line, once, for check.sh's places from after it (#3841).
+    #[test]
+    fn the_log_after_a_drew_frame_holds_that_frames_places() {
+        let mut log = DrawnLog::default();
+        log.frame();
+        assert!(
+            log.draw("profile 2", NAME.into()),
+            "a frame before the window was on screen"
+        );
+        log.frame();
+        log.clear();
+        assert!(
+            log.draw("profile 2", NAME.into()),
+            "logged again after the drew line"
+        );
+        assert_eq!(log.lines(), [NAME]);
+        log.frame();
+        assert!(!log.draw("profile 2", NAME.into()), "once a place");
+        assert_eq!(log.lines(), [NAME]);
+    }
+
     /// A view that never starts a frame logs a control again only where it moves.
     #[test]
     fn without_frames_a_control_logs_only_where_it_moves() {
@@ -1615,20 +1638,20 @@ pub fn site_note_row(
     toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
     use crate::agents::notes::{CLOSE, READ};
-    let host = note.host;
+    let name = note.name;
     let title = if opened { CLOSE } else { READ };
-    let id = gpui::ElementId::Name(format!("agent-note-read-{host}").into());
+    let id = gpui::ElementId::Name(format!("agent-note-read-{name}").into());
     let read = stop_button(look, id, title, a11y)
         .relative()
-        .child(drawn(format!("note {host}"), logged))
+        .child(drawn(format!("note {name}"), logged))
         .on_click(toggle);
     let head = frame()
-        .child(text(look, note.name, Some(note.about.into())))
+        .child(text(look, name, Some(note.about().into())))
         .child(end([read.into_any_element()]));
     // A line each, as the note's text has them: a part's name in a row's name's ink, its
     // sentences grey under it, so an open note reads as its three parts.
     let words = opened.then(|| {
-        let lines = note.text.trim_end().lines().map(|line| {
+        let lines = note.text().trim_end().lines().map(|line| {
             let ink = match crate::agents::notes::PARTS.contains(&line) {
                 true => look.ink,
                 false => look.detail,

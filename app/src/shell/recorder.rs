@@ -52,6 +52,9 @@ impl Core {
     }
 }
 
+/// What a test does as first run ends (`Recorder::first_run_end`).
+pub(super) type FirstRunEnd = Box<dyn Fn(&mut App)>;
+
 #[derive(Default)]
 pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
@@ -87,6 +90,12 @@ pub(crate) struct Recorder {
     pub(super) grows_first_run: Cell<bool>,
     /// How many times it was asked whether it grows first run's window.
     pub(super) asked_to_grow: Cell<u32>,
+    /// What each frame of a grown exit said of the browser window and the card's glass, kept
+    /// apart so what the host was told reads as before.
+    pub(super) revealed: RefCell<Vec<(f32, f32)>>,
+    /// What first run's end does where the Mac's host draws the browser window before showing it,
+    /// for a test to draw the shell's window as the host would.
+    pub(super) first_run_end: RefCell<Option<FirstRunEnd>>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
     /// The search engines and the default's keyword, as `search_engines` answers.
@@ -1682,6 +1691,14 @@ impl Browser for Recorder {
 
     fn hide_reveal(&self, _: &mut App) {}
 
+    fn show_edge_knot(&self, top: f32, width: f32, height: f32, _: &mut App) {
+        self.record(format!("edge knot at {top} {width} {height}"));
+    }
+
+    fn hide_edge_knot(&self, _: &mut App) {
+        self.record("edge knot hidden".into());
+    }
+
     fn option_reveals_sidebar(&self) -> bool {
         !self.option_off.get()
     }
@@ -1972,6 +1989,7 @@ impl Browser for Recorder {
         tab: u64,
         place: crate::site_controls::Place,
         _: Size<Pixels>,
+        _: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<crate::site_controls::Extension>,
         profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
@@ -2149,7 +2167,10 @@ impl Browser for Recorder {
         self.record("first run shown".into())
     }
 
-    fn end_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+    fn end_first_run(&self, _: gpui::AnyWindowHandle, cx: &mut App) {
+        if let Some(end) = self.first_run_end.borrow().as_ref() {
+            end(cx);
+        }
         self.record("first run ended".into())
     }
 
@@ -2161,6 +2182,10 @@ impl Browser for Recorder {
         // Counted, not recorded, so what the host was told reads as before.
         self.asked_to_grow.set(self.asked_to_grow.get() + 1);
         self.grows_first_run.get()
+    }
+
+    fn reveal_first_run(&self, window: f32, glass: f32) {
+        self.revealed.borrow_mut().push((window, glass));
     }
 
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.

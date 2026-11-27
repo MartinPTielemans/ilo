@@ -63,17 +63,18 @@ impl Shell {
     }
 
     /// The card in a window whose content is `viewport`, and its panel's card if one shows. A page
-    /// full screen takes the window, and the panel hides.
+    /// full screen takes the window, and the panel hides; with the sidebar hidden the card takes
+    /// the window and the panel shows at its edge.
     pub(super) fn card_frames(
         &self,
         viewport: Size<Pixels>,
     ) -> (Bounds<Pixels>, Option<Bounds<Pixels>>) {
         let card_left = self.card_left();
-        let card = page_frame(viewport, card_left, self.card_push());
+        let card = page_frame(viewport, card_left, self.card_rim(), self.card_push());
         // On the right, the card and its panel are today's mirrored, so the panel stays between
         // the page and the sidebar.
         let card = self.little_card(super::sidebar::mirrored(self.right, viewport.width, card));
-        match self.side_panel.is_some() && card_left != 0. {
+        match self.side_panel.is_some() && !self.page_fullscreen {
             true => {
                 let (page, panel) = split_card(card, panel_width(self.side_panel_width));
                 (page, Some(panel))

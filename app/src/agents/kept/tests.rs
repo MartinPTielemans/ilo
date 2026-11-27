@@ -67,8 +67,8 @@ fn launch() -> Launch {
         effort: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
-        helpers: false,
         wall: None,
+        reads: Vec::new(),
     }
 }
 
@@ -106,9 +106,10 @@ fn a_kept_run_takes_its_id_where_a_run_that_keeps_nothing_says_so() {
     }
 }
 
+/// A task comes back at the level it ended at, Full access too (#4360).
 #[test]
-fn a_task_comes_back_at_work_on_pages_and_never_above_where_it_was() {
-    assert_eq!(comes_back(Tier::Full), Tier::Work);
+fn a_task_comes_back_at_the_level_it_ended_at() {
+    assert_eq!(comes_back(Tier::Full), Tier::Full);
     assert_eq!(comes_back(Tier::Work), Tier::Work);
     assert_eq!(comes_back(Tier::Look), Tier::Look);
 }

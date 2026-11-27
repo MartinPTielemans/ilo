@@ -1,0 +1,8 @@
+source: https://www.notion.com/help/keyboard-shortcuts
+landmark: https://www.notion.com/help/keyboard-shortcuts | cmd/ctrl
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+⌘ on a Mac stands for Ctrl elsewhere. ⌘+P or ⌘+K searches the workspace or jumps to a page seen lately, and ⌘+F searches the page. ⌘+N makes a page. ⌘+[ goes back and ⌘+] forward. ⌘+L copies the page's address.
+In a page, / opens the menu of every kind of block. At a line's start, # and a space make a heading, - and a space a bulleted list, [] and a space a to-do, and > and a space a toggle. ⌘+D duplicates the blocks selected, ⌘+Shift and the arrows move them, and ⌘+/ turns them into another kind. ⌘+Shift+M comments, and @ and a name mentions someone.

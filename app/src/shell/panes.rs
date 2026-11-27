@@ -7,8 +7,8 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, COPIED_TIME, EXPANDED_OTHER, MAX_PANES, MenuAction, MenuEntry, PANE_LEAST,
-    PANE_SNAP, SPLIT_GAP, Shell, access::Accessible,
+    COPIED_TIME, EXPANDED_OTHER, MAX_PANES, MenuAction, MenuEntry, PANE_LEAST, PANE_SNAP,
+    SPLIT_GAP, Shell, access::Accessible,
 };
 use crate::tokens::shell::split_controls::{DOT, DOT_GAP, DOTS, DOTS_HOVERED, INSET, WIDTH};
 
@@ -95,7 +95,13 @@ impl Shell {
     /// the page out of it or closes it. Its look and place are ours, as Arc's aren't measured.
     pub(super) fn pane_handles(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let panes = self.panes(self.selected);
-        if panes.len() < 2 || self.adding_pane.is_some() || self.page_fullscreen {
+        // With no rim, as with the sidebar hidden, there's no margin over the card to hold them,
+        // as in full screen.
+        if panes.len() < 2
+            || self.adding_pane.is_some()
+            || self.page_fullscreen
+            || self.card_rim() == 0.
+        {
             return Vec::new();
         }
         let (frame, _) = self.page_frame(self.viewport);
@@ -436,17 +442,15 @@ impl Shell {
 }
 
 /// Where the page goes in a window whose content is `viewport`: in the card, whose left edge is at
-/// `card_left`, or filling the window for a full-screen page, at 0. The Library pushes the card
-/// `push` further right at the same width, past the window's edge.
-pub fn page_frame(viewport: Size<Pixels>, card_left: f32, push: f32) -> Bounds<Pixels> {
-    if card_left == 0. {
-        return Bounds::new(point(px(0.), px(0.)), viewport);
-    }
+/// `card_left` and the others `rim` in from the window's, the whole window at 0 and 0, as for a
+/// full-screen page or with the sidebar hidden. The Library pushes the card `push` further right
+/// at the same width, past the window's edge.
+pub fn page_frame(viewport: Size<Pixels>, card_left: f32, rim: f32, push: f32) -> Bounds<Pixels> {
     Bounds::new(
-        point(px(card_left + push), px(CARD_INSET)),
+        point(px(card_left + push), px(rim)),
         size(
-            viewport.width - px(card_left + CARD_INSET),
-            viewport.height - px(2. * CARD_INSET),
+            viewport.width - px(card_left + rim),
+            viewport.height - px(2. * rim),
         ),
     )
 }

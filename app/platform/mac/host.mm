@@ -286,6 +286,14 @@ struct Browser {
   // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
   // too (host_set_sidebar_right).
   bool sidebar_right = false;
+  // The edge knot's window and view (host_add_edge_knot), the room round its tab for its shadow,
+  // where its tab is in the window from its top left, and while it shows, the monitor that lets
+  // the mouse through the window but on the tab.
+  NSWindow* edge_knot;
+  NSView* edge_knot_view;
+  double edge_knot_margin = 0;
+  NSRect edge_knot_tab;
+  id edge_knot_monitor;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -2140,21 +2148,45 @@ void host_hold_window(void* ui_view) {
 
 static void PlaceTitlebarSide(Browser* browser);
 
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen);
+
 void host_show_window(void* ui_view) {
-  host_show_window_behind(ui_view, nullptr);
+  ShowWindow(ui_view, nil, false);
+}
+
+void host_show_window_behind(void* ui_view, void* above_ui_view) {
+  Browser* above = above_ui_view ? BrowserWithView(above_ui_view) : nullptr;
+  ShowWindow(ui_view, above ? above->window : nil, false);
 }
 
 // Whether the window first run held is on, in the place of first run's (host_close_first_run).
 static bool g_took_first_runs_place;
 
-void host_show_window_behind(void* ui_view, void* above_ui_view) {
+// The browser window a grow put under first run's, unseen until the card gives way to it
+// (host_set_first_run_reveal), until it comes to the front.
+static __weak NSWindow* g_under_first_run;
+
+// Its opacity while unseen: not none, as a window with none counts as hidden, and then GPUI
+// doesn't draw it nor Chromium its pages; and too little to see over any desktop.
+constexpr CGFloat kUnseen = 0.01;
+
+// Shows the window of |ui_view| in front with the keyboard, or right behind |above|, neither key
+// nor activating the app, and there all but transparent where |unseen|.
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
     return;
   }
-  Browser* above = above_ui_view ? BrowserWithView(above_ui_view) : nullptr;
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
+  // Shown already under first run's, drawn there through the grow: whole, and in front.
+  if (window && window == g_under_first_run && !above) {
+    g_under_first_run = nil;
+    window.alphaValue = 1;
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    return;
+  }
   browser->window = window;
   // The window first run held comes on at its frame whole, with none of AppKit's motion for a
   // window ordered in: first run's card has just grown to that frame, or faded where it stood.
@@ -2164,9 +2196,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
-  if (browser->sidebar_right) {
-    PlaceTitlebarSide(browser);
-  }
+  PlaceTitlebarSide(browser);
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -2183,7 +2213,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   [view addSubview:browser->material positioned:NSWindowBelow relativeTo:nil];
   // Views keeps a new window clear until its compositor's first frame, which waits for the GPU
   // process to start, though the UI's and the pages' views cover all of that compositor.
-  window.alphaValue = 1;
+  window.alphaValue = unseen ? kUnseen : 1;
   if (g_launch_window && !above) {
     // It takes the launch window's place, and its picture stays over the UI until the UI has
     // drawn. The launch window itself can't stay over it: Chromium counts a covered window's
@@ -2204,8 +2234,8 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     TellMain(shown, NSApp.active && shown.isMainWindow);
   });
   WatchHeldEscape();
-  if (above && above->window) {
-    [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
+  if (above) {
+    [window orderWindow:NSWindowBelow relativeTo:above.windowNumber];
   } else {
     // Before it's on screen, so its first frame is already the small one.
     if (browser->grows) {
@@ -2982,6 +3012,12 @@ void host_forget_window(void* ui_view) {
   browser->offer_view = nil;
   browser->reveal = nil;
   browser->reveal_view = nil;
+  if (browser->edge_knot_monitor) {
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+  }
+  browser->edge_knot = nil;
+  browser->edge_knot_view = nil;
 }
 
 void host_set_overlay_elevation(int index,
@@ -5276,13 +5312,17 @@ void host_show_window_buttons(void* ui_view, bool shown) {
 // puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
 // for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
 // class answers it for each window, and the rest of the window keeps its direction: the title,
-// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+// which is hidden, and the Window menu and Mission Control, which read the title, not this. A
+// window with its sidebar on the left answers left to right under an Arabic or Hebrew system too:
+// its buttons sit in the sidebar's header row, and the core reads the direction as the sidebar's
+// side, for the strip at its edge (core/platform/mac/window_views.mm).
 static char kSidebarRight;
 static IMP g_titlebar_direction;
 
 static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
-  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
-    return NSUserInterfaceLayoutDirectionRightToLeft;
+  if (NSNumber* right = objc_getAssociatedObject(self, &kSidebarRight)) {
+    return right.boolValue ? NSUserInterfaceLayoutDirectionRightToLeft
+                           : NSUserInterfaceLayoutDirectionLeftToRight;
   }
   return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
 }
@@ -5311,8 +5351,13 @@ static void PlaceTitlebarSide(Browser* browser) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
+  const NSUserInterfaceLayoutDirection was = window.windowTitlebarLayoutDirection;
+  objc_setAssociatedObject(window, &kSidebarRight, @(browser->sidebar_right),
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Only a change moves the buttons, so a window on the system's own side costs nothing more.
+  if (window.windowTitlebarLayoutDirection == was) {
+    return;
+  }
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
   // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
@@ -6127,6 +6172,83 @@ void host_hide_reveal(void* ui_view) {
   });
 }
 
+// Lets the mouse through |browser|'s edge knot window but on its tab, with the pointer at |screen|.
+static void PlaceEdgeKnotClicks(Browser* browser, NSPoint screen) {
+  NSPoint at = [browser->edge_knot convertPointFromScreen:screen];
+  at.y = NSHeight(browser->edge_knot.frame) - at.y;
+  browser->edge_knot.ignoresMouseEvents = !NSPointInRect(at, browser->edge_knot_tab);
+}
+
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  browser->edge_knot_view = (__bridge NSView*)edge_knot_view;
+  browser->edge_knot = browser->edge_knot_view.window;
+  browser->edge_knot_margin = margin;
+  MakeOverlay(browser->edge_knot);
+  // The UI draws the tab and its shadow, in the margin round it, as the mini bar's.
+  browser->edge_knot.styleMask = NSWindowStyleMaskBorderless;
+  browser->edge_knot.hasShadow = NO;
+  browser->edge_knot.ignoresMouseEvents = YES;
+  // A click on it brings the sidebar out, and the keyboard stays where it was.
+  NeverKey(browser->edge_knot);
+}
+
+void host_show_edge_knot(void* ui_view, double top, double width, double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot || !browser->window) {
+      return;
+    }
+    const double margin = browser->edge_knot_margin;
+    NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
+    const double window_width = width + margin;
+    const CGFloat x = browser->sidebar_right ? NSMaxX(content) - window_width : NSMinX(content);
+    [browser->edge_knot setFrame:NSMakeRect(x, NSMaxY(content) - top - height - margin,
+                                            window_width, height + 2 * margin)
+                         display:NO];
+    browser->edge_knot_tab =
+        NSMakeRect(browser->sidebar_right ? margin : 0, margin, width, height);
+    if (browser->edge_knot_monitor) {
+      PlaceEdgeKnotClicks(browser, Pointer());
+      return;
+    }
+    // As the reveal does, it goes on screen once it has drawn what it shows now.
+    [browser->edge_knot_view.layer setNeedsDisplay];
+    [browser->edge_knot_view.layer displayIfNeeded];
+    AddOver(browser->window, browser->edge_knot);
+    // The page's view takes the pointer's moves while it's over the page, so the knot's window
+    // doesn't hear them. Only while it shows, and only as the pointer moves.
+    browser->edge_knot_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                              handler:^NSEvent*(NSEvent* event) {
+                                                NSPoint at = event.locationInWindow;
+                                                if (event.window) {
+                                                  at = [event.window convertPointToScreen:at];
+                                                }
+                                                PlaceEdgeKnotClicks(browser, at);
+                                                return event;
+                                              }];
+    PlaceEdgeKnotClicks(browser, Pointer());
+  });
+}
+
+void host_hide_edge_knot(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot_monitor) {
+      return;
+    }
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+    browser->edge_knot.ignoresMouseEvents = YES;
+    [browser->window removeChildWindow:browser->edge_knot];
+    [browser->edge_knot orderOut:nil];
+  });
+}
+
 void host_focus(void* view) {
   NSView* ns_view = (__bridge NSView*)view;
   [ns_view.window makeFirstResponder:ns_view];
@@ -6333,6 +6455,7 @@ bool host_grow_first_run(void) {
   }
   // The window first run ends on: the one held, and with none or more than one there's no saying.
   NSWindow* held = nil;
+  NSView* held_view = nil;
   for (auto& browser : g_browsers) {
     if (!browser->held) {
       continue;
@@ -6341,6 +6464,7 @@ bool host_grow_first_run(void) {
       return false;
     }
     held = browser->window;
+    held_view = browser->ui_view;
   }
   if (!held || held.miniaturized || (held.styleMask & NSWindowStyleMaskFullScreen)) {
     return false;
@@ -6369,8 +6493,26 @@ bool host_grow_first_run(void) {
     PlaceFirstRunGlass();
     [g_first_run_view.layer setNeedsDisplay];
     [g_first_run_view.layer displayIfNeeded];
+    // Under the card from the grow's start, unseen, so the UI and its pages draw it on their own
+    // frames while the card grows, and the reveal only changes opacities: drawn at the reveal or
+    // at the exit's end, as before, it took frames from the card's motion or left the grown card
+    // blank until it came.
+    ShowWindow((__bridge void*)held_view, first_run, true);
+    g_under_first_run = held;
   });
   return true;
+}
+
+void host_set_first_run_reveal(double window, double glass) {
+  if (!g_first_run || !g_under_first_run) {
+    return;
+  }
+  g_under_first_run.alphaValue = MAX(window, kUnseen);
+  for (NSView* view in g_first_run.contentView.subviews) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) {
+      view.alphaValue = glass;
+    }
+  }
 }
 
 void host_show_first_run(void) {
@@ -6403,6 +6545,9 @@ void host_close_first_run(void) {
     g_took_first_runs_place = false;
     g_first_run.animationBehavior = NSWindowAnimationBehaviorNone;
   }
+  // A window still under it, as on a quit mid-exit, isn't left unseen.
+  g_under_first_run.alphaValue = 1;
+  g_under_first_run = nil;
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;

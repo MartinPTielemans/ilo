@@ -1,297 +1,38 @@
-//! A task's helpers (#4102): its assistant's own way of working on several pages at once, behind
-//! a switch that's off.
+//! A thread's strands (#4102), which the assistant is told are its helpers: its way of working on
+//! several pages at once, with the browser's `strand` tool. A strand is a run of the thread's
+//! assistant of its own, which ilo starts, counts and ends itself. It has its own token and
+//! connection, the thread's tools but those that are the thread's own (`tools::THE_THREADS_OWN`),
+//! and its calls are its thread's: in the thread's tabs, at the thread's access at each act, so
+//! the user lowering the thread lowers its strands at once. Its last message answers the call
+//! that started it, and it ends with its turn, or with its thread.
 //!
-//! A helper is the assistant's, not ilo's. It calls the browser's tools through the task's own
-//! connection, so each of its acts meets the same check as the task's, at the task's access as it
-//! is at that act, and ilo can't tell a helper's call from the task's. What ilo reads of helpers
-//! comes from the CLI's output alone, and three things are built on it: a label for the
-//! conversation's lines (the helpers a task has, and which of its pages each works on), which
-//! nothing ilo allows or refuses reads; a count of the helpers its CLI says started, for the
-//! limit, which bounds what a task costs the user's plan, never what it may reach; and ilo's
-//! floor.
-//!
-//! The floor: the only helper is ilo's kind, started by the task, one level under it, waited for.
-//! Three things stand in front of it, none of them ilo's act: the assistant is started so that it
-//! has no other kind (`ENV`, `NOT_OURS`), each run's first line lists its kinds, and the program
-//! itself refuses a call for a kind it doesn't have. ilo can't hold the assistant's own tool
-//! back, so what it does itself comes after the fact, and it waits for the start. A first line
-//! that lists another kind ends the run before its first answer (`Agents::helper_kinds`). A start
-//! of another kind, deeper than a helper may be or in the background stops the task
-//! (`Agents::helper_not_allowed`), and so does a helper's line that calls a tool when no start
-//! was told for that helper, so a start told some other way fails closed, or that calls a tool
-//! which is the task's alone. A call that only asks for another kind stops nothing: the program
-//! refuses it, no helper starts, and it's no step of the task's. A start comes seconds before its
-//! helper's first call, so the stop lands before that helper acts; one that went past may have
-//! acted until the stop landed, each act at the task's access, and after it every call of the
-//! task's is answered as stopped (#4209).
-//!
-//! The reading here is checked against two recorded runs. The first, whose first message is
-//! `runner/answers/claude-2.1.331-helpers.jsonl`, was started without `ENV`. What the second
-//! showed, started as a task with helpers is, is written at `ON`.
+//! What ilo holds of them: the labels of the conversation's lines (each strand's pages), the
+//! count that bounds what a thread costs the user's plan, refused at the call past `MOST`, and
+//! the lines of the times ilo stopped a thread over them. A strand can't start one of its own,
+//! or call a thread's own tool: it has neither, and a call of one stops the thread.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use gpui::{Context, SharedString};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::runner::{Helper, Out, SERVER};
+use super::runner::{self, Failure, Out, Process};
 use super::task::ilo::{HelpersLimit as Limit, IloKind, IloLine};
 use super::task::{Line, State, Task, Who};
-use super::tier;
-use super::{Agents, tools};
+use super::{Agents, Call, ToolResult, tier, tools};
 use crate::product::PRODUCT;
-use crate::tokens::agents::helpers::{DEEP, MOST};
+use crate::tokens::agents::helpers::MOST;
 
-/// Whether a task's assistant gets its helper tool. Off: nothing in Settings turns it on, and a
-/// task started while it's off has today's arguments, to the byte.
-///
-/// A run started as `ENV` and `NOT_OURS` start it was recorded (Claude Code 2.1.331), seven turns
-/// long. It showed:
-/// 1. Every turn's first line lists ilo's kind of helper alone.
-/// 2. A helper of another kind that the task asks for is refused by the program itself: the call
-///    is answered with an error and no start follows.
-/// 3. A helper is waited for. `task_started` names the call that asked for it as `tool_use_id`,
-///    with ilo's kind, `spawn_depth` 1 and not in the background, and the turn's `result` comes
-///    after its helpers have ended.
-/// 4. A helper's lines come whole, each with that call as its parent. Each helper's first call
-///    came 3 to 5.5 s after its start, and opened its page.
-/// 5. A helper's end is told by `task_notification`, by the same `tool_use_id`.
-/// 6. An interrupt ended every helper under way within half a second, no start came after it,
-///    and the task answered the user's next message.
-///
-/// No real run has shown a helper's own helper refused, which the assistant didn't try, or a call
-/// after Stop answered as stopped, which didn't come up: a stand-in shows both.
-pub const ON: bool = true;
-
-/// What the assistant's process is started with while helpers are on, each by its maker's
-/// documentation, and none while they're off. ilo sets them on the process itself, so its value
-/// is the one the assistant reads whatever ilo's own environment holds.
-pub const ENV: [(&str, &str); 4] = [
-    // None of the assistant's own kinds of helper, in print mode: ilo's kind alone is left.
-    ("CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS", "1"),
-    // No helper that is the task over again, with its conversation and every tool of its own.
-    ("CLAUDE_CODE_FORK_SUBAGENT", "0"),
-    // A helper is waited for, so the task's turn ends after its helpers. It takes the background
-    // from every tool, so a slow call of the browser's is waited for too.
-    ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
-    // One level under the task: a helper has no tool that starts another.
-    ("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "1"),
-];
-
-/// The kinds of helper the assistant is known to keep of its own, denied by name beside `ENV`:
-/// a second belt only, as a list misses the kind a later version adds.
-const NOT_OURS: [&str; 8] = [
-    "fork",
-    "claude",
-    "general-purpose",
-    "Explore",
-    "Plan",
-    "statusline-setup",
-    "claude-code-guide",
-    "web-fetch",
-];
-
-/// The assistant's tool that starts a helper: as its arguments and its own calls name it, and as
-/// its init line lists it.
-pub const TOOLS: [&str; 2] = ["Agent", "Task"];
-
-/// The kind of helper ilo describes to the assistant, by the name the task asks for it with.
+/// The kind of helper the task was told of, by the name it asked for it with, which what it's
+/// told when stopped still names.
 const KIND: &str = "page-helper";
-
-/// The task's own tools, which no helper has: the task's name, its question, its end and a tab
-/// handed to the user, each of which speaks to the user as the task. ilo's server can't tell a
-/// helper's call from the task's, so a helper's line that calls one stops the task.
-const THE_TASKS_OWN: [&str; 5] = ["title", "ask", "finish", "done", "hand_off"];
-
-/// What a call without a tab is told once the task has more than one, as a helper's "tab used
-/// last" may be another's page. It names no page.
-pub const NAME_YOUR_TAB: &str = "This task has more than one tab. Give the call its tab, a number \
-                                 from list_tabs or from the open_tab that made it. Nothing was \
-                                 done.";
-
-/// What a task with helpers is told after `tools::TASK_INSTRUCTIONS`: the two numbers, so the
-/// limit is known before it's met, and that every call names its tab.
-pub fn instructions() -> String {
-    format!(
-        "You can start helpers with the {} tool, as “{KIND}”, when the same work repeats across \
-         pages: one page each. Start at most {MOST} for each message of the user's, and a helper \
-         may start none of its own: ilo stops the turn if either limit is passed. If there are \
-         more pages, do the rest yourself in your own tabs. A helper works in the tab you give it \
-         or one it opens, at this task's access level, and what it finds comes back to you as its \
-         result. Once this task has more than one tab, give every browser call its tab; one \
-         without is refused.",
-        TOOLS[0]
-    )
-}
-
-/// The arguments that describe ilo's kind of helper to Claude, after the task's own: the browser's
-/// tools without the task's own and without the tool that starts a helper. The shape is the CLI's
-/// documented one; whether a helper so described can start another wasn't run, so the depth its
-/// CLI says each start is at is what ilo holds the limit to (`Agents::helper_started`).
-pub fn claude_args(allowed: &[String]) -> Vec<String> {
-    let own = THE_TASKS_OWN.map(|tool| format!("mcp__{SERVER}__{tool}"));
-    let tools: Vec<&String> = (allowed.iter())
-        .filter(|tool| !own.contains(tool))
-        .collect();
-    let kinds = json!({
-        KIND: {
-            "description": "Does one page's part of the task in the browser, in a tab of its own.",
-            "prompt": "You do one page's part of a task in the user's web browser, through its \
-                       tools only. Give every call its tab. A sign-in, a 2FA prompt or a CAPTCHA \
-                       is the user's: stop there and say so in your result, with the tab, so the \
-                       task hands it over. Never pay, order, book or send a message unless your \
-                       instructions say the user asked for it. End with what you found, short \
-                       and plain.",
-            "tools": tools,
-        }
-    });
-    let denied = NOT_OURS.map(|kind| format!("{}({kind})", TOOLS[0]));
-    vec![
-        "--disallowedTools".into(),
-        denied.join(","),
-        "--agents".into(),
-        kinds.to_string(),
-    ]
-}
-
-/// Whether a block is a call of `names`' tool.
-fn calls(block: &Value, names: &[String]) -> bool {
-    let name = block.get("name").and_then(Value::as_str);
-    block.get("type").and_then(Value::as_str) == Some("tool_use")
-        && name.is_some_and(|name| names.iter().any(|each| each == name))
-}
-
-/// The kinds of helper a run's first line lists: whether each is ilo's. One that lists none it
-/// can read is taken as listing another, as ilo can't tell.
-pub fn kinds(kind: &str, message: &Value) -> Option<Out> {
-    let init = message.get("subtype").and_then(Value::as_str) == Some("init");
-    if kind != "system" || !init {
-        return None;
-    }
-    let listed = message.get("agents").and_then(Value::as_array);
-    let ours = listed.is_some_and(|listed| listed.iter().all(|each| each.as_str() == Some(KIND)));
-    Some(Out::Kinds { ours })
-}
-
-/// What a line of Claude's output with a parent says, which is a helper's line (`parent` is the
-/// call of the task's that asked for it): each tool it calls, with the tab it calls one of the
-/// browser's on, for its label. Nothing it says, writes or thinks comes out, so none of it is
-/// shown as the task's or kept. One that calls a tool that is the task's alone says only that.
-/// One that asks for a helper of its own says no more than that it calls: the program refuses
-/// it, and a helper that did start would say so by its start.
-pub fn claude_read(parent: &str, kind: &str, message: &Value) -> Vec<Out> {
-    if kind != "assistant" {
-        return Vec::new();
-    }
-    let content = message
-        .pointer("/message/content")
-        .and_then(Value::as_array);
-    let blocks = || content.into_iter().flatten();
-    let own = THE_TASKS_OWN.map(|tool| format!("mcp__{SERVER}__{tool}"));
-    if blocks().any(|block| calls(block, &own)) {
-        return vec![Out::NotAllowed(Limit::Kind)];
-    }
-    let ours = format!("mcp__{SERVER}__");
-    blocks()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .map(|block| {
-            let name = block.get("name").and_then(Value::as_str);
-            let tool = name.and_then(|name| name.strip_prefix(&ours));
-            let tab = block.pointer("/input/tab").and_then(tools::tab_id);
-            let told = match (tool, tab, super::runner::searched(block)) {
-                (Some(_), Some(tab), _) => Helper::On(tab),
-                (Some("open_tab"), None, _) => Helper::Opens,
-                (_, _, Some(Out::Searched(query))) => Helper::Searched(query),
-                _ => Helper::Calls,
-            };
-            Out::Helper {
-                id: parent.to_string(),
-                told,
-            }
-        })
-        .collect()
-}
-
-/// The helpers a message of the task's own asks for, from its blocks: each call of the helper
-/// tool for ilo's kind, by its id, which its start and its lines name, and by the name the task
-/// gave it (the call's `description`), for its line. A call for another kind, or for none, says
-/// nothing: the program refuses it, and one that started all the same says so by its start.
-pub fn asked<'a>(blocks: impl Iterator<Item = &'a Value>) -> impl Iterator<Item = Out> {
-    blocks
-        .filter(|block| calls(block, &TOOLS.map(String::from)))
-        .filter(|block| {
-            block
-                .pointer("/input/subagent_type")
-                .and_then(Value::as_str)
-                == Some(KIND)
-        })
-        .filter_map(|block| {
-            let name = block.pointer("/input/description").and_then(Value::as_str);
-            Some(Out::Helper {
-                id: block.get("id")?.as_str()?.to_string(),
-                told: Helper::Asked(name.map(tier::plain).unwrap_or_default()),
-            })
-        })
-}
-
-/// A `system` line that says a helper started, by the call that asked for it, with how deep
-/// under the task its CLI says it is. One with a parent is a helper's own line, so a start it
-/// tells without a depth is taken as a helper's helper: deeper than any may be. A start of
-/// another kind than ilo's, of none, or in the background, where the task's turn would end before
-/// its helper, isn't allowed.
-pub fn started(kind: &str, message: &Value) -> Option<Out> {
-    let started = message.get("subtype").and_then(Value::as_str) == Some("task_started");
-    if kind != "system" || !started {
-        return None;
-    }
-    let parent = (message.get("parent_tool_use_id")).is_some_and(Value::is_string);
-    let deep = match (message.get("spawn_depth").and_then(Value::as_u64), parent) {
-        (Some(deep), _) => deep,
-        (None, true) => u64::from(DEEP) + 1,
-        (None, false) => 0,
-    };
-    let ours = message.get("subagent_type").and_then(Value::as_str) == Some(KIND);
-    let background = message.get("is_backgrounded") == Some(&Value::Bool(true));
-    let id = message.get("tool_use_id").and_then(Value::as_str);
-    match deep <= u64::from(DEEP) && (!ours || background) {
-        true => Some(Out::NotAllowed(Limit::Kind)),
-        false => Some(Out::Started {
-            id: id.map(String::from),
-            deep,
-        }),
-    }
-}
-
-/// A `system` line that says a helper ended, done or stopped, by the call that asked for it.
-pub fn ended(kind: &str, message: &Value) -> Option<Out> {
-    let ended = message.get("subtype").and_then(Value::as_str) == Some("task_notification");
-    if kind != "system" || !ended {
-        return None;
-    }
-    Some(Out::Helper {
-        id: message.get("tool_use_id")?.as_str()?.to_string(),
-        told: Helper::Ended,
-    })
-}
-
-/// A run of a task with helpers, until its first line is read: what it would be started with
-/// again, without them.
-struct Run {
-    /// Its first message, as it was sent.
-    first: String,
-    /// Whether the run began a conversation its assistant keeps, which goes with it.
-    new: bool,
-    /// How much the task had done and said as it started: a run that has added to either has
-    /// answered, and isn't started again.
-    had: (usize, usize),
-}
 
 /// What ilo holds of a task's helpers, in memory only: nothing of it is logged or kept.
 #[derive(Default)]
 pub struct Helpers {
-    /// Whether the task's assistant was started with its helper tool, which the switch decided as
-    /// it started.
+    /// Whether the task has helpers at all, which none has now.
     pub on: bool,
     /// The helpers the task asked for, oldest first.
     seen: Vec<Seen>,
@@ -299,16 +40,43 @@ pub struct Helpers {
     opens: Vec<Open>,
     /// The helpers whose lines asked for a page that no step has opened yet, oldest first.
     opening: VecDeque<usize>,
-    /// Each search a helper's line told, by its step's place in the task's trace and the helper.
-    searches: Vec<(usize, usize)>,
     /// How many its CLI said started since the user's last message.
     started: u32,
     /// What follows the end of the turn ilo interrupted for the limit, while that end is awaited.
     stopping: Option<After>,
-    /// The run under way, until its first line is read.
-    run: Option<Run>,
     /// The times ilo stopped it after it started more, as its conversation shows each.
     pub(super) over: Vec<Over>,
+    /// Its strands under way.
+    strands: Vec<Strand>,
+}
+
+/// A strand under way: a run of its own, whose last message answers its thread's call.
+struct Strand {
+    /// Its id, task-N-K, which its calls and its run's lines come by.
+    agent: String,
+    /// Which helper it is, by `Helpers::of`'s numbering.
+    helper: usize,
+    token: String,
+    /// Its run, once started.
+    process: Option<Process>,
+    /// The thread's call that started it, until it's answered.
+    reply: Option<mpsc::Sender<ToolResult>>,
+    /// What it said last, which answers the call.
+    said: Option<String>,
+    /// Whether it has called or said anything yet: until then it has NO_ANSWER from its start,
+    /// as its thread has while it thinks (`Agents::watch_strands`).
+    heard: bool,
+    /// When it started, by the executor's clock, which its thread's timer goes by.
+    since: Instant,
+}
+
+impl Drop for Strand {
+    /// A strand that goes unanswered is answered as stopped, so no call of its thread's waits.
+    fn drop(&mut self) {
+        if let Some(reply) = self.reply.take() {
+            _ = reply.send(ToolResult::failed(tools::Kind::Stopped, super::STOPPED));
+        }
+    }
 }
 
 /// What follows the end of a turn ilo interrupted at the limit.
@@ -339,8 +107,16 @@ struct Seen {
     started: Option<Instant>,
     /// How long the task's trace was as its CLI said it ended: a step after it isn't its own.
     ended: Option<usize>,
-    /// When its CLI said it ended, where the time on its line stops.
+    /// When it ended, where the time on its line stops.
     ended_at: Option<Instant>,
+}
+
+impl Seen {
+    /// It ended when the task's trace was `trace` long, unless it already had.
+    fn end(&mut self, trace: usize) {
+        self.ended.get_or_insert(trace);
+        self.ended_at.get_or_insert_with(Instant::now);
+    }
 }
 
 /// A page opened while a task's helpers were at work, by the step that opened it. A helper's
@@ -391,12 +167,44 @@ pub struct Over {
 const OVER: usize = usize::MAX / 2;
 
 impl Helpers {
-    /// A new task's, `on` if its assistant gets the helper tool.
-    pub(super) fn of_task(on: bool) -> Self {
-        Helpers {
-            on,
-            ..Helpers::default()
+    /// Whether a strand is under way, which its thread's call waits on.
+    pub(super) fn has_strands(&self) -> bool {
+        !self.strands.is_empty()
+    }
+
+    /// The start of the strand longest without a call or a word, if one is under way.
+    pub(super) fn unheard_since(&self) -> Option<Instant> {
+        (self.strands.iter())
+            .filter(|each| !each.heard)
+            .map(|each| each.since)
+            .min()
+    }
+
+    /// Ends each strand that hasn't called or said anything in `most` since it started, by
+    /// `now`, at `trace`, its call answered with `why`; whether any did.
+    pub(super) fn end_unheard(
+        &mut self,
+        (now, most): (Instant, Duration),
+        why: &str,
+        trace: usize,
+    ) -> bool {
+        let due = |each: &Strand| !each.heard && now.duration_since(each.since) >= most;
+        let (due, going): (Vec<Strand>, Vec<Strand>) =
+            std::mem::take(&mut self.strands).into_iter().partition(due);
+        self.strands = going;
+        let ended = !due.is_empty();
+        for mut strand in due {
+            log!(
+                "browser: strand {} had no answer in {} s",
+                strand.agent,
+                most.as_secs()
+            );
+            self.seen[strand.helper].end(trace);
+            if let Some(reply) = strand.reply.take() {
+                _ = reply.send(ended_badly(why));
+            }
         }
+        ended
     }
 
     /// Which of the task's helpers the step at `key` of its trace, on `tab`, is labelled as, if
@@ -410,9 +218,6 @@ impl Helpers {
         };
         let opened =
             |open: &&Open| open.key == key || (tab.is_some() && open.tab == tab && open.key < key);
-        if let Some(&(_, helper)) = self.searches.iter().find(|(at, _)| *at == key) {
-            return Some(helper).filter(|&helper| within(&self.seen[helper]));
-        }
         if let Some(open) = self.opens.iter().rev().find(opened) {
             return open.helper.filter(|&helper| within(&self.seen[helper]));
         }
@@ -438,7 +243,7 @@ impl Helpers {
         })
     }
 
-    /// When its CLI said the helper started and, once it has, ended: its line's time (screen 4c).
+    /// When the helper started and, once it has, ended: its line's time (screen 4c).
     pub fn times(&self, helper: usize) -> (Option<Instant>, Option<Instant>) {
         (self.seen.get(helper)).map_or((None, None), |seen| (seen.started, seen.ended_at))
     }
@@ -546,19 +351,55 @@ impl Helpers {
         (self.over.iter()).any(|over| !over.settled && over.appeared.elapsed() < tier::PROTECT)
     }
 
+    /// Whether the strand `agent` runs, which only then may call.
+    pub(super) fn runs(&self, agent: &str) -> bool {
+        (self.strands.iter()).any(|strand| strand.agent == agent && strand.process.is_some())
+    }
+
+    /// The token of the strand `agent`.
+    pub(super) fn token_of(&self, agent: &str) -> Option<String> {
+        let strand = self.strands.iter().find(|strand| strand.agent == agent)?;
+        Some(strand.token.clone())
+    }
+
+    /// Each strand's token, with its id, which its calls come by.
+    pub(super) fn tokens(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        (self.strands.iter()).map(|strand| (strand.token.clone(), strand.agent.clone()))
+    }
+
+    /// Its thread ended, when its trace was `trace` long: each strand ends with it, its run
+    /// ended and its call answered as stopped.
+    pub(super) fn end_strands(&mut self, trace: usize) {
+        for strand in std::mem::take(&mut self.strands) {
+            self.seen[strand.helper].end(trace);
+        }
+        self.opening.clear();
+    }
+
     /// What follows the turn that just ended, if it's one ilo interrupted at the limit.
     pub(super) fn takes_end(&mut self) -> Option<After> {
         self.stopping.take()
     }
+}
 
-    /// A run of the task's started with `first`, `new` if it began a kept conversation, when the
-    /// task had done and said `had`.
-    pub(super) fn run_started(&mut self, first: &str, new: bool, had: (usize, usize)) {
-        self.run = self.on.then(|| Run {
-            first: first.to_string(),
-            new,
-            had,
-        });
+/// The thread's answer when its strand's run ended badly, for `reason` (AP29): what went wrong and
+/// what to do next, as the model otherwise learns only that something broke.
+fn ended_badly(reason: &str) -> ToolResult {
+    ToolResult::error(format!(
+        "The helper ended: {reason} Check what's already done and finish its part yourself."
+    ))
+}
+
+/// What went wrong with a strand's turn, for its thread's call: as the thread's own card would say
+/// it, by the assistant's `name`.
+fn failure_words(name: &str, cli: Option<runner::Cli>, failure: Failure) -> String {
+    let name = cli.map_or(name, |cli| cli.name());
+    match failure {
+        Failure::Limit(_) => format!("{name} is at its usage limit."),
+        Failure::SignedOut => format!("{name} isn't signed in."),
+        Failure::NotInstalled => format!("{name} isn't installed."),
+        Failure::NeedsUpdate => format!("{name} needs an update to work in {PRODUCT}."),
+        Failure::Other(why) => why,
     }
 }
 
@@ -617,120 +458,113 @@ pub(super) fn lines(task: &Task, lines: &mut Vec<Line>) {
 }
 
 impl Agents {
-    /// What `agent`'s task's output told of a helper, by the call `id` that asked for it: its
-    /// label, for the conversation's line. A tab labels one only while it's a tab of the task's,
-    /// so naming numbers grows nothing. A helper that calls a tool when ilo holds no start for it
-    /// isn't allowed: every helper's start is told before it acts, so one that wasn't is a
-    /// helper's own helper, or one started in a way this version doesn't read.
-    pub(super) fn helper_told(
-        &mut self,
-        agent: &str,
-        id: String,
-        told: Helper,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(task) = self.task(agent).filter(|task| task.helpers.on) else {
+    /// The thread `agent` calls `strand`: a helper for `goal`, in `tab` if it names one. Past the
+    /// most a thread starts for a message of the user's, the call is refused, nothing starts,
+    /// and ilo stops the turn with Stop's own request and says so in one line; once that turn
+    /// ends, ilo tells the thread, which goes on in a new turn (`task_said`). It isn't Stopped
+    /// then, as the count bounds a cost and nothing was done that may not be. Past the count
+    /// again before the user writes, ilo stops that turn too and tells the thread nothing, so it
+    /// ends there and waits for the user: two stops for each message of theirs, and no more turns
+    /// after the second.
+    pub(super) fn strand(&mut self, call: Call, cx: &mut Context<Self>) {
+        let Call {
+            agent,
+            connection,
+            arguments,
+            reply,
+            ..
+        } = call;
+        let goal = (arguments.get("goal").and_then(Value::as_str))
+            .map(str::trim)
+            .unwrap_or_default();
+        if goal.is_empty() {
+            _ = reply.send(ToolResult::error("goal is what the helper is to do."));
+            return;
+        }
+        let tab = match tools::tab_argument(&arguments) {
+            Ok(tab) => tab,
+            Err(not_a_tab) => {
+                _ = reply.send(ToolResult::error(not_a_tab));
+                return;
+            }
+        };
+        let Some(task) = self.task_mut(&agent) else {
             return;
         };
-        let named = |seen: &Seen| !id.is_empty() && seen.id == id;
-        let helper = task.helpers.seen.iter().position(named);
-        let calls = matches!(
-            told,
-            Helper::On(_) | Helper::Opens | Helper::Calls | Helper::Searched(_)
-        );
-        let started = helper.is_some_and(|helper| task.helpers.seen[helper].started.is_some());
-        if calls && !started {
-            return self.helper_not_allowed(agent, Limit::Kind, cx);
+        if task.helpers.started >= MOST {
+            _ = reply.send(ToolResult::error(told(Limit::Count, MOST)));
+            return self.past_most(&agent);
         }
-        let own = match told {
-            Helper::On(tab) => {
-                let tabs = self.tabs_seen(task.space, cx);
-                tabs.iter().any(|each| each.id == tab)
-            }
-            _ => true,
+        task.helpers.on = true;
+        task.helpers.started += 1;
+        let helper = task.helpers.seen.len();
+        let strand = format!("{agent}-{}", helper + 1);
+        task.helpers.seen.push(Seen {
+            id: strand.clone(),
+            name: tier::plain(goal).into(),
+            after: task.messages.len(),
+            from: task.trace.len(),
+            until: None,
+            tabs: tab.into_iter().collect(),
+            started: Some(Instant::now()),
+            ended: None,
+            ended_at: None,
+        });
+        // Its token is the server's before its run can connect with it.
+        task.helpers.strands.push(Strand {
+            agent: strand.clone(),
+            helper,
+            token: super::random_token(),
+            process: None,
+            reply: Some(reply),
+            said: None,
+            heard: false,
+            since: cx.background_executor().now(),
+        });
+        self.tokens_changed();
+        let first = match tab {
+            Some(tab) => format!("{goal}\n\nWork in tab {tab}."),
+            None => goal.to_string(),
         };
-        let Some(task) = self.task_mut(agent).filter(|_| own) else {
+        let started = self.launch_strand(&agent, &strand, &first, cx);
+        // Its start is its thread's entry in the activity log, naming the strand as its calls'
+        // entries do: one entry for each strand, never a count. The log keeps what happened,
+        // never the assistant's words, so not its goal.
+        if started.is_ok() {
+            self.as_strand(&strand, |agents| {
+                agents.note(&agent, connection, tools::STRAND, "", "")
+            });
+        }
+        let Some(task) = self.task_mut(&agent) else {
             return;
         };
-        let (after, trace) = (task.messages.len(), task.trace.len());
-        match (told, helper) {
-            (Helper::Asked(name), None) => task.helpers.seen.push(Seen {
-                id,
-                name: name.into(),
-                after,
-                from: trace,
-                until: None,
-                tabs: Vec::new(),
-                started: None,
-                ended: None,
-                ended_at: None,
-            }),
-            (Helper::On(tab), Some(helper)) => task.helpers.on(helper, tab),
-            (Helper::Opens, Some(helper)) => task.helpers.opens(helper),
-            // Its search is a step of its own, under its line alone.
-            (Helper::Searched(query), Some(helper)) => {
-                task.helpers.searches.push((trace, helper));
-                task.trace.push(super::task::searched(&query, after));
-                self.count_search(agent);
+        let trace = task.trace.len();
+        let Some(at) = (task.helpers.strands.iter()).position(|each| each.agent == strand) else {
+            return;
+        };
+        match started {
+            Ok(process) => task.helpers.strands[at].process = Some(process),
+            Err(why) => {
+                let mut strand = task.helpers.strands.remove(at);
+                task.helpers.seen[helper].end(trace);
+                if let Some(reply) = strand.reply.take() {
+                    _ = reply.send(ended_badly(&why));
+                }
+                self.tokens_changed();
             }
-            (Helper::Ended, Some(helper)) => {
-                let seen = &mut task.helpers.seen[helper];
-                seen.ended.get_or_insert(trace);
-                seen.ended_at.get_or_insert_with(Instant::now);
-                task.helpers.opening.retain(|each| *each != helper);
-            }
-            _ => {}
         }
+        self.watch_strands(&agent, cx);
+        cx.notify();
     }
 
-    /// `agent`'s task's CLI says a helper started, the one its call `id` asked for, `deep` levels
-    /// under the task: from here the helper is counted and shown. Deeper than a helper may be,
-    /// the task is stopped (`helper_not_allowed`). Past the most a task starts, ilo stops the
-    /// turn with Stop's own request and says so in one line; once that turn ends, ilo tells the
-    /// task, which goes on in a new turn (`task_said`). It isn't Stopped then, as the count bounds
-    /// a cost and nothing was done that may not be. Past the count again before the user writes,
-    /// ilo stops that turn too and tells the task nothing, so it ends there and waits for the
-    /// user: two stops for each message of theirs, and no more turns after the second. A helper
-    /// that went past may act until the interrupt lands, and each of its acts meets the same
-    /// check as any.
-    pub(super) fn helper_started(
-        &mut self,
-        agent: &str,
-        id: Option<String>,
-        deep: u64,
-        cx: &mut Context<Self>,
-    ) {
-        if deep > u64::from(DEEP) {
-            return self.helper_not_allowed(agent, Limit::Depth, cx);
-        }
+    /// The thread `agent` called past the most it starts: ilo stops its turn and says so once for
+    /// each message of the user's (`strand`).
+    fn past_most(&mut self, agent: &str) {
         let on = self.task(agent).and_then(|task| self.on(task)).unwrap_or(0);
-        let Some(task) = self.task_mut(agent).filter(|task| task.helpers.on) else {
+        let Some(task) = self.task_mut(agent) else {
             return;
         };
-        let id = id.unwrap_or_default();
-        let named = |seen: &Seen| !id.is_empty() && seen.id == id;
-        match task.helpers.seen.iter().position(named) {
-            Some(helper) => {
-                _ = task.helpers.seen[helper]
-                    .started
-                    .get_or_insert_with(Instant::now)
-            }
-            // One the task's own line didn't ask for by a name: it started all the same.
-            None => task.helpers.seen.push(Seen {
-                id,
-                name: SharedString::default(),
-                after: task.messages.len(),
-                from: task.trace.len(),
-                until: None,
-                tabs: Vec::new(),
-                started: Some(Instant::now()),
-                ended: None,
-                ended_at: None,
-            }),
-        }
-        task.helpers.started += 1;
-        let over = task.helpers.started > MOST;
-        if !over || task.state != State::Working || task.helpers.stopping.is_some() {
+        if task.state != State::Working || task.helpers.stopping.is_some() {
             return;
         }
         // One line for each message of the user's: stopped again, the line still says what's so.
@@ -750,6 +584,133 @@ impl Agents {
             });
         }
         task.interrupt();
+    }
+
+    /// The strand `strand` of the thread `thread` makes `call`, which is its thread's from here:
+    /// the tab it names is its page, if it's one of the thread's, and a page it opens is its own.
+    /// A label, which nothing ilo allows or refuses reads.
+    pub(super) fn strand_calls(
+        &mut self,
+        thread: &str,
+        strand: &str,
+        call: &Call,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task(thread) else {
+            return;
+        };
+        let space = task.space;
+        let Some(helper) = (task.helpers.strands.iter())
+            .find(|each| each.agent == strand)
+            .map(|each| each.helper)
+        else {
+            return;
+        };
+        let tab = call.arguments.get("tab").and_then(tools::tab_id);
+        let own =
+            tab.is_some_and(|tab| (self.tabs_seen(space, cx).iter()).any(|each| each.id == tab));
+        let Some(task) = self.task_mut(thread) else {
+            return;
+        };
+        if let Some(each) = (task.helpers.strands.iter_mut()).find(|each| each.agent == strand) {
+            each.heard = true;
+        }
+        match (tab, call.tool.as_str()) {
+            (Some(tab), _) if own => task.helpers.on(helper, tab),
+            (None, "open_tab" | tools::SEARCHED) => task.helpers.opens(helper),
+            _ => {}
+        }
+    }
+
+    /// A strand of `thread`'s called `tool`, which it hasn't: a strand of its own, or one of its
+    /// thread's own tools, stops the thread as a helper ilo doesn't allow. Any other is only
+    /// refused.
+    pub(super) fn strand_not_allowed(&mut self, thread: &str, tool: &str, cx: &mut Context<Self>) {
+        let limit = match tool {
+            tools::STRAND => Limit::Depth,
+            tool if tools::THE_THREADS_OWN.contains(&tool) => Limit::Kind,
+            _ => return,
+        };
+        self.helper_not_allowed(thread, limit, cx);
+    }
+
+    /// What the strand `strand` of `thread`'s run `run` said: what it says is kept for its answer,
+    /// its turn's end answers its thread's call with it, or with what went wrong, and it ends
+    /// there. Nothing it says, writes or thinks is the thread's own.
+    pub(super) fn strand_said(
+        &mut self,
+        thread: &str,
+        strand: &str,
+        run: u32,
+        out: Out,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task_mut(thread) else {
+            return;
+        };
+        let (trace, name, cli) = (task.trace.len(), task.name.clone(), task.cli);
+        let ours = |each: &Strand| {
+            let run_of = each.process.as_ref().map(Process::run);
+            each.agent == strand && run_of == Some(run)
+        };
+        let Some(at) = task.helpers.strands.iter().position(ours) else {
+            return;
+        };
+        let answer = match out {
+            Out::Said(text) => {
+                let strand = &mut task.helpers.strands[at];
+                (strand.said, strand.heard) = (Some(text), true);
+                return;
+            }
+            Out::Ended(None) => {
+                let said = task.helpers.strands[at].said.take();
+                ToolResult::text(said.unwrap_or_default())
+            }
+            Out::Ended(Some(failure)) => ended_badly(&failure_words(&name, cli, failure)),
+            Out::Refused(why) => {
+                log!("browser: strand {strand} ended as {why}");
+                use crate::shell::conversation::words;
+                let (said, _) = words::head(&IloKind::NotOurTools, &name);
+                ended_badly(&format!("{PRODUCT} {said}."))
+            }
+            Out::Walled(Err(refused)) => {
+                log!("browser: strand {strand} wasn't walled in: {refused:?}");
+                ended_badly(&format!("{name} couldn't start."))
+            }
+            Out::Gone(_) => ended_badly(&format!("{name} stopped working.")),
+            _ => return,
+        };
+        let mut ended = task.helpers.strands.remove(at);
+        task.helpers.seen[ended.helper].end(trace);
+        if let Some(reply) = ended.reply.take() {
+            _ = reply.send(answer);
+        }
+        drop(ended);
+        self.tokens_changed();
+        cx.notify();
+    }
+
+    /// The strands of `thread` under way, by id.
+    #[cfg(test)]
+    pub(super) fn strands_of(&self, thread: &str) -> Vec<String> {
+        let strands = self.task(thread).map(|task| task.helpers.strands.iter());
+        strands
+            .into_iter()
+            .flatten()
+            .map(|strand| strand.agent.clone())
+            .collect()
+    }
+
+    /// The run of the strand `strand`, or 0 with none.
+    #[cfg(test)]
+    pub(super) fn strand_run(&self, strand: &str) -> u32 {
+        let task = super::strand_parent(strand).and_then(|thread| self.task(thread));
+        (task
+            .into_iter()
+            .flat_map(|task| task.helpers.strands.iter()))
+        .find(|each| each.agent == strand)
+        .and_then(|each| each.process.as_ref())
+        .map_or(0, Process::run)
     }
 
     /// `agent`'s task's output shows a helper ilo doesn't allow, by `limit`: ilo stops the task,
@@ -777,48 +738,6 @@ impl Agents {
         task.told = Some(told(limit, MOST));
         log!("browser: task {agent} stopped over a helper: {limit:?}");
         self.stop_task(agent, cx);
-    }
-
-    /// The first line of a run of `agent`'s task lists its kinds of helper, all `ours` or not.
-    /// With another listed, a run that has answered and done nothing yet is ended there
-    /// (`kinds_not_ours`); one that has is stopped as for any helper ilo doesn't allow.
-    pub(super) fn helper_kinds(&mut self, agent: &str, ours: bool, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent).filter(|task| task.helpers.on) else {
-            return;
-        };
-        let run = task.helpers.run.take();
-        if ours {
-            return;
-        }
-        let had = (task.trace.len(), task.messages.len());
-        match run.filter(|run| run.had == had && task.state == State::Working) {
-            Some(run) => self.kinds_not_ours(agent, run, cx),
-            None => self.helper_not_allowed(agent, Limit::Kind, cx),
-        }
-    }
-
-    /// What follows a run whose first line lists a kind of helper ilo didn't make, before it has
-    /// answered or done anything: the one place that decides it. The task starts again without
-    /// helpers, and nothing is said. To stop it and say so instead, this is
-    /// `self.helper_not_allowed(agent, Limit::Kind, cx)`.
-    fn kinds_not_ours(&mut self, agent: &str, run: Run, cx: &mut Context<Self>) {
-        self.start_without_helpers(agent, run, cx);
-    }
-
-    /// Ends `agent`'s task's run and starts it again as a task without helpers is started, with
-    /// the message it had. Nothing of the run that ended is kept: a conversation it began is
-    /// removed as a task's that goes for good is. The dev log has one line, the activity log none.
-    fn start_without_helpers(&mut self, agent: &str, run: Run, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent) else {
-            return;
-        };
-        task.helpers.on = false;
-        task.end_run();
-        if run.new {
-            self.forget_kept(agent, cx);
-        }
-        log!("browser: task {agent} starts again without helpers");
-        self.launch(agent, &run.first, cx);
     }
 }
 

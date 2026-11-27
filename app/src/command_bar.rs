@@ -114,12 +114,12 @@ use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
-use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
     CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
     FOOT_TEXT, PLUS,
 };
-use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
+use crate::tokens::command_bar::{CHOSEN_KIND, LIGHT_CHOSEN_KIND};
+use crate::tokens::selected::plate::{DARK as CHOSEN, LIGHT as LIGHT_CHOSEN};
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
@@ -301,13 +301,10 @@ pub fn starts_on<'a>(
     ready.find(|agent| Some(&agent.id) == picked).or(first)
 }
 
-/// The level menu, as each level it offers and its items: the levels, `current` checked, and the
-/// line every level holds to. Settings' `A new thread starts with` opens it too, without Full
-/// access (`full`), which is set for one thread and never where one starts.
-pub fn level_choices(current: Tier, full: bool) -> (Vec<Tier>, Vec<MenuEntry>) {
-    let tiers: Vec<Tier> = (Tier::ALL.into_iter())
-        .filter(|&tier| full || tier != Tier::Full)
-        .collect();
+/// The level menu, as each level it offers and its items: every level, `current` checked, and the
+/// line every level holds to. Settings' `A new thread starts with` opens it too, row for row.
+pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
+    let tiers: Vec<Tier> = Tier::ALL.to_vec();
     let mut items: Vec<MenuEntry> = (tiers.iter())
         .map(|&tier| MenuEntry {
             checked: tier == current,
@@ -453,7 +450,7 @@ const SEARCH_MODELS: &str = "Search models";
 /// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
 /// `{assistant}'s default`.
 pub const DEFAULT_ROW: &str = "Default";
-/// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
+/// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
 fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
     let (plate, kind) = match palette.tone {
         palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
@@ -914,29 +911,7 @@ struct Site {
     /// The word typed before Tab, which leaving puts back in the keyword's place, as Arc's
     /// `queryBeforeEnteringScopedSearch` (#1397): "yout" comes back as "yout", not youtube.com.
     word: String,
-    /// The site's own colour, which its chip and the selected row are in, if it has one.
-    color: Option<u32>,
 }
-
-/// The colours of the site searches a new profile has (core/site_searches.cc), by keyword, for those
-/// whose brand has one.
-pub(crate) const SITE_COLORS: [(&str, u32); 15] = [
-    ("drive.google.com", site_colors::GOOGLE_DRIVE),
-    ("mail.google.com", site_colors::GMAIL),
-    ("maps.google.com", site_colors::GOOGLE_MAPS),
-    ("calendar.google.com", site_colors::GOOGLE_CALENDAR),
-    ("docs.google.com", site_colors::GOOGLE_DOCS),
-    ("dropbox.com", site_colors::DROPBOX),
-    ("amazon.com", site_colors::AMAZON),
-    ("figma.com", site_colors::FIGMA),
-    ("youtube.com", site_colors::YOUTUBE),
-    ("reddit.com", site_colors::REDDIT),
-    ("soundcloud.com", site_colors::SOUNDCLOUD),
-    ("asana.com", site_colors::ASANA),
-    ("linkedin.com", site_colors::LINKEDIN),
-    ("music.apple.com", site_colors::APPLE_MUSIC),
-    ("spotify.com", site_colors::SPOTIFY),
-];
 
 /// Where the bar shows the page chosen.
 #[derive(Clone, Copy)]
@@ -2306,15 +2281,10 @@ impl CommandBar {
             input.set_placeholder(SITE_PLACEHOLDER.into(), cx);
             input.set_spoken(Some(spoken), cx);
         });
-        let color = SITE_COLORS
-            .iter()
-            .find(|(site, _)| *site == keyword)
-            .map(|&(_, color)| color);
         self.site = Some(Site {
             keyword,
             name,
             word,
-            color,
         });
         self.completion.clear();
         let caret = query.len();
@@ -2777,11 +2747,11 @@ impl CommandBar {
         self.show_choices(FOLDER, items, chosen, window, cx);
     }
 
-    /// The level trigger's menu, under it: `level_choices`, Full access among them. A pick holds
-    /// for this thread and is offered next time; Full access is never offered again by itself.
+    /// The level trigger's menu, under it: `level_choices`. A pick holds for this thread and is
+    /// where the next starts, Full access too, as Settings' Access is.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
-        let (tiers, items) = level_choices(ask.tier, true);
+        let (tiers, items) = level_choices(ask.tier);
         // The pick goes to the bar whose trigger showed the menu.
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
@@ -3190,18 +3160,6 @@ impl CommandBar {
             );
         }
         taken
-    }
-
-    /// The mode chip's fill and its label: in a site search with a colour of its own, that colour,
-    /// made to read on the bar, else a chip's plate and the ink.
-    fn site_chip(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
-        match self.site.as_ref().and_then(|site| site.color) {
-            Some(color) => {
-                let (fill, label) = palette.site_accent(gpui::rgb(color));
-                (fill.into(), label.into())
-            }
-            None => (palette.plate(CHIP), palette.ink.into()),
-        }
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -4429,9 +4387,12 @@ impl CommandBar {
         let name = self.mode_name()?;
         let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
         let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
-        // A site search with a colour of its own is in it.
-        let (fill, label) = self.site_chip(palette);
-        Some(mode_chip(fill, label, favicon, name))
+        Some(mode_chip(
+            palette.plate(CHIP),
+            palette.ink.into(),
+            favicon,
+            name,
+        ))
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.

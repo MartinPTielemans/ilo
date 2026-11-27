@@ -23,6 +23,7 @@ use gpui::{Role, accesskit::Live as Telling};
 
 use self::markdown::{Block, Inline};
 use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
+use super::knot::{self, Knot};
 use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
@@ -58,6 +59,9 @@ use crate::tokens::shell::conversation::ilo::{
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::panel;
+use crate::tokens::shell::conversation::sign::{
+    ABOVE as SIGN_ABOVE, RIGHT as SIGN_RIGHT, SIZE as SIGN_SIZE,
+};
 use crate::tokens::shell::conversation::{
     ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
     BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
@@ -76,7 +80,7 @@ use crate::tokens::shell::conversation::{
     TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
     TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
-use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
+use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RAIL, RING_TURN};
 use crate::tokens::shell::task::{
     LIGHT_TILE_FILL, LIGHT_TILE_LINE, LIGHT_TILE_LINE_ON, RAIL_BREAKPOINT, RAIL_EDGE, RAIL_FAVICON,
     RAIL_GAP, RAIL_HEAD, RAIL_HEAD_GAP, RAIL_HEAD_X, RAIL_TITLE, RAIL_TITLE_LINE, RAIL_WIDTH,
@@ -101,8 +105,10 @@ fn said_ink(palette: &super::Palette) -> Hsla {
     palette.text(TITLE)
 }
 
-/// The stage's fill, the conversation's ground in the page area: also the fill of the shown
-/// thread's card, a shape of its own beside it (task_cards.rs).
+/// The page's plate, which the shown thread's card in the sidebar takes, a shape of its own
+/// (task_cards.rs), until the lifted pane takes its place (#4398). The conversation itself draws
+/// no plate: its column is the chrome the user steers from, on the window's glass as the sidebar
+/// is, and the page is the one card (the owner, 27 Nov, #4396).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }
@@ -267,6 +273,12 @@ pub struct TalkView {
     /// as it lands, and the view.
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The sign over the composer, and since when it has said what it says.
+    sign: knot::Timed,
+    /// The sign and the gap in its cord as it was drawn last, and where, and where the composer
+    /// was, for a test.
+    sign_drawn: Rc<Cell<Option<(Knot, Option<(f32, f32)>, Bounds<Pixels>)>>>,
+    composer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where an outside app's line was drawn last in the panel's head, for a test.
     from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
@@ -307,6 +319,10 @@ pub struct TalkView {
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the view was last drawn as the panel beside a page, so `drawn_at` is the panel's.
     drawn_standing: Cell<bool>,
+    /// Whether the thread had pages when last drawn, and the rail's slide in or out since then
+    /// (`rail_open`).
+    drawn_pages: Cell<Option<bool>>,
+    rail_slide: Cell<Option<(bool, Instant)>>,
     /// Whether an assistive app reads the window, as the last frame found: its lines have roles
     /// and names only then, so with none running a frame costs what it did (#4244).
     a11y: bool,
@@ -457,6 +473,8 @@ impl Shell {
                 talk.view.update(cx, |view, _| {
                     view.scroll.scroll_to_bottom();
                     view.motion.reset();
+                    // Its rail is where its pages put it, with no slide for what came away.
+                    view.drawn_pages.set(None);
                 });
                 talk.view
             }
@@ -498,6 +516,9 @@ impl Shell {
                     made: Instant::now(),
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
+                    sign: Default::default(),
+                    sign_drawn: Rc::default(),
+                    composer_drawn: Rc::default(),
                     from_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
@@ -519,6 +540,8 @@ impl Shell {
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                     drawn_standing: Cell::default(),
+                    drawn_pages: Cell::default(),
+                    rail_slide: Cell::default(),
                     a11y: false,
                     spoken: None,
                     answer_due: false,
@@ -2523,6 +2546,32 @@ impl TalkView {
         self.step_line(step, glyph, look, cx)
     }
 
+    /// How open the pages' rail is this frame, from 0 to 1, and whether it's still sliding: the
+    /// thread's first page brings it in and its last page closing takes it out, over `RAIL`. Where
+    /// it `fits` beside the column it's open while there are `pages`; a resize, full screen, a
+    /// page beside the panel or the thread coming to show moves nothing, and under Reduce Motion
+    /// it's at once where it goes. `pages` is None while no thread shows.
+    fn rail_open(&self, pages: Option<bool>, fits: bool, now: Instant, still: bool) -> (f32, bool) {
+        let had = self.drawn_pages.replace(pages);
+        let pages = pages.unwrap_or(false);
+        if had
+            .zip(self.drawn_pages.get())
+            .is_some_and(|(had, has)| had != has)
+            && fits
+            && !still
+        {
+            self.rail_slide.set(Some((pages, now)));
+        }
+        let at = if pages && fits { 1. } else { 0. };
+        let slid = (self.rail_slide.get())
+            .filter(|(opening, _)| *opening == pages && fits && !still)
+            .and_then(|(opening, since)| rail_slid(opening, since, now));
+        if slid.is_none() {
+            self.rail_slide.set(None);
+        }
+        (slid.unwrap_or(at), slid.is_some())
+    }
+
     /// How far round the running ring is now, on the shell's breath, which draws the next frame
     /// only while a ring is drawn.
     fn turned(&self, look: &Look, cx: &mut Context<Self>) -> f32 {
@@ -2917,6 +2966,51 @@ impl TalkView {
                 .child(landing.text.clone())
                 .into_any_element(),
         )
+    }
+
+    /// What stands in the reply field's place, with the sign over its right corner while the
+    /// thread works or waits on the user. The sign takes no press: it is drawn over the lines'
+    /// foot, which keep theirs.
+    fn composer(
+        &self,
+        look: &Look,
+        gap: Option<(f32, f32)>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
+        let mark = knot::knot(SIGN_SIZE, &look.palette, gap);
+        let (drawn, composer) = (self.sign_drawn.clone(), self.composer_drawn.clone());
+        div()
+            .relative()
+            .child(self.reply(look, cx))
+            .child(
+                canvas(
+                    move |bounds, _, _| composer.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .children(sign.map(|sign| {
+                div()
+                    .absolute()
+                    .right(px(SIGN_RIGHT))
+                    .top(px(-(SIGN_SIZE + SIGN_ABOVE)))
+                    .child(mark)
+                    .child(
+                        canvas(
+                            move |bounds, _, _| drawn.set(Some((sign, gap, bounds))),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+            }))
+            .into_any_element()
     }
 
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
@@ -4251,6 +4345,16 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .children(chevron)
 }
 
+/// How open a rail sliding in (`opening`) or out since `since` is at `now`, on the sidebar's
+/// ease-out cubic, or None once it's there.
+fn rail_slid(opening: bool, since: Instant, now: Instant) -> Option<f32> {
+    let t = now.saturating_duration_since(since).as_secs_f32() / RAIL;
+    (t < 1.).then(|| {
+        let eased = 1. - (1. - t).powi(3);
+        if opening { eased } else { 1. - eased }
+    })
+}
+
 /// The split's line's glyph: a fork, as sheet 45 draws it.
 const SPLIT_GLYPH: &str = "icons/git-fork.svg";
 
@@ -4530,6 +4634,8 @@ impl Render for TalkView {
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         self.reply_drawn.set(None);
+        self.sign_drawn.set(None);
+        self.composer_drawn.set(None);
         self.speaker_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
@@ -4539,9 +4645,17 @@ impl Render for TalkView {
         // and the shimmer, which moves while a step is under way and never while one waits on the
         // user, on the loading dots' clock, as each frame draws the whole window again (#1700).
         let shimmers = self.moving(still);
+        // The sign moves from when it came to say what it says, only while it's drawn in a window
+        // the system shows and motion isn't reduced, on the shimmer's clock: no frame is asked for
+        // it otherwise.
+        let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
+        let composed = self.replies || !look.standing;
+        let gap = (self.sign).gap(sign, now, composed && knot::moves(window, cx));
         if !self.folding.is_empty() || busy {
             window.request_animation_frame();
-        } else if shimmers && let Some(shell) = self.shell.upgrade() {
+        } else if (shimmers || gap.is_some())
+            && let Some(shell) = self.shell.upgrade()
+        {
             shell.read(cx).breath.keep();
             cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
@@ -4590,6 +4704,12 @@ impl Render for TalkView {
             .filter(|_| !was_standing)
             .map_or(window.viewport_size().width, |area| area.size.width);
         let across = pages && !standing && f32::from(wide) < RAIL_BREAKPOINT;
+        let (rail_open, sliding) = self.rail_open(
+            self.shown.as_ref().map(|_| pages),
+            !across && !standing,
+            now,
+            still,
+        );
         let middle = shut(
             div()
                 .flex_1()
@@ -4648,17 +4768,29 @@ impl Render for TalkView {
             // beside its page: its user talks to it in its own app.
             .children(
                 (self.replies || !standing)
-                    .then(|| shut(foot(on_column(self.reply(&look, cx).into_any_element())))),
+                    .then(|| shut(foot(on_column(self.composer(&look, gap, cx))))),
             );
-        let rail = (pages && !across && !standing).then(|| {
+        // The rail's slot, as open as it is: the column keeps its width in the room left of it,
+        // so it slides to that room's middle as the slot grows, and the rail, held at the slot's
+        // left, comes in from the right.
+        let beside = pages && !across && !standing;
+        let rail = (rail_open > 0.).then(|| {
             div()
                 .flex_none()
-                .w(px(RAIL_WIDTH))
+                .w(px((RAIL_WIDTH + RAIL_EDGE) * rail_open))
                 .h_full()
-                .py(px(RAIL_EDGE))
-                .mr(px(RAIL_EDGE))
-                .child(self.rail(false, &look, cx))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .w(px(RAIL_WIDTH))
+                        .h_full()
+                        .py(px(RAIL_EDGE))
+                        .children(beside.then(|| self.rail(false, &look, cx))),
+                )
         });
+        if sliding {
+            window.request_animation_frame();
+        }
         if !pages {
             self.drawn.borrow_mut().clear();
         }
@@ -4673,7 +4805,6 @@ impl Render for TalkView {
             .on_action(cx.listener(Self::ilo_back))
             .on_action(cx.listener(Self::ilo_leave))
             .size_full()
-            .bg(stage_fill(&palette))
             .flex()
             .justify_center()
             // A press here is the conversation's, not the window background's, which moves the

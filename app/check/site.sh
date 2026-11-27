@@ -350,11 +350,14 @@ b.onclick = () => navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{
 # A page that names the engine showing it: Safari's sends Safari's user agent, without Chrome's name.
 # A text field covers it, so a click anywhere in it lands there, and the field's title says what it
 # did: a press, counted, its value, what ⌘A selected and ⌘C copied, and a committed composition.
+# The system's correction is off in it: its panel over a typed word holds the driver's keys until it
+# goes, and came before clear's ⌘A once (#4114).
 # It keeps escape, counting each. In Chromium it asks the site for /painted once painted() says it
 # has painted, which a click the moment it has loaded waits for (#3323): its title can't wait, as it
 # names the engine for the page Chromium kept from before Safari's engine had the tab, too.
 printf '%s' '<title>loading</title>
-<input id=f style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
+<input id=f spellcheck=false autocorrect=off
+  style="position:fixed;left:0;top:0;width:100%;height:100%;box-sizing:border-box">
 <script src="painted.js"></script>
 <script>
 document.title = "engine " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari");

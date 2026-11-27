@@ -400,7 +400,8 @@ fn a_tabs_menu_opens_its_boost(cx: &mut TestAppContext) {
 fn the_plus_menu_makes_then_edits_a_boost(cx: &mut TestAppContext) {
     let (shell, host, _folder, cx) = window(cx);
     shell.update(cx, |shell, cx| {
-        shell.plus_menu(point(px(100.), px(700.)), cx)
+        let items = shell.space_switcher_items(cx);
+        shell.show_space_switcher(items, point(px(100.), px(700.)), cx)
     });
     let titles = menu(&host);
     let note = titles.iter().position(|title| title == "New Note").unwrap();
@@ -413,7 +414,8 @@ fn the_plus_menu_makes_then_edits_a_boost(cx: &mut TestAppContext) {
         shell.close_boost_card(cx);
     });
     shell.update(cx, |shell, cx| {
-        shell.plus_menu(point(px(100.), px(700.)), cx)
+        let items = shell.space_switcher_items(cx);
+        shell.show_space_switcher(items, point(px(100.), px(700.)), cx)
     });
     assert!(
         menu(&host).contains(&"Edit Boost…".to_string()),
@@ -425,7 +427,10 @@ fn the_plus_menu_makes_then_edits_a_boost(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.close_boost_card(cx);
         shell.set_selected(11, cx);
-        shell.plus_menu(point(px(100.), px(700.)), cx);
+        {
+            let items = shell.space_switcher_items(cx);
+            shell.show_space_switcher(items, point(px(100.), px(700.)), cx)
+        };
     });
     assert!(
         !menu(&host).iter().any(|title| title.contains("Boost")),

@@ -370,6 +370,12 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
         row(codex, Ready::NotFound, None, Row::Idle),
         says("Not installed", Offer::Get)
     );
+    // Older than the browser runs (AP27): said before any thread starts, with its maker's page.
+    assert_eq!(
+        row(codex, Ready::NeedsUpdate, None, Row::Idle),
+        says("Needs an update", Offer::Update)
+    );
+    assert_eq!(Offer::Update.label(codex).as_deref(), Some("How to Update"));
     let out = row(codex, Ready::SignedOut, Some("Plus"), Row::Idle);
     assert_eq!(out, says("Not signed in", Offer::SignIn));
     let signing = row(codex, Ready::SignedOut, None, Row::SigningIn);
@@ -395,4 +401,39 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     assert_eq!(not_out, says("Couldn't sign out", Offer::SignedIn));
     let out = row(codex, Ready::SignedIn, None, Row::SigningOut);
     assert_eq!(out, says("Signing out…", Offer::Nothing));
+    // Claude Code missing installs first (AS1–AS4); Codex, with no installer road yet, keeps Get.
+    let claude = Cli::Claude;
+    let missing = row(claude, Ready::NotFound, None, Row::Idle);
+    assert_eq!(
+        missing,
+        says("Installs Anthropic's Claude Code", Offer::Install)
+    );
+    assert_eq!(
+        Offer::Install.label(claude).as_deref(),
+        Some("Install and Sign In")
+    );
+    let installing = row(claude, Ready::NotFound, None, Row::Installing);
+    assert_eq!(installing, says("Installing Claude Code", Offer::Cancel));
+    let offline = Row::InstallFailed(Some(crate::agents::install::OFFLINE.into()));
+    assert_eq!(
+        row(claude, Ready::NotFound, None, offline),
+        says("You're offline.", Offer::TryInstall)
+    );
+    let said = Row::InstallFailed(Some("a made-up reason".into()));
+    assert_eq!(
+        row(claude, Ready::NotFound, None, said),
+        says(
+            "Couldn't install Claude Code: a made-up reason.",
+            Offer::TryInstall
+        )
+    );
+    let failed = row(claude, Ready::NotFound, None, Row::InstallFailed(None));
+    assert_eq!(
+        failed,
+        says("Couldn't install Claude Code.", Offer::TryInstall)
+    );
+    assert_eq!(
+        Offer::TryInstall.label(claude).as_deref(),
+        Some("Try Again")
+    );
 }

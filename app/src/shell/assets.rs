@@ -940,6 +940,9 @@ impl AssetSource for Assets {
         if let Some(drawn) = crate::product::drawn_mark(path) {
             return Ok(Some(Cow::Owned(drawn.into_bytes())));
         }
+        if let Some(gapped) = crate::product::gapped_mark(path) {
+            return Ok(Some(Cow::Owned(gapped.into_bytes())));
+        }
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)
@@ -1051,11 +1054,9 @@ mod tests {
             ] {
                 assert!(svg.contains(want), "{name}: needs {want}");
             }
-            // The Library's books have one solid, as its Spaces' cards do, at the one stroke.
-            let fills = if name == "library.svg" { 2 } else { 1 };
             assert_eq!(
                 svg.matches("fill=").count(),
-                fills,
+                1,
                 "{name}: an outline has no fill"
             );
             checked += 1;
