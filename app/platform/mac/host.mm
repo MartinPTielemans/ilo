@@ -1471,8 +1471,8 @@ void WatchHeldEscape() {
 namespace {
 
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
-// isn't the active one, and with Reduce Transparency or Increase Contrast.
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill with Reduce
+// Transparency or Increase Contrast, whichever window is active.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
@@ -1481,42 +1481,13 @@ void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
-// From the first browser window, every browser window's material follows the app: active while
-// the app is the active one, AppKit's inactive fill once another app is in front. Following the
-// window's own key state instead gives a window the inactive fill behind its own command bar, a
-// menu or Settings, each a window that takes the keyboard from it.
-void WatchAppActiveForMaterial() {
-  static bool watching = false;
-  if (watching) {
-    return;
-  }
-  watching = true;
-  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
-    for (auto& browser : g_browsers) {
-      browser->material.state = state;
-    }
-  };
-  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  [center addObserverForName:NSApplicationDidBecomeActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateActive);
-                  }];
-  [center addObserverForName:NSApplicationDidResignActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateInactive);
-                  }];
-}
-
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
-  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
+  // Active even with another app in front, so the glass and the Space's colour stay; AppKit still
+  // gives its opaque fill with Reduce Transparency or Increase Contrast.
+  material.state = NSVisualEffectStateActive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
