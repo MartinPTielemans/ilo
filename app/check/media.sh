@@ -1494,13 +1494,13 @@ if [ -n "$looked" ]; then
   [ -z "$bad" ] || fail "the Mini Player's origin or its \"–\" was over its buttons: $bad"
 fi
 
-# Music in Safari's engine has a player too, on the Mac from macOS 14: the checks' streaming host
+# Music in Safari's engine has a player too, on the Mac: the checks' streaming host
 # (main.rs) opens the call page there from its first load. Its title and artist come from the
 # page's metadata, its previous and next are there as the page names its track, and its buttons
 # play, pause and skip through the page's own handlers. Nothing floats from it, as its video isn't
 # Chromium's. Back in Chromium, the tab has no player (#3432).
 webkit_player=
-if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ "$(uname)" = Darwin ]; then
   forget_engine_sites
   # Which WebKit the page runs in, so a red here says which one it was.
   webkit=$(plutil -extract CFBundleVersion raw \

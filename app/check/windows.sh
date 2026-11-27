@@ -13,7 +13,7 @@
 # which shows its page again; in the last window it quits. ⇧↩ in the command bar opens its page in
 # a new window, as ⌘N makes one, and a Switch to Tab row for that window's page brings the window
 # forward rather than taking the page. With the first window in full screen, other apps take the
-# second for the window in front once the user is in it. From macOS 14, a page in Safari's engine,
+# second for the window in front once the user is in it. On the Mac, a page in Safari's engine,
 # which the Site Controls turn on for a page that asks for Widevine, moves to another window the
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
 # its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
@@ -321,7 +321,7 @@ send window 1
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
 # engine with a switch, and On shows the page there.
 webkit_moved=
-if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ "$(uname)" = Darwin ]; then
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar for the drm page"

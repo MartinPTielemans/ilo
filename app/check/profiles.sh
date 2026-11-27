@@ -14,7 +14,7 @@
 # service New Note opens a new document in, under Settings › Features, and ⌃⇧N, the command bar's
 # New Note, the footer's + and New Note Split open one in the Space's profile's service.
 # Deleting the Space leaves its profile with only a favorite, and Delete in the menu deletes it,
-# favorite and all, once the user confirms. From macOS 14, a page's icon in Safari's engine is kept
+# favorite and all, once the user confirms. On the Mac, a page's icon in Safari's engine is kept
 # in its Space's profile alone.
 
 # The cookie page's title says whether it finds its cookie, p, never a value, since the app logs
@@ -282,11 +282,11 @@ send window 1
 exec 3>&-
 quit
 
-# From macOS 14, the second profile's page in Safari's engine shows its own icon, which that profile
+# On the Mac, the second profile's page in Safari's engine shows its own icon, which that profile
 # keeps and the first doesn't: the first profile's page of the site with no icon of its own shows
 # none, and the same page in the first profile keeps its icon as new (#3431).
 profile_icon=
-if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ "$(uname)" = Darwin ]; then
   forget_engine_sites
   log="$out/profiles-icon.log"
   step=0
@@ -355,9 +355,9 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   exec 3>&-
   quit
   forget_engine_sites
-  profile_icon=" From macOS 14, a page in Safari's engine shows its own icon, which its own profile keeps and the other doesn't."
+  profile_icon=" On the Mac, a page in Safari's engine shows its own icon, which its own profile keeps and the other doesn't."
 else
-  echo "skip: each profile's icons in Safari's engine, which is the Mac's from macOS 14."
+  echo "skip: each profile's icons in Safari's engine, which is the Mac's."
 fi
 
 # Launched again, each Space is in its profile, and each tab loads in its own.
