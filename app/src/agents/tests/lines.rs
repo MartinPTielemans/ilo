@@ -100,7 +100,7 @@ fn a_refusal_counts_on_its_line_and_a_change_of_access_settles_it(cx: &mut TestA
 /// The thread's hand_off returns at once, which is #4363's: the tab is the user's until it's told
 /// otherwise, and calls on it are refused meanwhile.
 #[track_caller]
-fn returned_at_once(handed: mpsc::Receiver<ToolResult>, tab: u64) {
+pub(super) fn returned_at_once(handed: mpsc::Receiver<ToolResult>, tab: u64) {
     let now = handed.try_recv().expect("the hand-off waited");
     assert!(!now.error, "{}", now.text);
     assert!(
