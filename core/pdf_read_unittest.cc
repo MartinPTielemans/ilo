@@ -109,7 +109,8 @@ TEST(PdfReadTest, AReadTakesThirtyPagesFromWhereItsAsked) {
   EXPECT_EQ(first.page_count, 35);
   EXPECT_EQ(first.pages.size(), 30u);
   EXPECT_EQ(Read(pdf, 30, 30).pages.size(), 5u);
-  EXPECT_EQ(Read(pdf, 10, 100).pages.size(), 30u);
+  // From page 2, 33 are left, so only the cap stops it at 30.
+  EXPECT_EQ(Read(pdf, 2, 100).pages.size(), 30u);
   const PdfRead past = Read(pdf, 40, 30);
   EXPECT_EQ(past.result, PdfResult::kRead);
   EXPECT_TRUE(past.pages.empty());
