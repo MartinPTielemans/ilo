@@ -1185,6 +1185,13 @@ size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t capacity) {
       keyword, capacity);
 }
 
+size_t bc_profile_search_url(bc_id profile_id, const char* text, char* url, size_t capacity) {
+  Profile* profile = browser_core::ProfileOrLoad(profile_id);
+  const GURL search =
+      profile && text ? browser_core::SearchUrl(profile, std::u16string(), text) : GURL();
+  return search.is_valid() ? CopyString(search.spec(), url, capacity) : 0;
+}
+
 bool bc_profile_set_search_engine(bc_id profile, const char* keyword) {
   return keyword && browser_core::SetDefaultEngine(browser_core::ProfileOrLoad(profile),
                                                    base::UTF8ToUTF16(keyword));
