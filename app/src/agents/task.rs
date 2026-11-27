@@ -422,6 +422,9 @@ pub struct Traced {
     /// The site whose notes its call's answer carried (#4122), by its note's name. From the
     /// answer's own field, which only the app sets, never from the answer's text.
     pub notes: Option<&'static str>,
+    /// Where the tab it opened opened and why, in the user's words (PR5), while the user has
+    /// several profiles (#4376): never in an answer.
+    pub opened_in: Option<SharedString>,
 }
 
 impl Traced {
@@ -2593,6 +2596,7 @@ impl Agents {
                     picture: None,
                     close: None,
                     notes: None,
+                    opened_in: None,
                 });
             }
             Out::Searched(query) => {
@@ -3114,8 +3118,14 @@ impl Agents {
         self.forget_waiting(agent, None, cx);
         self.doing.remove(agent);
         self.tokens_changed();
-        if space && task.space != 0 {
-            self.browser.delete_space(task.space, cx);
+        if space {
+            // Its own, and one in each other profile it opened a tab in (#4376).
+            let mut spaces = self.browser.agent_spaces(agent);
+            spaces.retain(|&each| each != task.space);
+            spaces.extend(Some(task.space).filter(|&own| own != 0));
+            for each in spaces {
+                self.browser.delete_space(each, cx);
+            }
         }
         self.remove_task_files(agent);
     }
@@ -3176,8 +3186,7 @@ impl Agents {
             return;
         }
         for client in Client::ALL {
-            let space = self.browser.agent_space(client.id());
-            if space != 0 {
+            for space in self.browser.agent_spaces(client.id()) {
                 self.browser.delete_space(space, cx);
             }
         }
@@ -3194,15 +3203,13 @@ impl Agents {
             self.browser.delete_space(space, cx);
         }
         for client in Client::ALL {
-            let space = self.browser.agent_space(client.id());
-            if space == 0 {
-                continue;
+            for space in self.browser.agent_spaces(client.id()) {
+                log!(
+                    "browser: deleting space {space} of agent {} before",
+                    client.id()
+                );
+                self.browser.delete_space(space, cx);
             }
-            log!(
-                "browser: deleting space {space} of agent {} before",
-                client.id()
-            );
-            self.browser.delete_space(space, cx);
         }
         let Some(dir) = &self.tasks.dir else {
             return;
@@ -3316,8 +3323,8 @@ impl Agents {
         let in_space = |agents: &Self, tab: u64| {
             let session = agents.task(key).and_then(|task| task.session.as_ref());
             session.is_some_and(|session| {
-                let space = agents.browser.agent_space(&session.agent);
-                space != 0 && agents.browser.space_of(tab, cx) == space
+                let space = agents.browser.space_of(tab, cx);
+                space != 0 && agents.browser.agent_spaces(&session.agent).contains(&space)
             })
         };
         // A page an ended task of its client's held comes at no more than that task's access.
@@ -3361,6 +3368,7 @@ impl Agents {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -3755,7 +3763,7 @@ impl Agents {
             return Some(task.agent.clone());
         }
         // Listing its tabs isn't work, and done with no task under way has none to end.
-        if matches!(call.tool.as_str(), "list_tabs" | "done") {
+        if matches!(call.tool.as_str(), "list_tabs" | "list_profiles" | "done") {
             return None;
         }
         // Nor is handing the user a page another of its client's sessions holds, or asking for
@@ -4360,7 +4368,7 @@ impl Agents {
                 };
             }
             "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
-            "list_tabs" | "ask" => {
+            "list_tabs" | "list_profiles" | "ask" => {
                 (did.site, did.tab, did.page, did.title) =
                     (String::new(), None, String::new(), String::new())
             }
@@ -4873,6 +4881,7 @@ pub(super) fn searched(query: &str, after: usize) -> Traced {
         picture: None,
         close: None,
         notes: None,
+        opened_in: None,
     }
 }
 
@@ -4913,6 +4922,7 @@ impl Agents {
             said: SharedString::default(),
             tier: tier.into(),
             notes: SharedString::default(),
+            opened_in: None,
         });
     }
 }
@@ -5582,7 +5592,10 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         };
         let did = &step.did;
         let groups = (did.tab.is_some() || did.tool == "open_tab")
-            && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+            && !matches!(
+                did.tool.as_str(),
+                "thought" | "ask" | "list_tabs" | "list_profiles"
+            );
         // Closes join only those their pages answered alike.
         let like = |line: &Together| {
             matches!(line, Together::Steps(steps)
@@ -5710,6 +5723,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             .notes
             .and_then(|name| notes::NOTES.iter().find(|note| note.name == name)))
         .map(|note| note.with().into())
+        .or_else(|| step.opened_in.clone())
         .unwrap_or_default(),
         page: on_page(&step.did),
         // The assistant's word on its step, only on one that went as it asked.
@@ -5723,7 +5737,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
 /// The page a step acted on, as the log groups it: a step on a tab, or one that opened a page.
 fn on_page(did: &tools::Did) -> Option<OnPage> {
     let went = matches!(did.tool.as_str(), "open_tab" | "navigate");
-    let on_tab = did.tab.is_some() && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+    let on_tab = did.tab.is_some()
+        && !matches!(
+            did.tool.as_str(),
+            "thought" | "ask" | "list_tabs" | "list_profiles"
+        );
     (went || on_tab).then(|| OnPage {
         tab: did.tab,
         site: did.site.clone().into(),

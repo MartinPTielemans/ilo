@@ -93,6 +93,15 @@ struct Made {
     in_use: RefCell<HashSet<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The user's profiles as the core lists them, each its number, folder and name, with
+    /// "Default" (1) alone while a test lists none; those not loaded yet; the picks asked, each
+    /// its profiles, address and request; and the front window's Space, the user's if none.
+    profile_list: RefCell<Vec<(u64, &'static str, &'static str)>>,
+    unloaded: RefCell<HashSet<u64>>,
+    picks: RefCell<Vec<(Vec<u64>, String, u64)>>,
+    front: std::cell::Cell<Option<u64>>,
+    /// The agents' Spaces outside "Default", 200 and up, in the order they're made.
+    more_spaces: RefCell<Vec<(String, u64)>>,
 }
 
 impl Made {
@@ -115,14 +124,54 @@ impl Made {
 }
 
 impl Browser for Made {
-    fn agent_space(&self, agent: &str) -> u64 {
-        self.agent_spaces.borrow().get(agent).copied().unwrap_or(0)
+    fn agent_spaces(&self, agent: &str) -> Vec<u64> {
+        let first = self.agent_spaces.borrow().get(agent).copied();
+        let more = self.more_spaces.borrow();
+        let more = more
+            .iter()
+            .filter(|each| each.0 == agent)
+            .map(|each| each.1);
+        first.into_iter().chain(more).collect()
     }
 
-    fn make_agent_space(&self, agent: &str, name: &str, _: &mut App) -> u64 {
+    /// In "Default" it's 2 as before; in another profile 200 and up.
+    fn make_agent_space(&self, agent: &str, name: &str, profile: u64, _: &mut App) -> u64 {
         self.made.borrow_mut().push((agent.into(), name.into()));
-        self.agent_spaces.borrow_mut().insert(agent.into(), 2);
-        2
+        let folder = (self.profiles().into_iter())
+            .find(|each| each.id == profile)
+            .map_or("Default".to_string(), |each| each.folder);
+        if folder == "Default" {
+            self.agent_spaces.borrow_mut().insert(agent.into(), 2);
+            return 2;
+        }
+        let space = 200 + self.more_spaces.borrow().len() as u64;
+        self.more_spaces.borrow_mut().push((agent.into(), space));
+        let folder: &'static str = Box::leak(folder.into_boxed_str());
+        self.profiles.borrow_mut().push((space, folder));
+        space
+    }
+
+    fn profiles(&self) -> Vec<profiles::Profile> {
+        let list = self.profile_list.borrow();
+        let list = match list.is_empty() {
+            true => vec![(1, "Default", "Default")],
+            false => list.clone(),
+        };
+        (list.into_iter())
+            .map(|(id, folder, name)| profiles::Profile {
+                id,
+                folder: folder.into(),
+                name: name.into(),
+            })
+            .collect()
+    }
+
+    fn pick_profile(&self, profiles: &[u64], url: &str, request: u64) {
+        (self.picks.borrow_mut()).push((profiles.to_vec(), url.into(), request));
+    }
+
+    fn front_space(&self) -> u64 {
+        self.front.get().unwrap_or_else(|| self.user_space(0))
     }
 
     fn space_tabs(&self, space: u64, _: &App) -> Vec<TabInfo> {
@@ -143,10 +192,9 @@ impl Browser for Made {
     }
 
     fn agent_tabs(&self, agent: &str, cx: &App) -> Vec<TabInfo> {
-        match self.agent_space(agent) {
-            0 => Vec::new(),
-            own => self.space_tabs(own, cx),
-        }
+        (self.agent_spaces(agent).into_iter())
+            .flat_map(|own| self.space_tabs(own, cx))
+            .collect()
     }
 
     fn tab(&self, tab: u64, _: &App) -> TabInfo {
@@ -190,12 +238,12 @@ impl Browser for Made {
         if self.held.borrow().contains(&tab) {
             return Err((Failure::Held, words(HELD)));
         }
-        let space = self.agent_space(agent);
+        let spaces = self.agent_spaces(agent);
         match self
             .tabs
             .borrow()
             .iter()
-            .any(|each| each.0 == tab && each.1 == space && space != 0)
+            .any(|each| each.0 == tab && spaces.contains(&each.1))
         {
             true => Ok(()),
             false => Err((
@@ -213,15 +261,36 @@ impl Browser for Made {
         self.disconnected.borrow_mut().push(agent.into());
     }
 
-    /// The new tab is 30. As the core, none opens for an agent without a Space.
-    fn open_tab(&self, agent: &str, url: &str, _: &mut App) -> u64 {
-        let space = self.agent_space(agent);
+    /// The new tab is 30, or in a profile not "Default" 40 and up. As the core, none opens for an
+    /// agent without a Space in the profile, or in one not loaded yet.
+    fn open_tab(&self, agent: &str, profile: u64, url: &str, _: &mut App) -> u64 {
+        if self.unloaded.borrow().contains(&profile) {
+            return 0;
+        }
+        let folder = (self.profiles().into_iter())
+            .find(|each| each.id == profile)
+            .map_or("Default".to_string(), |each| each.folder);
+        let space = match profile {
+            0 => self.agent_space(agent),
+            _ => self.agent_space_in(agent, &folder),
+        };
         if space == 0 {
             return 0;
         }
+        let tab = match folder == "Default" || profile == 0 {
+            true => 30,
+            false => {
+                40 + self
+                    .tabs
+                    .borrow()
+                    .iter()
+                    .filter(|each| each.0 >= 40)
+                    .count() as u64
+            }
+        };
         let url: &'static str = Box::leak(url.to_string().into_boxed_str());
-        self.tabs.borrow_mut().push((30, space, "Opened", url));
-        30
+        self.tabs.borrow_mut().push((tab, space, "Opened", url));
+        tab
     }
 
     fn navigate(&self, _: &str, tab: u64, url: &str, _: &mut App) -> bool {
@@ -360,9 +429,10 @@ impl Browser for Made {
     }
 
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
-        let space = self.agent_space(agent);
-        let ours = (self.tabs.borrow().iter()).any(|each| each.0 == tab && each.1 == space);
-        if space == 0 || self.held.borrow().contains(&tab) || !ours {
+        let spaces = self.agent_spaces(agent);
+        let ours =
+            (self.tabs.borrow().iter()).any(|each| each.0 == tab && spaces.contains(&each.1));
+        if self.held.borrow().contains(&tab) || !ours {
             return Closed::Refused;
         }
         if self.pinned.borrow().contains(&tab) {
@@ -388,6 +458,11 @@ impl Browser for Made {
             .push((agent.into(), format!("{name} like {like}")));
         self.agent_spaces.borrow_mut().insert(agent.into(), space);
         self.task_spaces.borrow_mut().push(space);
+        let folder = self.space_profile(like);
+        if folder != "Default" {
+            let folder: &'static str = Box::leak(folder.into_boxed_str());
+            self.profiles.borrow_mut().push((space, folder));
+        }
         space
     }
 
@@ -396,6 +471,7 @@ impl Browser for Made {
         self.agent_spaces
             .borrow_mut()
             .retain(|_, each| *each != space);
+        self.more_spaces.borrow_mut().retain(|each| each.1 != space);
         self.tabs.borrow_mut().retain(|tab| tab.1 != space);
     }
 
@@ -3800,7 +3876,8 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 #[test]
 fn every_tool_and_step_is_in_one_class() {
     // Opens or reads a page, which every tier allows.
-    const READS: [&str; 10] = [
+    const READS: [&str; 11] = [
+        "list_profiles",
         "list_tabs",
         "list_split",
         "open_tab",
@@ -6818,6 +6895,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     assert_eq!(
         names,
         [
+            "list_profiles",
             "list_tabs",
             "open_tab",
             "close_tab",
@@ -9991,6 +10069,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         };
         let lines = fold(
             &[],
@@ -10044,6 +10123,7 @@ mod tasks {
                 picture: None,
                 close: None,
                 notes: None,
+                opened_in: None,
             };
             let lines = fold(
                 &[],
@@ -10233,6 +10313,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -10322,6 +10403,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         };
         let took = |trace: &[Traced]| {
             let messages = [
@@ -10388,6 +10470,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         }];
         let fold_with = |stopped: &[usize]| {
             fold(
@@ -10476,6 +10559,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -10533,6 +10617,7 @@ mod tasks {
             picture: None,
             close: None,
             notes: None,
+            opened_in: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -15342,6 +15427,7 @@ pub(crate) mod handed;
 #[cfg(unix)]
 mod helpers;
 mod holds;
+mod in_profiles;
 mod in_use;
 pub(crate) mod kept;
 #[cfg(unix)]

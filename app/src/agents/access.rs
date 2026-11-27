@@ -22,8 +22,9 @@ pub(super) const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key
 /// request's changes by their own row, and a close of a tab of the user's gives it back as it is.
 /// Any other is refused there below Full access (`stopped_in_use`), so one made later is refused
 /// on such a page until it's placed here.
-pub(super) const IN_USE_ANSWERS: [&str; 25] = [
+pub(super) const IN_USE_ANSWERS: [&str; 26] = [
     "list_tabs",
+    "list_profiles",
     "list_split",
     "open_tab",
     "snapshot",
@@ -190,10 +191,9 @@ impl Agents {
         // nothing of a tab not its own and nothing runs. One the core still calls its own but the
         // UI doesn't list, as a popup may be, sends a request's reads and refuses its changes in
         // the core's words; any other act there is refused as anywhere.
-        let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
             && !self
-                .tabs_seen(space, cx)
+                .agent_tabs_seen(&act.agent, cx)
                 .iter()
                 .any(|tab| tab.id == act.tab)
         {

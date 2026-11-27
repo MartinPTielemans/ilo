@@ -32,19 +32,25 @@ fn call<T>(core: impl FnOnce() -> T) -> T {
 struct Core;
 
 impl Browser for Core {
-    fn agent_space(&self, agent: &str) -> u64 {
-        let mut spaces = ids(bc::bc_spaces).into_iter();
-        spaces
-            .find(|&space| name(bc::bc_space_agent, space) == agent)
-            .unwrap_or(0)
+    fn agent_spaces(&self, agent: &str) -> Vec<u64> {
+        (ids(bc::bc_spaces).into_iter())
+            .filter(|&space| name(bc::bc_space_agent, space) == agent)
+            .collect()
     }
 
-    fn make_agent_space(&self, agent: &str, agent_name: &str, _: &mut App) -> u64 {
-        let (Ok(id), Ok(named)) = (CString::new(agent), CString::new(agent_name)) else {
+    fn make_agent_space(&self, agent: &str, space_name: &str, profile: u64, _: &mut App) -> u64 {
+        // An app's name is its own, without the profile its Space's name may add; a task's is its
+        // Space's.
+        let app = agents::Client::from_id(agent).map_or(space_name, |client| client.name());
+        let (Ok(id), Ok(named), Ok(app)) = (
+            CString::new(agent),
+            CString::new(space_name),
+            CString::new(app),
+        ) else {
             return 0;
         };
         let space = unsafe {
-            bc::bc_space_create_for_agent(named.as_ptr(), id.as_ptr(), named.as_ptr(), 0)
+            bc::bc_space_create_for_agent(named.as_ptr(), id.as_ptr(), app.as_ptr(), profile)
         };
         // check.sh reads this line, as the driver's agentspace writes it.
         browser::log!("browser: made space {space} for agent {agent}");
@@ -152,11 +158,34 @@ impl Browser for Core {
         }
     }
 
-    fn open_tab(&self, agent: &str, url: &str, _: &mut App) -> u64 {
+    fn open_tab(&self, agent: &str, profile: u64, url: &str, _: &mut App) -> u64 {
         let (Ok(agent), Ok(url)) = (CString::new(agent), CString::new(url)) else {
             return 0;
         };
-        call(|| unsafe { bc::bc_agent_open_tab(agent.as_ptr(), 0, url.as_ptr()) })
+        call(|| unsafe { bc::bc_agent_open_tab(agent.as_ptr(), profile, url.as_ptr()) })
+    }
+
+    fn profiles(&self) -> Vec<agents::profiles::Profile> {
+        (ids(bc::bc_profiles).into_iter())
+            .map(|id| agents::profiles::Profile {
+                id,
+                folder: profile_folder(id),
+                name: name(bc::bc_profile_name, id).to_string(),
+            })
+            .collect()
+    }
+
+    fn pick_profile(&self, profiles: &[u64], url: &str, request: u64) {
+        let Ok(url) = CString::new(url) else {
+            return update(move |agents, cx| agents.profile_picked(request, 0, cx));
+        };
+        unsafe {
+            bc::bc_profile_pick_for_site(profiles.as_ptr(), profiles.len(), url.as_ptr(), request)
+        };
+    }
+
+    fn front_space(&self) -> u64 {
+        unsafe { bc::bc_window_space(crate::front().0) }
     }
 
     fn navigate(&self, agent: &str, tab: u64, url: &str, _: &mut App) -> bool {
@@ -294,13 +323,10 @@ impl Browser for Core {
         unsafe { bc::bc_tab_set_muted(tab, muted) };
     }
 
+    // In the profile from the start, so no open lands in another while it loads (#4376).
     fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
-        let space = self.make_agent_space(agent, agent_name, cx);
         let profile = unsafe { bc::bc_space_profile(like) };
-        if space != 0 && profile != 0 && !unsafe { bc::bc_space_set_profile(space, profile) } {
-            browser::log!("browser: task space {space} couldn't take profile {profile}");
-        }
-        space
+        self.make_agent_space(agent, agent_name, profile, cx)
     }
 
     fn delete_space(&self, space: u64, _: &mut App) {
@@ -472,6 +498,21 @@ impl Browser for Core {
             _ => unsafe { bc::bc_tab_close(tab, false) },
         }
     }
+}
+
+/// The core's pick of a profile for an agent's tab (bc_profile_pick_for_site): the profile, or 0
+/// with none, and why, which the app needs only to know it was the history's.
+pub unsafe extern "C" fn profile_picked(
+    _: *mut std::ffi::c_void,
+    request: u64,
+    profile: bc::bc_id,
+    why: std::ffi::c_int,
+) {
+    let profile = match why as u32 == bc::BC_PICK_HISTORY {
+        true => profile,
+        false => 0,
+    };
+    update(move |agents, cx| agents.profile_picked(request, profile, cx));
 }
 
 /// The core's answer to a saved read (bc_profile_read), for what waits on it.

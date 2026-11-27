@@ -420,6 +420,7 @@ fn the_server_answers_what_needs_no_browser() {
     assert_eq!(
         names,
         [
+            "list_profiles",
             "list_tabs",
             "open_tab",
             "close_tab",

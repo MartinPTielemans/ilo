@@ -29,6 +29,7 @@ pub mod notes;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
+pub mod profiles;
 pub mod ready;
 pub mod request;
 pub mod runner;
@@ -199,10 +200,29 @@ pub struct Status {
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
 /// the core take the app, as one may tell the windows something before it returns.
 pub trait Browser {
-    /// The Space of the agent with the id `agent`, or 0 if it has none.
-    fn agent_space(&self, agent: &str) -> u64;
-    /// Makes the agent's Space, named as the agent, and returns it.
-    fn make_agent_space(&self, agent: &str, name: &str, cx: &mut App) -> u64;
+    /// The Spaces of the agent with the id `agent`, one a profile it works in (#4376).
+    fn agent_spaces(&self, agent: &str) -> Vec<u64>;
+    /// The first of the agent's Spaces, or 0 if it has none.
+    fn agent_space(&self, agent: &str) -> u64 {
+        self.agent_spaces(agent).first().copied().unwrap_or(0)
+    }
+    /// The agent's Space in the profile whose folder is `profile`, or 0 if it has none there.
+    fn agent_space_in(&self, agent: &str, profile: &str) -> u64 {
+        (self.agent_spaces(agent).into_iter())
+            .find(|&space| self.space_profile(space) == profile)
+            .unwrap_or(0)
+    }
+    /// Makes the agent's Space named `name` in `profile`, or with 0 in the one the core started
+    /// with, and returns it, or the one it has there (bc_space_create_for_agent).
+    fn make_agent_space(&self, agent: &str, name: &str, profile: u64, cx: &mut App) -> u64;
+    /// The user's profiles, the one the core started with first: never a private window's, as
+    /// bc_profiles lists none.
+    fn profiles(&self) -> Vec<profiles::Profile>;
+    /// Asks the core which of `profiles` last visited `url`'s site (bc_profile_pick_for_site),
+    /// which comes to `Agents::profile_picked` with `request`.
+    fn pick_profile(&self, profiles: &[u64], url: &str, request: u64);
+    /// The Space the user's window in front shows, a private window's too.
+    fn front_space(&self) -> u64;
     /// The tabs of `space`, pinned first, then Today's.
     fn space_tabs(&self, space: u64, cx: &App) -> Vec<TabInfo>;
     /// The tabs of `space`, in `space_tabs`' order, without their titles: what a window's menu asks
@@ -238,9 +258,10 @@ pub trait Browser {
     fn read_text(&self, tab: u64, request: u64);
     /// Tells the core the agent's client went (bc_agent_disconnected).
     fn disconnected(&self, agent: &str, cx: &mut App);
-    /// Opens `url`, http(s) only, in a new tab at the top of the agent's Space, not shown
-    /// (bc_agent_open_tab): the tab, or 0 if it couldn't.
-    fn open_tab(&self, agent: &str, url: &str, cx: &mut App) -> u64;
+    /// Opens `url`, http(s) only, in a new tab at the top of the agent's Space in `profile`, or
+    /// with 0 the Space it was given last, not shown (bc_agent_open_tab): the tab, or 0 if it
+    /// couldn't, as before the profile has loaded.
+    fn open_tab(&self, agent: &str, profile: u64, url: &str, cx: &mut App) -> u64;
     /// Loads `url`, http(s) only, in the agent's `tab` (bc_agent_navigate).
     fn navigate(&self, agent: &str, tab: u64, url: &str, cx: &mut App) -> bool;
     /// Asks the core to do `action` in the agent's `tab` (bc_agent_page), to the element whose
@@ -298,7 +319,7 @@ pub trait Browser {
     /// Mutes or unmutes `tab`'s sound (bc_tab_set_muted).
     fn set_muted(&self, tab: u64, muted: bool);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
-    /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
+    /// user's Space `like` (bc_space_create_for_agent).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
     /// Deletes a task's Space, with its tabs.
     fn delete_space(&self, space: u64, cx: &mut App);
@@ -784,6 +805,8 @@ pub struct Activity {
     pub tier: SharedString,
     /// The site whose notes its answer carried (#4122), by its note's name, or empty.
     pub notes: SharedString,
+    /// Where an open's tab opened and why, while the user has several profiles (#4376).
+    pub opened_in: Option<profiles::OpenedIn>,
 }
 
 static NEXT_ENTRY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -953,6 +976,8 @@ pub struct Agents {
     /// Whether scripts may control the browser (scripts.rs), and the Apple Event logged last.
     scripts: bool,
     script_event: u64,
+    /// The profiles each app and threads may use, and where each agent's tab opened (#4376).
+    profiles: profiles::Profiles,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -1167,6 +1192,7 @@ impl Agents {
             },
             scripts: false,
             script_event: 0,
+            profiles: Default::default(),
         }
     }
 
@@ -1265,6 +1291,7 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        self.profiles.load(saved.get("profiles_off"));
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
@@ -2216,10 +2243,9 @@ impl Agents {
         };
         // A tab the user holds, one agents may not use, or one not the agent's, is refused as it
         // is, saying nothing.
-        let space = self.browser.agent_space(&call.agent);
         if self.held.contains_key(&tab)
             || self.off_limits(&call.agent, tab, cx).is_some()
-            || !self.tabs_seen(space, cx).iter().any(|seen| seen.id == tab)
+            || !(self.agent_tabs_seen(&call.agent, cx).iter()).any(|seen| seen.id == tab)
         {
             return Some(call);
         }
@@ -2272,7 +2298,10 @@ impl Agents {
                     .collect();
                 let current = (self.current.get(&(agent.clone(), connection)).copied())
                     .filter(|tab| !self.withheld(&agent, *tab));
-                _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
+                let profiles = self.browser.profiles();
+                let profile = |tab: u64| self.tab_profile(tab, &profiles, cx);
+                let list = tools::tab_list_in(&tabs, current, &mine, profile);
+                _ = reply.send(ToolResult::text(list));
             }
             "read_page" => {
                 let tab = match tools::tab_argument(&arguments) {
@@ -2338,7 +2367,7 @@ impl Agents {
                     }
                 };
                 let host = site(&url);
-                let mut act = Act {
+                let act = Act {
                     agent: agent.clone(),
                     connection,
                     call: id,
@@ -2366,8 +2395,13 @@ impl Agents {
                     let refused = Refused::of(tools::Kind::NotWebPage, WEB_ONLY);
                     return self.refuse(act, &host, refused, cx);
                 }
-                let risk = self.opening(&mut act, &host);
-                self.check(act, host, risk, cx);
+                self.open_in_profile(act, host, &arguments, cx);
+            }
+            "list_profiles" => {
+                let names = self.profile_names(&agent);
+                self.note(&agent, connection, "list_profiles", "", "");
+                cx.notify();
+                _ = reply.send(ToolResult::text(names));
             }
             "navigate" | "snapshot" | "click" | "type" | "select" | "press_key" | "scroll"
             | "screenshot" => {
@@ -3446,11 +3480,8 @@ impl Agents {
 
     /// The tabs of the agent's Space the user doesn't hold.
     pub fn tabs_to_take(&self, agent: &str, cx: &App) -> Vec<u64> {
-        let space = self.browser.agent_space(agent);
-        if space == 0 {
-            return Vec::new();
-        }
-        let tabs = self.browser.space_tab_ids(space, cx).into_iter();
+        let spaces = self.browser.agent_spaces(agent).into_iter();
+        let tabs = spaces.flat_map(|space| self.browser.space_tab_ids(space, cx));
         tabs.filter(|tab| !self.held.contains_key(tab)).collect()
     }
 
@@ -3487,6 +3518,7 @@ impl Agents {
         self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
+        self.profile_tab_closed(tab);
         self.left(tab, Gone::Closed);
         self.forget_handed(tab);
         self.let_go(tab, held::Event::Closed, cx);
@@ -3515,7 +3547,7 @@ impl Agents {
         }
         let space = self.browser.space_of(tab, cx);
         let agent = (self.live.iter())
-            .find(|agent| space != 0 && self.browser.agent_space(agent) == space)
+            .find(|agent| space != 0 && self.browser.agent_spaces(agent).contains(&space))
             .cloned();
         if let Some(agent) = agent {
             let site = site(&self.browser.tab(tab, cx).url);
@@ -3537,7 +3569,7 @@ impl Agents {
         let tabs = self.browser.space_tab_ids(space, cx);
         let moved: Vec<u64> = (self.tasks.tasks.iter())
             .filter_map(|task| task.session.as_ref())
-            .filter(|session| self.browser.agent_space(&session.agent) == space)
+            .filter(|session| self.browser.agent_spaces(&session.agent).contains(&space))
             .flat_map(|session| session.tabs.iter().copied())
             .filter(|tab| !tabs.contains(tab) && self.browser.space_of(*tab, cx) != 0)
             .collect();
@@ -4391,6 +4423,7 @@ impl Agents {
         self.sending
             .retain(|_, sending| !theirs(&sending.agent, sending.connection));
         self.runs.retain(|run| !theirs(&run.agent, run.connection));
+        self.forget_opens(theirs);
         let held = (self.held.iter())
             .filter(|(_, held)| theirs(&held.agent, held.connection))
             .map(|(&tab, _)| tab)
@@ -4405,6 +4438,9 @@ impl Agents {
     fn refuse(&mut self, act: Act, site: &str, refused: Refused, cx: &mut Context<Self>) {
         let Refused { why, kind, told } = refused;
         let why = why.as_str();
+        if act.action == "open_tab" {
+            self.unchoose(&act);
+        }
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
         }
@@ -4450,6 +4486,17 @@ impl Agents {
         if act.action == "request" {
             return self.send(act, false, cx);
         }
+        // Its tab opens in the profile chosen for it, once that has loaded.
+        let mut opened_tab = 0;
+        if act.action == "open_tab" {
+            match self.open_chosen(&act, cx) {
+                Some(tab) => opened_tab = tab,
+                None => {
+                    act.fenced = open.map_or(Fenced::No, Fenced::Open);
+                    return self.park_open(act);
+                }
+            }
+        }
         let Act {
             agent,
             connection,
@@ -4486,9 +4533,7 @@ impl Agents {
         let logged = next_entry_id();
         if action == "open_tab" {
             let site = site(&url);
-            // An agent's first call may be this one, and the core opens a tab only in its Space.
-            self.space(&agent, cx);
-            tab = self.browser.open_tab(&agent, &url, cx);
+            tab = opened_tab;
             if tab == 0 {
                 self.note(&agent, connection, action, &site, "The tab couldn't open.");
                 cx.notify();
@@ -4500,12 +4545,18 @@ impl Agents {
             self.current.insert((agent.clone(), connection), tab);
             self.opened(&agent, call, tab);
             self.opened.insert(tab);
+            let profile = self.opened_in(tab).cloned();
+            self.logged_in(profile.clone());
             if let Some(entry) = open {
                 self.clear(tab, entry, cx);
             }
             // An agent's tab is quiet until the user wants to hear it (#1080).
             self.browser.set_muted(tab, true);
-            note = format!("Opened tab {tab}.");
+            // The profile by its name alone: why it's that one is the user's (#4376).
+            note = match profile {
+                Some(opened) => format!("Opened tab {tab} (profile: \"{}\").", opened.profile),
+                None => format!("Opened tab {tab}."),
+            };
         } else {
             if !self.act(&agent, connection, tab, action, &reply, cx) {
                 return;
@@ -5349,8 +5400,10 @@ impl Agents {
                 }
                 self.browser.remove_pinned(tab, cx);
                 self.pins.remove(&tab);
-                let space = self.browser.agent_space(agent);
-                let still = self.browser.space_tab_ids(space, cx);
+                let spaces = self.browser.agent_spaces(agent).into_iter();
+                let still: Vec<u64> = spaces
+                    .flat_map(|space| self.browser.space_tab_ids(space, cx))
+                    .collect();
                 for each in split.iter().filter(|each| still.contains(each)) {
                     self.gone.remove(each);
                 }
@@ -5442,13 +5495,20 @@ impl Agents {
     /// Whether `tab` is in `agent`'s own Space.
     fn owns(&self, agent: &str, tab: u64, cx: &App) -> bool {
         let space = self.browser.space_of(tab, cx);
-        space != 0 && space == self.browser.agent_space(agent)
+        space != 0 && self.browser.agent_spaces(agent).contains(&space)
     }
 
     /// The tabs of `space` an agent sees: none off limits, as `may_act` refuses those.
     fn tabs_seen(&self, space: u64, cx: &App) -> Vec<TabInfo> {
         (self.browser.space_tabs(space, cx).into_iter())
             .filter(|tab| self.browser.off_limits(tab.id, cx).is_none())
+            .collect()
+    }
+
+    /// The tabs of every Space of `agent`'s it sees, one a profile, as `tabs_seen`.
+    fn agent_tabs_seen(&self, agent: &str, cx: &App) -> Vec<TabInfo> {
+        (self.browser.agent_spaces(agent).into_iter())
+            .flat_map(|space| self.tabs_seen(space, cx))
             .collect()
     }
 
@@ -5684,8 +5744,14 @@ impl Agents {
                     self.task_space_made(agent, space);
                     space
                 }
+                // An app's first, in the first profile it may use.
                 None => {
-                    let space = self.browser.make_agent_space(agent, name(agent), cx);
+                    let profile = self.allowed_profiles(agent).into_iter().next();
+                    let (named, id) = match &profile {
+                        Some(profile) => (self.space_name(agent, profile), profile.id),
+                        None => (name(agent).to_string(), 0),
+                    };
+                    let space = self.browser.make_agent_space(agent, &named, id, cx);
                     self.client_space_made(agent, space);
                     space
                 }
@@ -5704,8 +5770,8 @@ impl Agents {
         connection: u64,
         cx: &mut Context<Self>,
     ) -> Result<u64, Refused> {
-        let space = self.space(agent, cx);
-        let mut tabs = self.tabs_seen(space, cx);
+        self.space(agent, cx);
+        let mut tabs = self.agent_tabs_seen(agent, cx);
         // A call that names no tab never falls on a page of a task the user stopped.
         tabs.retain(|tab| !self.withheld(agent, tab.id));
         // A task with helpers has several callers on its one connection, so the tab used last
@@ -5824,6 +5890,7 @@ impl Agents {
             said: SharedString::from(said.to_string()),
             tier: self.entry_tier(agent, connection, tab).label().into(),
             notes: SharedString::default(),
+            opened_in: None,
         };
         self.logged = entry.id;
         if self.stepping == Some((agent.into(), connection)) {
@@ -5951,6 +6018,7 @@ impl Agents {
             "tasks": tasks,
             "scripts": self.scripts,
             "notes": !self.notes_off,
+            "profiles_off": self.profiles.saved(),
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
