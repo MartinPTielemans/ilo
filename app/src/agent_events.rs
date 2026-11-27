@@ -146,6 +146,23 @@ pub(crate) unsafe extern "C" fn tab_text(
     agents_core::update(move |agents, cx| agents.text_read(request, text, cx));
 }
 
+/// What the core read of a held tab's page: the hand-off ends once no step of the user's is left on
+/// it. Posted by the core, outside any GPUI update.
+pub(crate) unsafe extern "C" fn held_page(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    page: *const bc::bc_held_page,
+) {
+    let page = unsafe { &*page };
+    let page = browser::agents::HeldPage {
+        document: page.document,
+        password: page.password,
+        one_time_code: page.one_time_code,
+        captcha: page.captcha,
+    };
+    update_app_later(move |cx| browser::agents::held_page(tab, page, cx));
+}
+
 /// What came of a Choose File… for a page's file field, which ilo never asks for: an upload is the
 /// user's step in the page itself, and its field is dropped as it's described.
 pub(crate) unsafe extern "C" fn file_field_done(_: *mut c_void, _: bc::bc_id, _: c_int, _: c_int) {}

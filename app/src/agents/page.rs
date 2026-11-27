@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::bc;
+
 use super::TabInfo;
 
 /// Roles an agent can act on, each given a ref.
@@ -666,11 +668,15 @@ impl<'a> Walk<'a> {
         self.lines.push(line);
     }
 
-    /// Whether `name` asks the user to prove they're human.
+    /// Whether `name` asks the user to prove they're human, in the words the core reads a held
+    /// page's frames for.
     fn looks_for_captcha(&mut self, name: &str) {
         let lower = name.to_lowercase();
-        let human = ["captcha", "not a robot", "verify you are human"];
-        if human.iter().any(|words| lower.contains(words)) {
+        let mut human = bc::BC_CAPTCHA_WORDS
+            .split(|&byte| byte == b'\n' || byte == 0)
+            .filter(|words| !words.is_empty())
+            .filter_map(|words| std::str::from_utf8(words).ok());
+        if human.any(|words| lower.contains(words)) {
             self.captcha = true;
         }
     }
@@ -2599,6 +2605,26 @@ mod tests {
             pressing.map(|pressing| pressing.control.name),
             Some("Send".into())
         );
+    }
+
+    /// The agent is told of a CAPTCHA in the words the core reads a held page for, so the step
+    /// it hands off is the one whose end ends the hand-off (#4361).
+    #[test]
+    fn a_captcha_is_found_in_the_words_the_core_holds_a_page_for() {
+        let captcha = |title: &str| {
+            let nodes = [
+                node("1", "RootWebArea", "Sign in", &["2"]),
+                node("2", "Iframe", title, &[]),
+            ];
+            outline(&tab(), &nodes, &mut Refs::default(), None)
+                .notes
+                .iter()
+                .any(|note| note.contains("CAPTCHA"))
+        };
+        assert!(captcha("reCAPTCHA"));
+        assert!(captcha("Widget containing a Cloudflare security challenge"));
+        assert!(captcha("I'm not a robot"));
+        assert!(!captcha("Payment"));
     }
 
     #[test]
