@@ -689,8 +689,7 @@ impl Clients for Configs {
 
     /// Under a made-up home that's never this computer's.
     fn skill_at(&self, kept: &crate::agents::skill::Kept) -> Option<PathBuf> {
-        let home = std::path::Path::new("/made-up-home");
-        crate::agents::skill::at(home, kept.program, &kept.name)
+        crate::agents::skill::at(&made_up_home(), kept.program, &kept.name)
     }
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
@@ -6975,6 +6974,16 @@ fn no_agent_path_reaches_arrange_or_a_boost() {
 }
 
 /// The request tool (#1439): HTTP requests from a tab's page to its own site.
+/// The made-up home the fake host's skills are under: whole on every system, as a skill's file is
+/// made only from a whole home (`skill::at`), and a path from the root alone isn't on Windows.
+fn made_up_home() -> PathBuf {
+    PathBuf::from(if cfg!(windows) {
+        r"C:\made-up-home"
+    } else {
+        "/made-up-home"
+    })
+}
+
 mod requests {
     use super::*;
 
@@ -14722,11 +14731,10 @@ mod sessions {
         assert_eq!(read(cx), (vec![Client::ClaudeCode], vec![], None));
 
         add(false, cx);
-        let file = format!(
-            "/made-up-home/.agents/skills/{}/SKILL.md",
-            super::skill::name()
-        );
-        assert_eq!(read(cx), (vec![], vec![Client::Codex], Some(file.into())));
+        let file = (super::made_up_home().join(".agents").join("skills"))
+            .join(super::skill::name())
+            .join("SKILL.md");
+        assert_eq!(read(cx), (vec![], vec![Client::Codex], Some(file)));
 
         // Gone: said no more.
         change(Place::Missing);
