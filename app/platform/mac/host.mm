@@ -286,6 +286,14 @@ struct Browser {
   // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
   // too (host_set_sidebar_right).
   bool sidebar_right = false;
+  // The edge knot's window and view (host_add_edge_knot), the room round its tab for its shadow,
+  // where its tab is in the window from its top left, and while it shows, the monitor that lets
+  // the mouse through the window but on the tab.
+  NSWindow* edge_knot;
+  NSView* edge_knot_view;
+  double edge_knot_margin = 0;
+  NSRect edge_knot_tab;
+  id edge_knot_monitor;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -3004,6 +3012,12 @@ void host_forget_window(void* ui_view) {
   browser->offer_view = nil;
   browser->reveal = nil;
   browser->reveal_view = nil;
+  if (browser->edge_knot_monitor) {
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+  }
+  browser->edge_knot = nil;
+  browser->edge_knot_view = nil;
 }
 
 void host_set_overlay_elevation(int index,
@@ -6155,6 +6169,83 @@ void host_hide_reveal(void* ui_view) {
     if (had_keyboard) {
       [browser->window makeKeyWindow];
     }
+  });
+}
+
+// Lets the mouse through |browser|'s edge knot window but on its tab, with the pointer at |screen|.
+static void PlaceEdgeKnotClicks(Browser* browser, NSPoint screen) {
+  NSPoint at = [browser->edge_knot convertPointFromScreen:screen];
+  at.y = NSHeight(browser->edge_knot.frame) - at.y;
+  browser->edge_knot.ignoresMouseEvents = !NSPointInRect(at, browser->edge_knot_tab);
+}
+
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  browser->edge_knot_view = (__bridge NSView*)edge_knot_view;
+  browser->edge_knot = browser->edge_knot_view.window;
+  browser->edge_knot_margin = margin;
+  MakeOverlay(browser->edge_knot);
+  // The UI draws the tab and its shadow, in the margin round it, as the mini bar's.
+  browser->edge_knot.styleMask = NSWindowStyleMaskBorderless;
+  browser->edge_knot.hasShadow = NO;
+  browser->edge_knot.ignoresMouseEvents = YES;
+  // A click on it brings the sidebar out, and the keyboard stays where it was.
+  NeverKey(browser->edge_knot);
+}
+
+void host_show_edge_knot(void* ui_view, double top, double width, double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot || !browser->window) {
+      return;
+    }
+    const double margin = browser->edge_knot_margin;
+    NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
+    const double window_width = width + margin;
+    const CGFloat x = browser->sidebar_right ? NSMaxX(content) - window_width : NSMinX(content);
+    [browser->edge_knot setFrame:NSMakeRect(x, NSMaxY(content) - top - height - margin,
+                                            window_width, height + 2 * margin)
+                         display:NO];
+    browser->edge_knot_tab =
+        NSMakeRect(browser->sidebar_right ? margin : 0, margin, width, height);
+    if (browser->edge_knot_monitor) {
+      PlaceEdgeKnotClicks(browser, Pointer());
+      return;
+    }
+    // As the reveal does, it goes on screen once it has drawn what it shows now.
+    [browser->edge_knot_view.layer setNeedsDisplay];
+    [browser->edge_knot_view.layer displayIfNeeded];
+    AddOver(browser->window, browser->edge_knot);
+    // The page's view takes the pointer's moves while it's over the page, so the knot's window
+    // doesn't hear them. Only while it shows, and only as the pointer moves.
+    browser->edge_knot_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                              handler:^NSEvent*(NSEvent* event) {
+                                                NSPoint at = event.locationInWindow;
+                                                if (event.window) {
+                                                  at = [event.window convertPointToScreen:at];
+                                                }
+                                                PlaceEdgeKnotClicks(browser, at);
+                                                return event;
+                                              }];
+    PlaceEdgeKnotClicks(browser, Pointer());
+  });
+}
+
+void host_hide_edge_knot(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot_monitor) {
+      return;
+    }
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+    browser->edge_knot.ignoresMouseEvents = YES;
+    [browser->window removeChildWindow:browser->edge_knot];
+    [browser->edge_knot orderOut:nil];
   });
 }
 

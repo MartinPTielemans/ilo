@@ -2150,6 +2150,25 @@ bar-length = 11.4
 bar-width = 2.0
 bars-box = 14.0
 
+[shell.edge-knot]
+# The lead's (Paper 1b, 26 Nov, Proposed): the tab at the hidden sidebar's edge of the window while a
+# thread waits on the user, flush with that edge, its top this far below the window's, this wide and
+# tall, its corners away from the edge rounded by this. It wears [floating]'s dark fill and rim in
+# either look, as the board draws it in a light window, and this shadow, drawn in the room round it
+# that lets clicks through to the page. The knot in it is this size, its small drawing, this much
+# past the middle away from the edge.
+top = 64.0
+width = 28.0
+height = 36.0
+radius = 10.0
+mark = 16.0
+mark-nudge = 1.0
+shadow = 0x0000_0059
+shadow-y = 4.0
+shadow-blur = 14.0
+# The shadow's room on each side but the edge: its blur and its drop.
+margin = 18.0
+
 [shell.empty]
 # The sidebar's New Tab row's size, body.
 words-size = 13.0

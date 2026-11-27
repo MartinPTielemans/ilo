@@ -706,6 +706,13 @@ pub trait Browser {
     /// Keeps the docked sidebar's width for the next launch.
     fn set_sidebar_width(&self, width: f32, cx: &mut App);
     fn hide_reveal(&self, cx: &mut App);
+    /// Shows the edge knot's window over the page, as `Shell::render_edge_knot` draws it now: the
+    /// tab at the window's edge on the sidebar's side, `top` points down the content, `width`
+    /// across and `height` tall, its window `MARGIN` bigger on every other side for its shadow,
+    /// where clicks go through to the page. Never with the keyboard; shown already, it moves
+    /// there. None where the browser has no child windows.
+    fn show_edge_knot(&self, _top: f32, _width: f32, _height: f32, _cx: &mut App) {}
+    fn hide_edge_knot(&self, _cx: &mut App) {}
     /// Whether ⌥ pressed alone brings the hidden sidebar out, as the user chose.
     fn option_reveals_sidebar(&self) -> bool;
     /// A detent on the trackpad, as a swipe's nearest Space changes.
