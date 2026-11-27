@@ -92,6 +92,7 @@ mod history;
 mod hover_cards;
 mod into_folder;
 mod keys;
+mod knot;
 mod launch_room;
 mod library;
 mod link;

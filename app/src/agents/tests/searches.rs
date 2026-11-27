@@ -19,7 +19,7 @@ fn stretches(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<Trace> {
 }
 
 /// The titles of the task's steps, oldest first.
-fn titles(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+pub(super) fn titles(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
     (stretches(run, agent, cx).into_iter())
         .flat_map(|trace| trace.items)
         .filter_map(|item| match item {

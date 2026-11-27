@@ -5689,20 +5689,16 @@ fn said(items: &[MenuEntry]) -> Vec<(String, bool, bool, bool, bool)> {
         .collect()
 }
 
-/// Settings' Access opens the composer's level menu, the same rows but Full access, which is
-/// never where a thread starts; each row still picks its own level.
+/// Settings' Access is the composer's level menu, every level and Full access among them, as a
+/// thread may start at any (#4360); each row picks its own level, the one set checked.
 #[test]
 fn settings_access_is_the_composers_level_menu() {
-    for current in [Tier::Look, Tier::default()] {
-        let (all, composer) = level_choices(current, true);
-        let (offered, settings) = level_choices(current, false);
-        assert!(!offered.contains(&Tier::Full));
-        let full = all.iter().position(|&tier| tier == Tier::Full).unwrap();
-        let mut expected = said(&composer);
-        expected.remove(full);
-        assert_eq!(said(&settings), expected);
+    for current in [Tier::Look, Tier::default(), Tier::Full] {
+        let (offered, items) = level_choices(current);
+        assert_eq!(offered, Tier::ALL);
         for (at, tier) in offered.iter().enumerate() {
-            assert_eq!(settings[at].title.as_ref(), tier.label());
+            assert_eq!(items[at].title.as_ref(), tier.label());
+            assert_eq!(items[at].checked, *tier == current);
         }
     }
 }

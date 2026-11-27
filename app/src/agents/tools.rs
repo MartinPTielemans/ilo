@@ -81,13 +81,43 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off. For a file \
      field, call upload: the user chooses the file in the page and hands the tab back.\n\n\
-     Never pay, and never place an order, book or send a message unless the user asked you to. \
-     When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
+     Never pay, place an order, book, send a message, file, sign or accept terms unless the user \
+     asked you to: being asked to fill something in isn't being asked to send it. When the work \
+     ends on a page only the user may finish, such as a checkout, or at a step you weren't asked \
+     to take, stop there and give finish its tab.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
      short line, such as “Gulbenkian, Sat 10:00–21:00”. Give finish tabs only when the user must \
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
+/// What a task below Full access is told of paying, ordering and the other steps that bind the
+/// user, as `TASK_INSTRUCTIONS` says it.
+pub const BINDING: &str = "Never pay, place an order, book, send a message, file, sign or accept \
+     terms unless the user asked you to: being asked to fill something in isn't being asked to send \
+     it. When the work ends on a page only the user may finish, such as a checkout, or at a step you \
+     weren't asked to take, stop there and give finish its tab.";
+
+/// What a task at Full access is told instead (#4358): it may finish an order or a payment it was
+/// asked for, only as the user said it; the same steps it wasn't asked to take still stop it.
+pub const BINDING_AT_FULL: &str = "Never pay, place an order, book, send a message, file, sign or \
+     accept terms unless the user asked you to: being asked to fill something in isn't being asked \
+     to send it. At a step you weren't asked to take, stop there and give finish its tab. This task \
+     has Full access, so you may pay or place an order the user asked for, but only when it matches \
+     what they said: the item, its size or options, and the total with shipping within any limit \
+     they gave. When it doesn't, don't place it: call ask with the difference.";
+
+/// hand_off as a thread of the browser's own has it: it returns at once (#4363).
+const TASK_HAND_OFF: &str = "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this returns at once: you're told when they hand the tab back. Until then the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.";
+
+/// What a task's CLI is told at `tier`: `TASK_INSTRUCTIONS`, with Full access's own words for the
+/// steps that bind the user there.
+pub fn task_instructions(tier: super::tier::Tier) -> String {
+    match tier {
+        super::tier::Tier::Full => TASK_INSTRUCTIONS.replace(BINDING, BINDING_AT_FULL),
+        _ => TASK_INSTRUCTIONS.to_string(),
+    }
+}
+
 /// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
 /// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
 /// the rest.
@@ -127,6 +157,11 @@ pub fn list(agent: &str) -> Value {
             true => {
                 // Only the product's own threads, a helper's calls among them, say why a step.
                 noted(tools);
+                // A thread is told when its tab is back, so its hand_off doesn't wait (#4363).
+                let hand_off = tools.iter_mut().find(|tool| tool["name"] == "hand_off");
+                if let Some(hand_off) = hand_off {
+                    hand_off["description"] = TASK_HAND_OFF.into();
+                }
                 tools.extend(task_tools())
             }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent
@@ -837,6 +872,11 @@ pub struct Did {
 /// no tool of the browser's.
 pub const SEARCHED: &str = "web_search";
 
+/// The browser ended a hand-off itself, its page past the user's step (#4361): the activity log's
+/// entry (HB1) and the trace's step after the hand-off's (HB2). Neither says the user finished:
+/// all the browser sees is that the page moved on.
+pub const MOVED_ON: &str = "moved on";
+
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
 
@@ -1169,6 +1209,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 _ => "Searched the web".into(),
             };
         }
+        MOVED_ON => return format!("Went on when {} moved past your step", site(NO_SITE)),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
@@ -1375,6 +1416,7 @@ pub fn describe(action: &str) -> &'static str {
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",
+        MOVED_ON => "Took the tab back when the page moved on",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
         "check" => "Looked for text on the page",
@@ -1419,6 +1461,34 @@ mod note_tests {
             "an outside app's agent is offered no note"
         );
         assert!(!INSTRUCTIONS.contains("`note`") && TASK_INSTRUCTIONS.contains("`note`"));
+    }
+
+    /// A task is told the same below Full access; at Full access it may finish an order it was
+    /// asked for, only as the user said it, and asks otherwise. At every level it's told never to
+    /// file, sign or accept terms it wasn't asked to, nor to take filling in for sending.
+    #[test]
+    fn what_a_task_is_told_of_orders_differs_by_level() {
+        use crate::agents::tier::Tier;
+        assert!(
+            TASK_INSTRUCTIONS.contains(BINDING),
+            "the instructions lost BINDING"
+        );
+        assert_eq!(task_instructions(Tier::Look), TASK_INSTRUCTIONS);
+        assert_eq!(task_instructions(Tier::Work), TASK_INSTRUCTIONS);
+        let full = task_instructions(Tier::Full);
+        assert_ne!(full, TASK_INSTRUCTIONS);
+        assert!(full.contains(BINDING_AT_FULL) && !full.contains(BINDING));
+        assert!(
+            !full.contains("such as a checkout"),
+            "Full access stops at a checkout"
+        );
+        assert!(full.contains("call ask with the difference"));
+        let never = "Never pay, place an order, book, send a message, file, sign or accept terms \
+                     unless the user asked you to: being asked to fill something in isn't being \
+                     asked to send it.";
+        for tier in Tier::ALL {
+            assert!(task_instructions(tier).contains(never), "{tier:?}");
+        }
     }
 
     #[test]
