@@ -52,6 +52,7 @@ class Reader : public mojom::PdfReader {
 };
 
 struct Heard {
+  PdfReadTime time;
   PdfReadResult result;
   int32_t page_count;
   size_t pages;
@@ -67,9 +68,9 @@ class PdfReadWaitTest : public testing::Test {
     wait_ = std::make_unique<PdfReadWait>(
         std::move(remote), base::ReadOnlySharedMemoryRegion::Create(8).region, 0, 30,
         base::BindOnce(
-            [](std::vector<Heard>* heard, PdfReadResult result, int32_t page_count,
-               std::vector<mojom::PdfPagePtr> pages) {
-              heard->push_back({result, page_count, pages.size()});
+            [](std::vector<Heard>* heard, PdfReadTime time, PdfReadResult result,
+               int32_t page_count, std::vector<mojom::PdfPagePtr> pages) {
+              heard->push_back({time, result, page_count, pages.size()});
             },
             &heard_));
     task_environment_.RunUntilIdle();
@@ -83,13 +84,14 @@ class PdfReadWaitTest : public testing::Test {
 };
 
 // A reader that never answers, as a hung one, doesn't keep the read waiting: at its deadline it's
-// broken, with no pages, and the reader's process is let go.
-TEST_F(PdfReadWaitTest, AReadItsReaderNeverAnswersIsBrokenAtItsDeadline) {
+// timed out, with no pages, and the reader's process is let go.
+TEST_F(PdfReadWaitTest, AReadItsReaderNeverAnswersTimesOutAtItsDeadline) {
   Start();
   task_environment_.FastForwardBy(kPdfReadDeadline - base::Milliseconds(1));
   EXPECT_TRUE(heard_.empty());
   task_environment_.FastForwardBy(base::Milliseconds(1));
   ASSERT_EQ(heard_.size(), 1u);
+  EXPECT_EQ(heard_[0].time, PdfReadTime::kTimedOut);
   EXPECT_EQ(heard_[0].result, PdfReadResult::kBroken);
   EXPECT_EQ(heard_[0].page_count, 0);
   EXPECT_EQ(heard_[0].pages, 0u);
@@ -97,13 +99,14 @@ TEST_F(PdfReadWaitTest, AReadItsReaderNeverAnswersIsBrokenAtItsDeadline) {
   EXPECT_TRUE(reader_->left());
 }
 
-// A reader whose process goes, a crash too, breaks the read at once, and the deadline adds no
-// second answer.
+// A reader whose process goes, a crash too, breaks the read at once, in time, and the deadline
+// adds no second answer.
 TEST_F(PdfReadWaitTest, AReadWhoseReaderGoesIsBrokenAtOnce) {
   Start();
   reader_->Crash();
   task_environment_.RunUntilIdle();
   ASSERT_EQ(heard_.size(), 1u);
+  EXPECT_EQ(heard_[0].time, PdfReadTime::kInTime);
   EXPECT_EQ(heard_[0].result, PdfReadResult::kBroken);
   task_environment_.FastForwardBy(kPdfReadDeadline);
   EXPECT_EQ(heard_.size(), 1u);
@@ -118,6 +121,7 @@ TEST_F(PdfReadWaitTest, AnAnswerInTimeIsTheReadersAlone) {
   reader_->Answer(PdfReadResult::kRead, 7, std::move(pages));
   task_environment_.RunUntilIdle();
   ASSERT_EQ(heard_.size(), 1u);
+  EXPECT_EQ(heard_[0].time, PdfReadTime::kInTime);
   EXPECT_EQ(heard_[0].result, PdfReadResult::kRead);
   EXPECT_EQ(heard_[0].page_count, 7);
   EXPECT_EQ(heard_[0].pages, 2u);

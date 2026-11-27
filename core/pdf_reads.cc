@@ -59,9 +59,10 @@ void Tell(bc_id id, int result, int page_count, int pages_read) {
   }
 }
 
-// The reader answered, or it's BROKEN as its process went or its deadline passed: the read keeps
-// what it read, and its process ends.
+// The reader answered, or it's BROKEN as its process went, or TIMEOUT as its deadline passed:
+// the read keeps what it read, and its process ends.
 void Answered(bc_id id,
+              PdfReadTime time,
               mojom::PdfReadResult result,
               int32_t page_count,
               std::vector<mojom::PdfPagePtr> pages) {
@@ -71,7 +72,7 @@ void Answered(bc_id id,
   }
   Read& read = *found->second;
   read.answered = true;
-  read.result = ResultOf(result);
+  read.result = time == PdfReadTime::kTimedOut ? BC_PDF_TIMEOUT : ResultOf(result);
   if (read.result == BC_PDF_READ) {
     read.pages = std::move(pages);
   } else {
