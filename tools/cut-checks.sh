@@ -44,10 +44,12 @@ for line in sys.stdin:
     if done and started and (not last or done > last): last = done
     if started and "macos" in labels and (not first or started < first): first = started
     print("  %-28s %-10s waited %6s  ran %6s" % (name, result, m(started and started - created), m(done and started and done - started)))
+# A run still going has no end yet: the last job to end so far may be its gate, before the build.
+if sys.argv[2] != "completed": last = None
 print("  queued, from dispatch to the first Mac job: %s (h:mm)" % m(first and first - made))
 print("  checking, from there to the end of its last job: %s" % m(first and last and last - first))
 print("  from dispatch to the end of its last job: %s" % m(last and last - made))
-' "$made"
+' "$made" "$status"
     }
 }
 
