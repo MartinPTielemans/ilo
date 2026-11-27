@@ -2,7 +2,7 @@
 //! what the thread's start is given, on the host that records what the bar asks.
 
 use super::*;
-use crate::tab_picks::YOUR_TABS;
+use crate::tab_picks::{ALL_TABS, YOUR_TABS};
 
 /// The composer open on what's typed, in a window that lists `tabs` for it, each by its title.
 fn listing(cx: &mut TestAppContext, tabs: &[(u64, &'static str)]) -> Bar {
@@ -79,8 +79,9 @@ impl Bar {
 }
 
 /// The add menu's row for the user's tabs opens a second menu of them, by title, in the
-/// window's order; a click picks one, which is a chip, the row checked the next time; a second
-/// click unpicks it.
+/// window's order, after All Tabs (Z33a), spoken with how many; a click picks one, which is a
+/// chip, the row checked the next time, and All Tabs not while one is unpicked; a second click
+/// unpicks it.
 #[gpui::test]
 fn the_add_menu_lists_the_users_tabs_and_a_click_picks_one(cx: &mut TestAppContext) {
     let mut bar = listing(cx, &[(10, "Ten"), (11, "Eleven")]);
@@ -90,15 +91,17 @@ fn the_add_menu_lists_the_users_tabs_and_a_click_picks_one(cx: &mut TestAppConte
         .collect();
     let expected = [
         (YOUR_TABS.to_string(), None, false),
+        (ALL_TABS.to_string(), Some(0), false),
         ("Ten".to_string(), Some(0), false),
         ("Eleven".to_string(), Some(0), false),
     ];
     assert_eq!(shown, expected);
+    assert_eq!(rows[1].spoken.as_deref(), Some("All Tabs, 2 tabs"));
     assert!(bar.click_tab("Eleven"));
     assert_eq!(bar.chips(), [11]);
     let rows = bar.add_menu().unwrap();
     assert!(
-        rows[2].checked && !rows[1].checked,
+        rows[3].checked && !rows[2].checked && !rows[1].checked,
         "the pick isn't checked"
     );
     assert!(!bar.click_tab("Eleven"));

@@ -20,8 +20,7 @@ use crate::tokens::tab_picks::{
 /// Z-tab Z33: the add menu's row that lists the user's tabs.
 pub const YOUR_TABS: &str = "Your Tabs";
 const YOUR_TABS_ICON: &str = "icons/app-window.svg";
-/// #4278: the second menu's first row, which picks every tab it lists. The lead's proposed words,
-/// waiting for the table's row.
+/// Z33a: the second menu's first row, which picks every tab it lists (#4278).
 pub const ALL_TABS: &str = "All Tabs";
 const NO_FAVICON: &str = "icons/globe.svg";
 const CLOSE_ICON: &str = "icons/x.svg";
@@ -189,6 +188,7 @@ pub fn row(
         let all = all_checked(&offer, &picked).map(|checked| {
             let entry = MenuEntry {
                 checked,
+                spoken: Some(all_tabs_spoken(offer.tabs.len()).into()),
                 ..MenuEntry::new(ALL_TABS, true)
             };
             let (space, tabs) = (offer.space, offer.tabs.clone());
@@ -199,6 +199,11 @@ pub fn row(
             .chain(tabs.map(crate::plus::Row::staying))
             .collect()
     })
+}
+
+/// What a screen reader says for All Tabs (Z33b): its check is the row's role's to say.
+fn all_tabs_spoken(tabs: usize) -> String {
+    format!("{}, {tabs} tabs", MenuEntry::label(ALL_TABS))
 }
 
 /// The All Tabs row's check, where the menu has the row: with two tabs or more listed, whether

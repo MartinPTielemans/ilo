@@ -91,6 +91,9 @@ pub struct MenuEntry {
     pub stays: Option<crate::menu::Stays>,
     /// The icon before its title, as the add menu's rows have.
     pub icon: Option<&'static str>,
+    /// What a screen reader says for it in place of its title and detail, where the words drawn
+    /// leave out what it stands for, as All Tabs leaves out how many (Z33b).
+    pub spoken: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -130,6 +133,7 @@ impl MenuEntry {
             out: false,
             stays: None,
             icon: None,
+            spoken: None,
         }
     }
 
