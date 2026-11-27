@@ -18,6 +18,7 @@
 #include "browser_core/boost_colors.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
+#include "browser_core/page_log_rule.h"
 #include "browser_core/session.h"
 
 namespace browser_core {
@@ -1254,6 +1255,9 @@ void Space::ReportChanged() {
                      [](bc_id id) {
                        // A tab that moved takes its new Space's colours in its Boost.
                        BoostSpacesChanged();
+                       // A tab that came to an agent's Space is heard for its page_log, and one
+                       // that left it isn't any more.
+                       PageLogsSpacesChanged();
                        if (FromId(id) && Host().space_changed) {
                          Host().space_changed(Host().context, id);
                        }

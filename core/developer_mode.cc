@@ -6,6 +6,7 @@
 
 #include "base/no_destructor.h"
 #include "base/values.h"
+#include "browser_core/page_log.h"
 #include "browser_core/site_controls.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
@@ -85,8 +86,32 @@ void Set(Profile* profile, const GURL& url, bool on) {
         system_engine::SiteOf(tab->Url()) == site) {
       tab->StateChanged();
       SiteControls::PageChanged(tab->id());
+      PageLog::DeveloperModeChanged(tab->web_contents());
     }
   }
+}
+
+std::vector<std::string> Sites(Profile* profile) {
+  std::vector<std::string> sites;
+  if (!profile) {
+    return sites;
+  }
+  const base::DictValue& kept = profile->GetPrefs()->GetDict(kSites);
+  for (const char* local : {"localhost", "127.0.0.1"}) {
+    if (kept.FindBool(local).value_or(true)) {
+      sites.push_back(local);
+    }
+  }
+  for (const auto [site, on] : kept) {
+    if (on.GetIfBool().value_or(false)) {
+      sites.push_back(site);
+    }
+  }
+  return sites;
+}
+
+void TurnOff(Profile* profile, const std::string& site) {
+  Set(profile, GURL("http://" + site + "/"), false);
 }
 
 }  // namespace browser_core::developer_mode

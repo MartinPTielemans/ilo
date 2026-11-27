@@ -579,6 +579,17 @@ source_set("mini_player_place") {
 
 # The sheet a Boost's page takes with its Space's colours, apart so browser_core_unittests tests it
 # alone.
+# What an agent's page_log keeps and answers, its strip list and caps, apart so
+# browser_core_unittests tests them alone (#4377).
+source_set("page_log_rule") {
+  sources = [
+    "page_log_rule.cc",
+    "page_log_rule.h",
+  ]
+  deps = [ "//base" ]
+  public_deps = [ "//url" ]
+}
+
 source_set("boost_colors") {
   sources = [
     "boost_colors.cc",
@@ -981,6 +992,8 @@ source_set("browser_core") {
     "notes.h",
     "open_app_dialog.cc",
     "open_app_dialog.h",
+    "page_log.cc",
+    "page_log.h",
     "page_menu.cc",
     "page_menu.h",
     "page_press.cc",
@@ -1085,6 +1098,7 @@ source_set("browser_core") {
     ":board_store",
     ":ax_text",
     ":boost_colors",
+    ":page_log_rule",
     ":boost_script",
     ":clear_both_engines",
     ":drm_request",
@@ -1468,6 +1482,7 @@ test("browser_core_unittests") {
     "agent_job_voter_unittest.cc",
     "quit_stores_wait_unittest.cc",
     "boost_colors_unittest.cc",
+    "page_log_rule_unittest.cc",
     "boost_script_unittest.cc",
     "clear_both_engines_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
@@ -1554,6 +1569,7 @@ test("browser_core_unittests") {
     ":agent_reply_limit",
     ":quit_stores_wait",
     ":boost_colors",
+    ":page_log_rule",
     ":boost_script",
     ":clear_both_engines",
     ":history_removal",

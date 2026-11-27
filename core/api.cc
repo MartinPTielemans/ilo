@@ -70,6 +70,7 @@
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
+#include "browser_core/page_log.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
 #include "browser_core/page_translate.h"
@@ -992,6 +993,21 @@ size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
   std::ranges::copy(space->today(), std::back_inserter(listed));
   std::copy_n(listed.begin(), std::min(capacity, listed.size()), tabs);
   return listed.size();
+}
+
+size_t bc_agent_page_log(const char* agent,
+                         bc_id tab,
+                         bool* developer_mode,
+                         char* log,
+                         size_t capacity) {
+  if (developer_mode) {
+    *developer_mode = false;
+  }
+  if (!agent || !*agent) {
+    return CopyString(std::string(), log, capacity);
+  }
+  return CopyString(browser_core::PageLog::For(agent, tab, developer_mode).value_or(std::string()),
+                    log, capacity);
 }
 
 void bc_agent_page(const char* agent,
@@ -2776,6 +2792,20 @@ void bc_ad_blocking_turn_on_site(bc_id profile_id, const char* site) {
 void bc_tab_set_developer_mode(bc_id id, bool on) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     browser_core::developer_mode::Set(tab->profile(), tab->Url(), on);
+  }
+}
+size_t bc_developer_mode_sites(bc_id profile_id, char* sites, size_t capacity) {
+  std::string lines;
+  if (Profile* profile = LoadedProfile(profile_id)) {
+    for (const std::string& site : browser_core::developer_mode::Sites(profile)) {
+      lines += (lines.empty() ? "" : "\n") + site;
+    }
+  }
+  return CopyString(lines, sites, capacity);
+}
+void bc_developer_mode_turn_off_site(bc_id profile_id, const char* site) {
+  if (Profile* profile = LoadedProfile(profile_id); profile && site) {
+    browser_core::developer_mode::TurnOff(profile, site);
   }
 }
 

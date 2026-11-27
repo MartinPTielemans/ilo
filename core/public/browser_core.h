@@ -2071,6 +2071,25 @@ BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 // never bc_space_pinned or bc_space_today.
 BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity);
 
+// What the page in |tab| reported since it loaded, for the agent with the id |agent| that owns the
+// tab (#4377), as UTF-8 JSON copied into |log| as bc_space_name does: {"developer_mode",
+// "requests", and "console", "dropped"}. Each failed request, one that ended in a network error (its name in
+// "error", a blocked one included) or with a status of 400 or more, gives its method, its address
+// without the query or fragment, and its status. Only while the page is in Developer Mode
+// (bc_tab_set_developer_mode, the user's), "console" holds every console message, and each request
+// gives its whole address and, as far as it was heard, its request and response headers without
+// Cookie, Authorization, Proxy-Authorization or Set-Cookie and its response's body; then
+// |developer_mode| is true. The core keeps a log only for a tab in an agent's Space, from the time
+// it comes there, and drops it as it leaves; it keeps at most 200 requests and 500 messages, the
+// oldest dropped first and counted in "dropped", a message cut at 8 KB and a body at 64 KB, and
+// 1 MB in all. Empty, with |developer_mode| false, for a tab the agent doesn't own, one in a
+// private window, or one whose page isn't http(s): never another tab's. Agent code calls it.
+BC_EXPORT size_t bc_agent_page_log(const char* agent,
+                                   bc_id tab,
+                                   bool* developer_mode,
+                                   char* log,
+                                   size_t capacity);
+
 // What bc_agent_page does in a tab. Each but SCREENSHOT then answers with the page's accessibility
 // tree. An action on an element first waits until it's on screen, holds still for two frames and,
 // to click or type in, isn't disabled, as a page that builds itself moves and enables what it
@@ -3726,6 +3745,15 @@ BC_EXPORT void bc_ad_blocking_turn_on_site(bc_id profile, const char* site);
 // bc_tab_site_controls is watching one. The user's: agents get none, as
 // it's how the user sees their tabs.
 BC_EXPORT void bc_tab_set_developer_mode(bc_id tab, bool on);
+// Copies the sites the profile has Developer Mode on for into |sites| as bc_space_name does, one a
+// line: localhost and 127.0.0.1 first while they're on by themselves, then those the user turned
+// on, in alphabetical order, each a registrable domain or a host alone. Empty for a profile that
+// isn't loaded. The user's: agents get none (#4377).
+BC_EXPORT size_t bc_developer_mode_sites(bc_id profile, char* sites, size_t capacity);
+// Turns Developer Mode off for |site|, one of bc_developer_mode_sites, in the profile, as
+// bc_tab_set_developer_mode does for a tab there: then tab_state_changed for each of the profile's
+// tabs at the site, and an agent's page_log there holds no more than outside it. The user's.
+BC_EXPORT void bc_developer_mode_turn_off_site(bc_id profile, const char* site);
 
 // Boosts (docs/ux-spec.md › Boosts). Gives |site|, a host without "www." such as
 // "news.ycombinator.com", |css| in |profile|, which its pages and frames there take as they
