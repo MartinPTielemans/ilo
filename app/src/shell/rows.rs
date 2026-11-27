@@ -476,12 +476,7 @@ impl Shell {
             .bottom(px(inset))
             .left(px(PLATE_INSET + depth as f32 * FOLDER_INDENT))
             .right(px(PLATE_INSET))
-            .child(super::pane::pane(
-                look,
-                &self.palette,
-                PLATE_RADIUS,
-                opacity,
-            ))
+            .child(super::pane::pane(look, PLATE_RADIUS, opacity))
     }
 
     /// Whether the page area starts at the sidebar's edge, where a line of the sidebar wears the

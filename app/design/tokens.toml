@@ -461,10 +461,10 @@ dark = 0.2
 light = 0.16
 
 # Where you are, the open tab's line, its split view's and the shown thread's card, is this pane
-# lifted out of the sidebar's glass (#4398), at the lifted level: [elevation]'s resting shadow and
-# rim. On a dark window its fill is brighter at its top than its foot, under a lit top edge; on a
-# light window it's the white Settings' selected section had. Under the pointer its fill is
-# `hovered` stronger.
+# lifted out of the sidebar's glass (#4398), at the lifted level by [elevation]'s resting shadow
+# alone: a plate, never an outline (#4401), so it has no rim. On a dark window its fill is brighter
+# at its top than its foot, under a lit top edge; on a light window it's the white Settings'
+# selected section had. Under the pointer its fill is `hovered` stronger.
 [selected.pane]
 dark-top = 0xffffff2e
 dark-bottom = 0xffffff1c

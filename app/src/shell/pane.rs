@@ -8,7 +8,7 @@ use gpui::{
 };
 
 use crate::elevation::Level;
-use crate::palette::{Palette, Tone};
+use crate::palette::Tone;
 use crate::tokens::selected::pane::{
     DARK_BOTTOM, DARK_EDGE, DARK_TOP, GLOW_DARK, GLOW_LIGHT, GLOW_REACH, HOVERED, LIGHT_FILL,
 };
@@ -37,20 +37,19 @@ pub(super) struct Pane {
     pub hovered: f32,
 }
 
-/// The pane in `palette`'s look, as big as it's laid out, with corners of `corner`, at `opacity`.
-/// It's at the lifted level, the resting one: its rim in the palette's ink, and its drop shadow.
-pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> Div {
+/// The pane in `look`'s tone, as big as it's laid out, with corners of `corner`, at `opacity`.
+/// It's at the lifted level, the resting one, by its drop shadow alone: a plate, never an outline
+/// (#4401), set apart by its fill, its shadow and, on a dark window, its lit top edge.
+pub(super) fn pane(look: Pane, corner: f32, opacity: f32) -> Div {
     let step = HOVERED * look.hovered;
     let stronger = |color: u32| stronger(color, look.hovered, opacity);
     let mut shadow = Level::Resting.drop_shadow();
     shadow.color = shadow.color.opacity(opacity);
-    let base = (div()
+    let base = div()
         .absolute()
         .inset_0()
         .rounded(px(corner))
-        .border(px(1.)))
-    .border_color(Level::Resting.rim_in(palette).opacity(opacity))
-    .shadow(vec![shadow]);
+        .shadow(vec![shadow]);
     let (base, glow_at) = match look.tone {
         Tone::Dark => (
             base.bg(linear_gradient(
@@ -62,7 +61,7 @@ pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> 
             .child(
                 div()
                     .absolute()
-                    .top(px(-1.))
+                    .top_0()
                     .left(px(corner))
                     .right(px(corner))
                     .h(px(1.))
@@ -72,7 +71,6 @@ pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> 
         ),
         Tone::Light => (base.bg(stronger(LIGHT_FILL)), GLOW_LIGHT),
     };
-    // Its box is the border's, outside the room its children are laid in.
     #[cfg(test)]
     let base = base.child(
         gpui::canvas(
@@ -80,10 +78,7 @@ pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> 
             |_, _, _, _| {},
         )
         .absolute()
-        .top(px(-1.))
-        .bottom(px(-1.))
-        .left(px(-1.))
-        .right(px(-1.)),
+        .inset_0(),
     );
     // The light lies over the fill from the leading edge, full to the icon's middle and gone
     // GLOW_REACH past it, in the pane's own leading corners, so none of it spills outside.
@@ -100,9 +95,9 @@ pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> 
         let strength = glow_at + step;
         div()
             .absolute()
-            .top(px(-1.))
-            .bottom(px(-1.))
-            .left(px(-1.))
+            .top_0()
+            .bottom_0()
+            .left_0()
             .w(px(width))
             .rounded_l(px(corner))
             .bg(linear_gradient(
