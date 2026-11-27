@@ -47,6 +47,17 @@ fn sentence_case(title: &str) -> String {
 /// What an item of a menu does once chosen.
 pub(super) type MenuAction = Box<dyn FnOnce(&mut Shell, &mut Context<Shell>)>;
 
+/// A maker's mark: its own asset, drawn unaltered in its own ink, in a box that holds whatever
+/// clear space the asset keeps round it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MakerMark {
+    pub path: &'static str,
+    pub size: f32,
+    /// Its ink, 0xRRGGBBAA, in the light look and the dark.
+    pub light: u32,
+    pub dark: u32,
+}
+
 /// An item in a menu the host shows. A line between items has no title.
 #[derive(Clone)]
 pub struct MenuEntry {
@@ -91,6 +102,11 @@ pub struct MenuEntry {
     pub stays: Option<crate::menu::Stays>,
     /// The icon before its title, as the add menu's rows have.
     pub icon: Option<&'static str>,
+    /// Its maker's mark in the icon's place, as a model's row has.
+    pub mark: Option<MakerMark>,
+    /// What a screen reader says for it in place of its title, where the title leans on something
+    /// only seen, as a model's row says its maker, whose mark isn't read.
+    pub spoken: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -130,6 +146,8 @@ impl MenuEntry {
             out: false,
             stays: None,
             icon: None,
+            mark: None,
+            spoken: None,
         }
     }
 

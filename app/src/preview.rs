@@ -3853,8 +3853,8 @@ fn preview_page_menu(
     .detach();
 }
 
-/// A CLI's Model menu as Settings › Agents opens it with Default chosen, its models as the CLI's
-/// recorded answer lists them, in the light or dark Settings.
+/// A CLI's Model menu as Settings › Agents opens it with its default checked, its models as the
+/// CLI's recorded answer lists them, in the light or dark Settings.
 fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
     use browser::agents::ready::{claude_listed, codex_listed};
     let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
@@ -3868,10 +3868,9 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
         ))),
     }
     .unwrap_or_default();
-    let first = (browser::agents::runner::Cli::from_id(cli))
-        .map_or_else(String::new, browser::agents::task::model_default);
-    let (_, items) =
-        browser::agents::task::model_menu(chosen, &first, models.default.as_deref(), models.listed);
+    let cli =
+        browser::agents::runner::Cli::from_id(cli).unwrap_or(browser::agents::runner::Cli::Claude);
+    let (_, items) = browser::agents::task::model_rows(chosen, cli, &models, 0);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;

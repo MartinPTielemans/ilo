@@ -475,7 +475,7 @@ fn panel_width(
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
-    let icons = items.iter().any(|&at| entries[at].icon.is_some());
+    let icons = (items.iter()).any(|&at| entries[at].icon.is_some() || entries[at].mark.is_some());
     let lead = lead + if icons { ICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
     let out = items.iter().any(|&at| entries[at].out);
@@ -1279,6 +1279,8 @@ struct Shown {
     alt: bool,
     /// Whether it has drawn on screen, and with ⌥ held, which the log says as it changes.
     drawn: Option<bool>,
+    /// When it was asked for, which its first frame on screen is timed from (#4394).
+    asked: Instant,
     /// The items whose submenus it has drawn open since they last opened, which the log says.
     drawn_open: Vec<usize>,
     /// Whether its window blends with what's under it (`Host::blends`).
@@ -1448,6 +1450,7 @@ fn measure(window: &Window) -> impl Fn(&str) -> f32 + use<> {
 
 /// Shows the menu `request` asks for, closing one that shows.
 pub fn show(request: Request, cx: &mut App) {
+    let asked = Instant::now();
     crate::lazy_window::ready::<ContextMenu>(cx);
     let mut request = Some(request);
     // The window it opens from saw the press or key that opened it, with what was held then.
@@ -1504,6 +1507,7 @@ pub fn show(request: Request, cx: &mut App) {
             logged_open: Vec::new(),
             alt,
             drawn: None,
+            asked,
             drawn_open: Vec::new(),
             blends,
             search,
@@ -2070,6 +2074,21 @@ impl ContextMenu {
                 .flex_none()
                 .text_color(secondary)
         });
+        // A maker's mark in its own ink whatever the row's state, as its maker gives it, centred
+        // on the icons' column with its clear space spilling past it.
+        let mark = entry.mark.map(|mark| {
+            let ink = if shown.look.light {
+                mark.light
+            } else {
+                mark.dark
+            };
+            svg()
+                .path(mark.path)
+                .size(px(mark.size))
+                .m(px((ICON - mark.size) / 2.))
+                .flex_none()
+                .text_color(rgba(ink))
+        });
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(
                 svg()
@@ -2101,9 +2120,10 @@ impl ContextMenu {
             (None, false) => None,
         };
         let a11y = self.a11y;
+        let title = entry.spoken.as_ref().unwrap_or(&entry.title);
         let name = match &entry.detail {
-            Some(detail) => format!("{}, {detail}", entry.title).into(),
-            None => entry.title.clone(),
+            Some(detail) => format!("{title}, {detail}").into(),
+            None => title.clone(),
         };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());
@@ -2142,6 +2162,7 @@ impl ContextMenu {
             .children(swatch)
             .children(favicon)
             .children(icon)
+            .children(mark)
             .child(
                 div()
                     .flex_1()
@@ -2260,10 +2281,15 @@ impl Render for ContextMenu {
             match window.is_visible() {
                 // check.sh waits for these lines.
                 true => match shown.drawn.replace(shown.alt) {
-                    None => log!(
-                        "browser: menu drawn {}",
-                        described_held(&shown.tracking.entries, shown.alt)
-                    ),
+                    None => {
+                        // How long from the click that asked for it to its first frame on screen.
+                        let took = shown.asked.elapsed().as_secs_f64() * 1000.;
+                        log!("browser: menu on screen {took:.1} ms after it was asked for");
+                        log!(
+                            "browser: menu drawn {}",
+                            described_held(&shown.tracking.entries, shown.alt)
+                        )
+                    }
                     Some(_) => log!(
                         "browser: menu drawn with ⌥ {} {}",
                         if shown.alt { "held" } else { "up" },

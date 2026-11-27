@@ -962,6 +962,17 @@ favicon = 16.0
 # An item's icon before its title, in the secondary ink, as the add menu's rows have
 # (spec-bar-composer Add).
 icon = 16.0
+# A maker's mark before each of its models in the model menu (#4394): its maker's own asset,
+# unaltered, centred on the icons' column. OpenAI's Blossom keeps its clear space inside its box,
+# the mark half as wide, so its box is twice the Spark's and the two marks read the same size.
+claude-mark = 14.0
+openai-mark = 28.0
+# The Blossom in black or white, as OpenAI provides it, by the look.
+openai-mark-light = 0x0000_00ff
+openai-mark-dark = 0xffff_ffff
+# Claude's Spark keeps its own orange, the one coloured mark: the owner's exception (11-27) to
+# marks drawn in the text's ink, for this menu.
+claude-mark-ink = 0xd977_57ff
 
 [offer]
 width = 320.0

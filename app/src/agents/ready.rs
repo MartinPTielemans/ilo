@@ -72,6 +72,11 @@ pub struct Models {
     pub listed: Vec<(String, String)>,
     /// Which model its default is, by name, where the CLI says.
     pub default: Option<String>,
+    /// That model by id, the menu's checked row while nothing else is picked (Z54).
+    pub default_id: Option<String>,
+    /// The models it lists but keeps out of its own picker, which the menu offers behind
+    /// More Models (Z54c), as id and name.
+    pub more: Vec<(String, String)>,
 }
 
 impl Found {
@@ -84,6 +89,8 @@ impl Found {
             "listed": self.models.as_ref().map(|models| serde_json::json!({
                 "models": models.listed.iter().map(|(id, name)| [id, name]).collect::<Vec<_>>(),
                 "default": models.default,
+                "default_id": models.default_id,
+                "more": models.more.iter().map(|(id, name)| [id, name]).collect::<Vec<_>>(),
             })),
         })
     }
@@ -124,12 +131,14 @@ impl Models {
             return Some(Models {
                 listed: pairs(listed.get("models").unwrap_or(&Value::Null)),
                 default: (listed.get("default").and_then(Value::as_str)).map(String::from),
+                default_id: (listed.get("default_id").and_then(Value::as_str)).map(String::from),
+                more: pairs(listed.get("more").unwrap_or(&Value::Null)),
             });
         }
         let listed = pairs(saved.get("models")?);
         (!listed.is_empty()).then_some(Models {
             listed,
-            default: None,
+            ..Models::default()
         })
     }
 }
@@ -290,27 +299,53 @@ pub fn claude_listed(answer: &Value) -> Option<Models> {
     fn id(model: &Value) -> Option<&str> {
         model.get("value").and_then(Value::as_str)
     }
-    fn name(model: &Value) -> Option<&str> {
-        model
-            .get("displayName")
-            .and_then(Value::as_str)
-            .or(id(model))
-    }
     fn resolved(model: &Value) -> Option<&str> {
         model.get("resolvedModel").and_then(Value::as_str)
+    }
+    fn name(model: &Value) -> Option<String> {
+        (resolved(model).and_then(claude_version_name))
+            .or_else(|| model.get("displayName")?.as_str().map(String::from))
+            .or_else(|| id(model).map(String::from))
     }
     let models = answer.pointer("/response/response/models")?.as_array()?;
     let (defaults, listed): (Vec<&Value>, Vec<&Value>) = models
         .iter()
         .partition(|model| id(model) == Some("default"));
     let default = (defaults.first().and_then(|model| resolved(model)))
-        .and_then(|model| listed.iter().find(|each| resolved(each) == Some(model)))
-        .and_then(|model| name(model))
-        .map(String::from);
+        .and_then(|model| listed.iter().find(|each| resolved(each) == Some(model)));
+    let default_id = default.and_then(|model| id(model)).map(String::from);
+    let default = default.and_then(|model| name(model));
     let listed = (listed.into_iter())
-        .filter_map(|model| Some((id(model)?.to_string(), name(model)?.to_string())))
+        .filter_map(|model| Some((id(model)?.to_string(), name(model)?)))
         .collect();
-    Some(Models { listed, default })
+    Some(Models {
+        listed,
+        default,
+        default_id,
+        more: Vec::new(),
+    })
+}
+
+/// A Claude model's name with its version, read from the id it resolves to: `claude-opus-5-5` is
+/// `Opus 5.5`, with a release date at its end dropped. None for an id of any other shape, such as
+/// one with a suffix in brackets, which then keeps the name Claude gives it: nothing is hand-kept.
+pub fn claude_version_name(resolved: &str) -> Option<String> {
+    let mut parts = resolved.strip_prefix("claude-")?.split('-');
+    let family = parts
+        .next()
+        .filter(|family| !family.is_empty() && family.chars().all(|c| c.is_ascii_lowercase()))?;
+    let mut version: Vec<&str> = parts.collect();
+    if version.last().is_some_and(|last| last.len() == 8) {
+        version.pop();
+    }
+    let numbers =
+        |part: &&str| (1..=2).contains(&part.len()) && part.chars().all(|c| c.is_ascii_digit());
+    if version.is_empty() || !version.iter().all(numbers) {
+        return None;
+    }
+    let mut name = family.to_string();
+    name[..1].make_ascii_uppercase();
+    Some(format!("{name} {}", version.join(".")))
 }
 
 /// `output`'s lines as they come, read on a thread of their own.
@@ -447,8 +482,8 @@ pub fn plan_name(plan: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-/// The models in Codex's answer to model/list, hidden ones left out, and the one it marks its
-/// default named.
+/// The models in Codex's answer to model/list, the hidden ones apart for More Models, and the one
+/// it marks its default, by id and name.
 pub fn codex_listed(answer: &Value) -> Models {
     let listed = answer.pointer("/result/data").and_then(Value::as_array);
     let named = |model: &Value| {
@@ -461,18 +496,16 @@ pub fn codex_listed(answer: &Value) -> Models {
     };
     let default = (listed.into_iter().flatten())
         .find(|model| model.get("isDefault").and_then(Value::as_bool) == Some(true))
-        .and_then(named)
-        .map(|(_, name)| name);
-    let listed = (listed.into_iter().flatten())
-        .filter(|model| {
-            !model
-                .get("hidden")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-        .filter_map(named)
-        .collect();
-    Models { listed, default }
+        .and_then(named);
+    let hidden = |model: &&Value| model.get("hidden").and_then(Value::as_bool) == Some(true);
+    let (more, shown): (Vec<&Value>, Vec<&Value>) =
+        (listed.into_iter().flatten()).partition(hidden);
+    Models {
+        listed: shown.into_iter().filter_map(named).collect(),
+        default_id: default.as_ref().map(|(id, _)| id.clone()),
+        default: default.map(|(_, name)| name),
+        more: more.into_iter().filter_map(named).collect(),
+    }
 }
 
 /// Whether `claude auth status --json` says the user is signed in.

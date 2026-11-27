@@ -2,7 +2,7 @@
 //! assistant's ⋯ menu and the ask before Sign Out; and Notifications' Notify.
 
 use super::*;
-use browser::agents::task::{MODEL, model_default};
+use browser::agents::task::MODEL;
 use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
 
 impl Settings {
@@ -95,10 +95,7 @@ impl Settings {
         cli: Cli,
         cx: &mut Context<Self>,
     ) -> (gpui::Div, f32) {
-        let label: SharedString = match agents.read(cx).task_model_name(cli) {
-            Some(model) => model,
-            None => model_default(cli).into(),
-        };
+        let label = agents.read(cx).task_model_words(cli);
         let agents = agents.clone();
         let popup = self.popup(
             Popup::Model(cli),
@@ -117,8 +114,8 @@ impl Settings {
         (line_row(&self.look, MODEL, None, controls).pl(px(x)), x)
     }
 
-    /// `cli`'s Model pop-up: its own default first, saying which model it is where the CLI says,
-    /// then the models it lists. A model is set only from that list.
+    /// `cli`'s Model pop-up: the models it lists, its default checked while nothing else is picked
+    /// (`model_rows`). A model is set only from that list.
     fn choose_model(
         &mut self,
         agents: &Entity<Agents>,
@@ -127,16 +124,17 @@ impl Settings {
         cx: &mut Context<Self>,
     ) {
         let (models, items) = agents.read(cx).task_model_menu(cli);
+        agents.update(cx, |agents, cx| agents.model_menu_opened(cx));
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some((id, _)) = picked.and_then(|at| models.get(at)) {
+            if let Some(id) = picked.and_then(|at| models.get(at).cloned().flatten()) {
                 // check.sh waits for this line.
                 log!(
                     "browser: task model {} {}",
                     cli.id(),
-                    if id.is_empty() { "default" } else { id }
+                    if id.is_empty() { "default" } else { &id }
                 );
-                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+                agents.update(cx, |agents, cx| agents.set_task_model(cli, &id, cx));
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
