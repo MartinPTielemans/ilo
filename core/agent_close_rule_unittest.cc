@@ -24,6 +24,15 @@ TEST(AgentArchiveRuleTest, OnlyAHandedTabTheUserDoesntHold) {
   EXPECT_EQ((AgentArchive{.handed = true, .pinned = true, .discard = true}).What(), Does::kPinned);
 }
 
+// A tab that went back but didn't close is the user's, never answered as refused, as the agent's
+// log would then say nothing moved; one that couldn't go back is still handed.
+TEST(AgentArchiveRuleTest, ATabThatWentBackButStaysIsReturnedNotRefused) {
+  using Came = AgentArchive::Came;
+  EXPECT_EQ(AgentArchive::After(/*returned=*/true, /*gone=*/false), Came::kReturned);
+  EXPECT_EQ(AgentArchive::After(/*returned=*/true, /*gone=*/true), Came::kArchived);
+  EXPECT_EQ(AgentArchive::After(/*returned=*/false, /*gone=*/false), Came::kStaysHanded);
+}
+
 // A page whose handler doesn't ask is closed by Chromium after its unload handlers: the agent hears
 // once the tab is gone, not as the page agrees.
 TEST(AgentCloseRuleTest, APageThatDoesntAskIsAnsweredAsItsTabGoes) {

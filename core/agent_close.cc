@@ -188,14 +188,21 @@ int AgentArchiveTab(const std::string& agent, bc_id tab, bool discard) {
   }
   // No window goes with it, so none the user looks at shows another Space for it. Where it can't
   // go back, as when the Space it left is gone, it stays handed, for the app to give back.
-  if (!handed::Return(tab, /*follows=*/false)) {
-    return BC_AGENT_CLOSE_REFUSED;
-  }
+  const bool returned = handed::Return(tab, /*follows=*/false);
   // As the user's close, into the archive from their Space (KeepClosed), but without its
-  // handlers, which would ask with the dialog. Still there, as between windows, it stays the
-  // user's.
-  Window::CloseTab(tab, /*discard=*/true);
-  return Tab::FromId(tab) ? BC_AGENT_CLOSE_REFUSED : BC_AGENT_CLOSED;
+  // handlers, which would ask with the dialog.
+  if (returned) {
+    Window::CloseTab(tab, /*discard=*/true);
+  }
+  switch (AgentArchive::After(returned, returned && !Tab::FromId(tab))) {
+    case AgentArchive::Came::kStaysHanded:
+      return BC_AGENT_CLOSE_REFUSED;
+    // Not a refusal: the tab moved, and the agent's log says so.
+    case AgentArchive::Came::kReturned:
+      return BC_AGENT_CLOSE_RETURNED;
+    case AgentArchive::Came::kArchived:
+      return BC_AGENT_CLOSED;
+  }
 }
 
 }  // namespace browser_core
