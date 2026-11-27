@@ -1,28 +1,26 @@
 //! A task's line in Today's list, the one place the list puts it (#4095). It is a tab's line: its
 //! mark and title, with no fill or outline but the shown thread's shape, and while it needs the
-//! user a second line in the product's words. An ended thread with its chip is still a whole
-//! card, outlined, until the chip has its place in the conversation. Its mark and second line come
-//! from its task's state alone; the title is the only words of the assistant's on it.
+//! user a second line in the product's words. Its mark and second line come from its task's state
+//! alone; the title is the only words of the assistant's on it. An ended thread's chip is in its
+//! conversation, under its last line.
 
 use gpui::{
-    AnyElement, FontWeight, HighlightStyle, Hsla, MouseButton, SharedString, StyledText, Window,
-    canvas, div, prelude::*, px, rgb,
+    AnyElement, FontWeight, Hsla, MouseButton, SharedString, Window, canvas, div, prelude::*, px,
+    rgb,
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{Chip, Form, SLOT, Shell, chip, clock, drawn_listener, number, state};
+use super::{Form, SLOT, Shell, clock, drawn_listener};
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::palette::Palette;
 use crate::shell::conversation::stage_fill;
 use crate::shell::page_ends::StripStop;
-use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
-use crate::tokens::shell::FAVICON_DRAWN;
-use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
+use crate::shell::{PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
+use crate::tokens::shell::task::SLOT_DASH;
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
-    DOT, FILL, FROM_INK, FROM_LINE, FROM_MARK, GAP, GLYPH, GLYPH_GAP, ICON, ICON_GAP, LINE_X,
-    LIVE_LINE, NEEDS_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT, OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS,
-    TEXT_2, TEXT_2_LIGHT, TEXT_3, TEXT_3_LIGHT, TITLE_LINE, UNDER,
+    DOT, FROM_INK, FROM_MARK, GLYPH, GLYPH_GAP, LINE_X, NEEDS_LINE, ON_PRIMARY, ON_PRIMARY_LIGHT,
+    RADIUS, TEXT_2, TEXT_2_LIGHT, TITLE_LINE,
 };
 use crate::tokens::text;
 
@@ -43,35 +41,23 @@ pub(super) const UNREAD: &str = "Unread";
 pub(super) const THREAD: &str = "Thread";
 
 /// What a card says to the screen reader after its title, as drawn (N3): at work the state's
-/// word, which its mark draws; finished and not seen, the dot's word alone; at rest nothing; a
-/// whole card its second line.
+/// word, which its mark draws; waiting its second line; finished and not seen, the dot's word
+/// alone; at rest nothing.
 pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
     match form {
         Form::Working => card.word.after_name().into(),
+        Form::Waits => second_line(card, form, site),
         Form::Unseen => UNREAD.into(),
         Form::Rest => SharedString::default(),
-        form => second_line(card, form, site),
     }
 }
 
-/// The second line of a whole card in `form`: ilo's words alone.
-pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
-    second(card, form, site).0
-}
-
-/// How much of a whole card's second line in `form` is its lead, in the title's ink: the level's
-/// label where the line is its state's and the card is at Full access, by the card's level and
-/// never by what the line begins with.
-pub(super) fn second_lead(card: &Card, form: Form) -> usize {
-    second(card, form, "").1
-}
-
-/// A whole card's second line in `form` and how much of it is its lead: only its state's line
-/// has one.
-fn second(card: &Card, form: Form, site: &str) -> (SharedString, usize) {
+/// A waiting line's second line: the product's words alone, never the assistant's or a page's.
+/// Empty for a line in any other `form`, which has none.
+pub(super) fn second_line(_card: &Card, form: Form, site: &str) -> SharedString {
     match form {
-        Form::Waits => (needs_you(site), 0),
-        _ => state(card),
+        Form::Waits => needs_you(site),
+        _ => SharedString::default(),
     }
 }
 
@@ -83,7 +69,7 @@ pub(super) struct Look {
     /// The line under the title that says it needs the user.
     pub(super) needs: bool,
     pub(super) dot: bool,
-    /// The outside app's line: its mark and name on a whole card, its mark on a folded one.
+    /// The outside app's mark at the line's right.
     pub(super) from: bool,
 }
 
@@ -117,13 +103,11 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
     }
 }
 
-/// A card's frame: a shape of its own in its stage's colour, none for a line among the tabs, or
-/// closed in its outline at `outline` of the ink, `width` wide.
+/// A line's frame: a shape of its own in its stage's colour, or none, as a tab's among the tabs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Framed {
     Own,
     Plain,
-    Outlined { outline: f32, width: f32 },
 }
 
 /// The mark of a task in state `dot`, its ring at the top: none for an ended one, which has
@@ -197,16 +181,13 @@ impl Shell {
         .into_any_element()
     }
 
-    /// Text-2 and text-3: the ink a step and two down, each a step stronger on a light window.
-    fn card_inks(&self) -> (Hsla, Hsla) {
+    /// Text-2: the ink a step down, a step stronger on a light window.
+    fn rest_ink(&self) -> Hsla {
         let palette = &self.palette;
-        (
-            palette.text(palette.toned(TEXT_2, TEXT_2_LIGHT)),
-            palette.text(palette.toned(TEXT_3, TEXT_3_LIGHT)),
-        )
+        palette.text(palette.toned(TEXT_2, TEXT_2_LIGHT))
     }
 
-    /// The card numbered `n` in the list of the Space shown, in its place: whole or a line, or ⌘T's
+    /// The card numbered `n` in the list of the Space shown, in its place: its line, or ⌘T's
     /// slot, sliding with the rows as they make room.
     pub(in crate::shell) fn task_card(&self, n: u64, cx: &mut Context<Self>) -> AnyElement {
         let placed = (self.shown_space())
@@ -233,23 +214,13 @@ impl Shell {
         else {
             return block.px(px(PLATE_INSET)).into_any_element();
         };
-        let framed = self.card_framed(card, placed.form);
+        let framed = self.card_framed(card);
         let block = block.px(px(PLATE_INSET));
         let now = clock();
         let coming = self.task_list.coming.get(&card.agent);
         let rest = self.slide(Slot::Task(n)) == 0. && coming.is_none_or(|ease| !ease.moving(now));
         let opacity = coming.map_or(1., |ease| ease.at(now));
-        let line = placed.form.line();
-        let body = match line {
-            true => self.card_line(card, placed.form, framed == Framed::Own),
-            false => self.card_whole(card, placed.form, cx),
-        };
-        // A whole card's outline keeps its room in its stage's colour; a line has none.
-        let width = match line {
-            true => 0.,
-            false => OUTLINE_WIDTH,
-        };
-        let height = placed.room - if line { 0. } else { UNDER };
+        let body = self.card_line(card, placed.form, framed == Framed::Own);
         let agent = card.agent.clone();
         // An outside app's name after the title, then what the card says of its state, as drawn.
         let mut name = card.title.to_string();
@@ -261,30 +232,24 @@ impl Shell {
             name = format!("{name}, {said}");
         }
         let name = SharedString::from(name);
-        let tip = (outside(card) && line).then(|| card.name.clone());
+        let tip = outside(card).then(|| card.name.clone());
         let frame = div()
             .id(("task-plate", n))
             .relative()
-            .h(px(height))
+            .h(px(placed.room))
             .rounded(px(RADIUS))
             .opacity(opacity)
             .cursor_pointer();
-        // In its stage's colour, the card's own outline gives way to the line a dark stage's
-        // shape has round it, in the same width of room, so nothing inside it moves.
         let frame = match framed {
             Framed::Own => {
                 let shape = self.in_own_colour(stage_fill(&self.palette), 1., RADIUS);
                 // Placed from the frame's corner: left to itself it starts inside the room.
-                (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
+                frame.child(div().absolute().inset_0().child(shape))
             }
             Framed::Plain => {
                 let hover = self.palette.hovered_row();
                 frame.hover(move |style| style.bg(hover))
             }
-            Framed::Outlined { outline, width } => frame
-                .border(px(width))
-                .border_color(Hsla::from(self.palette.ink).opacity(outline))
-                .bg(self.palette.plate(FILL)),
         };
         let drawn = drawn_listener(
             &self.task_list.plates_drawn,
@@ -319,19 +284,12 @@ impl Shell {
         block.child(frame).into_any_element()
     }
 
-    /// How `card` in `form` is framed: in its stage's colour while its thread is the one shown
-    /// and the stage starts at the sidebar's edge, in either of the thread's forms; a line
-    /// otherwise as a tab's, with none; a whole card in its outline.
-    pub(super) fn card_framed(&self, card: &Card, form: Form) -> Framed {
-        if self.beside_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
-            return Framed::Own;
-        }
-        if form.line() {
-            return Framed::Plain;
-        }
-        Framed::Outlined {
-            outline: OUTLINE,
-            width: OUTLINE_WIDTH,
+    /// How `card` is framed: in its stage's colour while its thread is the one shown and the
+    /// stage starts at the sidebar's edge; otherwise as a tab's line, with none.
+    pub(super) fn card_framed(&self, card: &Card) -> Framed {
+        match self.beside_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
+            true => Framed::Own,
+            false => Framed::Plain,
         }
     }
 
@@ -374,35 +332,6 @@ impl Shell {
             .child(drawn)
     }
 
-    /// An outside app's line over a whole card's first row: the product's mark in the glyph's
-    /// column, then the name the app gave at the rows' inset, small, in text-3, one line, cut with
-    /// an ellipsis.
-    fn from_line(&self, card: &Card, text_3: Hsla) -> impl IntoElement + use<> {
-        div()
-            .h(px(FROM_LINE))
-            .flex()
-            .items_center()
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(GLYPH))
-                    .flex()
-                    .justify_center()
-                    .child(from_mark(&self.palette)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .ml(px(GLYPH_GAP))
-                    .truncate()
-                    .text_size(px(text::SMALL))
-                    .line_height(px(FROM_LINE))
-                    .text_color(text_3)
-                    .child(card.name.clone()),
-            )
-    }
-
     /// A card's title on its line in `ink`: one line, cut with an ellipsis.
     fn card_title(&self, card: &Card, weight: FontWeight, ink: Hsla) -> impl IntoElement + use<> {
         div()
@@ -416,114 +345,6 @@ impl Shell {
             .child(card.title.clone())
     }
 
-    /// A page's icon, from memory alone, at `alpha`.
-    fn card_icon(&self, tab: u64, alpha: f32) -> impl IntoElement + use<> {
-        div()
-            .flex_none()
-            .size(px(ICON))
-            .flex()
-            .items_center()
-            .justify_center()
-            .opacity(alpha)
-            .child(self.tab_icon_sized(tab, ICON * FAVICON_SIZE / FAVICON_DRAWN))
-    }
-
-    /// A whole card's rows: the mark and title, ilo's line, and its pages or its button.
-    fn card_whole(&self, card: &Card, form: Form, cx: &mut Context<Self>) -> AnyElement {
-        let unseen = form == Form::Ended;
-        let (text_2, text_3) = self.card_inks();
-        let width = OUTLINE_WIDTH;
-        let first = div()
-            .h(px(TITLE_LINE))
-            .flex()
-            .items_center()
-            .gap(px(GLYPH_GAP))
-            .child(self.card_mark(card.dot, unseen))
-            .child(self.card_title(card, FontWeight::SEMIBOLD, self.palette.text(TITLE)));
-        let words = self.said(card, form);
-        let lead = second_lead(card, form);
-        let led = HighlightStyle {
-            color: Some(self.palette.text(TITLE)),
-            font_weight: Some(FontWeight::MEDIUM),
-            ..HighlightStyle::default()
-        };
-        let second = div()
-            .h(px(LIVE_LINE))
-            .truncate()
-            .text_size(px(text::SMALL))
-            .line_height(px(LIVE_LINE))
-            .text_color(text_2)
-            .child(match lead {
-                0 => StyledText::new(words),
-                lead => StyledText::new(words).with_highlights([(0..lead, led)]),
-            });
-        let third = self.card_third(card, form, cx);
-        let from = outside(card).then(|| self.from_line(card, text_3));
-        div()
-            .size_full()
-            .p(px(PADDING - width))
-            .flex()
-            .flex_col()
-            .gap(px(GAP))
-            .children(from)
-            .child(first)
-            .child(div().pl(px(GLYPH + GLYPH_GAP)).child(second))
-            .children(third.map(|third| div().pl(px(GLYPH + GLYPH_GAP)).child(third)))
-            .into_any_element()
-    }
-
-    /// A whole card's third row, if it has one: ended, the pages it visited and its chip.
-    fn card_third(&self, card: &Card, form: Form, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let row = || div().flex().items_center().gap(px(ICON_GAP));
-        let visited = || {
-            (card.pages.iter())
-                .filter(|tab| card.visited.contains(tab))
-                .map(|&tab| self.card_icon(tab, 1.))
-                .collect::<Vec<_>>()
-        };
-        match form {
-            Form::Ended => {
-                let chip = chip(card).map(|chip| self.card_chip(card, chip, cx));
-                let row = row()
-                    .h(px(CHIP_HEIGHT.max(ICON)))
-                    .children(visited())
-                    .child(div().flex_1())
-                    .children(chip);
-                Some(row.into_any_element())
-            }
-            _ => None,
-        }
-    }
-
-    /// An ended task's one chip, today's: its words on a quiet plate, not a filled button.
-    fn card_chip(&self, card: &Card, chip: Chip, cx: &mut Context<Self>) -> AnyElement {
-        let agent = card.agent.clone();
-        let n = number(&agent);
-        let hover = self.palette.plate(crate::shell::HOVERED + TILE);
-        let button = div()
-            .id(("task-chip", n))
-            .flex_none()
-            .min_w_0()
-            .h(px(CHIP_HEIGHT))
-            .px(px(CHIP_X))
-            .flex()
-            .items_center()
-            .rounded(px(PAGE_RADIUS))
-            .bg(self.palette.plate(crate::shell::HOVERED))
-            .hover(move |style| style.bg(hover))
-            .text_size(px(text::SMALL))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(self.palette.text(TITLE));
-        self.strip_stop(button, StripStop::Chip(n), chip.label(), PAGE_RADIUS)
-            .child(div().truncate().child(chip.label()))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |shell, _, _, cx| {
-                cx.stop_propagation();
-                shell.run_chip(agent.clone(), chip, cx);
-            }))
-            .into_any_element()
-    }
-
     /// A card as one line, a tab's: its mark and its title, set heavier while its thread is the
     /// one shown, as the open tab's is; while it needs the user, the line that says so under the
     /// title, in the text's ink, nothing in it to press.
@@ -535,7 +356,7 @@ impl Shell {
         // At rest the title steps down to text-2, as a thread that needs nothing more; shown, it
         // reads on its stage as the shown tab's does.
         let ink = match form == Form::Rest && !shown {
-            true => self.card_inks().0,
+            true => self.rest_ink(),
             false => self.palette.text(TITLE),
         };
         let unseen = form == Form::Unseen;

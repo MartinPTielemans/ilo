@@ -3251,40 +3251,24 @@ bump-glyph = 0.95
 crossfade = 0.2
 
 [shell.task-card]
-# The owner's drawing (sidebar-and-library, Notes · 36; spec-thread-card): a thread is one outlined
-# card in today's list, among the tabs, and never looks like one. Every ink is the window's ink at
-# an alpha, as a plate's is, so one card reads on a dark window and a light one (light-values: the
-# Light values are the lead's, Proposed). The frame: `padding` in, the row radius, `gap` between
-# its rows, the ink at `fill`, an outline `outline-width` inside at `outline`, and `under` under it
-# in the list. Row 1: the state's glyph, `glyph` square, `glyph-gap` before the title, which is
-# body type on `title-line`, semibold. Rows 2 and 3 start under the title.
-padding = 10.0
+# The owner's drawing (sidebar-and-library, Notes · 36; spec-sidebar, "Thread"; #4095): a thread
+# is a line in today's list, among the tabs. Every ink is the window's ink at an alpha, as a
+# plate's is, so one line reads on a dark window and a light one (light-values: the Light values
+# are the lead's, Proposed). The row radius; the state's glyph, `glyph` square, `glyph-gap` before
+# the title, which is body type on `title-line`.
 radius = 12.0
-gap = 8.0
-under = 4.0
-fill = 0.067
-outline = 0.18
-outline-width = 1.0
 glyph = 16.0
 glyph-gap = 9.0
 title-line = 16.0
-# Row 2: the live line, small type on `live-line` in text-2 (the drawing's 12 is off the scale).
-# Text-2 is a step stronger on a light window, where dark ink at 60% over a light glass falls
-# under the reading floor sooner; a line at rest takes it for its title.
-live-line = 15.0
+# A line at rest takes text-2 for its title. Text-2 is a step stronger on a light window, where
+# dark ink at 60% over a light glass falls under the reading floor sooner.
 text-2 = 0.6
 text-2-light = 0.65
-# Row 3: its pages as icons `icon` square, `icon-gap` apart; text-3 is the quietest ink.
-icon = 14.0
-icon-gap = 5.0
-text-3 = 0.42
-text-3-light = 0.5
 # On the ink: the waiting mark's bars, in `on-primary` (`on-primary-light` on a light window).
 on-primary = 0x161618
 on-primary-light = 0xF3F0E8
-# A line, a tab's (spec-sidebar, "Thread"; #4095): a thread, `line` tall against the rows beside
-# it, `line-x` at each side, with no fill or outline but the shown thread's own shape. The glyph
-# and title sit as on a card's first row. While it needs you it grows a second line under the
+# A line, a tab's: `line` tall against the rows beside it, `line-x` at each side, with no fill or
+# outline but the shown thread's own shape. While it needs you it grows a second line under the
 # title, small type on `needs-line` in the text's ink, at the title's inset, and the pair sits
 # where the title sat, as much room above as below (the lead's 48, Proposed).
 line = 34.0
@@ -3309,11 +3293,10 @@ pause-top = 5.6
 pause-bottom = 10.4
 pause-left = 6.3
 pause-right = 9.7
-# An outside app's card (spec-thread-card, "An outside app's card, told from a thread's"): a line
-# over row 1, `from-line` tall and a `gap` above it, of the product's mark, `from-mark` square in
-# the glyph's column, stroked `from-stroke` in the ink at `from-ink`, then the app's name in small
-# type, text-3, one line, its rows' inset from the inner left edge. On a line, the mark sits at
-# its right, `glyph-gap` after the title.
+# An outside app's line (spec-thread-card, "An outside app's card, told from a thread's"): the
+# product's mark, `from-mark` square, stroked `from-stroke` in the ink at `from-ink`, at the line's
+# right, `glyph-gap` after the title. The conversation's head says the app's name on a line
+# `from-line` tall.
 from-line = 14.0
 from-mark = 12.0
 from-stroke = 1.2

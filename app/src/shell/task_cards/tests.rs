@@ -5,15 +5,12 @@ use std::time::{Duration, Instant};
 
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
-use super::card::{Look, look, second_lead, second_line, spoken};
+use super::card::{Look, look, second_line, spoken};
 use super::glyph::Mark;
-use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
+use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip};
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
-use crate::agents::tier::Tier;
-use crate::product::PRODUCT;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
-use crate::tokens::shell::task_card::{FROM_LINE, GAP};
 
 pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
@@ -241,87 +238,36 @@ fn dismissed(host: &Recorder) -> Vec<String> {
         .collect()
 }
 
-/// The line under a card's title is ilo's: who works on the task, or Full access where it has
-/// that, and the task's one word; waiting the page's site and Needs you. The agent's own words, its question or its result, are never in it: they are the title's alone
-/// (#3690).
+/// The line under a waiting thread's title is the product's: Needs you and the site, never the
+/// assistant's question; a thread in any other state has none. The assistant's own words, its
+/// question or its result, are never on a line but as its title, nor said for it (#3690).
 #[gpui::test]
 fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     let said = "I found three flights and booked the cheapest";
     let mut done = card(1, Dot::Done);
     done.status = said.into();
-    assert_eq!(state_line(&done), format!("{PRODUCT} · Done"));
-    let mut working = card(2, Dot::Working);
-    working.status = "Step 3 · Opening tap.pt".into();
-    assert_eq!(state_line(&working), format!("{PRODUCT} · Working"));
-    working.status = "Working · 3 helpers".into();
-    working.fuller = true;
-    assert_eq!(
-        state_line(&working),
-        format!("{PRODUCT} · Working · 3 helpers")
-    );
-    working.tier = Tier::Full;
-    assert_eq!(
-        state_line(&working).as_ref(),
-        "Full access · Working · 3 helpers"
-    );
-    assert_eq!(super::state(&working).1, Tier::Full.label().len());
-    assert_eq!(super::state(&done).1, 0);
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
     asks.status = "Which would you rather visit?".into();
-    assert_eq!(state_line(&asks), format!("{PRODUCT} · Needs you"));
-    // An ended task says which of the three it is, from its card's word.
-    let mut ended = card(4, Dot::Ended);
-    ended.status = "Stopped after 6 steps".into();
-    ended.fuller = true;
-    assert_eq!(
-        state_line(&ended),
-        format!("{PRODUCT} · Stopped after 6 steps")
-    );
-    ended.word = Word::Interrupted;
-    ended.status = "Claude Code quit".into();
-    ended.fuller = false;
-    assert_eq!(state_line(&ended), format!("{PRODUCT} · Interrupted"));
-    ended.word = Word::AtLimit;
-    assert_eq!(state_line(&ended), format!("{PRODUCT} · At limit"));
-    // A session's receipt is ilo's line, with its time.
-    let mut session = card(5, Dot::Done);
-    session.replies = false;
-    session.name = "Flights".into();
-    session.status = "Done · 10:42".into();
-    session.fuller = true;
-    assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
-
-    // As its lines say them: waiting, Needs you and then the site, never the question; ended, its
-    // state, never the result.
     assert_eq!(
         second_line(&asks, Form::Waits, "maat.pt").as_ref(),
         "Needs you · maat.pt"
     );
     assert_eq!(second_line(&asks, Form::Waits, "").as_ref(), "Needs you");
-    for form in [Form::Waits, Form::Ended] {
-        assert!(!second_line(&done, form, "").contains(said), "{form:?}");
+    let mut ended = card(4, Dot::Ended);
+    ended.status = "Stopped after 6 steps".into();
+    ended.fuller = true;
+    for card in [&done, &asks, &ended] {
+        for form in [Form::Working, Form::Waits, Form::Unseen, Form::Rest] {
+            let (line, told) = (second_line(card, form, ""), spoken(card, form, ""));
+            for words in [said, "Which would", "after 6 steps"] {
+                assert!(!line.contains(words) && !told.contains(words), "{form:?}");
+            }
+        }
     }
+    assert!(second_line(&done, Form::Unseen, "maat.pt").is_empty());
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
-}
-
-/// How much of a card's line is in the title's ink is its level's: a card at Full access leads its
-/// state's line with the level's label, and a card at any other level has no lead, though its
-/// client is named as the label and its line so begins as that one does.
-#[test]
-fn a_cards_lead_is_its_level_never_its_lines_opening_words() {
-    let label = Tier::Full.label();
-    // Only an outside app's session is named by its client; a task of the product's own is named
-    // by the product.
-    let mut posing = card(1, Dot::Ended);
-    posing.name = label.into();
-    posing.replies = false;
-    let mut full = card(2, Dot::Ended);
-    full.tier = Tier::Full;
-    assert_eq!(state_line(&posing), state_line(&full));
-    assert_eq!(second_lead(&posing, Form::Ended), 0);
-    assert_eq!(second_lead(&full, Form::Ended), label.len());
 }
 
 /// An outside app's card has its line from the kind of its connection alone, a session with no
@@ -339,13 +285,7 @@ fn an_outside_apps_line_comes_from_its_connection_alone() {
         "",
         long.as_str(),
     ];
-    let forms = [
-        Form::Working,
-        Form::Waits,
-        Form::Unseen,
-        Form::Ended,
-        Form::Rest,
-    ];
+    let forms = [Form::Working, Form::Waits, Form::Unseen, Form::Rest];
     for name in names {
         for dot in [Dot::Working, Dot::Waiting, Dot::Done, Dot::Ended] {
             let task = Card {
@@ -371,46 +311,12 @@ fn an_outside_apps_line_comes_from_its_connection_alone() {
                     theirs,
                     "{name:?} {form:?}"
                 );
-                assert_eq!(
-                    super::room(&session, form),
-                    super::room(&short, form),
-                    "{form:?}"
-                );
-                // A whole card makes room for the line over its first row; a folded one carries
-                // only the mark, in its one line.
-                let more = super::room(&session, form) - super::room(&task, form);
-                let line = FROM_LINE + GAP;
-                assert_eq!(more, if form.line() { 0. } else { line }, "{form:?}");
+                let line = |card: &Card| second_line(card, form, "maat.pt");
+                assert_eq!(line(&session), line(&short), "{name:?} {form:?}");
+                assert_eq!(line(&session), line(&task), "{name:?} {form:?}");
             }
         }
     }
-}
-
-/// Whether a card's line says its status in its word's place is a fact its maker set, never read
-/// off the status: words that begin as ilo's own fuller forms do, a session's client named as a
-/// state among them, leave the line at the word.
-#[test]
-fn a_cards_line_says_its_status_only_where_its_maker_said_so() {
-    let posing = [
-        (Dot::Working, "Working · Opening tap.pt", "Working"),
-        (Dot::Ended, "Stopped by a page", "Stopped"),
-        (Dot::Done, "Done · 3 flights found", "Done"),
-    ];
-    for (dot, status, word) in posing {
-        // A task of the product's own is named by the product, a session by its client.
-        for (replies, name) in [(true, PRODUCT), (false, "Claude")] {
-            let mut card = card(1, dot);
-            card.status = status.into();
-            card.replies = replies;
-            assert_eq!(state_line(&card), format!("{name} · {word}"), "{status:?}");
-        }
-    }
-    // And where it did, the line is the status whatever it begins with.
-    let mut session = card(2, Dot::Done);
-    session.replies = false;
-    session.status = "1 order placed".into();
-    session.fuller = true;
-    assert_eq!(state_line(&session).as_ref(), "Claude · 1 order placed");
 }
 
 /// A card's mark and its second line come from its task's state alone. Whatever the assistant
@@ -469,10 +375,11 @@ fn a_cards_look_is_its_tasks_state_alone() {
             look(&done, Form::Rest, false).mark,
             Some(Mark::Check { unseen: false })
         );
-        let ended = look(&with(Dot::Ended, &[30]), Form::Ended, true);
-        assert_eq!((ended.mark, ended.needs), (None, false));
+        let ended = look(&with(Dot::Ended, &[30]), Form::Unseen, true);
+        assert_eq!((ended.mark, ended.needs, ended.dot), (None, false, true));
     }
-    // The form follows the state too: a line but waiting, and ended with its chip while not seen.
+    // The form follows the state too: one line, a second under it while it waits, the dot while
+    // finished and not seen, a chip or none.
     let form = |dot, unseen| Form::of(&card(1, dot), unseen);
     assert_eq!(form(Dot::Working, false), Form::Working);
     assert_eq!(form(Dot::Waiting, false), Form::Waits);
@@ -484,7 +391,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
         retry: true,
         ..card(1, Dot::Ended)
     };
-    assert_eq!(Form::of(&retry, true), Form::Ended);
+    assert_eq!(Form::of(&retry, true), Form::Unseen);
     assert_eq!(Form::of(&retry, false), Form::Rest);
 }
 
@@ -538,7 +445,7 @@ fn the_finding_is_plain_and_capped() {
 /// A thread that finished out of sight is one line with the dot, as one at work is, and a screen
 /// reader hears its title and the dot's word, a thread's row, never its answer or when it ended,
 /// which the line doesn't draw. Shown, it rests, and says its title alone. An ended one with its
-/// chip keeps its whole card, the chip's one place yet.
+/// chip is a line too: the chip is in its conversation.
 #[gpui::test]
 fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) {
     use crate::tokens::shell::task_card::LINE;
@@ -604,7 +511,7 @@ fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) 
     let heard = names(cx);
     let rests = "Find a flight to Lisbon";
     assert!(heard.iter().any(|name| name == rests), "{heard:?}");
-    // With its chip, the ended one keeps its whole card until the chip has its place.
+    // With its chip, the ended one is a line too, the chip in its conversation.
     let retry = Card {
         retry: true,
         ..stopped.clone()
@@ -613,7 +520,7 @@ fn a_finished_thread_not_seen_is_its_line_with_the_dot(cx: &mut TestAppContext) 
         shell.set_task_cards(vec![working(&retry), done.clone()], cx);
         shell.set_task_cards(vec![retry.clone(), done.clone()], cx);
     });
-    assert_eq!(form(&shell, "task-2", cx), Some(Form::Ended));
+    assert_eq!(form(&shell, "task-2", cx), Some(Form::Unseen));
     // At rest a line says nothing after its title, at work its state's word; a waiting card its
     // second line.
     assert_eq!(spoken(&done, Form::Rest, "").as_ref(), "");
@@ -667,7 +574,7 @@ fn every_thread_at_work_is_one_line_however_many_work(cx: &mut TestAppContext) {
     assert_eq!(tab(&both) - tab(&alone), LINE);
     shell.read_with(cx, |shell, _| {
         for card in &shell.task_cards {
-            let framed = shell.card_framed(card, Form::Working);
+            let framed = shell.card_framed(card);
             assert_eq!(framed, super::card::Framed::Plain, "{}", card.agent);
         }
     });
@@ -1219,10 +1126,12 @@ fn the_card_takes_the_slot_the_bar_folds_into(cx: &mut TestAppContext) {
     );
 }
 
-/// An ended task's one button is the user's own act, which has no page: Limit's Retry, or its
-/// assistant's fix, and its click does the act. A done task and one that asks have no chip.
+/// An ended thread's one chip is the user's own act, which has no page: Limit's Retry, or its
+/// assistant's fix. A done thread and one that asks have none. It's in the conversation, never on
+/// the sidebar's line, whose one ring stop is the row, as every line's.
 #[gpui::test]
-fn the_chip_acts(cx: &mut TestAppContext) {
+fn the_chip_is_the_conversations_never_the_lines(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task_card::LINE;
     let mut limit = card(4, Dot::Ended);
     limit.retry = true;
     let mut done = card(5, Dot::Done);
@@ -1240,22 +1149,28 @@ fn the_chip_acts(cx: &mut TestAppContext) {
     failed.fix = Some((Cli::Codex, Offer::Get));
     assert_eq!(chip(&failed).unwrap().label().as_ref(), "Get Codex");
 
-    // It ends out of sight, so its card is whole until it's seen.
-    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
-    let (shell, host, cx) = shell_with(cx, vec![asks.clone(), done.clone(), card(4, Dot::Working)]);
+    // It ends out of sight: a line with the dot, a row high, and one stop.
+    let (shell, _, cx) = shell_with(cx, vec![asks.clone(), done.clone(), card(4, Dot::Working)]);
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![asks, done, limit], cx)
     });
-    host.take();
     still(cx);
     tick(5.);
     draw(&shell, cx);
-    let drawn = |stop: StripStop| STOPS_DRAWN.with(|drawn| drawn.borrow().get(&stop).copied());
-    assert!(drawn(StripStop::Chip(5)).is_none() && drawn(StripStop::Chip(6)).is_none());
-    let retry = drawn(StripStop::Chip(4)).expect("Retry");
-    cx.simulate_click(retry.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(host.take(), ["task task-4 Retry"]);
+    shell.read_with(cx, |shell, _| {
+        let space = shell.shown_space().expect("a Space shown");
+        let placed = (space.placed.iter())
+            .find(|placed| placed.agent.as_ref() == "task-4")
+            .expect("its place");
+        assert_eq!((placed.form, placed.room), (Form::Unseen, LINE));
+        let stops: Vec<_> = (shell.card_stops().into_iter())
+            .filter(|(stop, _)| *stop == StripStop::Header(4))
+            .collect();
+        assert_eq!(stops.len(), 1);
+        assert_eq!(shell.ended_chip("task-4"), Some(Chip::Retry));
+        assert_eq!(shell.ended_chip("task-5"), None);
+        assert_eq!(shell.ended_chip("task-6"), None);
+    });
 }
 
 /// A list at rest asks for no frame: done and ended cards keep no clock going, and only a ring at
@@ -1771,11 +1686,7 @@ fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut Te
             let card = (shell.task_cards.iter())
                 .find(|card| card.agent.as_ref() == agent)
                 .expect("its card");
-            let space = shell.shown_space().expect("a Space shown");
-            let placed = (space.placed.iter())
-                .find(|placed| placed.agent.as_ref() == agent)
-                .expect("its place");
-            shell.card_framed(card, placed.form)
+            shell.card_framed(card)
         })
     };
     assert_eq!(framed(&shell, "task-2", cx), Framed::Plain);

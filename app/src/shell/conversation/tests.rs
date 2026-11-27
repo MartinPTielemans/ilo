@@ -5643,3 +5643,45 @@ fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut Te
         "an ended thread draws the sign"
     );
 }
+
+/// An ended thread's chip, Limit's Retry or its assistant's fix, stands under its conversation's
+/// last line, where the sidebar's line no longer has it, and its click does the act. A thread
+/// that isn't ended has none there.
+#[gpui::test]
+fn an_ended_threads_chip_is_under_its_last_line(cx: &mut TestAppContext) {
+    let limit = Card {
+        dot: Dot::Ended,
+        word: Word::AtLimit,
+        retry: true,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(limit.clone(), cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let talk = Conversation {
+        stoppable: false,
+        live: Default::default(),
+        ..conversation(1)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let chip = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.chip_drawn.get())
+    };
+    let retry = chip(&view, cx).expect("Retry wasn't drawn under the conversation's last line");
+    host.take();
+    cx.simulate_click(retry.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(host.take(), ["task task-1 Retry"]);
+
+    let done = Card {
+        dot: Dot::Done,
+        word: Word::Done,
+        retry: false,
+        ..limit
+    };
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(chip(&view, cx), None);
+}

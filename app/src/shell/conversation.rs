@@ -280,6 +280,8 @@ pub struct TalkView {
     /// Where an outside app's line was drawn last in the panel's head, for a test.
     from_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// Where an ended thread's chip was drawn last, for a test.
+    chip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Each ilo line's button, by its line's key, where it was drawn last and since when it has
     /// stood there: one that widens what the agent may do takes no press until it has stood a
     /// moment (`armed`).
@@ -515,6 +517,7 @@ impl Shell {
                     composer_drawn: Rc::default(),
                     from_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
+                    chip_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
                     ilo_keys: None,
@@ -1507,8 +1510,8 @@ impl TalkView {
                 .child(icon)
                 .on_click(cx.listener(move |view, _, _, cx| view.stand(tab, cx)))
         });
-        // An outside app's session, from the kind of its connection alone, has the card's line
-        // under its title: the product's mark and the name it gave.
+        // An outside app's session, from the kind of its connection alone, has a line under its
+        // title: the product's mark and the name it gave.
         let name = shown.map(|shown| shown.name.clone()).unwrap_or_default();
         let drawn = self.from_drawn.clone();
         let from = (!self.replies).then(|| {
@@ -2810,7 +2813,32 @@ impl TalkView {
                 .on_click(cx.listener(|view, _, _, cx| view.act(TaskAction::Open, cx)));
             lifted(chip, self.motion.came(Key::Open), CHIPS, look)
         });
-        let chips: Vec<_> = answers.chain(open).collect();
+        // An ended thread's chip, Retry or its assistant's fix, the user's own act: under its last
+        // line, where the thread ended, as its sidebar line is the title alone.
+        let ended = (self.shell.upgrade())
+            .and_then(|shell| shell.read(cx).ended_chip(&shown.agent))
+            .map(|chip| {
+                let (agent, label) = (shown.agent.clone(), chip.label());
+                let drawn = self.chip_drawn.clone();
+                page_chip(palette, "conversation-chip", label.clone(), None)
+                    .relative()
+                    .child(
+                        canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
+                    .when(look.a11y, |button| {
+                        button.role(Role::Button).aria_label(label)
+                    })
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        let agent = agent.clone();
+                        log!("browser: command run-chip via conversation");
+                        (view.shell)
+                            .update(cx, |shell, cx| shell.run_chip(agent, chip, cx))
+                            .ok();
+                    }))
+            });
+        let chips: Vec<_> = answers.chain(open).chain(ended).collect();
         if !chips.is_empty() {
             lines.push(
                 div()
@@ -4685,6 +4713,7 @@ impl Render for TalkView {
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         self.reply_drawn.set(None);
+        self.chip_drawn.set(None);
         self.sign_drawn.set(None);
         self.composer_drawn.set(None);
         self.speaker_drawn.set(None);

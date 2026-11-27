@@ -25,8 +25,6 @@ use crate::tokens::shell::{KEYED, KEYED_RING};
 pub(super) enum StripStop {
     /// A task's card in Today, by its task's number.
     Header(u64),
-    /// The button on a task's card, Show Page or an ended task's chip, by its task's number.
-    Chip(u64),
     /// The page: the panel's page row's words for an agent's page, the page itself for one the
     /// user holds.
     Page,
@@ -75,7 +73,7 @@ pub(super) struct PageEnds {
 impl StripStop {
     /// Whether it's a card's, in Today's list, which the arrows go over with the rows.
     pub(super) fn at_foot(self) -> bool {
-        matches!(self, StripStop::Header(_) | StripStop::Chip(_))
+        matches!(self, StripStop::Header(_))
     }
 }
 
@@ -173,7 +171,7 @@ impl Shell {
     /// as a press there would take the page over.
     pub(super) fn key_strip_show(&mut self, stop: StripStop, cx: &mut Context<Self>) {
         match stop {
-            StripStop::Header(_) | StripStop::Chip(_) => self.key_card_show(stop, cx),
+            StripStop::Header(_) => self.key_card_show(stop, cx),
             StripStop::Page => {}
             StripStop::TakeOver | StripStop::HandBack => {
                 let (Some(agent), Some((_, tab))) =
@@ -355,7 +353,6 @@ impl Shell {
 fn strip_stop_name(stop: StripStop) -> &'static str {
     match stop {
         StripStop::Header(_) => "header",
-        StripStop::Chip(_) => "chip",
         StripStop::Page => "page",
         StripStop::TakeOver => "take-over",
         StripStop::HandBack => "hand-back",

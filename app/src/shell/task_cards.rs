@@ -37,17 +37,14 @@ use super::{
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word, head_name};
-use crate::agents::tier::Tier;
+use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::needs_you::Told;
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     CONTENT, CROSSFADE, FADE, FOLD, GHOST, GHOST_CONTENT, GHOST_DELAY, GHOST_LAND, GHOST_STAGGER,
 };
-use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
-use crate::tokens::shell::task_card::{
-    FROM_LINE, GAP, ICON, LINE, LIVE_LINE, NEEDS_LINE, PADDING, TITLE_LINE, UNDER,
-};
+use crate::tokens::shell::task::{GHOST_RADIUS, GLYPH, STATUS, STOPPED};
+use crate::tokens::shell::task_card::{LINE, NEEDS_LINE};
 use glyph::{Look, State};
 use motion::{Curve, Ease};
 
@@ -94,7 +91,8 @@ const SLOT: u64 = u64::MAX - 1;
 /// How long Open's pages may take to reach the list before their flight is let go.
 const OPENING_WAIT: Duration = Duration::from_secs(3);
 
-/// The one chip on an ended task's card: an act that is the user's and has no page.
+/// An ended thread's one chip, under its conversation's last line: an act that is the user's and
+/// has no page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Chip {
     Retry,
@@ -103,7 +101,7 @@ pub(super) enum Chip {
 }
 
 impl Chip {
-    fn label(self) -> SharedString {
+    pub(super) fn label(self) -> SharedString {
         match self {
             Chip::Retry => "Retry".into(),
             Chip::Assistant(cli, offer) => offer.label(cli).unwrap_or_default().into(),
@@ -111,34 +109,9 @@ impl Chip {
     }
 }
 
-/// A card's chip: a failure's fix from its assistant's row, else Limit's Retry.
+/// A thread's chip: a failure's fix from its assistant's row, else Limit's Retry.
 fn chip(card: &Card) -> Option<Chip> {
     (card.fix.map(|(cli, offer)| Chip::Assistant(cli, offer))).or(card.retry.then_some(Chip::Retry))
-}
-
-/// The line a card says its task's state on, but at work and waiting: who works on the task as a
-/// thread's rows name it (`head_name`), or Full access where it has that, and its state, in ilo's
-/// words alone. The agent's own words are the title's (#3690). The state is the task's one word,
-/// in the fuller form its card has for it where that names the same state: "Stopped after 6
-/// steps", "Working · 3 helpers".
-#[cfg(test)]
-fn state_line(card: &Card) -> SharedString {
-    state(card).0
-}
-
-/// A card's state line and how much of it is its lead, Full access, which is in the title's ink:
-/// all of the level's label on a card at that level, and none of any other card's, whatever its
-/// line begins with.
-fn state(card: &Card) -> (SharedString, usize) {
-    let state = match card.fuller {
-        true => card.status.as_ref(),
-        false => card.word.after_name(),
-    };
-    let (lead, led) = match card.tier {
-        Tier::Full => (Tier::Full.label(), Tier::Full.label().len()),
-        _ => (head_name(&card.name, !card.replies), 0),
-    };
-    (format!("{lead} · {state}").into(), led)
 }
 
 /// A task's page's word and whether it has the outline, as `Shell::page_mark` says.
@@ -187,11 +160,9 @@ pub(super) enum Form {
     Working,
     /// Waits on the user: the line, with a second line under the title that says so.
     Waits,
-    /// Finished and not seen since: one line with the dot, an answer's title in the text's ink.
+    /// Finished and not seen since: one line with the dot, its title in the text's ink. An ended
+    /// one's chip is in its conversation.
     Unseen,
-    /// Stopped, interrupted or at its limit, not yet seen, with its chip: the whole card, until
-    /// the chip has its place in the conversation.
-    Ended,
     /// Done and seen, or stopped, interrupted or at its limit and seen: one line at rest.
     Rest,
 }
@@ -201,31 +172,19 @@ impl Form {
         match (card.dot, unseen) {
             (Dot::Working, _) => Form::Working,
             (Dot::Waiting, _) => Form::Waits,
-            (Dot::Ended, true) if chip(card).is_some() => Form::Ended,
             (Dot::Done | Dot::Ended, true) => Form::Unseen,
             (Dot::Done | Dot::Ended, false) => Form::Rest,
         }
     }
-
-    pub(super) fn line(self) -> bool {
-        self != Form::Ended
-    }
 }
 
 /// The room a card in `form` takes in the list: a line's, a tab row's, against the rows beside it
-/// as a tab's is, and the second line's under it while it waits; a whole card's, the room under it
-/// with it: its padding, its title's line, its second line and its chip's row, a gap between each.
-fn room(card: &Card, form: Form) -> f32 {
+/// as a tab's is, and the second line's under it while it waits.
+fn room(form: Form) -> f32 {
     match form {
-        Form::Waits => return LINE + NEEDS_LINE,
-        Form::Ended => {}
-        _ => return LINE,
+        Form::Waits => LINE + NEEDS_LINE,
+        _ => LINE,
     }
-    let from = match card::outside(card) {
-        true => FROM_LINE + GAP,
-        false => 0.,
-    };
-    2. * PADDING + from + TITLE_LINE + GAP + LIVE_LINE + GAP + CHIP_HEIGHT.max(ICON) + UNDER
 }
 
 /// The room ⌘T's slot takes: a line at work's, so nothing moves as the task's line takes it.
@@ -615,7 +574,7 @@ impl Shell {
                         above: stood.map_or(top, |was| was.above),
                         lead: away.then_some(0),
                         form,
-                        room: room(card, form),
+                        room: room(form),
                     }
                 })
                 .collect();
@@ -831,21 +790,14 @@ impl Shell {
         let layout = self.layout();
         let mut stops = Vec::new();
         for placed in self.shown_placed() {
-            let Some(card) = self
-                .task_cards
-                .iter()
-                .find(|card| card.agent == placed.agent)
-            else {
+            if !(self.task_cards.iter()).any(|card| card.agent == placed.agent) {
                 continue;
-            };
+            }
             let top = layout
                 .get(&Slot::Task(placed.n))
                 .copied()
                 .unwrap_or_default();
             stops.push((StripStop::Header(placed.n), top));
-            if placed.form == Form::Ended && chip(card).is_some() {
-                stops.push((StripStop::Chip(placed.n), top));
-            }
         }
         stops
     }
@@ -858,11 +810,6 @@ impl Shell {
                     self.leave_strip("header", cx);
                     log!("browser: command show-task via strip keys");
                     self.show_line(agent, cx);
-                }
-            }
-            StripStop::Chip(n) => {
-                if let Some(agent) = self.card_agent(n) {
-                    self.card_button(agent, cx);
                 }
             }
             _ => {}
@@ -921,14 +868,10 @@ impl Shell {
         }
     }
 
-    /// The chip on an ended thread's card.
-    fn card_button(&mut self, agent: SharedString, cx: &mut Context<Self>) {
-        let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
-            return;
-        };
-        if let Some(chip) = chip(card) {
-            self.run_chip(agent, chip, cx);
-        }
+    /// The chip of `agent`'s thread, ended, which its conversation draws under its last line.
+    pub(super) fn ended_chip(&self, agent: &str) -> Option<Chip> {
+        let card = self.task_cards.iter().find(|card| card.agent == agent)?;
+        (card.dot == Dot::Ended).then(|| chip(card)).flatten()
     }
 
     /// The page a waiting task waits on the user in, else its first.
@@ -967,7 +910,7 @@ impl Shell {
     }
 
     /// A chip's click: the user's own act on the task.
-    fn run_chip(&mut self, agent: SharedString, chip: Chip, cx: &mut Context<Self>) {
+    pub(super) fn run_chip(&mut self, agent: SharedString, chip: Chip, cx: &mut Context<Self>) {
         match chip {
             Chip::Retry => self.browser.task(agent, TaskAction::Retry, cx),
             Chip::Assistant(cli, Offer::Get) => {
