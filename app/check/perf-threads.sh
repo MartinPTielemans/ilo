@@ -7,7 +7,8 @@
 # - Launches with 10, 100 and 1,000 kept threads, 5 each, seeded by tools/seed-kept-threads.py into
 #   the check's own profile before each, as a launch removes all but 10: link to page painted and
 #   the launch window on screen.
-# A build that draws no waiting knot, or no edge knot, logs neither line below, and that leg says
+# A build that draws no waiting knot logs no line for it, and one that draws no edge knot shows no
+# child window for it in the driver's layout (nothing logs whether it shows, #4091); that leg says
 # "skip: ...: not in this build" and counts as a skip: a leg that measured nothing never passes.
 # Its threads run on a stand-in for Claude Code's claude, in a home of the run's own, which every
 # launch here gets with a login shell that gives the stand-in's folder alone, so the app never finds
@@ -26,9 +27,14 @@ mkdir -p "$perf_dir"
 on_cpu=$(runner_cpu)
 perf_page
 echo "perf: on $on_cpu"
-# The lines a build with each knot logs as it draws one.
+# The line a build with the waiting knot logs as it draws one.
 knot_moving() { echo "^browser: task card $1 knot moving\$"; }
-edge_knot() { echo "^browser: edge knot $1 shown\$"; }
+# Whether the window has a child window, which with the sidebar hidden and in and a thread waiting is
+# the tab at its edge, as the driver's layout lists it.
+edge_knot_shown() {
+  send layout
+  sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child'
+}
 
 home="$PWD/$out/threads-home"
 rm -rf "$home"
@@ -151,7 +157,7 @@ knot=
 edge=
 ! threads_shows "$(knot_moving "$thread")" 30 || knot=1
 threads_sidebar hidden
-! threads_shows "$(edge_knot "$thread")" 30 || edge=1
+! edge_knot_shown || edge=1
 threads_sidebar shown
 threads_quit
 measured=
@@ -161,7 +167,7 @@ skipped=
 [ -n "$knot" ] ||
   echo "skip: the waiting knot: not in this build, which logs no $(knot_moving task-N)"
 [ -n "$edge" ] ||
-  echo "skip: the edge knot: not in this build, which logs no $(edge_knot task-N)"
+  echo "skip: the edge knot: not in this build, whose window shows no child window for it"
 
 # A session at $1 tabs of perf's page: idle with no thread, then with one waiting, then with it
 # waiting at the window's edge, each where the build draws its knot.
