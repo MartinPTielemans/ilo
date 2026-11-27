@@ -5,7 +5,7 @@ use std::time::Instant;
 use std::{cell::Cell, f32::consts::FRAC_PI_2, time::Duration};
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, Hsla, MouseButton,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, MouseButton,
     MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Rgba, Role, SharedString,
     Transformation, Window, canvas, div, prelude::*, px, svg,
 };
@@ -34,7 +34,7 @@ use super::{
     sidebar_keys,
 };
 use crate::palette::Tone;
-use crate::tokens::shell::{DIVIDER, LIGHT_SEGMENT_RULE, SEGMENT_RULE};
+use crate::tokens::shell::{LIGHT_SEGMENT_RULE, SEGMENT_RULE};
 use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
@@ -476,7 +476,12 @@ impl Shell {
             .bottom(px(inset))
             .left(px(PLATE_INSET + depth as f32 * FOLDER_INDENT))
             .right(px(PLATE_INSET))
-            .child(super::pane::pane(look, PLATE_RADIUS, opacity))
+            .child(super::pane::pane(
+                look,
+                &self.palette,
+                PLATE_RADIUS,
+                opacity,
+            ))
     }
 
     /// Whether the page area starts at the sidebar's edge, where a line of the sidebar wears the

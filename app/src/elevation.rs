@@ -71,6 +71,17 @@ fn invisible_past(color: u32, blur: f32) -> f32 {
     distance
 }
 
+/// A shadow of `color`, falling `y`, with CSS's `blur`.
+fn box_shadow(color: u32, y: f32, blur: f32) -> BoxShadow {
+    BoxShadow {
+        color: rgba(color).into(),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(sigma(blur)),
+        spread_radius: px(0.),
+        inset: false,
+    }
+}
+
 /// How far past what it shadows a drop shadow of `color`, falling `y` with `blur`, can be seen.
 fn reach_of(color: u32, y: f32, blur: f32) -> Reach {
     let sides = invisible_past(color, blur);
@@ -154,18 +165,17 @@ impl Level {
     /// For a surface GPUI draws, which is wholly inside its window: the drop shadow, and over it
     /// the outline.
     pub fn shadow(self) -> Vec<BoxShadow> {
-        let (color, y, blur) = self.drop();
-        let shadow = |color: u32, y: f32, blur: f32| BoxShadow {
-            color: rgba(color).into(),
-            offset: point(px(0.), px(y)),
-            blur_radius: px(sigma(blur)),
-            spread_radius: px(0.),
-            inset: false,
-        };
         vec![
-            shadow(color, y, blur),
-            shadow(t::OUTLINE, 0., t::OUTLINE_BLUR),
+            self.drop_shadow(),
+            box_shadow(t::OUTLINE, 0., t::OUTLINE_BLUR),
         ]
+    }
+
+    /// The drop shadow alone, for a surface on the sidebar's glass rather than over a page, which
+    /// has no page under it for the outline to read on: the open tab's pane (#4398).
+    pub fn drop_shadow(self) -> BoxShadow {
+        let (color, y, blur) = self.drop();
+        box_shadow(color, y, blur)
     }
 
     /// For a surface the host puts a shadow window under.

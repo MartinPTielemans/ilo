@@ -17,7 +17,7 @@ use crate::{
     },
     theme::{self, Appearance},
     tokens::palette::SHOWN,
-    tokens::shell::pane::{DARK_TOP, HOVERED, LIGHT_FILL},
+    tokens::selected::pane::{DARK_TOP, HOVERED, LIGHT_FILL},
     tokens::shell::{
         DIVIDER, FAVICON_SIZE, FAVICON_X, HAIRLINE, PAGE_OUTLINE, PAGE_OUTLINE_LIGHT, PLATE_HEIGHT,
         PLATE_INSET,

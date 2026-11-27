@@ -313,7 +313,7 @@ impl Shell {
                     glow: None,
                     hovered: 0.,
                 };
-                let shape = crate::shell::pane::pane(look, RADIUS, 1.);
+                let shape = crate::shell::pane::pane(look, &self.palette, RADIUS, 1.);
                 // Placed from the frame's corner: left to itself it starts inside the room.
                 (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
             }

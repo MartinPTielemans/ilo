@@ -4,15 +4,13 @@
 //! quads the plain plate did and decodes nothing it hasn't (tile_theme's `main_colour`).
 
 use gpui::{
-    BoxShadow, Div, Hsla, Rgba, Styled, div, linear_color_stop, linear_gradient, point, prelude::*,
-    px, rgba,
+    Div, Hsla, Rgba, Styled, div, linear_color_stop, linear_gradient, prelude::*, px, rgba,
 };
 
-use crate::palette::Tone;
-use crate::tokens::shell::pane::{
-    DARK_BOTTOM, DARK_EDGE, DARK_HAIRLINE, DARK_SHADOW, DARK_SHADOW_BLUR, DARK_SHADOW_Y, DARK_TOP,
-    GLOW_DARK, GLOW_LIGHT, GLOW_REACH, HOVERED, LIGHT_FILL, LIGHT_HAIRLINE, LIGHT_SHADOW,
-    LIGHT_SHADOW_BLUR, LIGHT_SHADOW_Y,
+use crate::elevation::Level;
+use crate::palette::{Palette, Tone};
+use crate::tokens::selected::pane::{
+    DARK_BOTTOM, DARK_EDGE, DARK_TOP, GLOW_DARK, GLOW_LIGHT, GLOW_REACH, HOVERED, LIGHT_FILL,
 };
 
 #[cfg(test)]
@@ -39,24 +37,20 @@ pub(super) struct Pane {
     pub hovered: f32,
 }
 
-/// The pane, as big as it's laid out, with corners of `corner`, at `opacity`.
-pub(super) fn pane(look: Pane, corner: f32, opacity: f32) -> Div {
+/// The pane in `palette`'s look, as big as it's laid out, with corners of `corner`, at `opacity`.
+/// It's at the lifted level, the resting one: its rim in the palette's ink, and its drop shadow.
+pub(super) fn pane(look: Pane, palette: &Palette, corner: f32, opacity: f32) -> Div {
     let step = HOVERED * look.hovered;
     let stronger = |color: u32| stronger(color, look.hovered, opacity);
-    let faded = |color: u32| Hsla::from(rgba(color)).opacity(opacity);
-    let shadow = |color: u32, y: f32, blur: f32| BoxShadow {
-        color: faded(color),
-        offset: point(px(0.), px(y)),
-        // A CSS blur is twice the Gaussian's deviation, which GPUI takes.
-        blur_radius: px(blur / 2.),
-        spread_radius: px(0.),
-        inset: false,
-    };
-    let base = div()
+    let mut shadow = Level::Resting.drop_shadow();
+    shadow.color = shadow.color.opacity(opacity);
+    let base = (div()
         .absolute()
         .inset_0()
         .rounded(px(corner))
-        .border(px(1.));
+        .border(px(1.)))
+    .border_color(Level::Resting.rim_in(palette).opacity(opacity))
+    .shadow(vec![shadow]);
     let (base, glow_at) = match look.tone {
         Tone::Dark => (
             base.bg(linear_gradient(
@@ -64,8 +58,6 @@ pub(super) fn pane(look: Pane, corner: f32, opacity: f32) -> Div {
                 linear_color_stop(stronger(DARK_TOP), 0.),
                 linear_color_stop(stronger(DARK_BOTTOM), 1.),
             ))
-            .border_color(faded(DARK_HAIRLINE))
-            .shadow(vec![shadow(DARK_SHADOW, DARK_SHADOW_Y, DARK_SHADOW_BLUR)])
             // The top edge catches the light, inside the corners' curve.
             .child(
                 div()
@@ -74,20 +66,11 @@ pub(super) fn pane(look: Pane, corner: f32, opacity: f32) -> Div {
                     .left(px(corner))
                     .right(px(corner))
                     .h(px(1.))
-                    .bg(faded(DARK_EDGE)),
+                    .bg(Hsla::from(rgba(DARK_EDGE)).opacity(opacity)),
             ),
             GLOW_DARK,
         ),
-        Tone::Light => (
-            base.bg(stronger(LIGHT_FILL))
-                .border_color(faded(LIGHT_HAIRLINE))
-                .shadow(vec![shadow(
-                    LIGHT_SHADOW,
-                    LIGHT_SHADOW_Y,
-                    LIGHT_SHADOW_BLUR,
-                )]),
-            GLOW_LIGHT,
-        ),
+        Tone::Light => (base.bg(stronger(LIGHT_FILL)), GLOW_LIGHT),
     };
     // Its box is the border's, outside the room its children are laid in.
     #[cfg(test)]

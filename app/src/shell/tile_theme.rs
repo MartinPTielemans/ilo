@@ -12,7 +12,7 @@ use crate::palette::Tone;
 
 /// The icon is looked at, and blurred, at no more than this on its long side.
 const MAX_SIDE: usize = 32;
-use crate::tokens::shell::pane::{GLOW_SATURATION, GLOW_SHARE, GLOW_VALUE};
+use crate::tokens::selected::pane::{GLOW_SATURATION, GLOW_SHARE, GLOW_VALUE};
 use crate::tokens::shell::tile_theme::BLACK;
 use crate::tokens::shell::tile_theme::BLUR_OPACITY;
 use crate::tokens::shell::tile_theme::BLUR_SCALE;
