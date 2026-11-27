@@ -807,6 +807,27 @@ bool Key(NSWindow* window,
 constexpr CGEventField kWindowNumberField = (CGEventField)51;
 extern "C" void CGEventSetWindowLocation(CGEventRef event, CGPoint location);
 
+// Where a driven wheel event goes: its window, and its place there and on screen as the same point.
+// On macOS 14 an event placed only in its window landed outside it (#4354).
+struct WheelPlace {
+  long window_number;
+  CGPoint in_window;
+  CGPoint on_screen;
+};
+
+WheelPlace WheelAt(NSWindow* window, double x, double y) {
+  NSPoint screen = [window convertPointToScreen:NSMakePoint(x, NSHeight(window.frame) - y)];
+  // Quartz's screen points start at the top left of the menu bar's screen, AppKit's at its bottom.
+  CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+  return {window.windowNumber, CGPointMake(x, y), CGPointMake(screen.x, top - screen.y)};
+}
+
+void Place(CGEventRef event, const WheelPlace& place) {
+  CGEventSetIntegerValueField(event, kWindowNumberField, place.window_number);
+  CGEventSetLocation(event, place.on_screen);
+  CGEventSetWindowLocation(event, place.in_window);
+}
+
 }  // namespace
 
 // host.mm's, as AppKit has no way to make a swipe event of one's own.
@@ -891,7 +912,7 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
 }
 
 void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^done)(void)) {
-  long window_number = window.windowNumber;
+  WheelPlace place = WheelAt(window, x, y);
   __block int left = count;
   dispatch_source_t timer =
       dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
@@ -899,8 +920,7 @@ void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^d
   dispatch_source_set_event_handler(timer, ^{
     CGEventRef event =
         CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1, (int32_t)-dy, 0, 0);
-    CGEventSetIntegerValueField(event, kWindowNumberField, window_number);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, place);
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
     if (--left == 0) {
@@ -915,13 +935,12 @@ void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^d
 // ends, with the phases AppKit reads from Quartz's field.
 void Swipe(NSWindow* window, double x, double y, double dx, double dy, int count, int rest_ms,
            void (^done)(void)) {
-  long window_number = window.windowNumber;
+  WheelPlace place = WheelAt(window, x, y);
   void (^post)(double, double, int64_t) = ^(double across, double along, int64_t phase) {
     CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 2,
                                                       (int32_t)along, (int32_t)across, 0);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
-    CGEventSetIntegerValueField(event, kWindowNumberField, window_number);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, place);
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
   };
@@ -1550,8 +1569,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       // mouse's lines, and the Mini Player moves with it as the content would.
       CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1,
                                                         (int32_t)(-notches * 120), 0, 0);
-      CGEventSetIntegerValueField(event, kWindowNumberField, pip.windowNumber);
-      CGEventSetWindowLocation(event, CGPointMake(x, y));
+      Place(event, WheelAt(pip, x, y));
       // AppKit's modifier flags are Quartz's bits.
       CGEventSetFlags(event, (CGEventFlags)Modifiers(words));
       Pointed(pip, NSMakePoint(x, NSHeight(pip.frame) - y));
@@ -1975,8 +1993,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     Convert(window, target, &x, &y);
     CGEventRef event =
         CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitLine, 2, 0, (int32_t)dx, 0);
-    CGEventSetIntegerValueField(event, kWindowNumberField, target.windowNumber);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, WheelAt(target, x, y));
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
     done();
