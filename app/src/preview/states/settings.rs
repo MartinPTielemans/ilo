@@ -21,6 +21,9 @@ pub(crate) enum Pictures {
     Assistants { signed_in: bool },
     /// Your assistant with one signed in, its Model chosen, and one not, then Notifications.
     Models,
+    /// Claude Code's install from its row (#4100): missing, installing and failed, or `installed`
+    /// by ilo with its way out, signed out and in.
+    Install { installed: bool },
     /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
     SiteNotes { open: bool },
     /// Threads' first row, your assistant's switch, `on` or off.
@@ -134,7 +137,9 @@ impl gpui::Render for PicturesPage {
             Pictures::Appearance { .. } => Section::Window,
             Pictures::General => Section::General,
             Pictures::CommandLine(_) => Section::OtherApps,
-            Pictures::Assistants { .. } | Pictures::Models => Section::Models,
+            Pictures::Assistants { .. } | Pictures::Models | Pictures::Install { .. } => {
+                Section::Models
+            }
             Pictures::SiteNotes { .. } => Section::Access,
             Pictures::Threads { .. } => Section::Threads,
         };
@@ -488,7 +493,7 @@ impl gpui::Render for PicturesPage {
                     (Some("Command line"), vec![command]),
                 ]
             }
-            Pictures::Assistants { .. } | Pictures::Models => {
+            Pictures::Assistants { .. } | Pictures::Models | Pictures::Install { .. } => {
                 use browser::agents::ready::Ready;
                 use browser::agents::runner::Cli;
                 use browser::agents::sign_in::{Row, shown};
@@ -528,6 +533,87 @@ impl gpui::Render for PicturesPage {
                 // Under the assistants, as Settings draws it.
                 under = Some(browser::settings_rows::SIGN_INS_STAY);
                 match self.shown {
+                    Pictures::Install { installed: false } => {
+                        let offline =
+                            Row::InstallFailed(Some(browser::agents::install::OFFLINE.into()));
+                        nested = Vec::new();
+                        vec![
+                            (
+                                Some("Your assistant"),
+                                vec![
+                                    row(Cli::Claude, Ready::NotFound, None, Row::Idle, false),
+                                    row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
+                                ],
+                            ),
+                            (
+                                Some("Installing"),
+                                vec![row(
+                                    Cli::Claude,
+                                    Ready::NotFound,
+                                    None,
+                                    Row::Installing,
+                                    false,
+                                )],
+                            ),
+                            (
+                                Some("Failed"),
+                                vec![
+                                    row(Cli::Claude, Ready::NotFound, None, offline, false),
+                                    row(
+                                        Cli::Claude,
+                                        Ready::NotFound,
+                                        None,
+                                        Row::InstallFailed(None),
+                                        false,
+                                    ),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(at, row)| match at {
+                                    // Where the parity sheet waits for the rows to be drawn.
+                                    1 => row
+                                        .relative()
+                                        .child(drawn("assistant rows".into(), self.logged.clone())),
+                                    _ => row,
+                                })
+                                .collect(),
+                            ),
+                        ]
+                    }
+                    Pictures::Install { installed: true } => {
+                        // AS6's line under a row, set in as Model is.
+                        let installed = |cli| {
+                            browser::settings_rows::installed_row(
+                                &look,
+                                cli,
+                                a11y,
+                                Rc::new(|_, _| {}),
+                            )
+                            .pl(px(NESTED_X))
+                        };
+                        nested = vec![(0, 1), (1, 1), (1, 2)];
+                        under = None;
+                        vec![
+                            (
+                                Some("Signed out"),
+                                vec![
+                                    row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
+                                    installed(Cli::Claude),
+                                ],
+                            ),
+                            (
+                                Some("Signed in"),
+                                vec![
+                                    row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                    installed(Cli::Claude),
+                                    // Where the parity sheet waits for the rows to be drawn.
+                                    model(Cli::Claude, Some("Sonnet"))
+                                        .relative()
+                                        .child(drawn("assistant rows".into(), self.logged.clone())),
+                                ],
+                            ),
+                        ]
+                    }
                     Pictures::Models => {
                         use browser::agents::tier::{ACCESS, Tier};
                         use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
@@ -704,7 +790,9 @@ impl gpui::Render for PicturesPage {
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let lede = match self.shown {
-            Pictures::Models | Pictures::Assistants { .. } => Section::Models.lede(),
+            Pictures::Models | Pictures::Assistants { .. } | Pictures::Install { .. } => {
+                Section::Models.lede()
+            }
             Pictures::CommandLine(_) => Section::OtherApps.lede(),
             _ => None,
         };

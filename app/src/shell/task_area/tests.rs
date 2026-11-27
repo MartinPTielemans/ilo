@@ -2203,6 +2203,44 @@ fn the_panel_stands_on_another_page_at_once(cx: &mut TestAppContext) {
     assert_eq!(laid, watched(split(card).0), "it isn't in the page's part");
 }
 
+/// A thread's column is no card (#4396): with no page shown the area draws no card's line. Standing
+/// on one of its pages, the page is the one card, its line round all four sides, the side beside
+/// the column too, as the column is the window's.
+#[gpui::test]
+fn standing_on_a_threads_page_it_is_the_one_card_with_its_line_all_round(cx: &mut TestAppContext) {
+    use crate::shell::PAGE_OUTLINES;
+    let (shell, _, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    PAGE_OUTLINES.take();
+    draw(&shell, cx);
+    assert_eq!(
+        PAGE_OUTLINES.take(),
+        [],
+        "the conversation has a card's line"
+    );
+
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    PAGE_OUTLINES.take();
+    draw(&shell, cx);
+    let (card, _) = frames(&shell, cx);
+    let (radius, ink) = shell.read_with(cx, |shell, _| {
+        (shell.card_radius(), shell.page_outline_ink())
+    });
+    assert_eq!(
+        PAGE_OUTLINES.take(),
+        [(watched(split(card).0), radius, None, ink)],
+        "the page isn't the one card with its line all round"
+    );
+}
+
 /// A web link in a thread's answer, clicked while the user watches one of the thread's pages or
 /// stands on it, ⌘ held or not, leaves the thread's area and opens as a tab of the user's own Space:
 /// nothing opens behind into the Space shown, which is the thread's, and the thread keeps the pages

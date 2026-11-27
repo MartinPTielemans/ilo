@@ -24,6 +24,7 @@ pub mod files;
 mod held;
 pub use held::HeldPage;
 mod helpers;
+pub mod install;
 pub mod kept;
 mod lines;
 pub mod notes;
@@ -65,15 +66,19 @@ use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
 
-/// The name the clients list the server by: the product's, a dev build's apart.
+/// The name the clients list the server by: the command's, the product's but in the rework's
+/// copy (build.rs), a dev build's apart.
 pub fn server_name() -> String {
-    listed_as(PRODUCT)
+    listed_as(env!("COMMAND_NAME"))
 }
 
 /// The name the clients listed the server by before it took the product's, which Connect Again
-/// takes out of a client's config.
+/// takes out of a client's config. The rework's copy never had another.
 pub fn old_server_name() -> String {
-    listed_as(env!("APP_NAME"))
+    match cfg!(feature = "rework") {
+        true => server_name(),
+        false => listed_as(env!("APP_NAME")),
+    }
 }
 
 fn listed_as(name: &str) -> String {
@@ -199,6 +204,9 @@ pub struct Status {
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
 /// the core take the app, as one may tell the windows something before it returns.
 pub trait Browser {
+    /// Whether the computer opens links with the browser, where Claude Code's sign-in page opens
+    /// as a tab (FR19).
+    fn is_default_browser(&self) -> bool;
     /// The Space of the agent with the id `agent`, or 0 if it has none.
     fn agent_space(&self, agent: &str) -> u64;
     /// Makes the agent's Space, named as the agent, and returns it.
@@ -1280,6 +1288,12 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        let installed = (tasks.get("installed").and_then(Value::as_array))
+            .into_iter()
+            .flatten();
+        self.tasks.sign_ins.installed = (installed.filter_map(Value::as_str))
+            .filter_map(runner::Cli::from_id)
+            .collect();
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
@@ -6032,6 +6046,9 @@ impl Agents {
             "last": last,
             "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
+            "installed": (self.tasks.sign_ins.installed.iter())
+                .map(|cli| cli.id())
+                .collect::<Vec<_>>(),
         });
         let saved = json!({
             "threads": self.threads(),

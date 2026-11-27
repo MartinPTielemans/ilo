@@ -69,6 +69,10 @@ mod drop_targets;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drops.rs"]
 mod drops;
+mod edge_knot;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/edge_knot_window.rs"]
+mod edge_knot_window;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "../platform/linux/emoji.rs"]
 mod emoji;

@@ -46,8 +46,8 @@ use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
     command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
-    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
-    stop_chip, stop_popup, stop_restore, stop_switch, text,
+    group_lined, installed_row, mark_row, named_button, named_popup, ring, row, segmented,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -66,7 +66,7 @@ use browser::tokens::settings::{
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
-    WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
+    WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_GLYPH, WINDOWS_CLOSE_HOVERED,
 };
 use browser::tokens::text;
 
@@ -1389,7 +1389,7 @@ fn windows_close_button(base: Rgba, at: gpui::Canvas<()>, a11y: bool) -> AnyElem
                 .path("icons/window-windows-close.svg")
                 .size(px(WINDOWS_BUTTON_GLYPH))
                 .text_color(base.opacity(SECTION_TEXT))
-                .group_hover("close", |style| style.text_color(gpui::white())),
+                .group_hover("close", |style| style.text_color(rgb(WINDOWS_CLOSE_GLYPH))),
         )
         .child(at)
         .into_any_element()

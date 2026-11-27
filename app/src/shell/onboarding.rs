@@ -1057,7 +1057,13 @@ impl Shell {
         if !onboarding.pressed.contains(&cli) {
             onboarding.pressed.push(cli);
         }
-        let known = agents.read(cx).found(cli) == Ready::SignedOut;
+        // Signed out it signs in; missing where its maker's installer is known, it installs first
+        // (AS1). Otherwise its look comes first, and the row says what that found.
+        let known = match agents.read(cx).found(cli) {
+            Ready::SignedOut => true,
+            Ready::NotFound => cli.installs(),
+            _ => false,
+        };
         if !known && !onboarding.signing.contains(&cli) {
             onboarding.signing.push(cli);
         }
@@ -2709,7 +2715,7 @@ fn card_row(
     let shown = agents.assistant_row(cli);
     let known = matches!(
         shown.offer,
-        Offer::Cancel | Offer::SignedIn | Offer::TryAgain
+        Offer::Cancel | Offer::SignedIn | Offer::TryAgain | Offer::TryInstall
     ) || agents.found(cli) == Ready::SignedIn;
     card_words(cli, shown, pressed || known)
 }
@@ -2717,8 +2723,9 @@ fn card_row(
 /// What an assistant's row says on the card (v9 §4), from what Settings › Models' row would:
 /// its maker's plan until `learned` is what the browser holds or a press found, then the wait,
 /// a failed or closed sign-in, or its maker's plan again once signed in, as no use is reported.
-/// Settings' own words (a missing program, a sign-in that needs a terminal) aren't the card's:
-/// its Sign In does what Settings' does.
+/// A program its row installs says so, as Settings' does (AS2–AS4); Settings' other words (a
+/// program with no installer known, a sign-in that needs a terminal) aren't the card's: its Sign In
+/// does what Settings' does.
 fn card_words(
     cli: crate::agents::runner::Cli,
     shown: crate::agents::sign_in::Shown,
@@ -2730,8 +2737,8 @@ fn card_words(
         false => Offer::SignIn,
     };
     let line = match offer {
-        // The wait's own line, which Settings › Models says too (FR19).
-        Offer::Cancel => shown.line,
+        // The wait's own line, which Settings › Models says too (FR19), and an install's (AS2–AS4).
+        Offer::Cancel | Offer::Install | Offer::TryInstall => shown.line,
         Offer::TryAgain => "Sign-in didn't finish.".into(),
         _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
     };

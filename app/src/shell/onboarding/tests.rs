@@ -3076,7 +3076,8 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
 
 /// Each row on the card says v9's words for its state, never Settings' own: its maker's plan
 /// before a press and once signed in, the wait in the place its sign-in opened, and a failed or
-/// closed sign-in as one line, with Sign In again. A missing program is never "Not installed".
+/// closed sign-in as one line, with Sign In again. A missing program is never "Not installed":
+/// Claude Code's says its install, as Settings' row does (AS2–AS4).
 #[test]
 fn the_assistants_rows_say_the_cards_words_in_each_state() {
     use crate::agents::ready::Ready;
@@ -3094,8 +3095,16 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
             let before = card(cli, ready, None, Row::Idle, false);
             assert_eq!(before, said(plan, Offer::SignIn), "{cli:?} before a press");
         }
+        // Claude Code missing installs first, in Settings' words (AS2); Codex, with no installer
+        // road yet, keeps its maker's page.
         let missing = card(cli, Ready::NotFound, None, Row::Idle, true);
-        assert_eq!(missing, said(plan, Offer::Get), "{cli:?}'s program missing");
+        match cli {
+            Cli::Claude => assert_eq!(
+                missing,
+                said("Installs Anthropic's Claude Code", Offer::Install)
+            ),
+            Cli::Codex => assert_eq!(missing, said(plan, Offer::Get), "Codex missing"),
+        }
         let signed_in = card(cli, Ready::SignedIn, Some("Plus"), Row::Idle, true);
         assert_eq!(signed_in, said(plan, Offer::SignedIn), "{cli:?} signed in");
         for row in [Row::Failed(None), Row::Failed(Some("said".into()))] {
@@ -3113,6 +3122,56 @@ fn the_assistants_rows_say_the_cards_words_in_each_state() {
         said("Finish in the new window.", Offer::Cancel),
         "ChatGPT's is in a window here"
     );
+    let claude = Cli::Claude;
+    assert_eq!(
+        card(claude, Ready::NotFound, None, Row::Installing, true),
+        said("Installing Claude Code", Offer::Cancel)
+    );
+    let offline = Row::InstallFailed(Some(crate::agents::install::OFFLINE.into()));
+    assert_eq!(
+        card(claude, Ready::NotFound, None, offline, true),
+        said("You're offline.", Offer::TryInstall)
+    );
+    let failed = card(
+        claude,
+        Ready::NotFound,
+        None,
+        Row::InstallFailed(None),
+        true,
+    );
+    assert_eq!(
+        failed,
+        said("Couldn't install Claude Code.", Offer::TryInstall)
+    );
+}
+
+/// Claude Code missing on the card: the first press looks, as every first press does, and the row
+/// then offers its install; only the press on Install and Sign In installs, never the look.
+#[gpui::test]
+fn a_missing_claude_code_installs_only_on_its_own_press(cx: &mut TestAppContext) {
+    use crate::agents::ready::Ready;
+    let (shell, cx, host) = first_window(cx);
+    host.threads.set(Some(true));
+    let (agents, installs) =
+        cx.update(|_, cx| crate::agents::tests::stand_in_installs(Vec::new(), cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+
+    shell.update(cx, |shell, cx| shell.onboarding_sign_in(Cli::Claude, cx));
+    cx.run_until_parked();
+    let found = agents.read_with(cx, |agents, _| agents.found(Cli::Claude));
+    assert_eq!(found, Ready::NotFound, "the press looked for Claude");
+    assert!(installs().is_empty(), "the look installed nothing");
+    assert_eq!(
+        card_lines(&shell, &agents, cx)[0],
+        "Installs Anthropic's Claude Code"
+    );
+
+    shell.update(cx, |shell, cx| shell.onboarding_sign_in(Cli::Claude, cx));
+    cx.run_until_parked();
+    assert_eq!(installs(), [Cli::Claude]);
+    assert_eq!(card_lines(&shell, &agents, cx)[0], "Installing Claude Code");
 }
 
 /// A row on the card is as tall in each of its states (FR19), as each state's line is one line in

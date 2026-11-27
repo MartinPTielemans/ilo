@@ -754,6 +754,21 @@ void host_show_reveal(void* ui_view, double width);
 // Hides |ui_view|'s reveal window.
 void host_hide_reveal(void* ui_view);
 
+// Makes the window of |edge_knot_view| the edge knot of |ui_view|'s window: the tab the hidden
+// sidebar leaves at the window's edge while a thread needs the user. It shows over the page and
+// never takes the keyboard, a click on it included. The window reaches |margin| points past the tab
+// on every side but the window's edge, for its shadow, which the UI draws, and the margin lets the
+// mouse through to the page. It starts hidden.
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin);
+
+// Shows |ui_view|'s edge knot window with its tab flush with its browser window's edge on the
+// sidebar's side, |top| points down the content, |width| points across and |height| tall, or moves
+// it there if it shows.
+void host_show_edge_knot(void* ui_view, double top, double width, double height);
+
+// Hides |ui_view|'s edge knot window.
+void host_hide_edge_knot(void* ui_view);
+
 // Makes the window of |settings_view| the Settings window: a standard one, dark, that can show
 // over the browser window in full screen. It starts hidden.
 void host_add_settings(void* settings_view);

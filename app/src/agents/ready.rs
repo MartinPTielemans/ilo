@@ -212,7 +212,16 @@ fn locate(cli: Cli) -> (Option<PathBuf>, Option<String>) {
         .clone()
         .or_else(|| std::env::var("PATH").ok())
         .unwrap_or_default();
-    (find(cli.program(), &search), path)
+    let installed = || installed_at(cli, &super::clients::home());
+    (find(cli.program(), &search).or_else(installed), path)
+}
+
+/// Where its maker's installer puts `cli` in `home`, which a login shell's PATH may not have yet, as
+/// Claude Code's installer only says to add: ~/.local/bin (install.rs).
+#[cfg(not(windows))]
+fn installed_at(cli: Cli, home: &Path) -> Option<PathBuf> {
+    let program = (cli.installs()).then(|| home.join(".local/bin").join(cli.program()))?;
+    is_executable(&program).then_some(program)
 }
 
 #[cfg(windows)]

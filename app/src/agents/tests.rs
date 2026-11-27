@@ -80,6 +80,8 @@ struct Made {
     user: std::cell::Cell<Option<u64>>,
     /// The search engine's host, where a test moves it from search.example.
     engine: std::cell::Cell<Option<&'static str>>,
+    /// Whether the system opens links with the browser: another browser does, unless a test says.
+    default_browser: std::cell::Cell<bool>,
 }
 
 impl Made {
@@ -102,6 +104,10 @@ impl Made {
 }
 
 impl Browser for Made {
+    fn is_default_browser(&self) -> bool {
+        self.default_browser.get()
+    }
+
     fn agent_space(&self, agent: &str) -> u64 {
         self.agent_spaces.borrow().get(agent).copied().unwrap_or(0)
     }
@@ -491,6 +497,11 @@ struct Configs {
     sign_out_answers: Mutex<Option<Result<(), Option<String>>>>,
     /// Whether the next sign-in can't start.
     sign_in_fails: Mutex<bool>,
+    /// Each install started, as a stand-in the test ends; the CLIs whose install was cancelled;
+    /// and whether the next can't start. No installer runs.
+    installs: Mutex<Vec<(crate::agents::runner::Cli, InstallEnded)>>,
+    installs_cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+    install_fails: Mutex<bool>,
 }
 
 impl Configs {
@@ -516,6 +527,22 @@ impl crate::agents::sign_in::Session for StandInSignIn {
         use crate::agents::sign_in::{Ended, Heard};
         self.cancelled.lock().unwrap().push(self.cli);
         _ = self.heard.unbounded_send(Heard::Ended(Ended::Cancelled));
+    }
+}
+
+type InstallEnded = futures::channel::mpsc::UnboundedSender<crate::agents::sign_in::Ended>;
+
+/// An install in the tests: a cancel is recorded, and ends it as the installer's does.
+struct StandInInstall {
+    cli: crate::agents::runner::Cli,
+    ended: InstallEnded,
+    cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+}
+
+impl crate::agents::sign_in::Session for StandInInstall {
+    fn cancel(&mut self) {
+        self.cancelled.lock().unwrap().push(self.cli);
+        _ = (self.ended).unbounded_send(crate::agents::sign_in::Ended::Cancelled);
     }
 }
 
@@ -638,6 +665,24 @@ impl Clients for Configs {
         }))
     }
 
+    /// The tests never run a maker's installer: the test says how each install ends.
+    fn start_install(
+        &self,
+        cli: crate::agents::runner::Cli,
+        ended: InstallEnded,
+    ) -> std::io::Result<Box<dyn crate::agents::sign_in::Session>> {
+        if std::mem::take(&mut *self.install_fails.lock().unwrap()) {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        self.installs.lock().unwrap().push((cli, ended.clone()));
+        let cancelled = self.installs_cancelled.clone();
+        Ok(Box::new(StandInInstall {
+            cli,
+            ended,
+            cancelled,
+        }))
+    }
+
     fn sign_out(
         &self,
         cli: crate::agents::runner::Cli,
@@ -692,6 +737,23 @@ pub(crate) fn stand_in(
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
     stand_in_with(looked, Vec::new(), cx)
+}
+
+/// As `stand_in`, and the installs started: no installer runs, and none ends.
+pub(crate) fn stand_in_installs(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    cx: &mut App,
+) -> (
+    Entity<Agents>,
+    impl Fn() -> Vec<crate::agents::runner::Cli> + use<>,
+) {
+    let configs = Arc::new(Configs::default());
+    let (agents, _) = stand_in_configs(looked, Vec::new(), Some(configs.clone()), cx);
+    let installs = move || {
+        let installs = configs.installs.lock().unwrap();
+        installs.iter().map(|(cli, _)| *cli).collect()
+    };
+    (agents, installs)
 }
 
 /// As `stand_in`, with `found` the clients whose files the stat finds on the made-up computer.
@@ -985,11 +1047,11 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
         let (row, listed) = agents.read_with(cx, |agents, _| {
-            (agents.assistant_row(Cli::Claude).line, agents.listed())
+            (agents.assistant_row(Cli::Claude), agents.listed())
         });
         assert_eq!(
             !listed.contains(&Client::ClaudeCode),
-            row == "Not installed",
+            matches!(row.offer, Offer::Get | Offer::Install),
             "{ready:?}: Claude Code's row says {row:?} and Apps that connect lists {listed:?}"
         );
     }
@@ -1080,7 +1142,7 @@ fn models_lists_an_assistant_not_on_this_computer(cx: &mut TestAppContext) {
     let listed = providers_found(crate::agents::ready::Ready::NotFound, cx);
     assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
     assert!(
-        listed.contains(&(Cli::Claude, Offer::Get, false)),
+        listed.contains(&(Cli::Claude, Offer::Install, false)),
         "{listed:?}"
     );
 }
@@ -7183,8 +7245,8 @@ mod tasks {
         set_found(&agents, Ready::NotFound, cx);
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        // Its row's own Get.
-        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+        // Its row's own Install and Sign In.
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Install)));
         assert_eq!(card.dot, Dot::Ended);
     }
 
@@ -7248,7 +7310,7 @@ mod tasks {
 
         let card = fails(Failure::NotInstalled, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Install)));
     }
 
     /// The inside switch off: ⌘T's ask lists no agent, no thread starts, and one at its limit
@@ -11530,7 +11592,7 @@ mod tasks {
         let blossom = Cli::Codex.caps().mark;
         assert!(blossom.path.ends_with("openai-blossom.svg"));
         for at in [0, 1, 3] {
-            assert_eq!(items[at].mark, Some(blossom), "{}", items[at].title);
+            assert_eq!(items[at].maker_mark, Some(blossom), "{}", items[at].title);
             assert_eq!(items[at].icon, None);
         }
         assert_eq!(items[3].parent, Some(2));
@@ -11569,7 +11631,7 @@ mod tasks {
             spark.light, spark.dark,
             "the Spark keeps its own orange in either look"
         );
-        assert!(items.iter().all(|item| item.mark == Some(spark)));
+        assert!(items.iter().all(|item| item.maker_mark == Some(spark)));
         assert_eq!(items[0].spoken.as_deref(), Some("Anthropic Opus 5.5"));
         let (ids, items) = model_rows("", Cli::Claude.caps(), &Models::default(), 0);
         assert_eq!(crate::menu::described(&items), "Claude Code (checked)");
@@ -11635,7 +11697,7 @@ mod tasks {
             [Some("wade-2"), Some(""), None, Some("wade-1")].map(|id| id.map(String::from))
         );
         for at in [0, 1, 3] {
-            assert_eq!(items[at].mark, Some(mark), "{}", items[at].title);
+            assert_eq!(items[at].maker_mark, Some(mark), "{}", items[at].title);
         }
         let spoken: Vec<_> = (items.iter())
             .map(|item| item.spoken.clone().unwrap_or_default())
@@ -11917,6 +11979,45 @@ mod tasks {
             again.read_with(cx, |agents, _| agents.others_start()),
             Tier::Full
         );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    /// The composer's effort is kept with its level and model, per profile, so the next composer
+    /// and a relaunch open with it (#4415); a start on Codex, which takes none, keeps the one
+    /// picked last for Claude.
+    #[gpui::test]
+    fn the_composer_keeps_its_last_effort_per_profile(cx: &mut TestAppContext) {
+        let folder =
+            std::env::temp_dir().join(format!("ilo-composer-effort-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        browser.profiles.borrow_mut().push((2, "Profile 2"));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        agents.update(cx, |agents, _| {
+            agents.set_new_thread_effort(1, Some("low"));
+            agents.remember_start(1, Cli::Claude, Tier::Look, None, Some("max"));
+            agents.remember_start(2, Cli::Claude, Tier::Look, None, Some("medium"));
+            agents.remember_start(1, Cli::Codex, Tier::Look, None, None);
+        });
+        let efforts = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (
+                    agents.composer_last(1).effort,
+                    agents.composer_last(2).effort,
+                )
+            })
+        };
+        assert_eq!(efforts(&agents, cx), (Some("max"), Some("medium")));
+        let again = super::agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        again.update(cx, |agents, cx| agents.load(&saved, cx));
+        assert_eq!(efforts(&again, cx), (Some("max"), Some("medium")));
+        // Back to the program's own, picked in the composer, is kept as the pick it is.
+        agents.update(cx, |agents, _| {
+            agents.remember_start(1, Cli::Claude, Tier::Look, None, None);
+        });
+        assert_eq!(efforts(&agents, cx), (None, Some("medium")));
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
@@ -15180,6 +15281,7 @@ fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
 
 mod fenced;
 mod holds;
+mod installs;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;

@@ -27,7 +27,7 @@ use crate::{
     icon_picker::Subject,
     palette::{Palette, Tone},
     passwords::Key,
-    space_icon::{GLYPHS, SpaceIcon},
+    space_icon::SpaceIcon,
     text_input::{self, TextInput},
     theme::{Appearance, Theme},
 };
@@ -73,6 +73,9 @@ mod copy_tests;
 mod display_face;
 mod drag;
 mod drm_note;
+mod edge_knot;
+#[cfg(test)]
+mod edge_knot_tests;
 mod empty;
 mod export;
 mod extensions;
@@ -95,6 +98,8 @@ mod keys;
 mod knot;
 mod launch_room;
 mod library;
+#[cfg(test)]
+mod library_leave_tests;
 mod link;
 #[cfg(test)]
 mod link_previews;
@@ -453,7 +458,6 @@ use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::LOADING_SIZE;
-use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
 use crate::tokens::shell::STATUS_LOADING;
 // A loading dot's breath, out and back, eased in and out (ours, #321).
@@ -490,19 +494,7 @@ const COPIED_TIME: Duration = Duration::from_secs(2);
 const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
-use crate::tokens::shell::SPACE_CLEAR;
 use crate::tokens::shell::SPACE_DRAGGED;
-use crate::tokens::shell::SPACE_DROP_LINE;
-use crate::tokens::shell::SPACE_HEIGHT;
-use crate::tokens::shell::SPACE_LEAST;
-use crate::tokens::shell::SPACE_SHOWN_LEAST;
-use crate::tokens::shell::SPACE_SWATCH;
-use crate::tokens::shell::SPACE_SWATCH_HOVERED;
-use crate::tokens::shell::SPACE_SWATCH_SHOWN;
-use crate::tokens::shell::SWITCHER_INSET;
-// A Space's icon in the switcher takes its dot's place in the same item. Its glyph is 16 pt, a
-// favicon's size (ours, *interim*).
-const SPACE_ICON_SWITCHER: f32 = EMOJI_SIZE;
 // The Create a Space form, in Arc's places and type, without its illustration and subtitle, which
 // are Arc's art and copy. The field moves up into the subtitle's place, Arc's 35 pt under the text
 // above it. Distances to the buttons are from the window's bottom.
@@ -563,9 +555,7 @@ use crate::tokens::shell::ICON_INK;
 use crate::tokens::shell::NAV;
 use crate::tokens::shell::NAV_HOVERED;
 use crate::tokens::shell::NAV_INACTIVE;
-use crate::tokens::shell::SPACE_HOVERED;
 use crate::tokens::shell::SPACE_NAME;
-use crate::tokens::shell::SPACE_OTHER;
 use crate::tokens::shell::TILE_RING;
 use crate::tokens::shell::TILE_UNTHEMED;
 use crate::tokens::shell::TILE_UNTHEMED_LIGHT;
@@ -604,6 +594,7 @@ use crate::tokens::shell::WINDOW_BUTTON_Y;
 use crate::tokens::shell::WINDOW_BUTTON_ZOOM;
 use crate::tokens::shell::WINDOWS_BUTTON_GLYPH;
 use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
+use crate::tokens::shell::WINDOWS_CLOSE_GLYPH;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
 
@@ -1202,6 +1193,10 @@ struct Drag {
     /// The Space it last paged to, which the core says it shows only once that Space's page is
     /// handed over, by when the pointer can be off the edge (#1840).
     paged: Option<u64>,
+    /// Since when it's been held over the Space button, whose menu springs open after the edge's
+    /// wait, and whether the menu up is that one, which the drag leads (#4400).
+    on_space_button: Option<Instant>,
+    space_menu: bool,
     /// Pressed with ⌥, whose click splits once it's let go without having moved, so that a drag
     /// with ⌥ held can drop a copy instead (#690).
     alt_click: bool,
@@ -1521,8 +1516,8 @@ pub struct Shell {
     /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
     menu_control: bool,
     app_menu: bool,
-    /// Whether the menu up is the one the footer's + opened, which keeps its plate while it's up.
-    plus_menu: bool,
+    /// Whether the menu up is the Space button's, which keeps its plate while it's up.
+    space_switcher_up: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -1615,7 +1610,7 @@ pub struct Shell {
     /// row, which glides from there.
     space_drag: Option<space_order::SpaceDrag>,
     space_slides: space_order::SpaceSlides,
-    space_landing: Option<(space_order::Along, u64, f32)>,
+    space_landing: Option<(u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1906,6 +1901,18 @@ pub struct Shell {
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
+    /// When the edge knot last came, while it shows: it takes no press for a moment after
+    /// (edge_knot.rs).
+    edge_knot_since: Option<Instant>,
+    /// Whether a thread of this window's Spaces needs the user, for the edge knot (edge_knot.rs).
+    thread_waits: bool,
+    /// The top of the edge knot's window while it shows, and the content's width and the
+    /// sidebar's side it was placed for (edge_knot.rs).
+    edge_knot_at: Option<(f32, f32, bool)>,
+    /// When the edge knot's knot came to wait, which its motion runs from, and whether the frame
+    /// drawn last moved it, for its window to draw the next (edge_knot.rs).
+    edge_knot_sign: knot::Timed,
+    edge_knot_moving: bool,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     task_list: task_cards::TaskList,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
@@ -2102,8 +2109,14 @@ pub struct Shell {
     tab_row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The icon each tile drew last, for the line check.sh waits on once one changes.
     tile_icons_drawn: Rc<RefCell<HashMap<u64, SharedString>>>,
-    /// Where each Space's dot in the switcher was drawn last, for the line check.sh clicks it by.
-    space_dots_drawn: Rc<RefCell<HashMap<u64, (i32, i32)>>>,
+    /// Where the Space button was drawn last, for the line check.sh clicks it by.
+    space_button_drawn: Rc<Cell<Option<(i32, i32)>>>,
+    /// What each row of the Space button's menu a dragged tab opened takes it to: a Space, or
+    /// a new one for New Space…, none for its line.
+    space_menu_targets: Vec<Option<u64>>,
+    /// The Space button's change after a switch in this window: its mark sliding and the name's
+    /// pill (`footer::ButtonSwitch`).
+    space_button_switch: Option<footer::ButtonSwitch>,
     name_row_before: Option<Bounds<Pixels>>,
     /// The Space with no icon the icon picker shows for, whose name row holds the icon's place
     /// with a placeholder until the picker closes, and the watch on the picker that tells it so.
@@ -2209,7 +2222,7 @@ impl Shell {
             name_menu: false,
             menu_control: OFF_THE_MAC,
             app_menu: false,
-            plus_menu: false,
+            space_switcher_up: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -2389,6 +2402,11 @@ impl Shell {
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
             task_cards: Vec::new(),
+            edge_knot_since: None,
+            thread_waits: false,
+            edge_knot_at: None,
+            edge_knot_sign: knot::Timed::default(),
+            edge_knot_moving: false,
             task_list: task_cards::TaskList::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
@@ -2464,7 +2482,9 @@ impl Shell {
             name_row_drawn: Rc::default(),
             tab_row_drawn: Rc::default(),
             tile_icons_drawn: Rc::default(),
-            space_dots_drawn: Rc::default(),
+            space_button_drawn: Rc::default(),
+            space_menu_targets: Vec::new(),
+            space_button_switch: None,
             name_row_before: None,
             icon_placeholder: None,
             card_picker: None,
@@ -2896,6 +2916,8 @@ impl Shell {
 
     /// Lays the page out at `page_frame`, unless it's there already or held.
     fn lay_out_page(&mut self, cx: &mut Context<Self>) {
+        // Not the page's, so a page held where it was doesn't hold it.
+        self.place_edge_knot(cx);
         let Some(frame) = self.window_page_frame(self.viewport) else {
             return;
         };
@@ -3290,6 +3312,11 @@ impl Shell {
                 clock: cx.background_executor().clone(),
                 next_door: from.abs_diff(to) == 1,
             });
+        }
+        if let (Some(from), Some(to)) = (index(before), index(space))
+            && from != to
+        {
+            self.switch_space_button(before, to > from);
         }
         self.slides.clear();
         self.opened = None;
@@ -4268,6 +4295,9 @@ impl Shell {
         if space == self.space {
             return;
         }
+        // The Library shows no Space's tabs, so going to one leaves it, by any way (#4414). A
+        // swipe out of it sets its own motion after.
+        self.set_library(false, cx);
         self.switching = Some((Switch::Space(space), Instant::now()));
         self.browser.show_space(space, cx);
     }
@@ -4914,6 +4944,7 @@ impl Render for Shell {
         self.step_held_row(window);
         self.step_held_nav(window, cx);
         self.step_space_slides(window);
+        self.step_space_button(window);
         self.step_form_going(cx);
         // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
         // and the two of different sizes measuring it in turn each asked the other for a frame.
@@ -5191,11 +5222,7 @@ impl Shell {
                 scaled(bounds),
                 radius,
                 meets_sidebar.then_some(self.right),
-                rgba(match self.palette.tone {
-                    Tone::Dark => PAGE_OUTLINE,
-                    Tone::Light => PAGE_OUTLINE_LIGHT,
-                })
-                .into(),
+                self.page_outline_ink(),
             ),
         };
         let panes = self.panes(self.selected);
@@ -5229,6 +5256,15 @@ impl Shell {
             })
         });
         outlines.chain(cards).collect()
+    }
+
+    /// The line round a page's card where it faces the window, in either look.
+    pub(super) fn page_outline_ink(&self) -> Hsla {
+        rgba(match self.palette.tone {
+            Tone::Dark => PAGE_OUTLINE,
+            Tone::Light => PAGE_OUTLINE_LIGHT,
+        })
+        .into()
     }
 
     /// The sidebar: the header's buttons, the URL field and the Space's tabs, or the Create a
@@ -5318,9 +5354,10 @@ impl Shell {
             .children(self.recent_download_rows(cx))
             .children((!self.blank).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
-            .children((!self.one_space()).then(|| self.plus_button(cx)))
+            // A private or blank window keeps its one Space, as it had no +.
+            .children((!self.one_space()).then(|| self.space_button(cx)).flatten())
+            .children((!self.one_space()).then(|| self.space_pill()).flatten())
             .children(self.menu_control.then(|| self.menu_button(cx)))
-            .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))
     }
@@ -5711,6 +5748,7 @@ impl Shell {
         self.step_held_row(window);
         self.step_held_nav(window, cx);
         self.step_space_slides(window);
+        self.step_space_button(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
@@ -5765,24 +5803,15 @@ impl Shell {
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(HAIRLINE))
-                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .border_color(rgba(REVEAL_BORDER))
                     .shadow(vec![BoxShadow {
-                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        color: rgba(crate::tokens::shell::REVEAL_RIM).into(),
                         offset: point(px(0.), px(0.)),
                         blur_radius: px(0.),
                         spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
                         inset: true,
                     }])
-                    .bg(self.palette.underlay)
-                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
-                        self.foot_glow(
-                            space,
-                            self.width(),
-                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
-                            REVEAL_RADIUS,
-                        )
-                        .opacity(weight)
-                    }))
+                    .bg(self.window_fill())
                     .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -5931,7 +5960,9 @@ impl Shell {
                             .size(px(WINDOWS_BUTTON_GLYPH))
                             .text_color(ink)
                             .when(close, |svg| {
-                                svg.group_hover(glyph, |style| style.text_color(gpui::white()))
+                                svg.group_hover(glyph, |style| {
+                                    style.text_color(rgb(WINDOWS_CLOSE_GLYPH))
+                                })
                             }),
                     )
             }))
@@ -6164,25 +6195,18 @@ pub(super) fn dashed_plate(color: Hsla, radius: f32) -> gpui::Canvas<()> {
     )
 }
 
-/// A Space's icon before its name, in the name row `name_box` makes, if it has one: its emoji, or
-/// its glyph in the name's colour.
+/// A Space's glyph before its name, in the name row `name_box` makes, if it has one.
 pub(super) fn space_icon(palette: &Palette, icon: &str) -> Option<gpui::Div> {
     space_icon_drawn(palette, icon).map(icon_slot)
 }
 
-/// A Space's emoji, or its glyph in the name's colour, if it has an icon.
+/// A Space's glyph in the name's colour, if it has one. A Space with none, or with an emoji kept
+/// from before marks were glyphs only (#4400), has no mark beside its name, where its letter
+/// would only say the name's first again.
 pub(super) fn space_icon_drawn(palette: &Palette, icon: &str) -> Option<gpui::AnyElement> {
-    match SpaceIcon::parse(icon) {
-        SpaceIcon::Dot => None,
-        SpaceIcon::Emoji(emoji) => Some(SharedString::from(emoji.to_string()).into_any_element()),
-        SpaceIcon::Glyph(index) => Some(
-            svg()
-                .path(GLYPHS[index].1)
-                .size(px(SPACE_GLYPH))
-                .text_color(palette.text(SPACE_NAME))
-                .into_any_element(),
-        ),
-    }
+    let ink = palette.text(SPACE_NAME);
+    (SpaceIcon::parse(icon).glyph_path())
+        .map(|_| crate::space_icon::mark(icon, "", SPACE_GLYPH, ink))
 }
 
 /// The place before a Space's name that its icon takes, with `drawn` in it.

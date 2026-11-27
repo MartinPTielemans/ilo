@@ -7,7 +7,8 @@
 # - Launches with 10, 100 and 1,000 kept threads, 5 each, seeded by tools/seed-kept-threads.py into
 #   the check's own profile before each, as a launch removes all but 10: link to page painted and
 #   the launch window on screen.
-# A build that draws no waiting knot, or no edge knot, logs neither line below, and that leg says
+# A build that draws no waiting knot logs no line for it, and one that draws no edge knot shows no
+# child window for it in the driver's layout (nothing logs whether it shows, #4091); that leg says
 # "skip: ...: not in this build" and counts as a skip: a leg that measured nothing never passes.
 # Its threads run on a stand-in for Claude Code's claude, in a home of the run's own, which every
 # launch here gets with a login shell that gives the stand-in's folder alone, so the app never finds
@@ -26,9 +27,14 @@ mkdir -p "$perf_dir"
 on_cpu=$(runner_cpu)
 perf_page
 echo "perf: on $on_cpu"
-# The lines a build with each knot logs as it draws one.
+# The line a build with the waiting knot logs as it draws one.
 knot_moving() { echo "^browser: task card $1 knot moving\$"; }
-edge_knot() { echo "^browser: edge knot $1 shown\$"; }
+# Whether the window has a child window, which with the sidebar hidden and in and a thread waiting is
+# the tab at its edge, as the driver's layout lists it.
+edge_knot_shown() {
+  send layout
+  sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child'
+}
 
 home="$PWD/$out/threads-home"
 rm -rf "$home"
@@ -50,7 +56,7 @@ elif "-p" in args and "--mcp-config" in args:
     # A thread's turn: its first message, then a question to the user through the browser's
     # server, as the config names it, which holds the thread waiting until its input closes.
     with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as file:
-        server = next(iter(json.load(file)["mcpServers"].values()))
+        name, server = next(iter(json.load(file)["mcpServers"].items()))
     sys.stdin.readline()
     bridge = subprocess.Popen([server["command"], *server.get("args", [])],
                               env={**os.environ, **server.get("env", {})},
@@ -64,8 +70,10 @@ elif "-p" in args and "--mcp-config" in args:
         if json.loads(line).get("id") == 1:
             break
     send({"method": "notifications/initialized"})
+    # Its output names the tool as Claude does, by the server: the app ends a run that calls one
+    # by another name.
     say({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ask-1",
-         "name": "ask", "input": {}}]}})
+         "name": "mcp__" + name + "__ask", "input": {}}]}})
     send({"id": 2, "method": "tools/call",
           "params": {"name": "ask", "arguments": {"question": "Which seat?"}}})
     for line in sys.stdin:
@@ -94,7 +102,7 @@ threads_shows() {
   done
   return 1
 }
-# A driven launch, logged as $1, on perf's page as $2, once its stand-in claude is found signed in.
+# A driven launch, logged as $1, on perf's page as $2.
 threads_launch() {
   log="$perf_dir/$1.log"
   step=0
@@ -105,8 +113,6 @@ threads_launch() {
   exec 3> "$out/drive"
   await "^browser: title [0-9]* $2 fcp " || fail "$1's first page didn't paint"
   loaded=$(date +%s)
-  await "^browser: task agent claude is SignedIn at $home/bin/claude\$" ||
-    fail "$1 didn't find the stand-in signed in: $(grep '^browser: task agent claude ' "$log")"
   send click $page_point
 }
 # Opens perf's page as $1 in a new tab from ⌘T's bar.
@@ -125,6 +131,11 @@ threads_ask() {
   send type "Pick a seat"
   send key tab
   expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a thread"
+  # A launch looks for no CLI: the ask's first showing in a run does (Agents::task_ask_shown).
+  await "^browser: task agent claude is SignedIn at $home/bin/claude\$" ||
+    fail "the ask didn't find the stand-in signed in: $(grep '^browser: task agent claude ' "$log")"
+  # The bar hears of it a turn after the look logs it, and a ↩ before then has nothing to run on.
+  expect '^browser: command bar agents: Claude$' "the bar didn't list the stand-in it found"
   send key return
   expect '^browser: command bar runs a task on claude$' "↩ didn't run the thread on the stand-in"
   expect_late '^browser: task task-[0-9]* on claude asked from space ' "the thread didn't start"
@@ -151,7 +162,7 @@ knot=
 edge=
 ! threads_shows "$(knot_moving "$thread")" 30 || knot=1
 threads_sidebar hidden
-! threads_shows "$(edge_knot "$thread")" 30 || edge=1
+! edge_knot_shown || edge=1
 threads_sidebar shown
 threads_quit
 measured=
@@ -161,7 +172,7 @@ skipped=
 [ -n "$knot" ] ||
   echo "skip: the waiting knot: not in this build, which logs no $(knot_moving task-N)"
 [ -n "$edge" ] ||
-  echo "skip: the edge knot: not in this build, which logs no $(edge_knot task-N)"
+  echo "skip: the edge knot: not in this build, whose window shows no child window for it"
 
 # A session at $1 tabs of perf's page: idle with no thread, then with one waiting, then with it
 # waiting at the window's edge, each where the build draws its knot.
