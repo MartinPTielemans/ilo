@@ -304,6 +304,157 @@ fn the_reply_fields_revoke_takes_the_folder_and_its_chip(cx: &mut TestAppContext
     assert_eq!(shown(&run, cx), None, "the chip outlived the folder");
 }
 
+/// A folder's name is the user's, and one place says it: ilo's line in the task's conversation.
+/// With each line made on a boxed task whose folder has a name no other string holds, and with a
+/// box refused, which says no line, nothing else holds it: the dev log, what the browser was
+/// asked, the activity log, the task's card and its bar, a posted notification, each tool's
+/// answer to the task and to a client from outside, Library's record and every file ilo wrote.
+#[gpui::test]
+fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
+    use crate::agents::files::Picked;
+    use crate::agents::task::Start;
+    use crate::needs_you::{self, Host, Notify};
+    #[derive(Default)]
+    struct Posted(RefCell<Vec<String>>);
+    impl Host for Posted {
+        fn badge(&self, _: usize) {}
+        fn active(&self) -> bool {
+            false
+        }
+        fn notify(&self, _: u64, title: &str, body: &str) {
+            self.0.borrow_mut().push(format!("{title}\n{body}"));
+        }
+    }
+    const NAME: &str = "Saffron ledger";
+    let named = || Some(Granted::named_for_test(NAME));
+    let names = |text: &str| text.contains(NAME) || text.contains("nonexistent");
+    let posted = Rc::new(Posted::default());
+
+    // Each starts its task, as its test above does, and says the line that names the folder.
+    type Makes = fn(&Run, &Boxes, &mut TestAppContext) -> (String, Option<IloKind>);
+    let cases: [(&str, Makes); 3] = [
+        // A folder ilo couldn't give (X6): the task starts in its box without it.
+        ("named-not-given", |run, _, cx| {
+            (run.agents).update(cx, |agents, _| agents.tasks.files_available = true);
+            let start = Start {
+                tier: Tier::default(),
+                model: None,
+                effort: None,
+                pages: Vec::new(),
+                files: Picked {
+                    files: Vec::new(),
+                    folder: Some(Granted::named_for_test(NAME)),
+                },
+            };
+            let agent = (run.agents)
+                .update(cx, |agents, cx| {
+                    agents.start_task(Cli::Claude, ASKED, None, 1, start, cx)
+                })
+                .expect("started");
+            run.ran(1);
+            let line = IloKind::StartedWithout {
+                folder: NAME.into(),
+            };
+            (agent, Some(line))
+        }),
+        ("named-revoked", |run, _, cx| {
+            let agent = run.start(Cli::Claude, cx);
+            run.ran(1);
+            (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+            let line = IloKind::Revoked {
+                folder: NAME.into(),
+            };
+            (agent, Some(line))
+        }),
+        ("named-refused", |run, boxes, cx| {
+            boxes.refuses.set(true);
+            (run.start(Cli::Claude, cx), None)
+        }),
+    ];
+    let mut notified = 0;
+    for (name, makes) in cases {
+        // Each task's notification is its own, whatever the one before was told.
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        crate::heard::listen();
+        let (run, boxes) = (Run::new(name, cx), Boxes::default());
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files.folder = named();
+            agents.tasks.box_available = Some(Ok(()));
+            agents.tasks.wall = Some(boxes.maker());
+        });
+        let (agent, line) = makes(&run, &boxes, cx);
+        assert_eq!(boxes.asked().len(), 1, "{name}");
+
+        // The conversation says it once, in ilo's line, and no other line of it does.
+        let said = run.talk(&agent, cx).lines;
+        let held: Vec<&Line> = (said.iter())
+            .filter(|line| names(&format!("{line:?}")))
+            .collect();
+        match &line {
+            Some(line) => assert!(
+                matches!(held[..], [Line::Ilo(IloLine { kind, .. })] if kind == line),
+                "{name}: {held:?}"
+            ),
+            None => assert!(held.is_empty(), "{name}: {held:?}"),
+        }
+
+        let mut words: Vec<String> = Vec::new();
+        // Its card and its notification, as it is and once it ends, where it still works.
+        let mut follow = |cx: &mut TestAppContext| {
+            let cards = (run.agents).read_with(cx, |agents, cx| agents.shown_cards(cx));
+            cx.update(|cx| needs_you::follow(&cards, Notify::Away, cx));
+            format!("{cards:?}")
+        };
+        words.push(follow(cx));
+        let works = run.state(&agent, cx) == State::Working;
+        assert_eq!(works, line.is_some(), "{name}");
+        if works {
+            run.finish(&agent, cx);
+            words.push(follow(cx));
+        }
+        (run.agents).update(cx, |agents, cx| {
+            words.push(format!("{:?}", agents.status()));
+            words.push(format!("{:?}", agents.question()));
+            agents.connect(Client::ClaudeCode, cx);
+        });
+        cx.run_until_parked();
+        // Each tool, asked with nothing: what it answers at once, a refusal included.
+        let before = words.len();
+        for client in [agent.as_str(), "claude-code"] {
+            for tool in tools::names(client) {
+                if let Ok(answer) = call(&run.agents, client, &tool, json!({}), cx).try_recv() {
+                    words.push(answer.text);
+                }
+            }
+        }
+        assert!(words.len() > before + 10, "{name}: few tools answered");
+        cx.run_until_parked();
+        let browser = &run.browser;
+        words.push(format!("{:?}", browser.made.borrow()));
+        words.push(format!("{:?}", browser.navigated.borrow()));
+        words.push(format!("{:?}", browser.checked.borrow()));
+        words.push(format!("{:?}", browser.sign_in_pages.borrow()));
+        (run.agents).update(cx, |agents, cx| {
+            words.extend(agents.activity(&agent).map(|entry| format!("{entry:?}")));
+            words.push(format!("{:?}", agents.take_ended(cx)));
+            agents.save();
+        });
+        words.extend(run.files().into_iter().map(|(_, text)| text));
+        let heard = crate::heard::take();
+        assert!(!heard.is_empty(), "{name}: the dev log was never heard");
+        words.extend(heard);
+        let posted = posted.0.borrow();
+        // A task that ended posted its notification, so one was read.
+        assert_eq!(posted.len() > notified, works, "{name}: {posted:?}");
+        words.extend(posted[notified..].iter().cloned());
+        notified = posted.len();
+        for word in &words {
+            assert!(!names(word), "{name}: {word}");
+        }
+    }
+    assert_eq!(notified, 2);
+}
+
 /// What the assistant is told as its folder goes is one of the lead's texts exactly, and none
 /// names a folder, holds a path or gives a reason.
 #[test]
