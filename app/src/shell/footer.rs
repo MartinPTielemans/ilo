@@ -566,6 +566,14 @@ mod tests {
             titles.iter().any(|(title, _)| title == "New Space…"),
             "the click opened no menu: {titles:?}"
         );
+        // As check.sh's choose_space reads it: each Space, the shown one checked and the first not
+        // last, then New Space…, with no line and no ⌃ key between them.
+        let shown = crate::menu::described(&host.entries.borrow());
+        assert!(
+            shown.starts_with("Space 1 (checked), Space 2, New Space…, "),
+            "the menu as the log has it: {shown}"
+        );
+        assert!(!shown.contains('⌃'), "the log has a key: {shown}");
         assert!(
             shell.read_with(cx, |shell, _| shell.space_button_lit()),
             "no plate while its menu is up"
