@@ -1732,15 +1732,15 @@ typedef struct bc_host {
   // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
   // app is quitting. |answer| lasts only for the call.
   void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
-  // How |read| (bc_pdf_read) ended, from a task of its own, once a read: a BC_PDF_ |result|, and
-  // with BC_PDF_READ the document's |page_count| and how many of the pages asked for it read,
-  // |pages_read|, fewer than asked past the document's end. Else both 0.
-  void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
   // The product's name as the user reads it, for what Chrome shows in words of its own that name
   // the browser: its warning before http. Null or empty, those keep Chrome's own name. Not a
   // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
   // reaches no log line, no page and no agent's answer.
   const char* product;
+  // How |read| (bc_pdf_read) ended, from a task of its own, once a read: a BC_PDF_ |result|, and
+  // with BC_PDF_READ the document's |page_count| and how many of the pages asked for it read,
+  // |pages_read|, fewer than asked past the document's end. Else both 0.
+  void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
