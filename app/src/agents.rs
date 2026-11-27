@@ -198,6 +198,9 @@ pub struct Status {
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
 /// the core take the app, as one may tell the windows something before it returns.
 pub trait Browser {
+    /// Whether the computer opens links with the browser, where Claude Code's sign-in page opens
+    /// as a tab (FR19).
+    fn is_default_browser(&self) -> bool;
     /// The Space of the agent with the id `agent`, or 0 if it has none.
     fn agent_space(&self, agent: &str) -> u64;
     /// Makes the agent's Space, named as the agent, and returns it.

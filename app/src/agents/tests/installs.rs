@@ -117,6 +117,32 @@ fn the_install_then_its_sign_in(cx: &mut TestAppContext) {
     assert_eq!(configs.installs.lock().unwrap().len(), 1);
 }
 
+/// Where the browser is the computer's default, Claude Code's sign-in page opens as a tab here, and
+/// the row says so (FR19); where it isn't, the page is in the computer's browser.
+#[gpui::test]
+fn the_sign_in_waits_in_a_tab_where_the_browser_is_the_default(cx: &mut TestAppContext) {
+    use crate::agents::sign_in::{CLAUDE_WAITING, CLAUDE_WAITING_IN_A_TAB};
+    let (agents, browser, configs) = missing(None, cx);
+    browser.default_browser.set(true);
+    press(&agents, cx);
+    will_find(&configs, Some(Ready::SignedOut));
+    end(&configs, 0, Ended::Done, cx);
+    assert_eq!(
+        shown(&agents, cx),
+        says(CLAUDE_WAITING_IN_A_TAB, Offer::Cancel)
+    );
+
+    // Failed, and no longer the default when Try Again signs in again.
+    let heard = configs.sign_ins.lock().unwrap()[0].1.clone();
+    heard
+        .unbounded_send(Heard::Ended(Ended::Failed(None)))
+        .unwrap();
+    cx.run_until_parked();
+    browser.default_browser.set(false);
+    press(&agents, cx);
+    assert_eq!(shown(&agents, cx), says(CLAUDE_WAITING, Offer::Cancel));
+}
+
 /// A sign-in that fails after the install says so as any does (AS5), and its Try Again signs in
 /// again, never installs again.
 #[gpui::test]

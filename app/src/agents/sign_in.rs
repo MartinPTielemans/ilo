@@ -652,6 +652,9 @@ pub struct SignIns {
     /// The programs ilo installed, as it noted at the time: saved, so Settings › Models says so
     /// for as long as each is there (AS6).
     pub(super) installed: HashSet<Cli>,
+    /// The sign-ins whose page opens as a tab here, the browser being the computer's default as
+    /// each started (FR19).
+    in_a_tab: HashSet<Cli>,
 }
 
 impl Agents {
@@ -696,6 +699,14 @@ impl Agents {
                     _heard: listen,
                 };
                 self.tasks.sign_ins.running.insert(cli, running);
+                // Claude Code opens its page in the computer's default browser; Codex's opens in
+                // a window of the browser's own either way.
+                let in_a_tab = &mut self.tasks.sign_ins.in_a_tab;
+                if cli == Cli::Claude && self.browser.is_default_browser() {
+                    in_a_tab.insert(cli);
+                } else {
+                    in_a_tab.remove(&cli);
+                }
                 log!("browser: task agent {} sign-in started", cli.id());
                 Row::SigningIn
             }
@@ -941,6 +952,9 @@ pub struct Shown {
 pub(crate) const CLAUDE_WAITING: &str = "Finish in your browser.";
 /// ChatGPT's line while its sign-in waits, in a window the browser opens (FR19).
 pub(crate) const CHATGPT_WAITING: &str = "Finish in the new window.";
+/// Claude's line while its sign-in waits where the browser is the computer's default, which
+/// opens its page as a new tab (FR19).
+pub(crate) const CLAUDE_WAITING_IN_A_TAB: &str = "Finish in the new tab.";
 
 /// The button of a row whose program isn't on the computer (AS1).
 pub const INSTALL_AND_SIGN_IN: &str = "Install and Sign In";
@@ -1050,7 +1064,12 @@ impl Agents {
     pub fn assistant_row(&self, cli: Cli) -> Shown {
         let found = self.tasks.found.get(&cli);
         let plan = found.and_then(|found| found.plan.as_deref());
-        shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
+        let row = self.sign_in_row(cli);
+        let mut shown = shown(cli, self.found(cli), plan, &row);
+        if row == Row::SigningIn && self.tasks.sign_ins.in_a_tab.contains(&cli) {
+            shown.line = CLAUDE_WAITING_IN_A_TAB.into();
+        }
+        shown
     }
 
     /// Settings › Models' assistants: every one the app can run, in its state, whether agents

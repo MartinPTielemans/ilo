@@ -80,6 +80,8 @@ struct Made {
     user: std::cell::Cell<Option<u64>>,
     /// The search engine's host, where a test moves it from search.example.
     engine: std::cell::Cell<Option<&'static str>>,
+    /// Whether the system opens links with the browser: another browser does, unless a test says.
+    default_browser: std::cell::Cell<bool>,
 }
 
 impl Made {
@@ -102,6 +104,10 @@ impl Made {
 }
 
 impl Browser for Made {
+    fn is_default_browser(&self) -> bool {
+        self.default_browser.get()
+    }
+
     fn agent_space(&self, agent: &str) -> u64 {
         self.agent_spaces.borrow().get(agent).copied().unwrap_or(0)
     }
