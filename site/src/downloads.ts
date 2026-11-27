@@ -9,7 +9,7 @@ export const PLATFORMS = [
     name: "Mac",
     file: "ilo-mac-arm64.dmg",
     note: "Apple silicon",
-    needs: "macOS 15 Sequoia or later, on Apple silicon",
+    needs: "macOS 14 Sonoma or later, on Apple silicon",
   },
   {
     id: "windows",

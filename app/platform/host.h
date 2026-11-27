@@ -686,9 +686,11 @@ void host_set_sidebar_right(void* ui_view, bool right);
 
 // The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
 // copies the UI draws in their place: each one's centre across from the window's left edge, their
-// row's centre down from its top, and their circles' diameter. False until a window shows all
-// three out of full screen.
-bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter);
+// row's centre down from its top, their circles' diameter, and how far the zoom button's frame
+// reaches from that edge, which the sidebar button keeps past. False until a window shows all three
+// out of full screen.
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter,
+                         double* zoom_end);
 
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);

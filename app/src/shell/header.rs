@@ -16,9 +16,9 @@ use gpui::{
 use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
     NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
-    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
-    TILE_HOVERED, TOOLS_FADE, Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
-    URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, Shell, Swapped, TILE_HOVERED,
+    TOOLS_FADE, Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
+    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -344,8 +344,18 @@ impl Shell {
             log!("browser: nav glyphs dimmed {dimmed}");
         }
         let page = self.page(self.field_tab());
-        let [sidebar, back, forward, reload_x] =
-            nav_places(self.width(), self.full_screen, self.right);
+        let [sidebar, back, forward, reload_x] = nav_places(
+            self.width(),
+            self.full_screen,
+            self.right,
+            self.sidebar_button_x(),
+        );
+        if self.sidebar_button_drawn.replace(Some(sidebar)) != Some(sidebar)
+            && let Some(x) = sidebar
+        {
+            // check.sh reads this line, to find it past the zoom button where AppKit puts it.
+            log!("browser: sidebar button at {x:.1}");
+        }
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -1042,11 +1052,16 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 /// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
 /// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
 /// from the page (#2375).
-pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
+pub(super) fn nav_places(
+    width: f32,
+    full_screen: bool,
+    right: bool,
+    sidebar_x: f32,
+) -> [Option<f32>; 4] {
     let sidebar = if full_screen {
         FULL_SCREEN_SIDEBAR_BUTTON_X
     } else {
-        SIDEBAR_BUTTON_X
+        sidebar_x
     };
     let first = sidebar + NAV_SIZE + NAV_AFTER_SIDEBAR;
     let last = width - NAV_TRAIL - NAV_SIZE;

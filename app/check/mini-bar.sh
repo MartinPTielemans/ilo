@@ -489,12 +489,12 @@ fi
 exec 3>&-
 quit
 
-# Safari's engine, on the Mac from macOS 14, shows a page the core's Boosts and Arrange can't reach:
+# Safari's engine, on the Mac, shows a page the core's Boosts and Arrange can't reach:
 # the command bar offers no Boost of the site there, though it has one from above (#2955), and ↑, ↓,
 # ⌘Z and escape are the page's with the page focused, and the UI's with the UI focused, as with the
 # mode off. The checks' streaming host (main.rs) opens the page there from its first load.
 safari=
-if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ "$(uname)" = Darwin ]; then
   forget_engine_sites
   log="$out/mini-bar-safari.log"
   step=0

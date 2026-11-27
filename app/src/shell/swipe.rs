@@ -786,6 +786,7 @@ mod tests {
         centres: [20., 40., 60.],
         y: 24.,
         diameter: 12.,
+        zoom_end: 67.,
     };
 
     /// A window of three Spaces on the first, whose host draws its buttons as `OLDER_SDK`.
@@ -907,6 +908,30 @@ mod tests {
             });
             assert!(receded && swapped, "the swipe didn't swap both ways");
         });
+    }
+
+    /// The header's sidebar button keeps 3 past the zoom button where AppKit puts it, as on macOS
+    /// 14, whose buttons are 20 apart, not at macOS 26's place: a press just past the zoom button
+    /// there hides the sidebar (#4354).
+    #[gpui::test]
+    fn the_sidebar_button_keeps_past_the_zoom_button_appkit_places(cx: &mut TestAppContext) {
+        use crate::tokens::shell::{
+            NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_AFTER_ZOOM, SIDEBAR_BUTTON_X,
+        };
+        let (shell, cx) = older_sdk_window(cx);
+        let start = OLDER_SDK.zoom_end + SIDEBAR_BUTTON_AFTER_ZOOM;
+        assert!(
+            start + 1. < SIDEBAR_BUTTON_X,
+            "the older buttons' place isn't nearer"
+        );
+        let at = point(px(start + 1.), px(NAV_TOP + NAV_SIZE / 2.));
+        cx.simulate_mouse_down(at, gpui::MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(at, gpui::MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "a press just past the zoom button missed the sidebar button"
+        );
     }
 
     /// On the right, fingers going right still bring the Library out from the first Space, and

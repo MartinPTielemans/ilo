@@ -9,7 +9,7 @@
 # relaunch brings back no private window. A private window's Library has its session's downloads
 # (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
 # window's doesn't, nor does the profile's history after the quit. Customize Chrome's page, typed in a
-# private window, is refused there, where it crashed the browser (#2070). From macOS 14, a private
+# private window, is refused there, where it crashed the browser (#2070). On the Mac, a private
 # window's page in Safari's engine shows its own icon, which the profile doesn't keep.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
@@ -362,11 +362,11 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 exec 3>&-
 quit
 
-# From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile
+# On the Mac, a private window's page in Safari's engine shows its own icon, which the profile
 # doesn't keep: the regular window's page of that site with none of its own shows none, and the
 # same page there keeps its icon as new (#3431).
 private_icon=
-if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+if [ "$(uname)" = Darwin ]; then
   forget_engine_sites
   log="$out/private-icon.log"
   step=0
@@ -407,8 +407,8 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   exec 3>&-
   quit
   forget_engine_sites
-  private_icon=" From macOS 14, a private window's page in Safari's engine shows its own icon, which the profile doesn't keep."
+  private_icon=" On the Mac, a private window's page in Safari's engine shows its own icon, which the profile doesn't keep."
 else
-  echo "skip: a private window's icon in Safari's engine, which is the Mac's from macOS 14."
+  echo "skip: a private window's icon in Safari's engine, which is the Mac's."
 fi
 echo "ok: a private window runs the extension allowed in Incognito, listed alone in its Extensions menu, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png.$private_icon"

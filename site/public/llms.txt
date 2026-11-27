@@ -11,7 +11,7 @@ The name is written lowercase, "ilo", and is Esperanto for "a tool".
 ## Pages
 
 - [Home](https://ilobrowser.com/): what ilo is, and the download for your computer
-- [ilo for Mac](https://ilobrowser.com/mac): macOS 15 Sequoia or later, on Apple silicon
+- [ilo for Mac](https://ilobrowser.com/mac): macOS 14 Sonoma or later, on Apple silicon
 - [ilo for Windows](https://ilobrowser.com/windows): 64-bit Windows 10 or later
 - [ilo for Linux](https://ilobrowser.com/linux): a Flatpak, for x64
 - [Help](https://ilobrowser.com/help): how ilo works, and answers to common questions

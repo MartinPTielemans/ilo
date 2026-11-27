@@ -2000,11 +2000,8 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
     to = [NSRunningApplication runningApplicationWithProcessIdentifier:owner];
   }
   if (to) {
-    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
-    if (@available(macOS 14, *)) {
-      [NSApp yieldActivationToApplication:to];
-      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
-    }
+    [NSApp yieldActivationToApplication:to];
+    [to activateFromApplication:NSRunningApplication.currentApplication options:0];
     // Inactive, the app has no key window for AppKit to hand on from.
     [NSApp deactivate];
   }
@@ -2215,6 +2212,22 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                             }
                                             return event;
                                           }];
+  }
+  // On macOS 14 the find bar sat 5 points low in full screen when placed at the last resize alone,
+  // so the bars that hang from the window's top are placed again once it's in or out (#4470).
+  for (NSNotificationName name in
+       @[ NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification ]) {
+    [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                    object:window
+                                                     queue:nil
+                                                usingBlock:^(NSNotification*) {
+                                                  if (browser->find_bar_shown) {
+                                                    PlaceFindBar(browser);
+                                                  }
+                                                  if (browser->offer_shown) {
+                                                    PlaceOffer(browser);
+                                                  }
+                                                }];
   }
   // A window resizes from its top left corner as often as its bottom right, and AppKit moves a
   // child window only with its parent's bottom left.
@@ -5240,10 +5253,11 @@ static CGFloat DrawnDiameter(NSButton* button) {
   return drawn * NSWidth(button.bounds) / MAX(picture.pixelsWide, 1);
 }
 
-bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter) {
+bool host_window_buttons(void* ui_view, double centres[3], double* y, double* diameter,
+                         double* zoom_end) {
   // Read once: they're the same in every browser window, by the SDK the app was built with and
   // the system it runs on. Hidden, AppKit lays the others out again, so all three must show.
-  static double g_centres[3], g_y, g_diameter;
+  static double g_centres[3], g_y, g_diameter, g_zoom_end;
   if (g_diameter == 0) {
     Browser* browser = BrowserWithView(ui_view);
     if (!browser || (browser->window.styleMask & NSWindowStyleMaskFullScreen)) {
@@ -5264,6 +5278,12 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
       NSRect frame = [button convertRect:button.bounds toView:nil];
       read[i] = browser->sidebar_right ? NSWidth(window.frame) - NSMidX(frame) : NSMidX(frame);
       row = NSHeight(window.frame) - NSMidY(frame);
+      // AppKit sets the buttons further apart on 26 than before it, so the header's first button
+      // goes by where zoom actually ends, not by one version's numbers (#4354).
+      if (types[i] == NSWindowZoomButton) {
+        g_zoom_end =
+            browser->sidebar_right ? NSWidth(window.frame) - NSMinX(frame) : NSMaxX(frame);
+      }
     }
     const CGFloat drawn = DrawnDiameter([window standardWindowButton:NSWindowCloseButton]);
     if (drawn <= 0) {
@@ -5280,6 +5300,7 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
   }
   *y = g_y;
   *diameter = g_diameter;
+  *zoom_end = g_zoom_end;
   return true;
 }
 
@@ -5688,10 +5709,7 @@ void host_open_elsewhere(const char* url) {
   if (![page.scheme isEqualToString:@"http"] && ![page.scheme isEqualToString:@"https"]) {
     return;
   }
-  // check.sh reads this line. A driven run opens nothing, so checks never launch Safari.
-  if (Checked()) {
-    fprintf(stderr, "browser: open in safari %s\n", url);
-  }
+  // A driven run opens nothing, so checks never launch Safari.
   if (getenv("BROWSER_DRIVE")) {
     return;
   }

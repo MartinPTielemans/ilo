@@ -7,7 +7,9 @@ use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
 
 use crate::theme::Appearance;
-use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
+use crate::tokens::shell::{
+    SIDEBAR_BUTTON_AFTER_ZOOM, SIDEBAR_BUTTON_X, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y,
+};
 
 use super::live_folders::LiveSource;
 use super::{
@@ -1158,14 +1160,16 @@ pub enum WindowButton {
 }
 
 /// Where the window's close, minimize and zoom buttons are and how big: each one's centre across
-/// from the window's left edge, their row's centre down from its top, and their diameter. macOS 26
-/// draws the Mac's larger in an app built with its SDK than in one built with an older SDK, 14 on
-/// a pitch of 23 against 12 on 20 (#1310), so a copy takes them from AppKit.
+/// from the window's left edge, their row's centre down from its top, their diameter, and how far
+/// the zoom button's frame reaches from that edge. macOS 26 draws the Mac's larger in an app built
+/// with its SDK than in one built with an older SDK, 14 on a pitch of 23 against 12 on 20 (#1310),
+/// so a copy takes them from AppKit.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct WindowButtonGeometry {
     pub centres: [f32; 3],
     pub y: f32,
     pub diameter: f32,
+    pub zoom_end: f32,
 }
 
 impl Default for WindowButtonGeometry {
@@ -1177,11 +1181,17 @@ impl Default for WindowButtonGeometry {
             centres,
             y: WINDOW_BUTTON_Y,
             diameter: WINDOW_BUTTON_SIZE,
+            zoom_end: SIDEBAR_BUTTON_X - SIDEBAR_BUTTON_AFTER_ZOOM,
         }
     }
 }
 
 impl WindowButtonGeometry {
+    /// Where the header's sidebar button starts, from the window's edge: past the zoom button.
+    pub fn sidebar_button_x(&self) -> f32 {
+        self.zoom_end + SIDEBAR_BUTTON_AFTER_ZOOM
+    }
+
     /// Each button's frame in the window.
     pub fn frames(&self) -> [Bounds<Pixels>; 3] {
         let (radius, side) = (self.diameter / 2., px(self.diameter));

@@ -46,14 +46,15 @@ jobs:
           mkdir "$RUNNER_TEMP/Sparkle"
           tar xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/Sparkle"
 
-      # build.rs's flags for the Mac host, with the cc crate's warnings and Rust's default target.
+      # build.rs's flags for the Mac host, with the cc crate's warnings and the app's minimum, which
+      # app/.cargo/config.toml gives the build.
       # Each error also shows on the commit as an annotation at its line.
       - name: Check
         run: |
           status=0
           for file in app/platform/mac/*.mm; do
             echo "::group::$file"
-            if ! xcrun clang++ -fsyntax-only -target arm64-apple-macos11 -std=c++20 -fobjc-arc \
+            if ! xcrun clang++ -fsyntax-only -target arm64-apple-macos14 -std=c++20 -fobjc-arc \
                 -Wall -Wextra -DNDEBUG -Icore/public -F"$RUNNER_TEMP/Sparkle" "$file" 2> "$RUNNER_TEMP/out"; then
               status=1
             fi

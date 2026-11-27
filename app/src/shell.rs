@@ -402,7 +402,6 @@ use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_SIZE;
 use crate::tokens::shell::NAV_TOP;
 use crate::tokens::shell::NAV_TRAIL;
-use crate::tokens::shell::SIDEBAR_BUTTON_X;
 
 use crate::tokens::shell::URL_BUTTON_GLYPH;
 use crate::tokens::shell::URL_BUTTON_INSET;
@@ -2073,6 +2072,8 @@ pub struct Shell {
     window_main: bool,
     /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
     nav_dimmed_drawn: Cell<Option<bool>>,
+    /// Where the header's sidebar button was last drawn, which the log says when it changes.
+    sidebar_button_drawn: Cell<Option<Option<f32>>>,
     /// Whether the host was last asked to draw the material light.
     window_light: Option<bool>,
     /// The menus' look capture mode was last given, which it takes again when it changes (#861).
@@ -2469,6 +2470,7 @@ impl Shell {
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
+            sidebar_button_drawn: Cell::new(None),
             window_watches: Vec::new(),
             window_light: None,
             capture_look: None,
@@ -5676,6 +5678,14 @@ impl Shell {
     /// the window's own, at their size (#1310).
     pub(super) fn window_button_frames(&self) -> [Bounds<Pixels>; 3] {
         self.window_button_geometry.unwrap_or_default().frames()
+    }
+
+    /// Where the header's sidebar button starts out of full screen: past the window's zoom button,
+    /// where AppKit or the UI puts it.
+    pub(super) fn sidebar_button_x(&self) -> f32 {
+        self.window_button_geometry
+            .unwrap_or_default()
+            .sidebar_button_x()
     }
 
     /// The window's close, minimize and zoom buttons, drawn in the reveal's panel, the sidebar or

@@ -1265,10 +1265,13 @@ sidebar-min = 164.0
 sidebar-max = 500.0
 reveal-inset = 5.0
 # The header's buttons: their plates' tops and the sidebar button's left edge, from the window's,
-# as Arc 1.170's accessibility tree has them, 3 pt past the traffic lights. In full screen, with no
-# traffic lights, its glyph's centre is 29.25 in, so its plate starts at 13.25 (Arc 1.171).
+# as Arc 1.170's accessibility tree has them, 3 pt past the traffic lights: past the zoom button's
+# frame as AppKit places it on the Mac, whose spacing differs by version, and at 77 where the UI
+# draws the buttons itself. In full screen, with no traffic lights, its glyph's centre is 29.25 in,
+# so its plate starts at 13.25 (Arc 1.171).
 nav-top = 7.5
 sidebar-button-x = 77.0
+sidebar-button-after-zoom = 3.0
 full-screen-sidebar-button-x = 13.25
 # Back, forward and reload keep to the sidebar's right edge, 6 in from it and 34 apart, so 2 apart
 # (Arc 1.170: 241/275/309 in a 347 sidebar, 122/156/190 in a 228). A narrow sidebar loses reload,

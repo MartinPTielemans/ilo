@@ -15,6 +15,7 @@ use super::{
     Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
+use crate::tokens::shell::SIDEBAR_BUTTON_X;
 use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
 
 const WIDTH: f32 = 1000.;
@@ -109,8 +110,8 @@ fn on_the_right_the_page_is_the_left_mirrored(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_header_is_in_bs_order_on_the_right(_: &mut TestAppContext) {
     for full_screen in [false, true] {
-        let left = nav_places(240., full_screen, false);
-        let right = nav_places(240., full_screen, true);
+        let left = nav_places(240., full_screen, false, SIDEBAR_BUTTON_X);
+        let right = nav_places(240., full_screen, true, SIDEBAR_BUTTON_X);
         let sidebar = left[0].unwrap();
         assert_eq!(right[0], Some(240. - sidebar - NAV_SIZE));
         let navs = |places: [Option<f32>; 4]| places[1..].iter().flatten().copied().collect();

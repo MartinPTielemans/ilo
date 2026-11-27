@@ -17,10 +17,13 @@
 # What macOS keeps of the leave to notify of the app and of its alert helper, the two that post, as
 # "<id> allowed|refused <flags>" lines. On macOS 26 it's in usernoted's own preferences, by bundle
 # id, where bit 25 of an app's flags is Settings' Allow Notifications; ncprefs holds none (#2396).
+# macOS 14 keeps the same entries in ncprefs, and no usernoted file (#4468).
 kept_answers() {
   python3 -I -c '
 import os, plistlib, sys
 path = os.path.expanduser("~/Library/Group Containers/group.com.apple.usernoted/Library/Preferences/group.com.apple.usernoted.plist")
+if not os.path.exists(path):
+    path = os.path.expanduser("~/Library/Preferences/com.apple.ncprefs.plist")
 try:
     with open(path, "rb") as f:
         apps = plistlib.load(f).get("apps", [])
@@ -50,7 +53,8 @@ if [ "$(uname)" = Darwin ]; then
     # it runs on real Macs too; a check VM clears it before the run to be asked as a new app is
     # (#2396).
     allowed=$(kept_answers | grep -c ' allowed ' || true)
-    clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
+    # C++17 named: the command line tools on macOS 14 build .mm as C++98 by default.
+    clang++ -std=c++17 -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
     # usernoted delivers them to it, finding none. It's started before the app posts any.

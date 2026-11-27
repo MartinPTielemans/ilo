@@ -102,7 +102,9 @@
 //                                         numbered as order numbers them
 //   layout                                logs the frames of the window's views and child
 //                                         windows, the centres of its close, minimize and
-//                                         zoom buttons, the frame of the page that has the
+//                                         zoom buttons and the zoom button's far edge, as
+//                                         "browser: layout zoom end <x>", the frame of the
+//                                         page that has the
 //                                         keyboard, as "browser: layout keyboard <x>,<y>
 //                                         <w>x<h>" or "none", and whether it's full screen, as
 //                                         "browser: layout full screen <0|1>"
@@ -427,6 +429,10 @@ const std::map<std::string, std::string> kCharacters = {
 constexpr short kDoneSubtype = 0x5350;
 // Posted after pip's release, so the press holds the Mini Player till AppKit has the release.
 constexpr short kPipLetGoSubtype = 0x5351;
+// Whether the command running posts the mouse's button, which can start the system's drag.
+bool g_mouse_step = false;
+// The last command whose done line was given.
+long g_reported = 0;
 
 // The window the backdrop command puts behind the browser window.
 NSWindow* g_backdrop;
@@ -805,6 +811,27 @@ bool Key(NSWindow* window,
 constexpr CGEventField kWindowNumberField = (CGEventField)51;
 extern "C" void CGEventSetWindowLocation(CGEventRef event, CGPoint location);
 
+// Where a driven wheel event goes: its window, and its place there and on screen as the same point.
+// On macOS 14 an event placed only in its window landed outside it (#4354).
+struct WheelPlace {
+  long window_number;
+  CGPoint in_window;
+  CGPoint on_screen;
+};
+
+WheelPlace WheelAt(NSWindow* window, double x, double y) {
+  NSPoint screen = [window convertPointToScreen:NSMakePoint(x, NSHeight(window.frame) - y)];
+  // Quartz's screen points start at the top left of the menu bar's screen, AppKit's at its bottom.
+  CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+  return {window.windowNumber, CGPointMake(x, y), CGPointMake(screen.x, top - screen.y)};
+}
+
+void Place(CGEventRef event, const WheelPlace& place) {
+  CGEventSetIntegerValueField(event, kWindowNumberField, place.window_number);
+  CGEventSetLocation(event, place.on_screen);
+  CGEventSetWindowLocation(event, place.in_window);
+}
+
 }  // namespace
 
 // host.mm's, as AppKit has no way to make a swipe event of one's own.
@@ -889,7 +916,7 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
 }
 
 void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^done)(void)) {
-  long window_number = window.windowNumber;
+  WheelPlace place = WheelAt(window, x, y);
   __block int left = count;
   dispatch_source_t timer =
       dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
@@ -897,8 +924,7 @@ void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^d
   dispatch_source_set_event_handler(timer, ^{
     CGEventRef event =
         CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1, (int32_t)-dy, 0, 0);
-    CGEventSetIntegerValueField(event, kWindowNumberField, window_number);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, place);
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
     if (--left == 0) {
@@ -913,13 +939,12 @@ void Scroll(NSWindow* window, double x, double y, double dy, int count, void (^d
 // ends, with the phases AppKit reads from Quartz's field.
 void Swipe(NSWindow* window, double x, double y, double dx, double dy, int count, int rest_ms,
            void (^done)(void)) {
-  long window_number = window.windowNumber;
+  WheelPlace place = WheelAt(window, x, y);
   void (^post)(double, double, int64_t) = ^(double across, double along, int64_t phase) {
     CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 2,
                                                       (int32_t)along, (int32_t)across, 0);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
-    CGEventSetIntegerValueField(event, kWindowNumberField, window_number);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, place);
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
   };
@@ -1379,6 +1404,13 @@ void Layout(NSWindow* window) {
     NSRect frame = [button convertRect:button.bounds toView:nil];
     [line appendFormat:@" %.1f,%.1f", NSMidX(frame), NSHeight(window.frame) - NSMidY(frame)];
   }
+  // The zoom button's far edge, which the header's sidebar button keeps 3 past (#4354). From the
+  // window's left edge: for the left layout only, where the host reads it the same way.
+  NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
+  if (!zoom.hidden) {
+    [line appendFormat:@"\nbrowser: layout zoom end %.1f",
+                       NSMaxX([zoom convertRect:zoom.bounds toView:nil])];
+  }
   // Child windows, such as the find bar: from the content's top-left corner, and their size.
   NSRect bounds = [window contentRectForFrameRect:window.frame];
   for (NSWindow* child in window.childWindows) {
@@ -1453,9 +1485,18 @@ bool ChooseTracked(NSString* title) {
   return true;
 }
 
-// The text fields' and buttons' views in |view|, in the order AppKit lays them out.
+// The text fields' and buttons' views in |view| shown, in the order AppKit lays them out. A
+// button's title is its text, so what's in it isn't another: on macOS 14 an alert named each of
+// its buttons twice (#4471).
 void ModalTexts(NSView* view, NSMutableArray<NSView*>* texts) {
-  if ([view isKindOfClass:NSTextField.class] || [view isKindOfClass:NSButton.class]) {
+  if (view.hidden) {
+    return;
+  }
+  if ([view isKindOfClass:NSButton.class]) {
+    [texts addObject:view];
+    return;
+  }
+  if ([view isKindOfClass:NSTextField.class]) {
     [texts addObject:view];
   }
   for (NSView* subview in view.subviews) {
@@ -1541,8 +1582,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       // mouse's lines, and the Mini Player moves with it as the content would.
       CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1,
                                                         (int32_t)(-notches * 120), 0, 0);
-      CGEventSetIntegerValueField(event, kWindowNumberField, pip.windowNumber);
-      CGEventSetWindowLocation(event, CGPointMake(x, y));
+      Place(event, WheelAt(pip, x, y));
       // AppKit's modifier flags are Quartz's bits.
       CGEventSetFlags(event, (CGEventFlags)Modifiers(words));
       Pointed(pip, NSMakePoint(x, NSHeight(pip.frame) - y));
@@ -1668,11 +1708,8 @@ bool Run(const std::string& line, void (^done)(void)) {
               pid, up ? "is up" : "isn't");
       return false;
     }
-    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
-    if (@available(macOS 14, *)) {
-      [NSApp yieldActivationToApplication:to];
-      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
-    }
+    [NSApp yieldActivationToApplication:to];
+    [to activateFromApplication:NSRunningApplication.currentApplication options:0];
     fprintf(stderr, "browser: yielded to %d\n", pid);
     done();
     return true;
@@ -1885,6 +1922,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (action == "release") {
       pressed = nil;
     }
+    g_mouse_step = true;
     done();
     return true;
   }
@@ -1969,8 +2007,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     Convert(window, target, &x, &y);
     CGEventRef event =
         CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitLine, 2, 0, (int32_t)dx, 0);
-    CGEventSetIntegerValueField(event, kWindowNumberField, target.windowNumber);
-    CGEventSetWindowLocation(event, CGPointMake(x, y));
+    Place(event, WheelAt(target, x, y));
     [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
     CFRelease(event);
     done();
@@ -2597,6 +2634,23 @@ bool Run(const std::string& line, void (^done)(void)) {
   return false;
 }
 
+// The line saying command |number| is done, with where the keyboard is.
+void ReportDone(long number) {
+  g_reported = std::max(g_reported, number);
+  NSWindow* key = NSApp.keyWindow;
+  NSResponder* focus = (key ?: MainWindow()).firstResponder;
+  NSString* marked = @"none";
+  if ([focus conformsToProtocol:@protocol(NSTextInputClient)]) {
+    NSRange range = [(id<NSTextInputClient>)focus markedRange];
+    if (range.location != NSNotFound) {
+      marked = [NSString stringWithFormat:@"%lu,%lu", range.location, range.length];
+    }
+  }
+  fprintf(stderr, "browser: drive %ld done, key %s, focus %s, active %d, marked %s\n", number,
+          key ? NSStringFromClass(key.class).UTF8String : "none",
+          NSStringFromClass(focus.class).UTF8String, NSApp.active, marked.UTF8String);
+}
+
 void PostDone(long number) {
   [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
                                       location:NSZeroPoint
@@ -2608,6 +2662,25 @@ void PostDone(long number) {
                                          data1:number
                                          data2:0]
            atStart:NO];
+  if (!g_mouse_step) {
+    return;
+  }
+  g_mouse_step = false;
+  // On macOS 14 the system's drag a mouse step starts runs CoreDrag's loop until the button is let
+  // go, and it takes only the mouse's events, so the done event waits behind it and the command
+  // never finished (#4459). So a mouse command's line is given here once its done event has waited
+  // half a second, which a run loop that takes every event doesn't leave it, and none when AppKit
+  // takes the event.
+  NSTimer* tracking = [NSTimer timerWithTimeInterval:0.5
+                                             repeats:NO
+                                               block:^(NSTimer*) {
+                                                 if (number > g_reported) {
+                                                   fprintf(stderr, "browser: drive %ld done event held, run loop in %s\n", number,
+                                                           NSRunLoop.currentRunLoop.currentMode.UTF8String);
+                                                   ReportDone(number);
+                                                 }
+                                               }];
+  [NSRunLoop.mainRunLoop addTimer:tracking forMode:NSRunLoopCommonModes];
 }
 
 }  // namespace
@@ -2617,18 +2690,9 @@ void drive_start(void) {
     if (event.subtype != kDoneSubtype) {
       return event;
     }
-    NSWindow* key = NSApp.keyWindow;
-    NSResponder* focus = (key ?: MainWindow()).firstResponder;
-    NSString* marked = @"none";
-    if ([focus conformsToProtocol:@protocol(NSTextInputClient)]) {
-      NSRange range = [(id<NSTextInputClient>)focus markedRange];
-      if (range.location != NSNotFound) {
-        marked = [NSString stringWithFormat:@"%lu,%lu", range.location, range.length];
-      }
+    if (event.data1 > g_reported) {
+      ReportDone(event.data1);
     }
-    fprintf(stderr, "browser: drive %ld done, key %s, focus %s, active %d, marked %s\n",
-            (long)event.data1, key ? NSStringFromClass(key.class).UTF8String : "none",
-            NSStringFromClass(focus.class).UTF8String, NSApp.active, marked.UTF8String);
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
