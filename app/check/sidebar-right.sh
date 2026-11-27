@@ -65,7 +65,12 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 # side_buttons <stage> <side>: the buttons' centres, as the driver's layout line gives them from
-# the window's top-left, are where AppKit puts them on <side>: 20, 43 and 66 from that edge.
+# the window's top-left, are where AppKit puts them on <side>: 20, 43 and 66 from that edge from
+# macOS 26, and 20, 40 and 60 before it, as measured on 14.8.7 (#4354's run, 2026-11-27).
+minimize=43 zoom=66
+if [ "$(sw_vers -productVersion | cut -d. -f1)" -eq 14 ]; then
+  minimize=40 zoom=60
+fi
 side_buttons() {
   send layout
   width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
@@ -75,8 +80,8 @@ side_buttons() {
   echo "$1: window $width wide, close minimize zoom at $line" >> "$out/sidebar-right.txt"
   set -- "$1" "$2" $(echo "$line" | tr ' ' '\n' | cut -d. -f1 | tr '\n' ' ')
   case $2 in
-    left) want="20 43 66" ;;
-    right) want="$((width - 20)) $((width - 43)) $((width - 66))" ;;
+    left) want="20 $minimize $zoom" ;;
+    right) want="$((width - 20)) $((width - minimize)) $((width - zoom))" ;;
   esac
   [ "$3 $4 $5" = "$want" ] ||
     fail "$1: the window's buttons are at $line, not at $want across, as on the $2"

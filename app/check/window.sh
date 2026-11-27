@@ -151,6 +151,11 @@ check_buttons() {
   buttons=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout buttons' |
     cut -d' ' -f4-)
   expected="20.0,24.0 43.0,24.0 66.0,24.0"
+  # AppKit sets them 23 apart from macOS 26 and 20 apart before it, as measured on 14.8.7
+  # (#4354's run, 2026-11-27).
+  if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -eq 14 ]; then
+    expected="20.0,24.0 40.0,24.0 60.0,24.0"
+  fi
   # On Windows they're the system's, in its own title bar (platform/windows/drive.cc).
   { [ "${2:-}" = hidden ] || windows; } && expected="hidden hidden hidden"
   [ "$buttons" = "$expected" ] || fail "$1: the window's buttons are at $buttons, not $expected"
