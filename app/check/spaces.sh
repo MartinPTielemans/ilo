@@ -276,7 +276,7 @@ show_space() {
 # it, so nothing that clicks or captures the button waits for less (#4400).
 choose_space() {
   post click "$(space_button)"
-  expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, $(cased 'New Space…')" \
+  expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, \(.*, \)\{0,1\}$(cased 'New Space…')" \
     "a click on the Space button didn't open its menu with $1 in it"
   send choose "$1"
   expect '^browser: command select-space via footer$' "$1 in the Space button's menu didn't run select-space"
@@ -466,13 +466,20 @@ send dragto $at
 expect '^browser: drag opened the space menu$' "a row held on the Space button for 0.5 s didn't open its menu"
 expect "^browser: menu shown .*$second_name.*$(cased 'New Space…')" \
   "the menu a row held on the Space button opened didn't list $second_name and New Space…"
+rise=$((step + 1))
 for _ in $(seq 40); do
   button_y=$((button_y - 6))
   send dragto $button_x $button_y
   since | grep -q "^browser: menu highlights $second_name at " && break
 done
-since | grep -q "^browser: menu highlights $second_name at " ||
-  fail "the pointer rising from the Space button over the menu's rows never lit $second_name's row"
+# The menu logs a highlight only when it moves. Should the app light a row after a move's done, the
+# pointer can have risen past $second_name's row, so the row lit last is the one let go on.
+lit=$(since $rise | grep '^browser: menu highlights ' | tail -1)
+case "$lit" in
+  "browser: menu highlights $second_name at "*) ;;
+  '') fail "the pointer rising from the Space button over the menu's rows lit no row, up to $button_x $button_y" ;;
+  *) fail "the pointer rose past $second_name's row before letting go, at $button_x $button_y: the row lit last was \"${lit#browser: menu highlights }\"" ;;
+esac
 send release $button_x $button_y
 expect "^browser: dropped tab $c on the space menu\$" "a row let go on $second_name's row in the Space button's menu didn't drop there"
 expect "^browser: today $a\$" "the tab dropped on $second_name's row didn't leave this Space's Today: \"$(today)\""
