@@ -165,6 +165,14 @@ const THREAD_KIND: &str = "Thread";
 /// The composer's foot: what ⇥ does at its left, and what ↩ does at its right (Z8).
 const BACK_TO_SEARCH: &str = "Back to Search";
 const OPENS_AS: &str = "Opens as a thread in its own tab";
+/// The switch at the input's end, wherever an assistant is ready: its halves, the one the bar is
+/// in plated, and for a screen reader its name and help, with the half as its value (Z53).
+const SWITCH: [&str; 2] = ["Search", "Thread"];
+const SWITCH_NAME: &str = "Search or Thread";
+const SWITCH_HELP: &str = "Press Tab to switch";
+/// What the composer's field says with nothing typed, with no assistant to name (U2); with one it
+/// says `Ask {assistant} to do something`.
+const ASK_ANY_PLACEHOLDER: &str = "Ask an assistant to do something";
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -1189,14 +1197,17 @@ fn bind_keys(cx: &mut App) {
 }
 
 /// A bar to rest in `window`'s empty Space, which its page draws where ⌘T's opens: the same bar,
-/// whose ⇥ grows it into the composer in place. It asks nothing of the core or the host until it's
-/// typed in, so the Space's first frame reads nothing for it.
+/// whose ⇥ grows it into the composer in place. It asks the core nothing until it's typed in, and
+/// reads only what the browser last learned of the assistants, in memory, for its switch and
+/// placeholder (#4393).
 pub fn in_place(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
     if !cx.has_global::<CommandBarWindow>() && !cx.has_global::<InPlaceKeys>() {
         bind_keys(cx);
         cx.set_global(InPlaceKeys);
     }
-    new_bar(host, Surface::InPlace, window, cx)
+    let bar = new_bar(host, Surface::InPlace, window, cx);
+    bar.update(cx, |bar, cx| bar.agents_changed(cx));
+    bar
 }
 
 /// The bar, in its own window or at rest in `window`.
@@ -1621,11 +1632,9 @@ pub fn task_agents_changed(cx: &mut App) {
             bar.task_agents = agents;
             if bar.ask.is_some() {
                 bar.log_agents();
+                bar.show_placeholder(cx);
             } else if bar.site.is_none() && bar.commands.is_none() && bar.lists_commands() {
-                let placeholder = bar.search_placeholder();
-                bar.input.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder.into(), cx)
-                });
+                bar.show_placeholder(cx);
             }
             cx.notify();
         })
@@ -2010,10 +2019,6 @@ impl CommandBar {
             self.completion.clear();
             return;
         }
-        // A resting bar reads nothing of tasks for the page's first frame, only once typed in.
-        if self.surface == Surface::InPlace && self.task_agents.is_none() {
-            self.task_agents = self.learned_agents(cx);
-        }
         let shown = format!("{}{}", self.asked, self.completion);
         // Moving the selection off the completion takes it as typed, as in Chrome.
         if text == shown
@@ -2384,8 +2389,15 @@ impl CommandBar {
         if self.leave_ask(window, cx) {
             return;
         }
+        // With tasks on, ⇥ in an empty field opens the composer, as with words (#4393); with them
+        // off it lists only the commands, as Arc's does.
         let empty = self.input.read(cx).text().is_empty();
-        if empty && self.site.is_none() && self.commands.is_none() && self.lists_commands() {
+        if empty
+            && self.task_agents.is_none()
+            && self.site.is_none()
+            && self.commands.is_none()
+            && self.lists_commands()
+        {
             return self.enter_commands("", window, cx);
         }
         let hint = self
@@ -2451,15 +2463,14 @@ impl CommandBar {
             .flatten()
     }
 
-    /// Whether ⇥ makes what's typed a task: tasks are on, and the bar opens a page, outside a site
-    /// search and the commands-only list.
-    fn may_ask(&self, cx: &App) -> bool {
+    /// Whether ⇥ opens the composer with what's typed, if anything is: tasks are on, and the bar
+    /// opens a page, outside a site search and the commands-only list.
+    fn may_ask(&self, _: &App) -> bool {
         self.task_agents.is_some()
             && self.lists_commands()
             && self.site.is_none()
             && self.commands.is_none()
             && self.ask.is_none()
-            && !self.typed(cx).is_empty()
     }
 
     /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
@@ -2477,7 +2488,7 @@ impl CommandBar {
     /// Z2 where the bar can start a thread, as New Thread is offered; else E1, as with tasks off or
     /// no assistant set up.
     fn search_placeholder(&self) -> &'static str {
-        match self.surface == Surface::Window && self.lists_commands() && self.agents_ready() {
+        match self.lists_commands() && self.agents_ready() {
             true => THREAD_PLACEHOLDER,
             false => PLACEHOLDER_TEXT,
         }
@@ -2516,6 +2527,7 @@ impl CommandBar {
         self.input.update(cx, |input, cx| {
             input.set_text(typed.into(), caret, window, cx)
         });
+        self.show_placeholder(cx);
         self.ask_shown(true, cx);
         self.log_agents();
         self.set_rows(String::new(), Vec::new(), window, cx);
@@ -2539,6 +2551,20 @@ impl CommandBar {
     fn composer_assistant(&self) -> Option<&TaskAgent> {
         let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
         starts_on(self.task_agents.as_ref()?, picked)
+    }
+
+    /// Puts what the field says with nothing typed: in the composer U2, naming the assistant the
+    /// thread starts on; in search Z2 or E1, as an assistant is ready or not.
+    fn show_placeholder(&self, cx: &mut App) {
+        let placeholder: SharedString = match self.ask.is_some() {
+            true => match self.composer_assistant() {
+                Some(agent) => format!("Ask {} to do something", agent.name).into(),
+                None => ASK_ANY_PLACEHOLDER.into(),
+            },
+            false => self.search_placeholder().into(),
+        };
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     /// The model the composer's thread starts on, by id, empty for its assistant's own default:
@@ -2567,6 +2593,7 @@ impl CommandBar {
         if self.ask.take().is_none() {
             return false;
         }
+        self.show_placeholder(cx);
         self.ask_shown(false, cx);
         true
     }
@@ -2828,6 +2855,8 @@ impl CommandBar {
                 let Some(ask) = &mut self.ask else { return };
                 log!("browser: composer model picked");
                 ask.model = Some((agent, id));
+                // The field names the assistant the pick starts the thread on.
+                self.show_placeholder(cx);
                 cx.notify();
             }
             ModelPick::SignIn(agent) => self.host.sign_in(&agent, cx),
@@ -3276,7 +3305,8 @@ impl CommandBar {
     /// typed. The first row stays the page or search for it, which ↩ takes.
     fn with_thread_row(&self, mut rows: Vec<Suggestion>, cx: &App) -> Vec<Suggestion> {
         rows.retain(|row| !row.starts_thread());
-        if !rows.is_empty() && self.offers_ask(cx) {
+        // In an empty bar the switch says what ⇥ does; the row is for what's typed.
+        if !rows.is_empty() && self.offers_ask(cx) && !self.typed(cx).is_empty() {
             let thread = Suggestion {
                 text: NEW_THREAD.into(),
                 task: Some(TaskRow::Thread),
@@ -3983,6 +4013,96 @@ impl CommandBar {
 
     /// "Search <site>" and the Tab key, at the input's end, while the row ↩ takes hints a site
     /// search; "Ask Claude" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
+    /// Whether the input's end shows the switch: an assistant is ready and ⇥ goes between the
+    /// search and the composer, in ⌘T's bar and the resting one. A keyword row's site hint takes the
+    /// end while it shows, as ⇥ enters its site search then, and over the URL field there's no room.
+    fn shows_switch(&self) -> bool {
+        self.agents_ready()
+            && self.lists_commands()
+            && !self.over_field
+            && self.site.is_none()
+            && self.commands.is_none()
+            && !self.hints_site()
+    }
+
+    /// Whether the selected row hints its site search, which ⇥ enters.
+    fn hints_site(&self) -> bool {
+        (self.chosen()).is_some_and(|row| self.site.is_none() && !row.keyword.is_empty())
+    }
+
+    /// A click on the switch: what ⇥ does, between the search and the composer.
+    fn switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // check.sh reads this line.
+        log!("browser: command bar switch clicked");
+        if !self.leave_ask(window, cx) && self.may_ask(cx) {
+            self.enter_ask(window, cx);
+        }
+    }
+
+    /// The switch at the input's end (Z53): Search and Thread, the one the bar is in plated, and
+    /// ⇥'s chip. One control to a screen reader, its value the half it's in.
+    fn mode_switch(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        use crate::tokens::settings::{
+            CONTROL_RADIUS, SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS,
+            SEGMENT_TEXT, SEGMENT_X,
+        };
+        if !self.shows_switch() {
+            return None;
+        }
+        let palette = palette::current(cx);
+        let on = usize::from(self.ask.is_some());
+        let (plate, _) = chosen(&palette);
+        let halves = SWITCH.iter().enumerate().map(|(index, words)| {
+            div()
+                .flex_none()
+                .h(px(SEGMENT_HEIGHT))
+                .px(px(SEGMENT_X))
+                .flex()
+                .items_center()
+                .rounded(px(CONTROL_RADIUS))
+                .when(index == on, |half| {
+                    half.bg(plate)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.on_overlay(TITLE))
+                })
+                .when(index != on, |half| half.text_color(palette.on_overlay(DIM)))
+                .child(*words)
+        });
+        let track = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .p(px(SEGMENT_INSET))
+            .gap(px(SEGMENT_INSET))
+            .rounded(px(SEGMENT_RADIUS))
+            .bg(palette.plate(CHIP))
+            .text_size(px(SEGMENT_TEXT))
+            .line_height(px(SEGMENT_LINE))
+            .children(halves);
+        Some(
+            div()
+                .id("search-or-thread")
+                .when(self.a11y, |switch| {
+                    switch
+                        .role(Role::Button)
+                        .aria_label(SWITCH_NAME)
+                        .aria_value(SWITCH[on])
+                        .aria_description(SWITCH_HELP)
+                })
+                .flex_none()
+                .ml(px(HINT_GAP))
+                .flex()
+                .items_center()
+                .gap(px(HINT_KEY_GAP))
+                // The key chip at the size of every hint's at the input's end.
+                .text_size(px(text::BODY))
+                .cursor_pointer()
+                .on_click(cx.listener(|bar, _, window, cx| bar.switch(window, cx)))
+                .child(track)
+                .child(key_chip(hint_key("tab", shell::OFF_THE_MAC), &palette)),
+        )
+    }
+
     fn site_hint(&self, cx: &App) -> Option<impl IntoElement + use<>> {
         let site = self
             .chosen()
@@ -4503,9 +4623,6 @@ impl CommandBar {
     /// resting bar that has read them reads them again, so its New Thread row and composer show
     /// the ones found. Whether they changed.
     pub fn agents_changed(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.task_agents.is_none() {
-            return false;
-        }
         let agents = self.learned_agents(cx);
         if agents == self.task_agents {
             return false;
@@ -4513,6 +4630,9 @@ impl CommandBar {
         self.task_agents = agents;
         if self.ask.is_some() {
             self.log_agents();
+            self.show_placeholder(cx);
+        } else if self.site.is_none() && self.commands.is_none() {
+            self.show_placeholder(cx);
         }
         cx.notify();
         true
@@ -4660,7 +4780,8 @@ impl Render for CommandBar {
                         .child(self.input_icon(cx))
                         .children(self.mode_chip(&palette))
                         .child(div().flex_1().min_w_0().child(self.input.clone()))
-                        .children(self.site_hint(cx)),
+                        .children(self.site_hint(cx))
+                        .children(self.mode_switch(cx)),
                 )
                 .when(!rows.is_empty() && !self.over_field, |bar| {
                     bar.child(
