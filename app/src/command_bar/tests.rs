@@ -3785,6 +3785,23 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     assert!(!bar.is_open());
 }
 
+/// ⇧↩ in ⌘T's composer starts a line, and the bar grows by it: ↩ sends the lines as one task.
+#[gpui::test]
+fn shift_enter_in_the_composer_starts_a_line_and_the_bar_grows(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("flights to Lisbon");
+    bar.keys("tab");
+    bar.calls();
+    let one_line = bar.asked_height();
+    bar.keys("shift-enter");
+    bar.type_text("under 150");
+    assert!(bar.calls().is_empty(), "⇧↩ sent nothing");
+    assert_eq!(bar.input().0, "flights to Lisbon\nunder 150");
+    assert!(bar.asked_height() > one_line, "the bar grew a row");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude flights to Lisbon\nunder 150"]);
+}
+
 /// The level menu lists the three levels, the composer's checked, and the line every level holds
 /// to; the model menu each assistant by name over the models it offers. The picks are the
 /// thread's, which ↩ starts it with, and only the menus' picks set them.

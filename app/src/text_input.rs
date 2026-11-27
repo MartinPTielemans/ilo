@@ -4,10 +4,10 @@
 // `reset`, `complete`, `set_text`, a placeholder colour, `set_placeholder`, key bindings scoped to
 // the field, ⌘← and ⌘→ as Home and End, word moves and selection, double- and triple-click, a
 // context menu, `Away`, scrolling to keep the caret in view with a fade where text runs past an
-// edge, and no styling of its own.
+// edge, a mode of several lines, and no styling of its own.
 //
-//! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
-//! field of its own; Zed's is its editor.
+//! A text field of one line, or of several (`multi_line`), with IME support through GPUI's input
+//! handler. GPUI has no text field of its own; Zed's is its editor.
 
 use std::{
     cell::{Cell, RefCell},
@@ -21,17 +21,20 @@ use crate::shell::MenuEntry;
 use crate::tokens::palette::NO_THEME_SELECTION;
 use crate::tokens::text_input::PLACEHOLDER;
 use gpui::{
-    Action, App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Global,
-    GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style, Subscription,
-    TextRun, UTF16Selection, UnderlineStyle, WeakEntity, WeakFocusHandle, Window, WindowId,
-    accesskit, actions, div, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*, px,
-    relative, size,
+    Action, App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, CursorStyle,
+    ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, Global, GlobalElementId, Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style,
+    Subscription, TextRun, UTF16Selection, UnderlineStyle, WeakEntity, WeakFocusHandle, Window,
+    WindowId, accesskit, actions, div, fill, hsla, linear_color_stop, linear_gradient, point,
+    prelude::*, px, relative, size,
 };
 use unicode_segmentation::*;
 
+mod lines;
 mod words;
+
+use lines::Lines;
 
 actions!(
     text_input,
@@ -67,6 +70,11 @@ actions!(
         PasteAndGo,
         PasteAndSearch,
         OpenMenu,
+        Newline,
+        Up,
+        Down,
+        SelectUp,
+        SelectDown,
     ]
 );
 
@@ -337,6 +345,16 @@ pub fn bind_keys_for(keys: Keys, cx: &mut App) {
         KeyBinding::new("shift-f10", OpenMenu, context),
         KeyBinding::new("menu", OpenMenu, context),
     ]);
+    // A field of several lines: ⇧↩ starts a line, as in a chat's field, and ↑ ↓ move between its
+    // rows, past its first and last to its owner.
+    let lines = Some("TextInput && multi_line");
+    cx.bind_keys([
+        KeyBinding::new("shift-enter", Newline, lines),
+        KeyBinding::new("up", Up, lines),
+        KeyBinding::new("down", Down, lines),
+        KeyBinding::new("shift-up", SelectUp, lines),
+        KeyBinding::new("shift-down", SelectDown, lines),
+    ]);
 }
 
 /// What a field draws its placeholder, its caret and its selection in. A caret its owner gives
@@ -395,6 +413,11 @@ pub struct TextInput {
     last_bounds: Option<Bounds<Pixels>>,
     /// How far the line has scrolled left to keep the caret in view.
     scroll: Pixels,
+    /// The most rows a field of several lines shows before it scrolls; None for one line.
+    multi_line: Option<usize>,
+    /// A field of several lines as last laid out, and how far it has scrolled up.
+    lines: Option<Lines>,
+    scroll_y: Pixels,
     /// How wide a fade an edge with more text past it gets, and the ground it fades into.
     fade: Option<(Pixels, Hsla)>,
     is_selecting: bool,
@@ -438,6 +461,9 @@ impl TextInput {
             last_layout: None,
             last_bounds: None,
             scroll: px(0.),
+            multi_line: None,
+            lines: None,
+            scroll_y: px(0.),
             fade: None,
             is_selecting: false,
             word_drag: None,
@@ -450,6 +476,46 @@ impl TextInput {
             after_caret: false,
             undo_passes: false,
             edited: false,
+        }
+    }
+
+    /// A field of several lines, as a composer's: ⇧↩ starts a line, a paste keeps its lines, and
+    /// it grows to `rows` rows, then scrolls. IME is as in one line: ↩ while composing commits.
+    pub fn multi_line(mut self, rows: usize) -> Self {
+        self.multi_line = Some(rows.max(1));
+        self
+    }
+
+    /// As `multi_line`, once it's made, for a field that's a composer only some of the time; None
+    /// makes it one line again, its lines joined by spaces.
+    pub fn set_multi_line(&mut self, rows: Option<usize>, cx: &mut Context<Self>) {
+        if self.multi_line == rows.map(|rows| rows.max(1)) {
+            return;
+        }
+        self.multi_line = rows.map(|rows| rows.max(1));
+        if rows.is_none() && self.content.contains('\n') {
+            // The same length, so the selection stays where it was.
+            self.content = self.content.replace('\n', " ").into();
+        }
+        self.lines = None;
+        self.scroll_y = px(0.);
+        cx.notify();
+    }
+
+    /// How many rows the frame last drawn showed it in: one for a field of one line.
+    pub fn rows_drawn(&self) -> usize {
+        match (self.multi_line, &self.lines) {
+            (Some(most), Some(lines)) => lines.rows().min(most),
+            _ => 1,
+        }
+    }
+
+    /// How much taller than one row the frame last drawn made it, for an owner whose window is as
+    /// tall as what it shows.
+    pub fn grown(&self) -> f32 {
+        match &self.lines {
+            Some(lines) => f32::from(lines.line_height) * (self.rows_drawn() - 1) as f32,
+            None => 0.,
         }
     }
 
@@ -958,10 +1024,23 @@ impl TextInput {
         let Some(bounds) = self.last_bounds else {
             return;
         };
-        let x = (self.last_layout.as_ref())
-            .filter(|line| line.text == self.content)
-            .map_or(px(0.), |line| line.x_for_index(self.cursor_offset()));
-        let at = point(bounds.left() + x - self.scroll, bounds.bottom());
+        let at = match self
+            .lines
+            .as_ref()
+            .filter(|lines| lines.text == self.content)
+        {
+            Some(lines) => {
+                let caret = lines.position(self.cursor_offset());
+                let top = bounds.top() - self.scroll_y;
+                point(bounds.left() + caret.x, top + caret.y + lines.line_height)
+            }
+            None => {
+                let x = (self.last_layout.as_ref())
+                    .filter(|line| line.text == self.content)
+                    .map_or(px(0.), |line| line.x_for_index(self.cursor_offset()));
+                point(bounds.left() + x - self.scroll, bounds.bottom())
+            }
+        };
         self.show_menu(menu, at, true, window, cx);
     }
 
@@ -1066,7 +1145,11 @@ impl TextInput {
     }
 
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let text = text.replace("\n", " ");
+        // A field of several lines keeps a paste's, whatever ends them.
+        let text = match self.multi_line {
+            Some(_) => text.replace("\r\n", "\n").replace('\r', "\n"),
+            None => text.replace("\n", " "),
+        };
         let text = if self.paste_and_go {
             without_javascript(&text)
         } else {
@@ -1113,6 +1196,11 @@ impl TextInput {
             return 0;
         }
 
+        if let (Some(bounds), Some(lines)) = (self.last_bounds.as_ref(), self.lines.as_ref()) {
+            let within = position - bounds.origin;
+            let at = lines.index(point(within.x, within.y + self.scroll_y));
+            return self.text_offset(at);
+        }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
             return 0;
@@ -1129,6 +1217,9 @@ impl TextInput {
     /// The character under `position`, whose word a double-click selects, where a click goes to
     /// the nearest place between two. Past the text, its end.
     fn index_under_mouse(&self, position: Point<Pixels>) -> usize {
+        if self.lines.is_some() {
+            return self.index_for_mouse_position(position);
+        }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
             return 0;
@@ -1155,6 +1246,53 @@ impl TextInput {
         }
         window.notify_text_selection_changed(&self.focus_handle);
         cx.notify()
+    }
+
+    /// ⇧↩ in a field of several lines: a newline where the caret is. While an input method
+    /// composes, the key is its own.
+    fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multi_line.is_none() || self.marked_range.is_some() {
+            return cx.propagate();
+        }
+        self.replace_text_in_range(None, "\n", window, cx);
+    }
+
+    fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+        self.by_row(false, false, window, cx)
+    }
+
+    fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+        self.by_row(true, false, window, cx)
+    }
+
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.by_row(false, true, window, cx)
+    }
+
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.by_row(true, true, window, cx)
+    }
+
+    /// The caret goes a row down or up, as near where it was across as that row has, selecting
+    /// with `select`. From the first row up, or the last down, the key is its owner's.
+    fn by_row(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(lines) = (self.lines.as_ref()).filter(|lines| lines.text == self.shown()) else {
+            return cx.propagate();
+        };
+        let at = lines.position(self.shown_offset(self.cursor_offset()));
+        let tall = lines.line_height;
+        let y = match down {
+            true => at.y + tall,
+            false => at.y - tall,
+        };
+        if y < px(0.) || y >= lines.height() {
+            return cx.propagate();
+        }
+        let to = self.text_offset(lines.index(point(at.x, y + tall / 2.)));
+        match select {
+            true => self.select_to(to, window, cx),
+            false => self.move_to(to, window, cx),
+        }
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
@@ -1220,6 +1358,8 @@ impl TextInput {
         self.pasted = false;
         self.last_layout = None;
         self.last_bounds = None;
+        self.lines = None;
+        self.scroll_y = px(0.);
         // A field reset to be shown again may have been hidden with the keyboard: it says it has
         // it again from the next frame that draws it so (#2847).
         self.keyboard_drawn = false;
@@ -1410,6 +1550,26 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if let Some(lines) = &self.lines {
+            if self.content.is_empty() {
+                return Some(Bounds::new(bounds.origin, size(px(0.), lines.line_height)));
+            }
+            if lines.text != self.shown() {
+                return None;
+            }
+            let range = self.range_from_utf16(&range_utf16);
+            let (from, to) = (
+                lines.position(self.shown_offset(range.start)),
+                lines.position(self.shown_offset(range.end)),
+            );
+            // A range over rows is told by its first, where the input method's window goes.
+            let to_x = if to.y == from.y { to.x } else { from.x };
+            let top = bounds.top() - self.scroll_y + from.y;
+            return Some(Bounds::from_corners(
+                point(bounds.left() + from.x, top),
+                point(bounds.left() + to_x, top + lines.line_height),
+            ));
+        }
         let last_layout = self.last_layout.as_ref()?;
         // An empty field lays out its placeholder, and its caret is at its start. An input method
         // under Wayland composes for a field only once it knows where that is.
@@ -1452,6 +1612,13 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let line_point = self.last_bounds?.localize(&point)?;
+        if let Some(lines) = &self.lines {
+            if lines.text != self.shown() {
+                return None;
+            }
+            let at = lines.index(gpui::point(line_point.x, line_point.y + self.scroll_y));
+            return Some(self.offset_to_utf16(self.text_offset(at)));
+        }
         let last_layout = self.last_layout.as_ref()?;
 
         if last_layout.text != self.shown() {
@@ -1469,6 +1636,9 @@ struct TextElement {
 
 struct PrepaintState {
     line: Option<ShapedLine>,
+    /// A field of several lines', in `line`'s place, and its selection, a rectangle a row.
+    lines: Option<Lines>,
+    selections: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
     /// How far the line is scrolled left.
@@ -1502,6 +1672,53 @@ fn scrolled(scroll: Pixels, caret: Pixels, text: Pixels, width: Pixels, margin: 
     scroll.clamp(px(0.), end)
 }
 
+/// The text's runs, in `color`, with what an input method composes underlined.
+fn runs(
+    input: &TextInput,
+    text: &SharedString,
+    color: Hsla,
+    style: &gpui::TextStyle,
+) -> Vec<TextRun> {
+    let display_text = text;
+    let text_color = color;
+    let run = TextRun {
+        len: display_text.len(),
+        font: style.font(),
+        color: text_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let marked_range = (input.marked_range.as_ref())
+        .map(|marked| input.shown_offset(marked.start)..input.shown_offset(marked.end));
+    if let Some(marked_range) = marked_range.as_ref() {
+        vec![
+            TextRun {
+                len: marked_range.start,
+                ..run.clone()
+            },
+            TextRun {
+                len: marked_range.end - marked_range.start,
+                underline: Some(UnderlineStyle {
+                    color: Some(run.color),
+                    thickness: px(1.0),
+                    wavy: false,
+                }),
+                ..run.clone()
+            },
+            TextRun {
+                len: display_text.len() - marked_range.end,
+                ..run
+            },
+        ]
+        .into_iter()
+        .filter(|run| run.len > 0)
+        .collect()
+    } else {
+        vec![run]
+    }
+}
+
 impl IntoElement for TextElement {
     type Element = Self;
 
@@ -1531,8 +1748,42 @@ impl Element for TextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
+        let input = self.input.read(cx);
+        let Some(most) = input.multi_line else {
+            style.size.height = window.line_height().into();
+            return (window.request_layout(style, [], cx), ());
+        };
+        // Several lines: as many rows as its text wraps to at the width it's given, up to `most`.
+        let text_style = window.text_style();
+        let text = match input.content.is_empty() {
+            true => input.placeholder.clone(),
+            false => input.shown(),
+        };
+        let runs = runs(input, &text, text_style.color, &text_style);
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let tall = window.line_height();
+        let measure = move |known: gpui::Size<Option<Pixels>>,
+                            space: gpui::Size<AvailableSpace>,
+                            window: &mut Window,
+                            _: &mut App| {
+            let width = known.width.or(match space.width {
+                AvailableSpace::Definite(width) => Some(width),
+                _ => None,
+            });
+            let shaped = width.and_then(|width| {
+                let system = window.text_system();
+                system
+                    .shape_text(text.clone(), font_size, &runs, Some(width), None)
+                    .ok()
+            });
+            let rows = shaped.map_or(1, |lines| {
+                (lines.iter())
+                    .map(|line| line.wrap_boundaries().len() + 1)
+                    .sum::<usize>()
+            });
+            size(width.unwrap_or_default(), tall * rows.clamp(1, most))
+        };
+        (window.request_measured_layout(style, measure), ())
     }
 
     fn prepaint(
@@ -1544,6 +1795,9 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        if self.input.read(cx).multi_line.is_some() {
+            return self.prepaint_lines(bounds, window, cx);
+        }
         let input = self.input.read(cx);
         let content = input.shown();
         let selected = &input.selected_range;
@@ -1559,42 +1813,7 @@ impl Element for TextElement {
             (content, style.color)
         };
 
-        let run = TextRun {
-            len: display_text.len(),
-            font: style.font(),
-            color: text_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let marked_range = (input.marked_range.as_ref())
-            .map(|marked| input.shown_offset(marked.start)..input.shown_offset(marked.end));
-        let runs = if let Some(marked_range) = marked_range.as_ref() {
-            vec![
-                TextRun {
-                    len: marked_range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked_range.end - marked_range.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: display_text.len() - marked_range.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect()
-        } else {
-            vec![run]
-        };
+        let runs = runs(input, &display_text, text_color, &style);
 
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
@@ -1661,6 +1880,8 @@ impl Element for TextElement {
         self.input.update(cx, |input, _| input.scroll = scroll);
         PrepaintState {
             line: Some(line),
+            lines: None,
+            selections: Vec::new(),
             cursor,
             selection,
             scroll,
@@ -1684,7 +1905,9 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        let line = prepaint.line.take().unwrap();
+        let Some(line) = prepaint.line.take() else {
+            return self.paint_lines(bounds, prepaint, window, cx);
+        };
         // A line scrolled, or longer than the field, shows only within the field's sides; its
         // glyphs may still reach above and below the line's height.
         let tall = window.line_height();
@@ -1711,9 +1934,148 @@ impl Element for TextElement {
             }
         });
 
+        self.input.update(cx, |input, _| {
+            input.last_layout = Some(line);
+            input.lines = None;
+        });
+        self.drawn(bounds, window, cx);
+    }
+}
+
+impl TextElement {
+    /// A field of several lines, laid out at the width it was given, scrolled to keep the caret's
+    /// row in view.
+    fn prepaint_lines(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> PrepaintState {
+        let input = self.input.read(cx);
+        let content = input.shown();
+        let empty = content.is_empty();
+        let style = window.text_style();
+        let (text, color) = match empty {
+            true => (input.placeholder.clone(), input.placeholder_color),
+            false => (content, style.color),
+        };
+        let runs = runs(input, &text, color, &style);
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let tall = window.line_height();
+        let wrapped = (window.text_system())
+            .shape_text(
+                text.clone(),
+                font_size,
+                &runs,
+                Some(bounds.size.width),
+                None,
+            )
+            .map(|lines| lines.into_vec())
+            .unwrap_or_default();
+        let lines = Lines::new(text, wrapped, tall);
+        let selected = input.shown_offset(input.selected_range.start)
+            ..input.shown_offset(input.selected_range.end);
+        let caret = match empty {
+            true => point(px(0.), px(0.)),
+            false => lines.position(input.shown_offset(input.cursor_offset())),
+        };
+        // The rows follow the caret, moving no further than they must.
+        let height = bounds.size.height;
+        let mut scroll = (input.scroll_y).min((lines.height() - height).max(px(0.)));
+        if caret.y + tall > scroll + height {
+            scroll = caret.y + tall - height;
+        }
+        if caret.y < scroll {
+            scroll = caret.y;
+        }
+        let origin = point(bounds.left(), bounds.top() - scroll);
+        let at = |rect: Bounds<Pixels>| Bounds {
+            origin: rect.origin + origin,
+            size: rect.size,
+        };
+        let (selections, cursor) = match selected.is_empty() || empty {
+            true => (
+                Vec::new(),
+                Some(fill(
+                    at(Bounds::new(caret, size(CARET, tall))),
+                    own_or_texts(input.caret_color, None, style.color).0,
+                )),
+            ),
+            false => {
+                let ink = own_or_texts(None, input.selection_color, style.color).1;
+                let rects = lines.rects(selected, bounds.size.width);
+                (
+                    rects.into_iter().map(|rect| fill(at(rect), ink)).collect(),
+                    None,
+                )
+            }
+        };
+        self.input.update(cx, |input, _| input.scroll_y = scroll);
+        PrepaintState {
+            line: None,
+            lines: Some(lines),
+            selections,
+            cursor,
+            selection: None,
+            scroll,
+            fades: Vec::new(),
+        }
+    }
+
+    fn paint_lines(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        prepaint: &mut PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        let Some(lines) = prepaint.lines.take() else {
+            return;
+        };
+        let inset = self.input.read(cx).placeholder_inset();
+        // Rows scrolled out of the field show only within it.
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for selection in prepaint.selections.drain(..) {
+                window.paint_quad(selection);
+            }
+            let mut top = bounds.top() - prepaint.scroll;
+            for (_, line) in &lines.lines {
+                let origin = point(bounds.left() + inset, top);
+                (line.paint(
+                    origin,
+                    lines.line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                ))
+                .ok();
+                top += line.size(lines.line_height).height;
+            }
+            if focus_handle.is_focused(window)
+                && let Some(cursor) = prepaint.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
+        self.input.update(cx, |input, _| {
+            input.last_layout = None;
+            input.lines = Some(lines);
+        });
+        self.drawn(bounds, window, cx);
+    }
+
+    /// What the field keeps of a frame that drew it, either way.
+    fn drawn(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
         let focused = focus_handle.is_focused(window);
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
             // GPUI gives the window the field's input handler only in a frame that draws it
             // focused, so text sent between the press that focuses it and that frame is lost.
@@ -1782,7 +2144,10 @@ impl Render for TextInput {
                     })
             })
             .flex()
-            .key_context("TextInput")
+            .key_context(match self.multi_line {
+                Some(_) => "TextInput multi_line",
+                None => "TextInput",
+            })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -1809,6 +2174,11 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::open_menu))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
             // A field's text has no style, so it pastes as Paste does.
             .on_action(cx.listener(|field, _: &PasteAndMatchStyle, window, cx| {
                 field.paste(&Paste, window, cx)
@@ -1852,6 +2222,8 @@ impl Focusable for TextInput {
 pub(crate) mod korean;
 #[cfg(test)]
 mod leave_tests;
+#[cfg(test)]
+mod lines_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -3240,6 +3240,45 @@ fn the_threads_effort_is_the_composers_own(cx: &mut TestAppContext) {
     }
 }
 
+/// ⇧↩ in a thread's composer starts a line, and ↩ sends the lines as one reply.
+#[gpui::test]
+fn shift_enter_in_the_threads_composer_starts_a_line(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| window.focus(&reply.focus_handle(cx), cx));
+    host.take();
+    cx.simulate_input("Ryanair");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("only");
+    assert!(host.take().is_empty(), "⇧↩ sent nothing");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&r#"task task-1 Reply("Ryanair\nonly")"#.to_string())
+    );
+}
+
+/// ⌘. stops the thread at work from its composer, with words typed in the field too, where ↩
+/// would send them and ⇧↩ start a line.
+#[gpui::test]
+fn cmd_period_stops_the_thread_from_its_composer(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    cx.update(|_, cx| crate::shell::agent_bar::bind(cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| window.focus(&reply.focus_handle(cx), cx));
+    cx.simulate_input("Ryanair");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("only");
+    host.take();
+    cx.simulate_keystrokes("cmd-.");
+    cx.run_until_parked();
+    assert!(host.take().contains(&"task task-1 Stop".to_string()));
+    let typed = reply.read_with(cx, |reply, _| reply.text().to_string());
+    assert_eq!(typed, "Ryanair\nonly", "⌘. leaves what's typed");
+}
+
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.
 #[gpui::test]
 fn a_task_that_takes_a_reply_keeps_its_level_under_the_field(cx: &mut TestAppContext) {

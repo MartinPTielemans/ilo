@@ -965,6 +965,8 @@ pub struct CommandBar {
     hovered: Option<usize>,
     /// The row whose trash was last drawn, and its page, for check.sh's line as it draws.
     remove_drawn: Option<(usize, String)>,
+    /// How much the composer's field had grown past its one row when the bar last drew.
+    grown_drawn: f32,
     /// Whether an assistive app reads the bar's window, so its rows say what they are.
     a11y: bool,
     /// Whether it shows over the URL field, from a click on it, rather than centred.
@@ -1239,6 +1241,7 @@ fn new_bar(
             selected: 0,
             hovered: None,
             remove_drawn: None,
+            grown_drawn: 0.,
             a11y: false,
             over_field: false,
             page: String::new(),
@@ -2572,6 +2575,10 @@ impl CommandBar {
     /// bar folds into; at rest the thread's view takes the page's place instead, so only the
     /// agents are learned again.
     fn ask_shown(&self, shown: bool, cx: &mut App) {
+        // A composer's field takes lines (⇧↩), the bar's search field one.
+        let rows = shown.then_some(crate::tokens::command_bar::COMPOSER_ROWS as usize);
+        self.input
+            .update(cx, |input, cx| input.set_multi_line(rows, cx));
         match self.surface {
             Surface::Window => self.host.asking(shown, cx),
             Surface::InPlace if shown => self.host.look_for_agents(cx),
@@ -2603,6 +2610,8 @@ impl CommandBar {
         // The host folds the bar into the slot its card fills, so the slot doesn't close first,
         // and the bar doesn't hide on its own.
         self.ask = None;
+        self.input
+            .update(cx, |input, cx| input.set_multi_line(None, cx));
         self.closed(Close::new(Why::Chosen, by));
         if self.surface == Surface::Window {
             return self
@@ -3231,7 +3240,7 @@ impl CommandBar {
         self.rows = rows;
         self.suggested = text;
         if self.surface == Surface::Window {
-            self.host.set_height(self.drawn_height());
+            self.host.set_height(self.drawn_height(cx));
         }
         self.scroll.scroll_to_item(self.selected);
         for row in self.rows.iter().filter(|row| row.icon() == Icon::Favicon) {
@@ -3244,11 +3253,12 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// How tall the bar draws: its input, its rows, and the composer's choices and foot.
-    fn drawn_height(&self) -> f32 {
+    /// How tall the bar draws: its input, its rows, and the composer's choices and foot, with
+    /// the rows its field grew to.
+    fn drawn_height(&self, cx: &App) -> f32 {
         let rows = self.rows.len();
         let foot = match self.ask.is_some() {
-            true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
+            true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT + self.input.read(cx).grown(),
             false => 0.,
         };
         foot + match (self.surface, self.over_field) {
@@ -4651,6 +4661,14 @@ impl Render for CommandBar {
             self.remove_drawn = remove;
         }
         self.a11y = window.is_a11y_active();
+        // The composer's field grew or shrank a row last frame: the window follows.
+        let grown = self.input.read(cx).grown();
+        if grown != self.grown_drawn {
+            self.grown_drawn = grown;
+            if !in_place {
+                self.host.set_height(self.drawn_height(cx));
+            }
+        }
         let rows: Vec<_> = self
             .rows
             .iter()
@@ -4728,7 +4746,7 @@ impl Render for CommandBar {
                 .text_size(px(text::BODY))
                 .child(
                     div()
-                        .h(px(input_height))
+                        .h(px(input_height + self.grown_drawn))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -4780,7 +4798,7 @@ impl Render for CommandBar {
         if in_place {
             return div()
                 .w_full()
-                .h(px(self.drawn_height()))
+                .h(px(self.drawn_height(cx)))
                 .font_family(crate::face::UI)
                 .child(panel.when(!bare, |panel| panel.shadow(BAR_LEVEL.shadow())))
                 .into_any_element();

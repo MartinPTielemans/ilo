@@ -489,7 +489,9 @@ impl Shell {
                 // The reply's placeholder follows the appearance, as the lines do (#1659).
                 let colors = Self::form_colors(cx);
                 let reply = cx.new(|cx| {
-                    (TextInput::new(words::REPLY, cx).follows(colors)).placeholder_after_caret()
+                    (TextInput::new(words::REPLY, cx).follows(colors))
+                        .placeholder_after_caret()
+                        .multi_line(crate::tokens::command_bar::COMPOSER_ROWS as usize)
                 });
                 let shell = cx.weak_entity();
                 let ilo_stops = std::array::from_fn(|_| cx.focus_handle());
@@ -1032,11 +1034,15 @@ impl TalkView {
         // It goes from where it was typed to its plate, the field's box around its words.
         if let Some(field) = self.reply_drawn.get().filter(|_| !crate::motion::still(cx)) {
             let style = window.text_style();
+            // Its widest line, as a line is shaped alone.
+            let widest = (text.lines())
+                .max_by_key(|line| line.len())
+                .unwrap_or_default();
             let words = (window.text_system())
                 .shape_line(
-                    text.clone().into(),
+                    widest.to_string().into(),
                     px(text::BODY),
-                    &[style.to_run(text.len())],
+                    &[style.to_run(widest.len())],
                     None,
                 )
                 .width;

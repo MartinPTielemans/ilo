@@ -283,6 +283,9 @@ start-space = 6.0
 plus = 16.0
 plus-off = 0.26
 choices-menu-drop = 6.0
+# A composer's field, ⌘T's and a thread's, grows a row for each line typed or wrapped, up to 8,
+# then scrolls (#4457).
+composer-rows = 8
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at
 # 305.5 of 949, which no fraction of the height fits.
 above-middle = 169.0
