@@ -664,7 +664,8 @@ fn every_thread_at_work_is_one_line_however_many_work(cx: &mut TestAppContext) {
         names.iter().any(|name| name == "Book a table, Working"),
         "{names:?}"
     );
-    for name in &names {
+    // The Space button says its Space's place among the Spaces (words SP1), which isn't a step.
+    for name in names.iter().filter(|name| !name.starts_with("Space")) {
         assert!(
             !name.contains("Step 3") && !name.contains(" of 2"),
             "{name}"
