@@ -24,6 +24,7 @@ use crate::tokens::icon_picker::{
     HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
 use crate::tokens::palette::LIGHT_PLATE_GRAY;
+use crate::tokens::palette::NEEDS_YOU;
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
@@ -653,6 +654,9 @@ pub struct Palette {
     /// The shade of a dark window's plate under the pointer: what its text asks, or as much of
     /// it as leaves the plate telling from the window.
     pub pointed_shade: f32,
+    /// Amber, the chrome's one colour of its own, for a thread or an agent that waits on the user
+    /// (#4401), taken towards the ink only as far as its words need to read on the window.
+    pub needs_you: Rgba,
 }
 
 /// A plate primary text sits on over the window. The window stays as see-through as the user's
@@ -797,6 +801,7 @@ impl Palette {
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
             pointed_shade: 0.,
+            needs_you: rgb(NEEDS_YOU),
         };
         // Text and glyphs on what floats read on it, over the material, and on a control's plate
         // under the pointer.
@@ -823,6 +828,8 @@ impl Palette {
         let solid = palette.grounds_on(&[over(tone.solid(), palette.tint, palette.tint.a)], 0.);
         let solid_gray = least_alpha(ink, &solid, gray_text(Transparency::Less) + BETWEEN);
         palette.gray_floor = palette.gray_floor.max(solid_gray);
+        let plain = window.samples(palette.layer_alpha);
+        palette.needs_you = reading(rgb(NEEDS_YOU), ink, &plain, TEXT + BETWEEN);
         palette
     }
 
@@ -1077,6 +1084,8 @@ impl Palette {
                 from + (to - from) * t
             }),
             pointed_shade: self.pointed_shade + (other.pointed_shade - self.pointed_shade) * t,
+            // Through a change of look the ink's ends jump, so its amber is the nearer one's.
+            needs_you: near.needs_you,
         }
     }
 
@@ -1912,6 +1921,19 @@ pub fn ink_on(fill: Rgba) -> Rgba {
 
 /// The least alpha, in 25ths, at which `ink` over each of `grounds` reaches `minimum`; 1 where
 /// none does.
+/// `color` taken towards `ink` the least step that reads at `minimum` on every one of `grounds`,
+/// or all the way.
+fn reading(color: Rgba, ink: Rgba, grounds: &[Rgba], minimum: f32) -> Rgba {
+    (0..=50)
+        .map(|step| over(color, ink, step as f32 / 50.))
+        .find(|&at| {
+            grounds
+                .iter()
+                .all(|&ground| contrast(at, ground) >= minimum)
+        })
+        .unwrap_or(ink)
+}
+
 fn least_alpha(ink: Rgba, grounds: &[Rgba], minimum: f32) -> f32 {
     (0..=25)
         .map(|step| step as f32 / 25.)

@@ -2689,3 +2689,25 @@ fn the_main_buttons_label_reads_on_its_ink_in_every_state() {
         }
     }
 }
+
+/// Amber says a thread waits on the user (#4402), in its knot and its words, so it holds text's
+/// 4.5:1 on the sidebar's ground, as its text does, in both looks, all along the Transparency
+/// bar.
+#[test]
+fn a_waiting_threads_amber_reads_as_words_on_the_sidebar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        for glass in bar() {
+            let palette = Palette::at(None, tone, glass);
+            let amber = palette.needs_you;
+            // The sidebar's own ground, where a card that isn't shown lies, as the text's floor
+            // samples it.
+            for ground in Window::of_none(tone, glass).samples(0.) {
+                assert!(
+                    contrast(amber, ground) >= TEXT,
+                    "{tone:?} at {glass}: {:.2} on {ground:?}",
+                    contrast(amber, ground)
+                );
+            }
+        }
+    }
+}

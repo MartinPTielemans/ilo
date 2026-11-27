@@ -1141,8 +1141,9 @@ light-neutral-gradient-alpha = 0.11
 overlay-light = 0xf2f2f3
 dialog-light = 0xf9f9f9
 # The one colour of the chrome's own, amber, says a thread or an agent waits on you (#4401): the
-# knot and its words, nowhere else. Colour otherwise stays in favicons and pages, red for what
-# destroys, and the makers' logos.
+# knot and its words, nowhere else. Where its words wouldn't read at 4.5:1 on the window it's
+# taken towards the ink only as far as they need (#4402), as the menu's red is. Colour otherwise
+# stays in favicons and pages, red for what destroys, and the makers' logos.
 needs-you = 0xf5a524
 # ilo green, which a Board's page alone still takes, as its accent (copy-board.sh, [board]). A
 # Space without a theme no longer wears it: its accent is the text's ink with the other look's ink
