@@ -50,7 +50,8 @@ if [ "$(uname)" = Darwin ]; then
     # it runs on real Macs too; a check VM clears it before the run to be asked as a new app is
     # (#2396).
     allowed=$(kept_answers | grep -c ' allowed ' || true)
-    clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
+    # C++17 named: the command line tools on macOS 14 build .mm as C++98 by default.
+    clang++ -std=c++17 -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
     # usernoted delivers them to it, finding none. It's started before the app posts any.
