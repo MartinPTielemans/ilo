@@ -3,6 +3,7 @@
 //! the stand-in of kept.rs, on the made-up browser.
 
 use super::kept::Run;
+use super::lines::returned_at_once;
 use super::*;
 use crate::agents::kept::cards;
 use crate::agents::kept::log::Record;
@@ -814,12 +815,8 @@ fn a_tab_the_user_holds_goes_back_with_its_hold(cx: &mut TestAppContext) {
         cx,
     );
     cx.run_until_parked();
-    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+    returned_at_once(handed_off, SEATS.0);
     press_return(&run, &agent, SEATS.0, cx);
-    assert_eq!(
-        handed_off.try_recv().expect("answered").text,
-        handed::RETURNED
-    );
     assert!(!held(cx, SEATS.0));
     assert_eq!(space_of(&run, SEATS.0), USERS);
 }
@@ -837,7 +834,8 @@ fn a_call_that_waits_on_a_handed_tab_hears_the_stop(cx: &mut TestAppContext) {
     let step = json!({ "tab": SEATS.0, "reason": "Sign in." });
     let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
     cx.run_until_parked();
-    assert!(asked.try_recv().is_err() && handed_off.try_recv().is_err());
+    assert!(asked.try_recv().is_err());
+    returned_at_once(handed_off, SEATS.0);
 
     (run.agents).update(cx, |agents, cx| {
         agents.task_action(&agent, TaskAction::Stop, cx)
@@ -845,7 +843,6 @@ fn a_call_that_waits_on_a_handed_tab_hears_the_stop(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let stopped = ToolResult::failed(tools::Kind::Stopped, crate::agents::STOPPED);
     assert_eq!(asked.try_recv().expect("answered"), stopped);
-    assert_eq!(handed_off.try_recv().expect("answered"), stopped);
     assert_eq!(tabs_of(&run, THREADS), [0; 0]);
     assert_eq!(space_of(&run, TRAINS.0), USERS);
     assert_eq!(space_of(&run, SEATS.0), USERS);
@@ -1255,7 +1252,8 @@ fn a_thread_that_waits_on_the_user_keeps_its_tabs(cx: &mut TestAppContext) {
     let ask = json!({ "question": "Row 12 or row 14?", "answers": ["Row 12", "Row 14"] });
     let asked = call(&run.agents, &agent, "ask", ask, cx);
     cx.run_until_parked();
-    assert!(handed_off.try_recv().is_err() && asked.try_recv().is_err());
+    returned_at_once(handed_off, SEATS.0);
+    assert!(asked.try_recv().is_err());
     assert!(matches!(run.state(&agent, cx), State::Asking { .. }));
     assert!(run.browser.returned.borrow().is_empty());
     for tab in [TRAINS.0, SEATS.0] {
@@ -1619,7 +1617,7 @@ fn a_reply_to_a_thread_that_waits_in_a_hand_off_hands_its_tabs(cx: &mut TestAppC
     let step = json!({ "tab": own, "reason": "Sign in." });
     let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
     cx.run_until_parked();
-    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+    returned_at_once(handed_off, own);
 
     reply(&run, &agent, "It's this one", &[TRAINS.0], cx);
     assert!(held(&run, &agent, cx).is_empty());
@@ -1633,12 +1631,10 @@ fn a_reply_to_a_thread_that_waits_in_a_hand_off_hands_its_tabs(cx: &mut TestAppC
         )
     );
     assert_eq!(run.state(&agent, cx), State::Working);
-    assert!(handed_off.try_recv().is_err(), "the hand-off still waits");
 
     // Handed back, the thread is at work with no wait on the user: a tab waits for its turn's end.
     (run.agents).update(cx, |agents, cx| agents.hand_back(own, cx));
     cx.run_until_parked();
-    assert!(!handed_off.try_recv().expect("answered").error);
     reply(&run, &agent, "And this", &[SEATS.0], cx);
     assert_eq!(
         held(&run, &agent, cx),
@@ -1648,7 +1644,7 @@ fn a_reply_to_a_thread_that_waits_in_a_hand_off_hands_its_tabs(cx: &mut TestAppC
     let step = json!({ "tab": own, "reason": "The code." });
     let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
     cx.run_until_parked();
-    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+    returned_at_once(handed_off, own);
     reply(&run, &agent, "Fares too", &[FARES.0], cx);
     assert_eq!(held(&run, &agent, cx).len(), 2);
     assert_eq!(given(&run), [TRAINS.0]);

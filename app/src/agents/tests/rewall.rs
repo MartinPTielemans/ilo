@@ -143,7 +143,7 @@ fn logged(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
 }
 
 /// The messages the stand-in's run `to` was sent, once it has `count` of them.
-fn sent(run: &Run, to: usize, count: usize) -> Vec<String> {
+pub(super) fn sent(run: &Run, to: usize, count: usize) -> Vec<String> {
     let path = beside(&run.program, &format!("in.{to}"));
     for _ in 0..500 {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -333,12 +333,11 @@ fn a_reply_to_a_stopped_task_with_files_starts_it_inside_a_new_wall(cx: &mut Tes
     assert!(!stopped.contains(reply), "{stopped}");
 }
 
-/// A reply to a task that ended at Full access takes it up lower (kept.rs). For a task with a
-/// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
-/// of the reply, which starts one inside the lower level's wall from the task's own words. Its
-/// assistant is told nothing of the access, as at any reply that takes a task up.
+/// A reply to a task that ended at Full access takes it up there (#4360). For a task with a
+/// folder, that leaves its wall as it is: the run inside Full access's wall is sent the reply,
+/// and no wall is put up anew.
 #[gpui::test]
-fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
+fn a_reply_at_full_access_goes_on_inside_its_wall(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("reply", cx);
     // The user gives it the highest access while it works, and it ends there.
     set(&run, &agent, Tier::Full, cx);
@@ -351,15 +350,12 @@ fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut Te
 
     let reply = "Are there two together for Sunday too?";
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
-    let (args, first) = run.ran(3);
-    assert_eq!(walls.asked().last(), Some(&(Tier::Work, true, false)));
-    assert_eq!(walls.asked().len(), 2);
-    starts_from_its_words(&args, &first, reply);
-    assert_ne!(run_of(&run, &agent, cx), at_full);
+    let told = sent(&run, 2, 2);
+    assert!(told[1].contains(reply), "{}", told[1]);
+    assert_eq!(walls.asked().len(), 1);
+    assert_eq!(run_of(&run, &agent, cx), at_full);
     assert_eq!(run.state(&agent, cx), State::Working);
-    assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, Vec::new()));
-    // The run inside Full access's wall was sent what started it and no more.
-    assert_eq!(sent(&run, 2, 1).len(), 1);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Full, true, Vec::new()));
 }
 
 /// A raise whose wall isn't put up changes nothing: the task runs on as it was, at its level,

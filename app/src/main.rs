@@ -1223,6 +1223,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_recent_answered: Some(recent_host::tab_recent_answered),
         folder_live_answered: Some(spaces::folder_live_answered),
         file_field_done: Some(file_field_done),
+        held_page: Some(held_page),
         // The core copies it in bc_main: this one is the launch's, never freed.
         product: CString::new(browser::product::PRODUCT)
             .unwrap_or_default()

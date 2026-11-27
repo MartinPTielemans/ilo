@@ -6075,6 +6075,7 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
 }
 
 mod picks;
+
 /// The sign over the composer as last drawn: what it said, and where.
 fn sign_drawn(
     view: &Entity<super::TalkView>,

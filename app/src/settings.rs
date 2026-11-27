@@ -207,6 +207,8 @@ enum Popup {
     NewThreadAccess,
     NewThreadModel,
     NewThreadEffort,
+    /// Other apps' Access: where an app's next task starts.
+    OthersAccess,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -226,7 +228,7 @@ impl Popup {
                 format!("{} options", browser::settings_rows::assistant_name(cli)).into()
             }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
-            Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadAccess | Popup::OthersAccess => browser::agents::tier::ACCESS.into(),
             Popup::NewThreadModel => browser::agents::task::MODEL.into(),
             Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
@@ -3991,7 +3993,12 @@ impl Settings {
             threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
             threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
-        let mut blocks = vec![Block::Rows(vec![self.other_apps(agents, accent, cx)])];
+        let mut rows = vec![self.other_apps(agents, accent, cx)];
+        // Where their next task starts, while they may connect: the composer's level menu.
+        if agents.read(cx).other_apps() {
+            rows.push(self.others_access(agents, cx));
+        }
+        let mut blocks = vec![Block::Rows(rows)];
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
@@ -4197,6 +4204,34 @@ impl Settings {
         // S30, batch 12: off says what off does; on, the row is bare.
         let line = (!on).then(|| "Off: no app connects.".into());
         setting(&self.look, name, line, vec![switch])
+    }
+
+    /// Other apps' Access (#4360): the level an app's next task starts at, from the composer's
+    /// level menu, Full access too; only the user's pick sets it, and it sets it back.
+    fn others_access(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let tier = agents.read(cx).others_start();
+        let agents = agents.clone();
+        let choose = cx.listener(move |settings, _, window, cx| {
+            let (tiers, items) = browser::command_bar::level_choices(tier);
+            let (settings_, agents) = (cx.weak_entity(), agents.clone());
+            let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+                if let Some(&tier) = picked.and_then(|at| tiers.get(at)) {
+                    agents.update(cx, |agents, cx| agents.set_others_start(tier, cx));
+                }
+                settings_.update(cx, |settings, cx| settings.chose(cx)).ok();
+            });
+            settings.pop_up(Popup::OthersAccess, items, picked, window, cx);
+        });
+        let popup = self
+            .popup(
+                Popup::OthersAccess,
+                tier.label().into(),
+                POPUP_WIDTH,
+                choose,
+            )
+            .child(self.drawn("other apps access".into()))
+            .into_any_element();
+        setting(&self.look, agents::tier::ACCESS, None, vec![popup])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
