@@ -1,7 +1,7 @@
 //! First run's exit (first-run v9 §10): on Start Browsing the card's content fades, its knot with
-//! it, then the card grows plain into the browser window where the host grows first run's window,
-//! or else fades away, and only at the exit's end does the browser window come
-//! (`Shell::onboarding_layer`).
+//! it, then where the host grows first run's window the card grows to the browser window, which
+//! the host puts under it unseen, and gives way to it over the reveal; or else the card fades away,
+//! and the browser window comes at the exit's end (`Shell::onboarding_layer`).
 
 use super::{Onboarding, arrive, ease_in_out, lerp, t};
 use crate::tokens::shell::onboarding::exit as x;
@@ -29,6 +29,10 @@ pub(super) struct Exit {
     /// How far the card's fill has crossed to the window's under a page, 0 to 1.
     pub(super) tint: f32,
     pub(super) plate: Plate,
+    /// The browser window's opacity under the card, where the host grew first run's.
+    pub(super) window: f32,
+    /// The card's glass's, which goes before its fill so it never blurs the window's own.
+    pub(super) glass: f32,
 }
 
 impl Onboarding {
@@ -43,25 +47,19 @@ impl Onboarding {
         Some(self.secs_since(at))
     }
 
-    /// The exit's whole length: the content's fade and the grow where the host grew the window,
-    /// else the cross-fade.
+    /// The exit's whole length: to the reveal's end where the host grew the window, the grow's
+    /// tail playing under it, else the cross-fade.
     pub(super) fn exit_length(&self, still: bool) -> f32 {
+        let [from, over] = x::REVEAL;
         match self.grown(still) {
-            true => x::CONTENT + x::GROW,
+            true => from + over,
             false => x::CROSS_FADE,
         }
     }
 
-    /// Whether the exit has ended `at` seconds in, in a window `size` across: at its length, or
-    /// where it grows, once the card is within `rest` of the window on every side, as the curve's
-    /// tail moves it less than the eye sees and the browser window can come.
-    pub(super) fn exit_ended(&self, at: f32, still: bool, size: (f32, f32)) -> bool {
-        if at >= self.exit_length(still) {
-            return true;
-        }
-        let grown = self.grown(still);
-        let (_, _, w, h, _) = frame(at, grown, size).plate;
-        grown && at > x::CONTENT && (size.0 - w).max(size.1 - h) / 2. <= x::REST
+    /// Whether the exit has ended `at` seconds in.
+    pub(super) fn exit_ended(&self, at: f32, still: bool) -> bool {
+        at >= self.exit_length(still)
     }
 
     /// Whether the exit grows the card to its window: the host said it grows the window, and
@@ -91,6 +89,8 @@ pub(super) fn frame(at: f32, grown: bool, size: (f32, f32)) -> Exit {
             offset,
             tint: 0.,
             plate: (offset.0, offset.1, t::WIDTH, t::HEIGHT, t::RADIUS),
+            window: 0.,
+            glass: 1.,
         };
     }
     let content = 1. - (at / x::CONTENT).min(1.);
@@ -98,8 +98,14 @@ pub(super) fn frame(at: f32, grown: bool, size: (f32, f32)) -> Exit {
     let grown = arrive(since / x::GROW);
     let [from_radius, to_radius] = x::CORNERS;
     let (w, h) = (lerp(t::WIDTH, width, grown), lerp(t::HEIGHT, height, grown));
+    // The window in and the glass out over the reveal's first half, then the card's fill out.
+    let [from, over] = x::REVEAL;
+    let revealed = (at - from) / over;
+    let first = eased(revealed * 2.);
     Exit {
-        card: 1.,
+        card: 1. - eased(revealed * 2. - 1.),
+        window: first,
+        glass: 1. - first,
         content,
         offset,
         tint: ease_in_out(since / x::MATERIAL),
@@ -110,6 +116,18 @@ pub(super) fn frame(at: f32, grown: bool, size: (f32, f32)) -> Exit {
             h,
             lerp(from_radius, to_radius, grown),
         ),
+    }
+}
+
+/// Ease-in-out with its ends exact, as the curve's search lands a hair short of them: a half of
+/// the reveal not yet begun or over says 0 or 1 to the host.
+fn eased(x: f32) -> f32 {
+    if x <= 0. {
+        0.
+    } else if x >= 1. {
+        1.
+    } else {
+        ease_in_out(x)
     }
 }
 

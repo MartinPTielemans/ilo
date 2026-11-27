@@ -1609,6 +1609,25 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The line of a run ilo ended over its tools says AP17 as written, and has nothing to press or
+/// to say under it.
+#[test]
+fn a_run_ended_over_its_tools_says_ap17() {
+    let kind = IloKind::NotOurTools;
+    let said = format!("stopped Claude Code: it started with tools {PRODUCT} doesn't allow");
+    assert_eq!(
+        super::words::head(&kind, "Claude Code"),
+        (said.clone(), None)
+    );
+    assert_eq!(super::words::stored(&kind, "Claude Code"), said);
+    let line = IloLine {
+        key: 1,
+        kind,
+        settled: true,
+    };
+    assert!(crate::agents::task::ilo::buttons(&line).is_empty());
+}
+
 /// The line of a task the user stopped says the pages it held then by their count alone, and with
 /// none, no count (Z17). It names nothing, so no page's or site's words stand in it, and it has
 /// nothing to press.
@@ -2014,6 +2033,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tab: 1,
             limit: HelpersLimit::Kind,
         },
+        IloKind::NotOurTools,
         // A kept log's line, as it stored one of the above.
         IloKind::Kept {
             words: super::words::stored(&IloKind::EndedLeft, "Claude").into(),
@@ -2046,6 +2066,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::NoProfile
             | IloKind::NoSpace
             | IloKind::Helpers { .. }
+            | IloKind::NotOurTools
             | IloKind::Kept { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
@@ -6054,3 +6075,370 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
 }
 
 mod picks;
+/// The sign over the composer as last drawn: what it said, and where.
+fn sign_drawn(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> Option<(super::Knot, gpui::Bounds<gpui::Pixels>)> {
+    let drawn = view.read_with(cx, |view, _| view.sign_drawn.get());
+    drawn.map(|(sign, _, bounds)| (sign, bounds))
+}
+
+/// The sign says working while the thread's step or turn is under way, waiting while it waits on
+/// the user in each way it can, and is gone once the thread can't be stopped, read from the
+/// thread's own state alone: an assistant's words that say it waits change nothing.
+#[gpui::test]
+fn the_sign_says_working_waiting_or_nothing_from_the_threads_own_state(cx: &mut TestAppContext) {
+    use super::Knot::{Waiting, Working};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let yours = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    let mut talk = conversation(1);
+    talk.lines
+        .push(Line::Said("I'm waiting for you to sign in.".into()));
+    for (live, stoppable, sign) in [
+        (Live::Working, true, Some(Working)),
+        (Live::Refused, true, Some(Waiting)),
+        (Live::Handed, true, Some(Waiting)),
+        (yours, true, Some(Waiting)),
+        (Live::Asked, true, Some(Waiting)),
+        (Live::Working, false, None),
+        (Live::Asked, false, None),
+        (Live::Working, true, Some(Working)),
+    ] {
+        talk.live = live.clone();
+        talk.stoppable = stoppable;
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        redraw(&shell, &view, cx);
+        assert_eq!(
+            sign_drawn(&view, cx).map(|(sign, _)| sign),
+            sign,
+            "{live:?}, stoppable {stoppable}"
+        );
+    }
+}
+
+/// The sign stands over the composer's right corner, its right edge `right` in from the
+/// composer's and its foot `above` over it, `size` across, in the stage and in the panel beside a
+/// page alike.
+#[gpui::test]
+fn the_sign_stands_over_the_composers_right_corner_in_the_stage_and_beside_a_page(
+    cx: &mut TestAppContext,
+) {
+    use crate::tokens::shell::conversation::sign::{ABOVE, RIGHT, SIZE};
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let mut talk = foot_talk(2, vec![handed(1)]);
+    talk.live = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
+    redraw(&shell, &view, cx);
+    let placed = |cx: &mut VisualTestContext, at: &str| {
+        let (_, sign) = sign_drawn(&view, cx).unwrap_or_else(|| panic!("no sign {at}"));
+        let composer = view
+            .read_with(cx, |view, _| view.composer_drawn.get())
+            .unwrap_or_else(|| panic!("no composer {at}"));
+        let (right, top) = (composer.right(), composer.top());
+        assert_eq!(sign.size.width, px(SIZE), "{at}");
+        assert_eq!(sign.size.height, px(SIZE), "{at}");
+        assert_eq!(right - sign.right(), px(RIGHT), "{at}");
+        assert_eq!(top - sign.bottom(), px(ABOVE), "{at}");
+    };
+    placed(cx, "in the stage");
+    hand_off(&shell, &view, cx);
+    placed(cx, "beside a page");
+}
+
+/// The gap in the sign's cord as it was drawn last, if it was drawn moving.
+fn sign_gap(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) -> Option<(f32, f32)> {
+    view.read_with(cx, |view, _| view.sign_drawn.get())
+        .and_then(|(_, gap, _)| gap)
+}
+
+/// A thread at work, its turn under way with no step: nothing shimmers, and the sign alone moves.
+fn working_alone() -> Conversation {
+    conversation(0)
+}
+
+/// While the thread works, a gap of its share of the cord travels round it, a lap in its time at
+/// an even pace, from where the cord starts as the work does.
+#[test]
+fn the_working_gap_travels_round_the_cord_at_an_even_pace() {
+    use crate::shell::knot::{Knot, gap};
+    use crate::tokens::shell::conversation::sign::{LAP, WORKING_GAP};
+    for (gone, at) in [
+        (0., 0.),
+        (LAP / 4., 0.25),
+        (LAP / 2., 0.5),
+        (LAP, 0.),
+        (LAP * 1.75, 0.75),
+    ] {
+        let (was, length) = gap(Knot::Working, gone);
+        assert!((was - at).abs() < 1e-4, "{gone} s in: at {was}, not {at}");
+        assert_eq!(length, WORKING_GAP, "{gone} s in");
+    }
+}
+
+/// The working sign moves on the shimmer's clock, which it keeps going with nothing else moving,
+/// and asks for no frame with motion reduced, where it stands whole and still, or while its window
+/// isn't shown.
+#[gpui::test]
+fn the_working_sign_asks_for_frames_only_while_it_can_be_seen_moving(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::sign::WORKING_GAP;
+    let (shell, _, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(working_alone()), cx)
+    });
+    redraw(&shell, &view, cx);
+    let pending =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.breath.pending());
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "something shimmers"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(super::Knot::Working)
+    );
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "with motion reduced the sign moves"
+    );
+    assert!(!pending(cx), "with motion reduced the sign asks for frames");
+
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    redraw(&shell, &view, cx);
+    let (_, length) = sign_gap(&view, cx).expect("the working sign doesn't move");
+    assert_eq!(length, WORKING_GAP);
+    assert!(pending(cx), "the working sign isn't on the shimmer's clock");
+
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        redraw(&shell, &view, cx);
+    }
+    // The sidebar's card of a thread at work keeps the shimmer's clock by itself, so what the sign
+    // asks for is read from the sign: drawn still, it asks for no frame.
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "the sign moves in a window not shown"
+    );
+}
+
+/// While the thread waits on the user, at the top of the upper right loop a gap opens to its share
+/// of the cord over `open`, holds, closes over `open`, and the knot rests whole for `rest`, over
+/// and over, the gap's middle always at the loop's top.
+#[test]
+fn the_waiting_gap_opens_and_closes_at_the_loops_top_then_rests() {
+    use crate::shell::knot::{Knot, gap};
+    use crate::tokens::shell::conversation::sign::{HOLD, OPEN, REST, WAITING_GAP};
+    let crown = crate::product::crown();
+    let cycle = OPEN + HOLD + OPEN + REST;
+    let length = |gone: f32| {
+        let (at, length) = gap(Knot::Waiting, gone);
+        assert!(
+            (at + length / 2. - crown).abs() < 1e-4,
+            "{gone} s in the gap's middle is at {}, not the loop's top {crown}",
+            at + length / 2.
+        );
+        length
+    };
+    assert!(
+        length(0.) < 1e-4,
+        "the wait doesn't start with the knot whole"
+    );
+    let opening: Vec<f32> = (0..=4).map(|n| length(OPEN * n as f32 / 4.)).collect();
+    assert!(
+        opening.windows(2).all(|pair| pair[0] < pair[1]),
+        "the gap doesn't open steadily: {opening:?}"
+    );
+    for gone in [OPEN, OPEN + HOLD / 2., OPEN + HOLD] {
+        assert!((length(gone) - WAITING_GAP).abs() < 1e-4, "{gone} s in");
+    }
+    let closing: Vec<f32> = (0..=4)
+        .map(|n| length(OPEN + HOLD + OPEN * n as f32 / 4.))
+        .collect();
+    assert!(
+        closing.windows(2).all(|pair| pair[0] > pair[1]),
+        "the gap doesn't close steadily: {closing:?}"
+    );
+    for gone in [
+        OPEN + HOLD + OPEN + 0.01,
+        OPEN + HOLD + OPEN + REST / 2.,
+        cycle - 0.01,
+    ] {
+        assert!(length(gone) < 1e-3, "the knot isn't whole {gone} s in");
+    }
+    assert_eq!(length(cycle + OPEN), length(OPEN), "it doesn't go again");
+}
+
+/// At a wait with nothing else under way no line of the log moves and the sign is in its waiting
+/// motion, on the shimmer's clock; with a second tab's step under way, that step moves too; after
+/// the hand back the next step moves again and the sign works; with the window not shown nothing
+/// is scheduled.
+#[gpui::test]
+fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
+    use super::Knot;
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let pending =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.breath.pending());
+    let show = |talk: &Conversation, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+        // Its trace opens as it first draws, and shimmers from the next frame.
+        redraw(&shell, &view, cx);
+        redraw(&shell, &view, cx);
+    };
+    // Its step handed to the user: nothing under way.
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        trace.items = vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))];
+    }
+    talk.lines.push(handed(1));
+    talk.live = Live::Handed;
+    show(&talk, cx);
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "a line moves at the wait"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Knot::Waiting)
+    );
+    assert!(
+        sign_gap(&view, cx).is_some(),
+        "the waiting sign doesn't move"
+    );
+    assert!(pending(cx), "the waiting sign isn't on the shimmer's clock");
+
+    // A step under way on a second tab moves too, while the thread still waits.
+    let mut second = talk.clone();
+    if let Line::Trace(trace) = &mut second.lines[0] {
+        trace
+            .items
+            .push(TraceItem::Step(step(1, "Opened tap.pt", true)));
+    }
+    show(&second, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the second tab's step holds still"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Knot::Waiting)
+    );
+
+    // Handed back, the next step moves and the sign works.
+    let mut back = conversation(2);
+    back.lines.insert(1, handed(1));
+    show(&back, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the next step holds still"
+    );
+    assert_eq!(
+        sign_drawn(&view, cx).map(|(sign, _)| sign),
+        Some(Knot::Working)
+    );
+
+    // Waiting again, in a window not shown: nothing is scheduled.
+    show(&talk, cx);
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    for _ in 0..3 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        redraw(&shell, &view, cx);
+    }
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "the waiting sign moves in a window not shown"
+    );
+}
+
+/// The sign asks for frames only while it moves where it can be seen: a thread waiting on the user
+/// with nothing else under way, its card still, has the shimmer's clock kept for the sign alone;
+/// with motion reduced, in a window the system doesn't show, or once the thread has ended, the
+/// clock isn't kept for it. It never asks for the display's frames, which only what opens, folds
+/// or lands does.
+#[gpui::test]
+fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut TestAppContext) {
+    let waits = Card {
+        dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(waits, cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        trace.items = vec![TraceItem::Step(step(0, "Opened skyscanner.net", false))];
+    }
+    talk.lines.push(handed(1));
+    talk.live = Live::Handed;
+    let show = |talk: &Conversation, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(talk.clone()), cx)
+        });
+    };
+    // Whether the clock's next frame is out once its last has drawn.
+    let asked = |cx: &mut VisualTestContext| {
+        for _ in 0..3 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            redraw(&shell, &view, cx);
+        }
+        shell.read_with(cx, |shell, _| shell.breath.pending())
+    };
+    show(&talk, cx);
+    assert!(
+        !view.read_with(cx, |view, _| view.moving(false)),
+        "a line moves at the wait"
+    );
+    assert!(!asked(cx), "with motion reduced the clock is kept");
+    assert_eq!(
+        sign_gap(&view, cx),
+        None,
+        "with motion reduced the sign moves"
+    );
+
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    assert!(asked(cx), "the waiting sign doesn't keep the clock");
+    assert!(
+        sign_gap(&view, cx).is_some(),
+        "the waiting sign doesn't move"
+    );
+
+    cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+    assert!(!asked(cx), "in a hidden window the clock is kept");
+    cx.simulate_visibility_change(gpui::WindowVisibility::Visible);
+    assert!(
+        asked(cx),
+        "shown again, the waiting sign doesn't keep the clock"
+    );
+
+    talk.stoppable = false;
+    show(&talk, cx);
+    assert!(!asked(cx), "once the thread has ended the clock is kept");
+    assert_eq!(
+        sign_drawn(&view, cx),
+        None,
+        "an ended thread draws the sign"
+    );
+}

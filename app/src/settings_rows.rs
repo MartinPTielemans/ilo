@@ -1638,20 +1638,20 @@ pub fn site_note_row(
     toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
     use crate::agents::notes::{CLOSE, READ};
-    let host = note.host;
+    let name = note.name;
     let title = if opened { CLOSE } else { READ };
-    let id = gpui::ElementId::Name(format!("agent-note-read-{host}").into());
+    let id = gpui::ElementId::Name(format!("agent-note-read-{name}").into());
     let read = stop_button(look, id, title, a11y)
         .relative()
-        .child(drawn(format!("note {host}"), logged))
+        .child(drawn(format!("note {name}"), logged))
         .on_click(toggle);
     let head = frame()
-        .child(text(look, note.name, Some(note.about.into())))
+        .child(text(look, name, Some(note.about().into())))
         .child(end([read.into_any_element()]));
     // A line each, as the note's text has them: a part's name in a row's name's ink, its
     // sentences grey under it, so an open note reads as its three parts.
     let words = opened.then(|| {
-        let lines = note.text.trim_end().lines().map(|line| {
+        let lines = note.text().trim_end().lines().map(|line| {
             let ink = match crate::agents::notes::PARTS.contains(&line) {
                 true => look.ink,
                 false => look.detail,

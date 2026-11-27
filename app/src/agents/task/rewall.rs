@@ -295,13 +295,15 @@ impl Agents {
 
 impl Agents {
     /// The wall for `agent`'s task as it is, at `level`.
-    fn put_up(&self, agent: &str, level: Tier) -> Result<Wall, WallRefused> {
+    fn put_up(&self, agent: &str, run: &str, level: Tier) -> Result<Wall, WallRefused> {
         let refused = || WallRefused::Failed("the task isn't one ilo runs".into());
         let task = self.task(agent).ok_or_else(refused)?;
-        // Where its start puts them (`launch_in`): a task with files is never kept, so its
-        // folder is its own under the tasks'.
+        // Where the start of `run`, the task's own or a strand's, puts them (`launch_in`,
+        // `launch_strand`): a task with files is never kept, so each run's folder is its own under
+        // the tasks', and a strand's wall lets it read its own config and token, never its
+        // thread's.
         let dir = self.tasks_dir();
-        let (task_dir, config) = (dir.join(agent), dir.join(format!("{agent}.json")));
+        let (task_dir, config) = (dir.join(run), dir.join(format!("{run}.json")));
         let places = dir.join(wall::leftovers::ROOT);
         let cli = task.cli.ok_or_else(refused)?;
         let found = self.tasks.found.get(&cli);
@@ -341,17 +343,21 @@ impl Agents {
     /// The wall a start of `agent`'s task goes inside: none for a task with no files, which
     /// starts as it always has. Err for one whose wall isn't put up, which from then goes on
     /// without its files.
-    fn wall_or_without(&mut self, agent: &str) -> Result<Option<Arc<Wall>>, ()> {
+    pub(super) fn wall_or_without(
+        &mut self,
+        agent: &str,
+        run: &str,
+    ) -> Result<Option<Arc<Wall>>, ()> {
         let Some(task) = self.task(agent).filter(|task| task.files.any()) else {
             return Ok(None);
         };
-        match self.put_up(agent, task.tier) {
+        match self.put_up(agent, run, task.tier) {
             Ok(wall) => Ok(Some(Arc::new(wall))),
             // The folder is no longer where it was: its grant ends (J6), and what else the task
             // has goes inside a wall of its own.
             Err(WallRefused::Refused(Refusal::Gone)) if task.files.folder.is_some() => {
                 self.folder_gone(agent);
-                self.wall_or_without(agent)
+                self.wall_or_without(agent, run)
             }
             Err(_) => {
                 self.without_files(agent);
@@ -364,7 +370,7 @@ impl Agents {
     /// it starts at, what it starts `with`, and on the same row that its files were left out,
     /// where its wall wasn't put up or their copies couldn't be made.
     pub(super) fn wall_to_begin(&mut self, agent: &str, with: StartedWith) -> Option<Arc<Wall>> {
-        let wall = self.wall_or_without(agent);
+        let wall = self.wall_or_without(agent, agent);
         let left_out = with.left_out || wall.is_err();
         self.log_start(agent, StartedWith { left_out, ..with });
         wall.unwrap_or_default()
@@ -373,7 +379,7 @@ impl Agents {
     /// The wall a later start of `agent`'s task goes inside. One that leaves its files out is in
     /// the log as that start's row, which a later start otherwise has none of.
     pub(super) fn wall_to_start(&mut self, agent: &str) -> Option<Arc<Wall>> {
-        let wall = self.wall_or_without(agent);
+        let wall = self.wall_or_without(agent, agent);
         if wall.is_err() {
             self.log_start(agent, LEFT_OUT);
         }
@@ -468,7 +474,7 @@ impl Agents {
             return Ok(None);
         }
         let wall = match task.cli {
-            Some(Cli::Claude) => self.put_up(key, to).ok(),
+            Some(Cli::Claude) => self.put_up(key, key, to).ok(),
             // Codex inside a wall isn't started again at another level yet.
             Some(Cli::Codex) | None => None,
         };
@@ -492,6 +498,9 @@ impl Agents {
             return;
         };
         task.end_run();
+        // Its strands run inside the wall it outgrew, for what that run asked: they end with it,
+        // each call answered as stopped, and the next run starts its own inside the new wall.
+        task.helpers.end_strands(task.trace.len());
         task.rising = None;
         // What that run asked goes unanswered with it, so no answer to it is the next run's act.
         task.asking = None;
