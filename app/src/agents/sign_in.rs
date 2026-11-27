@@ -785,6 +785,9 @@ pub enum Offer {
     Cancel,
     /// Try Again, once a sign-in failed.
     TryAgain,
+    /// How to Update: its maker's page on updating it, for one older than the browser runs
+    /// (AP27). The browser never updates it itself.
+    Update,
     /// Its ⋯ menu, with Model and Sign Out, and the mark that has tasks run on it.
     SignedIn,
 }
@@ -797,6 +800,7 @@ impl Offer {
             Offer::Get => Some(format!("Get {name}")),
             Offer::SignIn => Some(format!("Sign In to {name}")),
             Offer::TryAgain => Some("Try Again".into()),
+            Offer::Update => Some("How to Update".into()),
             Offer::Cancel => Some("Cancel".into()),
             Offer::Nothing | Offer::SignedIn => None,
         }
@@ -873,6 +877,7 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         (Row::Failed(None), _) => shown("The sign-in didn't finish", Offer::TryAgain),
         (Row::Idle, Ready::Unknown) => shown("Checking…", Offer::Nothing),
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
+        (Row::Idle, Ready::NeedsUpdate) => shown("Needs an update", Offer::Update),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
         (Row::Idle, Ready::SignedIn) => match plan {
             Some(plan) => shown(&format!("Signed in · {plan} plan"), Offer::SignedIn),
@@ -909,7 +914,7 @@ impl Agents {
     pub(super) fn card_offer(&self, cli: Cli) -> Option<Offer> {
         match self.assistant_row(cli).offer {
             Offer::TryAgain => Some(Offer::SignIn),
-            offer @ (Offer::Get | Offer::SignIn | Offer::Cancel) => Some(offer),
+            offer @ (Offer::Get | Offer::Update | Offer::SignIn | Offer::Cancel) => Some(offer),
             Offer::Nothing | Offer::SignedIn => None,
         }
     }

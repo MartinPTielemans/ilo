@@ -2467,10 +2467,20 @@ impl Browser for Engine {
         }
     }
 
+    fn reveal_first_run(&self, window: f32, glass: f32) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_set_first_run_reveal(window.into(), glass.into())
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = (window, glass);
+    }
+
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
         // The browser window first, then first run's off on the same turn, as the launch window
         // gives way: taken off first, it would still be leaving behind the browser window, and
-        // show through its material.
+        // show through its material. Where a grow put it under first run's already, the host only
+        // gives it the keyboard.
         show_window_held_for_first_run(cx);
         unsafe { platform::host_close_first_run() };
         window

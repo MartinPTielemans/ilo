@@ -12,6 +12,9 @@ on:
       - app/platform/mac/**
       - app/platform/host.h
       - core/public/**
+      - tools/update-order.py
+      - tools/update-order-test.sh
+      - app/setup.sh
       - .github/workflows/mac-syntax.yml
   # A push runs it only for commits new to the repo: a commit already on another ref is skipped, so
   # a header that doesn't parse can reach an engine build unchecked. This runs it on any ref.
@@ -62,3 +65,29 @@ jobs:
             sed -nE 's/^([^:]+):([0-9]+):([0-9]+): (fatal )?error: (.*)$/::error file=\1,line=\2,col=\3::\5/p' "$RUNNER_TEMP/out"
           done
           exit $status
+
+  # The release's update check (tools/update-order.py) compares Mac builds with a port of Sparkle's
+  # comparator; here every case goes through the framework app/setup.sh pins as well (#4086).
+  update-order:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/update-order.py
+            tools/update-order-test.sh
+            app/platform/windows/package/version.sh
+            app/setup.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Fetch Sparkle
+        run: |
+          eval "$(grep -E '^  SPARKLE(_SHA256)?=' app/setup.sh)"
+          curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$RUNNER_TEMP/sparkle.tar.xz"
+          echo "$SPARKLE_SHA256  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c
+          mkdir "$RUNNER_TEMP/Sparkle"
+          tar xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/Sparkle"
+
+      - run: SPARKLE_FRAMEWORKS=$RUNNER_TEMP/Sparkle tools/update-order-test.sh

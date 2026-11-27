@@ -1070,12 +1070,18 @@ fi
 # the agent's tabs, isn't made key. The user is in a second window then, with the keyboard, which a
 # window made key would take: their window, Space and keyboard stay as they were.
 if [ -n "$yours_step" ]; then
-  printf '%s' '<!doctype html><title>Focuser</title>
-<button onclick="const w = open(&quot;opened.html?focused&quot;); setTimeout(() => { w.focus(); document.title = &quot;focused it&quot; }, 1000)">Open</button>' \
+  # window.open by name: in an inline handler a bare open( is document.open first, which with one
+  # argument empties the page and opens nothing. focus() is a second press of its own: opening the
+  # tab uses up the first press's activation, and Blink asks the browser to show a page only for a
+  # frame that still has one (Frame::FocusPage), so a focus() after it never reaches the core.
+  printf '%s' '<!doctype html><title>Focuser</title><script>let w</script>
+<button onclick="w = window.open(&quot;opened.html?focused&quot;)">Open</button>
+<button onclick="w.focus(); document.title = &quot;focused it&quot;">Focus</button>' \
     > "$out/site/focuser.html"
   opened=$(call open_tab "{\"url\":\"localhost:$port/focuser.html\"}")
   focuser=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Open" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  focus_ref=$(printf '%s\n' "$opened" | sed -n 's/.*- button "Focus" \[\(e[0-9]*\)\].*/\1/p' | head -1)
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   focus_window=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
@@ -1096,6 +1102,11 @@ if [ -n "$yours_step" ]; then
   await_more "^browser: tab [0-9]* opened by $focuser in the background\$" "$behind" ||
     fail "the agent's page didn't open a tab behind: $clicked"
   focused=$(sed -n "s/^browser: tab \([0-9]*\) opened by $focuser in the background\$/\1/p" "$log" | tail -1)
+  clicked=$(call click "{\"tab\":$focuser,\"ref\":\"$focus_ref\"}")
+  case "$clicked" in
+    "Clicked "*) ;;
+    *) fail "the agent's click on Focus answered: $clicked" ;;
+  esac
   await_log "^browser: agent's tab $focused refused focus (page)\$" \
     "the agent's page's focus() on the tab it opened never reached the core"
   await_log "^browser: title $focuser focused it\$" "the agent's page never called focus() on the tab it opened"

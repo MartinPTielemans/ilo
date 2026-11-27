@@ -1690,6 +1690,10 @@ card-inset = 8.0
 # The radius of the card's corners and the page's in it, the same in every window on every OS: the
 # drawing's, whatever corner the OS gives the window.
 card-radius = 10.0
+# The strip along the window's sides the UI keeps over a page that reaches them: where the pointer
+# brings out the hidden sidebar and, on Linux, resizes the window. The core leaves a page's input
+# out of it at the same width (core/page_edge_strips.h, kPageEdgeStrip).
+edge-strip = 3.0
 # The line round the card where it faces the window, a point wide, so a page of the window's own
 # shade keeps its edge. The side that meets the sidebar has none.
 page-outline = 0x00000080
@@ -2783,13 +2787,16 @@ way-copied = 1.2
 # First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing
 # fades the card's content over `content`, then the card grows to the window over `grow` on
 # ARRIVE, its `corners` from the card's to the window's, its fill crossing over `material` to the
-# window's tint with the pages' card over it. The exit ends once the card is within `rest` points
-# of the window on every side, as ARRIVE's tail moves it less than that. The last step's knot fades
-# with the content. Where it can't, and with Reduce Motion, the card cross-fades over `cross-fade`.
-# The Mac's host grows it; no other does yet.
+# window's tint with the pages' card over it. The browser window, drawn, waits unseen under first
+# run's from the grow's start, and comes in at `reveal`: so many seconds after the press, over so
+# many. In its first half the window fades in under the card as the card's glass fades out, so no
+# two glasses lie over each other; in its second the card fades from over it. The exit ends with
+# it, ARRIVE's tail, which moves the card a few points, playing under the fade. The last step's
+# knot fades with the content. Where it can't, and with Reduce Motion, the card
+# cross-fades over `cross-fade`. The Mac's host grows it; no other does yet.
 content = 0.12
 grow = 0.52
-rest = 0.5
+reveal = [0.28, 0.24]
 corners = [20.0, 12.0]
 material = 0.3
 cross-fade = 0.22
