@@ -48,7 +48,7 @@ class PageLog : public content::WebContentsObserver,
   PageLog(content::WebContents* contents, std::string agent);
 
   // Whether the page in the tab is in Developer Mode now, its log following, and the session.
-  bool DeveloperModeNow() const;
+  bool DeveloperModeNow();
   void Follow(bool developer_mode);
   void Attach();
   void Detach();

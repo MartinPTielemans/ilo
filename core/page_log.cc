@@ -145,7 +145,7 @@ std::optional<std::string> PageLog::For(const std::string& agent,
   return log->log_.Json();
 }
 
-bool PageLog::DeveloperModeNow() const {
+bool PageLog::DeveloperModeNow() {
   Profile* profile = Profile::FromBrowserContext(GetWebContents().GetBrowserContext());
   return kept_ && developer_mode::On(profile, GetWebContents().GetLastCommittedURL());
 }
