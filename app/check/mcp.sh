@@ -1070,8 +1070,10 @@ fi
 # the agent's tabs, isn't made key. The user is in a second window then, with the keyboard, which a
 # window made key would take: their window, Space and keyboard stay as they were.
 if [ -n "$yours_step" ]; then
+  # window.open by name: in an inline handler a bare open( is document.open first, which with one
+  # argument empties the page and opens nothing.
   printf '%s' '<!doctype html><title>Focuser</title>
-<button onclick="const w = open(&quot;opened.html?focused&quot;); setTimeout(() => { w.focus(); document.title = &quot;focused it&quot; }, 1000)">Open</button>' \
+<button onclick="const w = window.open(&quot;opened.html?focused&quot;); setTimeout(() => { w.focus(); document.title = &quot;focused it&quot; }, 1000)">Open</button>' \
     > "$out/site/focuser.html"
   opened=$(call open_tab "{\"url\":\"localhost:$port/focuser.html\"}")
   focuser=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
