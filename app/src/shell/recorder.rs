@@ -85,6 +85,8 @@ pub(crate) struct Recorder {
     /// What the core answers a tile with, true as the Mac's does for an agent's page (#4115),
     /// and recording what the shell asks of tiles; nothing recorded unless a test says.
     pub(super) shows_tiles: Cell<Option<bool>>,
+    /// The tabs whose tile was last shown taking the wheel (#4441), and still shown.
+    pub(super) tiles_taking_wheel: RefCell<HashSet<u64>>,
     /// The window that shows each tab's page, as `tab_window` answers.
     pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
@@ -2341,10 +2343,17 @@ impl Browser for Recorder {
         self.record(format!("show {tab} in window {window}"))
     }
 
-    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32) -> bool {
+    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32, takes_wheel: bool) -> bool {
         let Some(shows) = self.shows_tiles.get() else {
             return false;
         };
+        let mut wheels = self.tiles_taking_wheel.borrow_mut();
+        if shows && takes_wheel {
+            wheels.insert(tab);
+        } else {
+            wheels.remove(&tab);
+        }
+        drop(wheels);
         self.record(format!(
             "tile {tab} at {} {} {} {} radius {radius}",
             f32::from(at.origin.x),
@@ -2357,6 +2366,7 @@ impl Browser for Recorder {
 
     fn end_tile(&self, tab: u64) {
         if self.shows_tiles.get().is_some() {
+            self.tiles_taking_wheel.borrow_mut().remove(&tab);
             self.record(format!("end tile {tab}"));
         }
     }

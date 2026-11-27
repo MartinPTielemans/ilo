@@ -1257,9 +1257,11 @@ pub trait Browser {
     fn show_in_window(&self, _window: u64, _tab: u64, _cx: &mut App) {}
     /// Shows `tab`'s page live in this window at `at`, with corners of `radius`, over what the
     /// UI draws there: an agent's page no window shows, which takes nothing from the user and
-    /// hears no click (#4115). Call again as `at` changes. False, with nothing shown, for any
-    /// other tab and off the Mac, where the UI draws its picture instead.
-    fn show_tile(&self, _tab: u64, _at: Bounds<Pixels>, _radius: f32) -> bool {
+    /// hears no click (#4115). With `takes_wheel`, the trackpad over it scrolls its page, as over
+    /// the page a thread is watched in, without taking it over (#4441); without it, the wheel is
+    /// the UI's under it, as a rail of pictures scrolls. Call again as `at` changes. False, with
+    /// nothing shown, for any other tab and off the Mac, where the UI draws its picture instead.
+    fn show_tile(&self, _tab: u64, _at: Bounds<Pixels>, _radius: f32, _takes_wheel: bool) -> bool {
         false
     }
     /// Takes `tab`'s page out of the tile `show_tile` showed it in; nothing if it isn't one.

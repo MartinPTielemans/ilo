@@ -112,7 +112,8 @@ impl LiveTiles {
             {
                 continue;
             }
-            if self.browser.show_tile(tab, at, TILE_RADIUS) {
+            // The rail scrolls under its pictures, so the wheel over one is the rail's.
+            if self.browser.show_tile(tab, at, TILE_RADIUS, false) {
                 self.ever.set(true);
                 self.refused.borrow_mut().remove(&tab);
                 if self.live.borrow_mut().insert(tab, at).is_none() {

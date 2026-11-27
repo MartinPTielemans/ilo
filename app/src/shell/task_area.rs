@@ -566,7 +566,8 @@ impl Shell {
             });
         }
         let at = page_in(from);
-        if self.browser.show_tile(tab, at, TILE_RADIUS) {
+        // The page watched scrolls under the trackpad as in its tab, and stays the agent's (#4441).
+        if self.browser.show_tile(tab, at, TILE_RADIUS, true) {
             return Some(WatchTile {
                 tiles,
                 shown: true,
@@ -824,7 +825,7 @@ impl Shell {
             return;
         }
         let tab = page.tab;
-        if self.browser.show_tile(tab, placed.0, placed.1) {
+        if self.browser.show_tile(tab, placed.0, placed.1, true) {
             if let Some(tile) = self.watch_tile_mut() {
                 tile.placed = Some(placed);
             }
@@ -1653,8 +1654,9 @@ impl Shell {
 
     /// What the area draws under a page watched in its tile, which the core draws over it: the
     /// page's own outline and the area's ground round the page, fading in as it zooms; and where
-    /// the tile is, what takes a press on it, which takes the page over. Nothing takes a scroll or
-    /// a key there.
+    /// the tile is, what takes a press on it, which takes the page over. Nothing here takes a key
+    /// or a scroll there: the trackpad over the tile scrolls its page, as the core gives it the
+    /// wheel (#4441).
     fn watch_tile_ground(
         &self,
         tab: u64,
