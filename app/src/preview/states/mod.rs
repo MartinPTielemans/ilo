@@ -47,6 +47,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_DEVELOPER_MODE", values: "1", shows: "the tab shown, the third tab and a favorite in Developer Mode" },
     State { name: "PREVIEW_DIALOG", values: "1", shows: "the app's dialog over the window the first time it asks" },
     State { name: "PREVIEW_DRM", values: "1, default", shows: "a page asking for video ilo can't play, and its note" },
+    State { name: "PREVIEW_EDGE_KNOT", values: "1", shows: "the sidebar hidden and the edge knot at its edge (with PREVIEW_TASKS=needs-you)" },
     State { name: "PREVIEW_EMPTY", values: "1, reading, private, new", shows: "no page, as a fresh ⌘N window, the second Space, a private window or a new user's Space" },
     State { name: "PREVIEW_FAVORITE", values: "<index>", shows: "that favorite selected" },
     State { name: "PREVIEW_FOCUS_SIDEBAR", values: "1", shows: "the sidebar with the keyboard, its ring on the tab shown's row" },
