@@ -8,11 +8,11 @@ use gpui::{
 };
 
 use crate::shell::{
-    FOOTER_HEIGHT, PLUS_INSET, SWITCHER_INSET, Shell,
+    FOOTER_HEIGHT, Shell,
     commands::{Command, bind_keys},
     recorder::Recorder,
 };
-use crate::tokens::shell::{NAV_PITCH, NAV_SIZE, SPACE_PITCH};
+use crate::tokens::shell::{LIBRARY_BUTTON, NAV_SIZE};
 
 const TITLES: [&str; 7] = [
     "Settings…",
@@ -57,10 +57,10 @@ fn window(
     (shell, cx, host)
 }
 
-/// The menu control's plate's top left, as the footer places it before the +.
+/// The menu control's plate's top left, as the footer places it after the Library button.
 fn plate(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Point<Pixels> {
     shell.read_with(cx, |shell, _| {
-        let x = shell.width() - PLUS_INSET - NAV_PITCH - NAV_SIZE;
+        let x = crate::shell::library::LIBRARY_BACK_INSET + LIBRARY_BUTTON;
         let y = f32::from(shell.viewport.height) - (FOOTER_HEIGHT + NAV_SIZE) / 2.;
         point(px(x), px(y))
     })
@@ -141,31 +141,12 @@ fn each_of_the_menus_items_does_what_the_menu_bars_does(cx: &mut TestAppContext)
     );
 }
 
-/// On the Mac the menu bar holds ilo's menu, so the footer has no control and its place is the
-/// switcher's.
+/// On the Mac the menu bar holds ilo's menu, so the footer has no control.
 #[gpui::test]
 fn the_mac_has_no_menu_control(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx, false);
     click_control(&shell, cx);
     assert!(host.menus.borrow().is_empty());
-}
-
-/// The switcher keeps its centre over what's left between the Library and the control, so at the
-/// sidebar's 228 six Spaces' dots fit at their pitch where eight did.
-#[gpui::test]
-fn the_switcher_leaves_the_control_its_pitch(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window(cx, true);
-    let span = shell.update(cx, |shell, _| {
-        shell.sidebar_width = 228.;
-        shell.switcher_span()
-    });
-    assert_eq!(span, 228. - 2. * SWITCHER_INSET - NAV_PITCH);
-    let full = |count: usize| {
-        crate::shell::footer::space_cells(span, &vec![SPACE_PITCH; count], 0)
-            .iter()
-            .all(|&cell| cell == SPACE_PITCH)
-    };
-    assert!(full(6) && !full(7));
 }
 
 /// Focus ilo Menu as F10 from `from` runs it: the page's, or the UI's.

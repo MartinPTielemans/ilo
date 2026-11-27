@@ -226,7 +226,7 @@ if [ "$active" != 1 ]; then
 fi
 first=$(space)
 # With the sidebar hidden, the Spaces an import makes say so in a toast over the browser window,
-# as their icons in the switcher aren't seen. It comes back before the Personal Space's capture.
+# as the Space button, which lists them, isn't seen. It comes back before the Personal Space's capture.
 if [ -n "$arc" ]; then
   send key s cmd
   expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar before the import"

@@ -1647,6 +1647,16 @@ impl Browser for Engine {
         unsafe { platform::host_hide_reveal(self.ui_view) };
     }
 
+    fn show_edge_knot(&self, top: f32, width: f32, height: f32, _: &mut App) {
+        unsafe {
+            platform::host_show_edge_knot(self.ui_view, top.into(), width.into(), height.into())
+        };
+    }
+
+    fn hide_edge_knot(&self, _: &mut App) {
+        unsafe { platform::host_hide_edge_knot(self.ui_view) };
+    }
+
     fn option_reveals_sidebar(&self) -> bool {
         unsafe { bc::bc_option_reveals_sidebar() }
     }

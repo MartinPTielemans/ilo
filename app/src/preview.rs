@@ -39,8 +39,9 @@ use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
-    App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, Pixels, Point, Render,
+    SharedString, Size, TitlebarOptions, TouchPhase, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -3439,7 +3440,8 @@ fn main() {
                 };
                 dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
             }
-            // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
+            // PREVIEW_ICON_PICKER=<glyph:name, emoji, or empty> shows the icon picker for a Space
+            // with that glyph or none, and for a tab with an emoji, as a Space's offers no emoji.
             if let Ok(icon) = states::var("PREVIEW_ICON_PICKER") {
                 let left = x as f32 + 40.;
                 let top = y as f32 + 120.;
@@ -3457,7 +3459,10 @@ fn main() {
                 .is_some()
                 {
                     let picked: icon_picker::Picked = Rc::new(|_, _| {});
-                    let subject = icon_picker::Subject::Space(1);
+                    let subject = match browser::space_icon::SpaceIcon::parse(&icon) {
+                        browser::space_icon::SpaceIcon::Emoji(_) => icon_picker::Subject::Tab(1),
+                        _ => icon_picker::Subject::Space(1),
+                    };
                     icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
                 }
             }
@@ -3553,6 +3558,13 @@ fn main() {
                 && let Some(shell) = shell_window
             {
                 preview_foot_bar(&kind, shell, bounds, cx);
+            }
+            // PREVIEW_EDGE_KNOT=1 hides the sidebar and, once it's in and the shell shows the edge
+            // knot, opens the knot's window where the host puts it. With PREVIEW_TASKS=needs-you.
+            if let Some(shell) =
+                shell_window.filter(|_| states::var_os("PREVIEW_EDGE_KNOT").is_some())
+            {
+                preview_edge_knot(shell, bounds, cx);
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
@@ -4122,6 +4134,66 @@ fn ring_library_row(
             ring_library_row(shell, rows, frames - 1, window);
         }
     });
+}
+
+/// The edge knot's window, which the app's host shows over the page.
+struct PreviewEdgeKnot(Entity<Shell>);
+
+impl Render for PreviewEdgeKnot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.0
+            .update(cx, |shell, cx| shell.render_edge_knot(window, cx))
+    }
+}
+
+/// Hides the sidebar of the preview's window at `bounds`, then opens the edge knot's window where
+/// the host would put it, once the shell shows it.
+fn preview_edge_knot(window: gpui::WindowHandle<Shell>, bounds: Bounds<Pixels>, cx: &mut App) {
+    use browser::tokens::shell::edge_knot::{HEIGHT, MARGIN, TOP, WIDTH};
+    let Ok(shell) = window.update(cx, |_, _, cx| cx.entity()) else {
+        return;
+    };
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ToggleSidebar, "preview", cx)
+    });
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(1000))
+            .await;
+        cx.update(|cx| {
+            let (shown, right) = shell.read_with(cx, |shell, _| {
+                (shell.edge_knot_shown(), shell.edge_knot_look().0)
+            });
+            if !shown {
+                log!("preview: edge knot not shown");
+                return;
+            }
+            let x = match right {
+                true => f32::from(bounds.size.width) - WIDTH - MARGIN,
+                false => 0.,
+            };
+            let at = Bounds::new(
+                bounds.origin + point(px(x), px(TOP - MARGIN)),
+                size(px(WIDTH + MARGIN), px(HEIGHT + 2. * MARGIN)),
+            );
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(at)),
+                titlebar: None,
+                kind: WindowKind::PopUp,
+                focus: false,
+                window_background: WindowBackgroundAppearance::Transparent,
+                ..Default::default()
+            };
+            let shell = shell.clone();
+            if cx
+                .open_window(options, |_, cx| cx.new(|_| PreviewEdgeKnot(shell)))
+                .is_ok()
+            {
+                log!("preview: edge knot shown");
+            }
+        });
+    })
+    .detach();
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.

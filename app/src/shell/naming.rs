@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     icon_picker::{self, Picked, Subject},
-    space_icon::has_icon,
+    space_icon::has_glyph,
     text_input::TextInput,
     theme_picker,
 };
@@ -369,7 +369,7 @@ impl Shell {
                 let iconless = self
                     .spaces
                     .iter()
-                    .any(|each| each.id == space && !has_icon(&each.icon));
+                    .any(|each| each.id == space && !has_glyph(&each.icon));
                 self.show_space_icon_picker(space, anchor, cx);
                 if iconless {
                     self.hold_icon_place(space, cx);
@@ -498,7 +498,7 @@ impl Shell {
             .is_some_and(|(space, _)| *space == self.space)
             && self
                 .shown_space()
-                .is_some_and(|space| !has_icon(&space.icon))
+                .is_some_and(|space| !has_glyph(&space.icon))
     }
 
     /// Shows the folder's name in a field, all selected, to type a new one over.
