@@ -16,19 +16,18 @@ use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
 use crate::palette::{FIELD_PLATE, INK, OVERLAY_DARK, PAPER, TEXT_SECONDARY, darker, ink_states};
 use crate::text_input::Colors;
-use crate::tokens::group;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
     CHEVRONS_END, CHEVRONS_GAP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT,
-    CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT,
-    CONTROL_HOVERED, CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED,
-    CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL_LINE, DETAIL_SIZE, DETAIL_TOP, END_GAP, GLYPH,
-    GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUND_KNOB, KNOB,
-    KNOB_INSET, LINE_ROW_HEIGHT, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
-    ON_PRESSED, ON_SWITCH_OFF, PADDING, POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X,
-    SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
+    CONTROL_HOVERED_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT, CONTROL_RADIUS,
+    DETAIL_LINE, DETAIL_SIZE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON, GLYPH_PLATE,
+    GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUND_KNOB, KNOB, KNOB_INSET, LINE_ROW_HEIGHT, NAME,
+    NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
+    POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT,
+    SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{
     FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, PRIMARY,
@@ -38,6 +37,7 @@ use crate::tokens::settings::{
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::ICON_INK;
 use crate::tokens::text::SMALL;
+use crate::tokens::{button, group};
 
 mod assistant;
 pub use assistant::{
@@ -384,7 +384,7 @@ impl Look {
             ink,
             line: mix(group::LINE),
             detail: mix(pick(TEXT_SECONDARY, LIGHT_TEXT_SECONDARY)),
-            control: mix(pick(CONTROL, CONTROL_LIGHT)),
+            control: mix(button::SECONDARY),
             field: mix(FIELD_PLATE),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
@@ -697,18 +697,24 @@ pub fn button(
         .child(title.into())
 }
 
-/// A square push button with `glyph` on it, such as a list's + and −, lit as a button is.
+/// A square icon button with `glyph` on it, such as a list's + and −: bare, with a plate under the
+/// pointer and the pressed step under a press (#4401).
 pub fn icon_button(
     look: &Look,
     id: impl Into<gpui::ElementId>,
     glyph: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
-    lit(look, div().id(id).w(px(CONTROL_HEIGHT)).justify_center()).child(
-        svg()
-            .path(glyph)
-            .size(px(BUTTON_GLYPH))
-            .text_color(look.ink),
-    )
+    let (hovered, pressed) = (look.ink.opacity(button::ICON_HOVERED), look.pressed);
+    lit(look, div().id(id).w(px(button::HEIGHT)).justify_center())
+        .bg(gpui::transparent_black())
+        .hover(move |button| button.bg(hovered))
+        .active(move |button| button.bg(pressed))
+        .child(
+            svg()
+                .path(glyph)
+                .size(px(BUTTON_GLYPH))
+                .text_color(look.ink),
+        )
 }
 
 /// The push button that does what the view is for, one at most in sight: its label on the look's
@@ -723,10 +729,10 @@ pub fn primary(
         .id(id)
         .px(px(CONTROL_PADDING))
         .flex_none()
-        .h(px(CONTROL_HEIGHT))
+        .h(px(button::HEIGHT))
         .flex()
         .items_center()
-        .rounded(px(CONTROL_RADIUS))
+        .rounded(px(button::RADIUS))
         .bg(look.primary)
         .text_color(look.on_primary)
         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -735,7 +741,7 @@ pub fn primary(
         .child(title.into())
 }
 
-/// A control's plate, lit under the pointer and pressed.
+/// A button's plate, [button]'s secondary, lit under the pointer and pressed.
 fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
     let (hovered, pressed) = (look.hovered, look.pressed);
     control
@@ -745,10 +751,10 @@ fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::
         .focus_from_keys_only()
         .focus_visible(ring(look.ink))
         .flex_none()
-        .h(px(CONTROL_HEIGHT))
+        .h(px(button::HEIGHT))
         .flex()
         .items_center()
-        .rounded(px(CONTROL_RADIUS))
+        .rounded(px(button::RADIUS))
         .bg(look.control)
         .hover(move |button| button.bg(hovered))
         .active(move |button| button.bg(pressed))

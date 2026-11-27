@@ -1333,10 +1333,11 @@ knob = 16.0
 knob-inset = 2.0
 switch-off = 0.2
 switch-off-light = 0.16
-# Buttons, as drawn: 26 tall at the control radius, their title 12 in at medium. A pop-up is its
-# value at its start, 10 in, where its menu puts the chosen item's, and its chevrons 6 after it and
-# 8 from its end in the quiet ink, on a button's plate. Under the pointer, a step toward pressed,
-# which is the shown plate, as an open pop-up's is.
+# Buttons are [button]'s three kinds (#4402), their title 12 in at medium: a secondary on its
+# plate, an icon one bare, and the main one. A pop-up is its value at its start, 10 in, where its
+# menu puts the chosen item's, and its chevrons 6 after it and 8 from its end in the quiet ink, on
+# a secondary's plate. Under the pointer, a step toward pressed, which is the shown plate, as an
+# open pop-up's is. Fields and chips keep the control radius.
 control-height = 26.0
 control-padding = 12.0
 control-radius = 6.0
@@ -1346,8 +1347,6 @@ chevrons-end = 8.0
 chevrons-gap = 6.0
 chevrons-alpha = 0.6
 button-glyph = 13.0
-control = 0.1
-control-light = 0.1
 control-hovered = 0.14
 control-hovered-light = 0.13
 control-pressed = 0.2
