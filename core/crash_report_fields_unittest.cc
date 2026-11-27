@@ -30,8 +30,9 @@ TEST(CrashReportFields, NameTheReleaseAndChannel) {
 }
 
 TEST(CrashReportFields, KeepNoAddress) {
-  const std::string* infer_ip =
-      Fields("0.3.1", "rework").FindStringByDottedPath("sdk.settings.infer_ip");
+  // The dictionary outlives the pointer into it.
+  base::DictValue fields = Fields("0.3.1", "rework");
+  const std::string* infer_ip = fields.FindStringByDottedPath("sdk.settings.infer_ip");
   ASSERT_TRUE(infer_ip);
   EXPECT_EQ(*infer_ip, "never");
 }
