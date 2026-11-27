@@ -113,81 +113,143 @@ fn frame(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-/// The third Space's card dragged by its handle and let go over the first card's left half moves
-/// it first, with the Library left open and no Space shown; ⌘Z moves it back.
+/// One cell of the row: a card and its gap.
+const PITCH: f32 = CARD_WIDTH + CARD_GAP;
+
+/// Where the pointer holds `space`'s handle after the card's middle has gone `cells` cells right
+/// and `extra` more.
+fn moved(
+    shell: &Entity<Shell>,
+    cx: &mut VisualTestContext,
+    space: u64,
+    cells: f32,
+    extra: f32,
+) -> Point<Pixels> {
+    handle(shell, cx, space) + point(px(cells * PITCH + extra), px(0.))
+}
+
+/// The cards sent aside, by Space, as the drag has them.
+fn aside(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(u64, f32)> {
+    let mut aside: Vec<_> = shell.read_with(cx, |shell, _| {
+        shell
+            .space_shifts
+            .iter()
+            .map(|(&id, &by)| (id, by))
+            .collect()
+    });
+    aside.sort_by(|a, b| a.0.cmp(&b.0));
+    aside
+}
+
+/// The first Space's card dragged by its handle past the second's middle moves only the second,
+/// one cell left, and the card follows the pointer along x.
 #[gpui::test]
-fn a_card_dragged_by_its_handle_moves_its_space(cx: &mut TestAppContext) {
+fn a_card_passing_one_neighbour_moves_only_that_one(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
-    let (from, to) = (handle(&shell, cx, 3), handle(&shell, cx, 1));
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
     hold(cx, from, to);
-    frame(cx);
-    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
+    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(1)));
+    assert_eq!(aside(&shell, cx), [(2, -PITCH)]);
+    let at = shell.read_with(cx, |shell, _| shell.space_shift(1));
+    assert!(
+        (at - (PITCH + 20. - 6.)).abs() < 1.,
+        "the card follows the pointer: {at}"
+    );
+    assert!(
+        host.take_edits().is_empty(),
+        "nothing reaches the core mid-drag"
+    );
+}
+
+/// Past two middles, two cards move.
+#[gpui::test]
+fn a_card_passing_two_neighbours_moves_two(cx: &mut TestAppContext) {
+    let (shell, cx, _) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 2., 20.);
+    hold(cx, from, to);
+    assert_eq!(aside(&shell, cx), [(2, -PITCH), (3, -PITCH)]);
+}
+
+/// Let go, the card lands in the slot the others left open, tells the core once, and ⌘Z puts it
+/// back; the others are already where the order puts them.
+#[gpui::test]
+fn the_release_lands_in_the_open_slot(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, to);
     let_go(cx, to);
-    assert_eq!(host.take_edits(), ["move space 3 after 0"]);
+    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.space_dragged(1)));
+    assert_eq!(aside(&shell, cx), [(1, PITCH), (2, -PITCH)]);
     assert!(
         host.shown.take().is_empty(),
         "the drag was a click on the card"
     );
-    assert!(shell.read_with(cx, |shell, _| shell.library_open && !shell.space_dragged(3)));
 
-    report(&shell, cx, &[3, 1, 2]);
+    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.space_places()[&2])
+    };
+    let before = drawn(&shell, cx);
+    report_gliding(&shell, cx, &[2, 1, 3]);
+    assert!(
+        (drawn(&shell, cx) - before).abs() < 1.,
+        "the card passed doesn't jump when the order is reported"
+    );
+    assert!(aside(&shell, cx).is_empty());
     assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    assert_eq!(host.take_edits(), ["move space 3 after 2"]);
+    assert_eq!(host.take_edits(), ["move space 1 after 0"]);
 }
 
-/// Let go between two cards, it goes after the left one; a click on the handle, or a card let go
-/// on its own place, over the Library's column, or after Esc, moves nothing and shows nothing.
+/// Esc sends everything back, with no word to the core, and the release after it moves nothing.
 #[gpui::test]
-fn a_card_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestAppContext) {
+fn escape_puts_every_card_back(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
-    let between = handle(&shell, cx, 3) - point(px(CARD_MORE_X + CARD_GAP / 2.), px(0.));
     let from = handle(&shell, cx, 1);
-    hold(cx, from, between);
-    let_go(cx, between);
-    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
-    report(&shell, cx, &[2, 1, 3]);
-
-    let at = handle(&shell, cx, 3);
-    cx.simulate_click(at, Modifiers::none());
-    cx.run_until_parked();
-    let own = handle(&shell, cx, 1) + point(px(40.), px(0.));
-    let from = handle(&shell, cx, 1);
-    hold(cx, from, own);
-    let_go(cx, own);
-    let column = point(px(COLUMN_WIDTH / 2.), from.y);
-    hold(cx, from, column);
-    let_go(cx, column);
-    let last = handle(&shell, cx, 3) + point(px(CARD_WIDTH), px(0.));
-    hold(cx, from, last);
-    assert!(
-        shell.read_with(cx, |shell, _| shell.space_dragged(1)),
-        "the handle didn't drag"
-    );
+    let to = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, to);
+    let before = shell.read_with(cx, |shell, _| shell.space_shift(2));
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
-    let_go(cx, last);
+    assert!(aside(&shell, cx).is_empty());
+    let after = shell.read_with(cx, |shell, _| shell.space_shift(2));
+    assert!(
+        (after - before).abs() < 1.,
+        "the card passed springs back from where it is drawn: {before} {after}"
+    );
+    assert!(glide_from(&shell, cx, 1) > 0., "the card springs home");
+    let_go(cx, to);
     assert!(host.take_edits().is_empty());
     assert!(host.shown.take().is_empty());
     assert!(shell.read_with(cx, |shell, _| shell.library_open));
 }
 
-/// Once the core reports the order, the card let go glides from where its copy was, held as
-/// the drag began 6 past the press on its handle, and the card it passed from its old place.
+/// A card taken across and back to its start leaves no gap open, and its release says nothing; so
+/// does one let go over the Library's column, or only clicked.
 #[gpui::test]
-fn the_cards_glide_to_their_new_places(cx: &mut TestAppContext) {
-    let (shell, cx, _) = library(cx);
-    let (first, second) = (handle(&shell, cx, 1), handle(&shell, cx, 2));
-    let to = first - point(px(12.), px(0.));
-    hold(cx, second, to);
-    let_go(cx, to);
-    report_gliding(&shell, cx, &[2, 1, 3]);
-    let slides = (glide_from(&shell, cx, 2), glide_from(&shell, cx, 1));
-    assert!(
-        (slides.0 + 18.).abs() < 1.,
-        "the card let go starts at its copy: {slides:?}"
-    );
-    let pitch = CARD_WIDTH + CARD_GAP;
-    assert!(
-        (slides.1 + pitch).abs() < 1.,
-        "the card passed starts at its old place: {slides:?}"
-    );
+fn a_card_back_where_it_started_moves_nothing(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let out = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, out);
+    assert_eq!(aside(&shell, cx).len(), 1);
+    cx.simulate_mouse_move(from, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(aside(&shell, cx).is_empty());
+    let_go(cx, from);
+    assert!(host.take_edits().is_empty());
+
+    let column = point(px(COLUMN_WIDTH / 2.), from.y);
+    hold(cx, from, out);
+    cx.simulate_mouse_move(column, MouseButton::Left, Modifiers::none());
+    let_go(cx, column);
+    assert!(host.take_edits().is_empty());
+    assert!(aside(&shell, cx).is_empty());
+
+    let third = handle(&shell, cx, 3);
+    cx.simulate_click(third, Modifiers::none());
+    cx.run_until_parked();
+    assert!(host.take_edits().is_empty());
+    assert!(shell.read_with(cx, |shell, _| shell.library_open));
 }

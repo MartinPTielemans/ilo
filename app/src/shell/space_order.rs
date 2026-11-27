@@ -1,18 +1,18 @@
-//! Spaces reordered by dragging a card by its handle along the Library's Spaces. GPUI holds the
-//! drag, as it holds a Library card's tab; the Shell keeps the gap the pointer is over, draws the
-//! drop line there, and glides the cards to their new places once the browser reports the new
-//! order.
+//! Spaces reordered by dragging a card by its handle along the Library's Spaces, as a sortable
+//! row (#4452): the card itself follows the pointer along x, the cards it passes spring one cell
+//! aside, so the open slot is where it lands, and the release settles it there and tells the
+//! browser once. GPUI holds the drag, as it holds a Library card's tab, but draws nothing for it.
 
 use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton,
-    MouseUpEvent, Pixels, Point, Render, WeakEntity, Window, canvas, div, prelude::*, px,
+    App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent, Pixels,
+    Point, Render, WeakEntity, Window, canvas, div, prelude::*,
 };
 
-use super::{Curve, DROP_LINE, DROP_LINE_END, DROP_RING, DROP_RING_X, Edit, Shell, What};
-use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_INSET, SPACES_LEFT};
+use super::{Curve, Edit, Shell, What};
+use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_LEFT};
 
 /// A Space's card handle pressed and dragged, as GPUI holds it. Which Space is the Shell's to
 /// keep, in its SpaceDrag.
@@ -22,15 +22,16 @@ pub(super) struct DraggedSpace;
 /// A card being dragged.
 pub(super) struct SpaceDrag {
     space: u64,
-    /// The view following the pointer, which lives as long as GPUI's drag: a drag let go anywhere
-    /// ends with it.
+    /// The view GPUI holds for the drag, which lives as long as it: a drag let go anywhere ends
+    /// with it.
     ghost: WeakEntity<SpaceGhost>,
     /// How far right of its left the pointer holds the card, and how wide that is.
     grab: f32,
     width: f32,
-    /// While the pointer is over the Spaces section, the gap among the others it's over, 0 before
-    /// the first. Off it it would go nowhere.
-    gap: Option<usize>,
+    /// Where the pointer was last, along the row from its left.
+    pointer: Option<f32>,
+    /// The gap among the others the card's middle is over, None before it has moved.
+    slot: Option<usize>,
 }
 
 /// The cards still gliding to their places: how far right of its place each one started, and when.
@@ -44,13 +45,17 @@ impl Shell {
             .filter(|drag| drag.ghost.upgrade().is_some())
     }
 
-    /// Whether `space`'s card is being dragged, so its place dims.
+    /// Whether `space`'s card is being dragged.
     pub(super) fn space_dragged(&self, space: u64) -> bool {
         self.space_drag().is_some_and(|drag| drag.space == space)
     }
 
-    /// Makes the view that follows the pointer for `space`'s card dragged, `width` wide and held
-    /// `grab` from its left.
+    /// Whether `space`'s card is drawn over the others: while it's dragged, and while it settles.
+    pub(super) fn space_lifted(&self, space: u64) -> bool {
+        self.space_lifted == Some(space)
+    }
+
+    /// Starts the drag of `space`'s card, `width` wide and held `grab` from its left.
     pub(super) fn start_space_drag(
         shell: &WeakEntity<Shell>,
         space: u64,
@@ -58,10 +63,7 @@ impl Shell {
         grab: f32,
         cx: &mut gpui::App,
     ) -> Entity<SpaceGhost> {
-        let ghost = cx.new(|_| SpaceGhost {
-            shell: shell.clone(),
-            space,
-        });
+        let ghost = cx.new(|_| SpaceGhost);
         let weak = ghost.downgrade();
         shell
             .update(cx, |shell, cx| {
@@ -72,8 +74,10 @@ impl Shell {
                     ghost: weak,
                     grab,
                     width,
-                    gap: None,
+                    pointer: None,
+                    slot: None,
                 });
+                shell.space_lifted = Some(space);
                 cx.notify();
             })
             .ok();
@@ -98,59 +102,132 @@ impl Shell {
         )
     }
 
-    /// The gap among the others that the Space dragged is over with the pointer at `position`,
-    /// while that's over the section at `bounds`. None elsewhere.
-    fn gap_over(&self, position: Point<Pixels>, bounds: Bounds<Pixels>) -> Option<usize> {
-        let drag = self.space_drag()?;
-        let from = self
-            .spaces
-            .iter()
-            .position(|space| space.id == drag.space)?;
-        let (x, over) = self.along_at(position, bounds);
-        let (cells, left) = self.cells();
-        over.then(|| gap_at(&cells, left, from, x))
+    /// The card dragged's middle along the row with the pointer at `x`.
+    fn held_middle(drag: &SpaceDrag, x: f32) -> f32 {
+        x - drag.grab + drag.width / 2.
     }
 
-    /// The pointer holding a card moved over the window: the line goes to the gap it's over along
-    /// the section at `bounds`.
+    /// How far right of its place the card dragged is drawn with its middle at `middle`.
+    fn held_offset(&self, space: u64, middle: f32) -> f32 {
+        let (cells, left) = self.cells();
+        let Some(index) = self.spaces.iter().position(|each| each.id == space) else {
+            return 0.;
+        };
+        middle - (left + cells[..index].iter().sum::<f32>() + cells[index] / 2.)
+    }
+
+    /// How far each of the others goes aside for the card dragged from the `from`th cell to be in
+    /// the open slot `gap` among them: one cell for each it has passed.
+    fn shifts_for(&self, from: usize, gap: usize) -> HashMap<u64, f32> {
+        let (cells, _) = self.cells();
+        let pitch = cells.first().copied().unwrap_or(0.);
+        let mut shifts = HashMap::new();
+        let others = self.spaces.iter().enumerate().filter(|&(at, _)| at != from);
+        for (other, (at, space)) in others.enumerate() {
+            let now = if other < gap { other } else { other + 1 };
+            if at != now {
+                shifts.insert(space.id, (now as f32 - at as f32) * pitch);
+            }
+        }
+        shifts
+    }
+
+    /// Sends every card to the shift in `shifts`, none for the ones left out, from where it's drawn:
+    /// on a spring that goes on from there if it was going, and `held` is where the card just let
+    /// go is drawn, which the pointer was holding.
+    fn shift_spaces(&mut self, shifts: HashMap<u64, f32>, held: Option<(u64, f32)>, cx: &App) {
+        let now = crate::motion::start(cx);
+        for space in self.spaces.iter().map(|space| space.id).collect::<Vec<_>>() {
+            let to = shifts.get(&space).copied().unwrap_or(0.);
+            let drawn = match held {
+                Some((held, offset)) if held == space => offset,
+                _ => self.space_shift(space),
+            };
+            if drawn != to {
+                self.space_slides.insert(space, (drawn - to, now));
+            }
+        }
+        self.space_shifts = shifts;
+    }
+
+    /// How far right of its place `space`'s card is drawn: with the pointer if it's the one
+    /// dragged, else where it's been sent, and the way it still has to go.
+    pub(super) fn space_shift(&self, space: u64) -> f32 {
+        if let Some(drag) = self.space_drag().filter(|drag| drag.space == space)
+            && let Some(x) = drag.pointer
+        {
+            return self.held_offset(space, Self::held_middle(drag, x));
+        }
+        self.space_shifts.get(&space).copied().unwrap_or(0.) + self.space_slide(space)
+    }
+
+    /// The pointer holding a card moved over the window: the card follows it along x, and the
+    /// others make room where its middle has crossed theirs, along the section at `bounds`.
     pub(super) fn drag_space_over(
         &mut self,
         event: &DragMoveEvent<DraggedSpace>,
         cx: &mut Context<Self>,
     ) {
-        let gap = self.gap_over(event.event.position, event.bounds);
-        if let Some(drag) = self.space_drag.as_mut()
-            && drag.gap != gap
-        {
-            drag.gap = gap;
-            cx.notify();
+        let (x, over) = self.along_at(event.event.position, event.bounds);
+        let Some(drag) = self.space_drag() else {
+            return;
+        };
+        let space = drag.space;
+        let middle = Self::held_middle(drag, x);
+        let slot = drag.slot;
+        let from = self.spaces.iter().position(|each| each.id == space);
+        if let Some(drag) = self.space_drag.as_mut() {
+            drag.pointer = Some(x);
         }
+        if let (true, Some(from)) = (over, from) {
+            let (cells, left) = self.cells();
+            let gap = gap_at(&cells, left, from, middle);
+            if slot.unwrap_or(from) != gap {
+                let shifts = self.shifts_for(from, gap);
+                self.shift_spaces(shifts, None, cx);
+            }
+            if let Some(drag) = self.space_drag.as_mut() {
+                drag.slot = Some(gap);
+            }
+        }
+        cx.notify();
     }
 
-    /// The pointer let go at `position`, with the section at `bounds`: a Space dragged along it
-    /// moves into the gap it's over, if that's not where it was, its card gliding there from where
-    /// its copy was let go. ⌘Z puts it back. The gap is found again here, as the press,
-    /// the move that starts the drag and the release can come before any other move.
+    /// The pointer let go at `position`, with the section at `bounds`: the card settles into the
+    /// open slot and the browser is told once, if that's not where it was. Let go off the section,
+    /// or back in its place, everything goes back and nothing is told. ⌘Z puts it back.
     pub(super) fn drop_space(
         &mut self,
         position: Point<Pixels>,
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if self.space_drag().is_none() {
+        let Some(drag) = self.space_drag() else {
             return;
-        }
-        let gap = self.gap_over(position, bounds);
+        };
+        let (x, over) = self.along_at(position, bounds);
+        let held = (
+            drag.space,
+            self.held_offset(drag.space, Self::held_middle(drag, x)),
+        );
+        let middle = Self::held_middle(drag, x);
         let Some(drag) = self.space_drag.take() else {
             return;
         };
-        cx.notify();
-        let Some(after) = gap.and_then(|gap| self.after_gap(drag.space, gap)) else {
-            return;
-        };
         let space = drag.space;
-        let (x, _) = self.along_at(position, bounds);
-        self.space_landing = Some((space, x - drag.grab + drag.width / 2.));
+        cx.notify();
+        let from = self.spaces.iter().position(|each| each.id == space);
+        let (cells, left) = self.cells();
+        let gap = from
+            .zip(over.then_some(()))
+            .map(|(from, _)| gap_at(&cells, left, from, middle));
+        let after = gap.and_then(|gap| self.after_gap(space, gap));
+        let (Some(from), Some(gap), Some(after)) = (from, gap, after) else {
+            return self.shift_spaces(HashMap::new(), Some(held), cx);
+        };
+        let mut shifts = self.shifts_for(from, gap);
+        shifts.insert(space, (gap as f32 - from as f32) * cells[0]);
+        self.shift_spaces(shifts, Some(held), cx);
         // check.sh waits for this line.
         log!("browser: dropped space {space} after {after}");
         if let Some(back) = self.move_space(space, after, cx) {
@@ -160,16 +237,24 @@ impl Shell {
                 cx,
             );
         } else {
-            self.space_landing = None;
+            self.shift_spaces(HashMap::new(), None, cx);
         }
     }
 
-    /// Esc while a card is dragged: its copy goes, and the release moves nothing.
+    /// Esc while a card is dragged: it springs home, the others spring back, and the release moves
+    /// nothing.
     pub(super) fn cancel_space_drag(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.space_drag().is_none() {
+        let Some(drag) = self.space_drag() else {
             return false;
-        }
+        };
+        let held = drag.pointer.map(|x| {
+            (
+                drag.space,
+                self.held_offset(drag.space, Self::held_middle(drag, x)),
+            )
+        });
         self.space_drag = None;
+        self.shift_spaces(HashMap::new(), held, cx);
         cx.notify();
         true
     }
@@ -218,28 +303,32 @@ impl Shell {
         let mut places = HashMap::new();
         let (cells, mut left) = self.cells();
         for (space, cell) in self.spaces.iter().zip(cells) {
-            places.insert(space.id, left + cell / 2. + self.space_slide(space.id));
+            places.insert(space.id, left + cell / 2. + self.space_shift(space.id));
             left += cell;
         }
         places
     }
 
-    /// The Spaces came in another order: the cards that were in `before` glide from
-    /// where they were drawn to their places, and the one just let go from where its copy was.
-    /// Under Reduce Motion they're in their places from the first frame.
+    /// The Spaces came in another order: the cards that were in `before` glide from where they
+    /// were drawn to their places, which for the ones already sent there is nowhere. Under Reduce
+    /// Motion they're in their places from the first frame.
     pub(super) fn glide_spaces(&mut self, before: HashMap<u64, f32>, moved: bool, cx: &App) {
-        let landing = self.space_landing.take();
-        if !moved && landing.is_none() {
+        let shifts = std::mem::take(&mut self.space_shifts);
+        let now = crate::motion::start(cx);
+        if !moved {
+            // Nothing came of the move: the cards stay drawn where they were, and go home.
+            for (space, shift) in shifts {
+                self.space_slides
+                    .insert(space, (shift + self.space_slide(space), now));
+            }
             return;
         }
-        let now = crate::motion::start(cx);
+        if self.space_drag.take().is_some() {
+            self.space_lifted = None;
+        }
         for (key, at) in self.space_places() {
-            let from = match landing {
-                Some((space, x)) if space == key => x,
-                _ => match before.get(&key) {
-                    Some(&x) => x,
-                    None => continue,
-                },
+            let Some(&from) = before.get(&key) else {
+                continue;
             };
             if from != at {
                 self.space_slides
@@ -269,40 +358,9 @@ impl Shell {
             // the card drawn there, which can still be the one that was there (#2026).
             log!("browser: spaces settled");
         }
-    }
-
-    /// The drop line in the gap the Space dragged would go into, unless that's where it was: the
-    /// rows' line stood up, its ring as far below the cards' tops as the rows' is in from a
-    /// plate's left and its end as far above their foot, from the section's left.
-    pub(super) fn space_drop_line(&self) -> Option<AnyElement> {
-        let drag = self.space_drag()?;
-        let colour = self.palette.drop_line();
-        let from = self
-            .spaces
-            .iter()
-            .position(|space| space.id == drag.space)?;
-        let (cells, left) = self.cells();
-        let x = line_x(&cells, left, from, drag.gap?)?;
-        let ring = div()
-            .flex_none()
-            .size(px(DROP_RING))
-            .rounded_full()
-            .border(px(DROP_LINE))
-            .border_color(colour);
-        Some(
-            div()
-                .absolute()
-                .left(px(x - self.cards_at() - DROP_RING / 2.))
-                .top(px(SPACES_INSET + DROP_RING_X))
-                .bottom(px(SPACES_INSET + DROP_LINE_END))
-                .w(px(DROP_RING))
-                .flex()
-                .flex_col()
-                .items_center()
-                .child(ring)
-                .child(div().flex_1().w(px(DROP_LINE)).bg(colour))
-                .into_any_element(),
-        )
+        if self.space_slides.is_empty() && self.space_drag().is_none() {
+            self.space_lifted = None;
+        }
     }
 
     /// The release that ends a card's drag anywhere in the window, heard before GPUI lets go of
@@ -341,69 +399,33 @@ fn gap_at(cells: &[f32], mut left: f32, from: usize, x: f32) -> usize {
     gap
 }
 
-/// Where the drop line stands for `gap` among the cells but the `from`th, from the row's left,
-/// with the first cell starting at `left`: on the edge between the cells either side of it. None
-/// for the gap it came from.
-fn line_x(cells: &[f32], left: f32, from: usize, gap: usize) -> Option<f32> {
-    let others = cells.len().checked_sub(1)?;
-    if gap == from || gap > others {
-        return None;
-    }
-    // The cell right of the gap, counted with the dragged one's.
-    let next = if gap < from { gap } else { gap + 1 };
-    Some(left + cells[..next].iter().sum::<f32>())
-}
-
-/// What follows the pointer while a Space is dragged: its whole card, drawn from the Shell each
-/// frame, and nothing once Esc has put it back.
-pub(super) struct SpaceGhost {
-    shell: WeakEntity<Shell>,
-    space: u64,
-}
+/// What GPUI holds while a Space is dragged: nothing to draw, as the card itself follows the pointer.
+pub(super) struct SpaceGhost;
 
 impl Render for SpaceGhost {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let space = self.space;
-        let shell = self
-            .shell
-            .upgrade()
-            .filter(|shell| shell.read(cx).space_dragged(space));
-        let ghost =
-            shell.and_then(|shell| shell.update(cx, |shell, cx| shell.space_card_ghost(space, cx)));
-        div().children(ghost)
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{gap_at, line_x};
+    use super::gap_at;
 
     /// Three cells 34 wide, centred in 216: they start at 57, so their middles are at 74, 108 and
-    /// 142, and their edges at 57, 91, 125 and 159.
+    /// 142.
     const CELLS: [f32; 3] = [34.; 3];
     const LEFT: f32 = 57.;
 
-    /// The gap is how many of the others' middles the pointer is past; its own cell is the gap it
-    /// came from.
+    /// The gap is how many of the others' middles the card's middle is past; its own cell is the
+    /// gap it came from.
     #[test]
-    fn the_gap_counts_the_other_cards_the_pointer_is_past() {
+    fn the_gap_counts_the_other_cards_the_middle_is_past() {
         assert_eq!(gap_at(&CELLS, LEFT, 1, 0.), 0);
         assert_eq!(gap_at(&CELLS, LEFT, 1, 80.), 1);
         assert_eq!(gap_at(&CELLS, LEFT, 1, 108.), 1);
         assert_eq!(gap_at(&CELLS, LEFT, 1, 150.), 2);
         assert_eq!(gap_at(&CELLS, LEFT, 0, 120.), 1);
         assert_eq!(gap_at(&CELLS, LEFT, 0, 216.), 2);
-    }
-
-    /// The line stands on the edge between the cards either side of the gap, and there's none
-    /// where the card came from.
-    #[test]
-    fn the_line_stands_between_the_cards_either_side() {
-        assert_eq!(line_x(&CELLS, LEFT, 1, 0), Some(57.));
-        assert_eq!(line_x(&CELLS, LEFT, 1, 1), None);
-        assert_eq!(line_x(&CELLS, LEFT, 1, 2), Some(159.));
-        assert_eq!(line_x(&CELLS, LEFT, 0, 1), Some(125.));
-        assert_eq!(line_x(&CELLS, LEFT, 2, 1), Some(91.));
-        assert_eq!(line_x(&CELLS, LEFT, 2, 3), None);
     }
 }

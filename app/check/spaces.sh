@@ -799,10 +799,11 @@ send key escape
 expect '^browser: icon picker hidden$' "escape didn't close the card's icon picker"
 none_since '^browser: library hidden$' || fail "escape in the card's icon picker closed the Library"
 # The second card's handle, at its foot 22 in from its left and 22 above it, drags it along the
-# cards: let go over the first card's left half it goes first, the Library staying open with the
-# Space shown where it was, and ⌘Z puts it back. Held there, its copy hangs from the pointer, its
-# place dims and the line stands before the first card; the recording has the cards gliding to
-# their places as it's let go (#1580). It starts after the still, which would end it (#2026).
+# cards: its middle taken left of the first card's middle, with the pointer a card's width over
+# the first card's handle, it goes first, the Library staying open with the Space shown where it
+# was, and ⌘Z puts it back. Held there, the card itself follows the pointer along the row and the
+# first springs one cell right, making room; the recording has the card settling into the open
+# slot as it's let go (#1580, #4452). It starts after the still, which would end it (#2026).
 handle_point="$((404 + 22)) $((${content#*x} - 48 - 22))"
 handle_x=${handle_point% *}
 handle_y=${handle_point#* }
@@ -810,10 +811,10 @@ send move $handle_point
 send press $handle_point
 send dragto 420 $handle_y
 expect "^browser: drag space $second\$" "the second card's handle didn't drag the card"
-send dragto 180 $handle_y
+send dragto $((handle_x - 264 - 20)) $handle_y
 ../tools/window-screenshot.sh "$pid" "$out/library-space-drag.png" || fail "no window to capture"
 record library-space-drag 3
-send release 180 $handle_y
+send release $((handle_x - 264 - 20)) $handle_y
 expect "^browser: dropped space $second after 0\$" "the second card let go over the first didn't move its Space"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 recorded

@@ -494,7 +494,6 @@ const COPIED_TIME: Duration = Duration::from_secs(2);
 const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
-use crate::tokens::shell::SPACE_DRAGGED;
 // The Create a Space form, in Arc's places and type, without its illustration and subtitle, which
 // are Arc's art and copy. The field moves up into the subtitle's place, Arc's 35 pt under the text
 // above it. Distances to the buttons are from the window's bottom.
@@ -1609,7 +1608,11 @@ pub struct Shell {
     /// row, which glides from there.
     space_drag: Option<space_order::SpaceDrag>,
     space_slides: space_order::SpaceSlides,
-    space_landing: Option<(u64, f32)>,
+    /// Where each card's been sent from its place, which the springs go on to, until the browser
+    /// reports the order a drop made.
+    space_shifts: HashMap<u64, f32>,
+    /// The card drawn over the others: the one dragged, and while it settles.
+    space_lifted: Option<u64>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -2263,7 +2266,8 @@ impl Shell {
             dragged: false,
             space_drag: None,
             space_slides: HashMap::new(),
-            space_landing: None,
+            space_shifts: HashMap::new(),
+            space_lifted: None,
             putting_back: false,
             swipe: None,
             settle: None,
