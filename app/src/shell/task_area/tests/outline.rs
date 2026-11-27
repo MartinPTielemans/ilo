@@ -30,28 +30,24 @@ fn line(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Bounds<Pixe
     })
 }
 
-/// The outline was drawn round `card` as a page's is: outside it by the line's width on its top,
-/// right and bottom, none on its left, in `tone`'s own ink.
+/// The outline was drawn round `card` as a page's is: outside it by the line's width on all four
+/// sides, the one beside the conversation's column too (the owner, #4396), in `tone`'s own ink.
 fn outlined(shell: &Entity<Shell>, card: Bounds<Pixels>, tone: Tone, cx: &mut VisualTestContext) {
     let width = px(PAGE_OUTLINE_WIDTH);
     assert_eq!(line(shell, cx), Some(card), "{tone:?}: no outline round it");
     let mut line = shell.read_with(cx, |shell, _| shell.watched_outline(card));
     let style = line.style();
-    // Outside the card by its own width where it has a line, and at the card's edge on the left.
+    // Outside the card by its own width all round.
     let at = |edge: Pixels| Some(gpui::Length::from(edge));
     assert!(
-        style.inset.left == at(card.left())
+        style.inset.left == at(card.left() - width)
             && style.inset.top == at(card.top() - width)
-            && style.size.width == at(card.size.width + width)
+            && style.size.width == at(card.size.width + 2. * width)
             && style.size.height == at(card.size.height + 2. * width),
-        "{tone:?}: not outside the card on its top, right and bottom alone"
+        "{tone:?}: not outside the card on all four sides"
     );
     let sides = &style.border_widths;
-    assert!(
-        sides.left == Some(px(0.).into()),
-        "{tone:?}: a line on the left"
-    );
-    for side in [sides.top, sides.right, sides.bottom] {
+    for side in [sides.left, sides.top, sides.right, sides.bottom] {
         assert!(side == Some(width.into()), "{tone:?}: a side with no line");
     }
     let ink = match tone {
