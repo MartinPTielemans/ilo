@@ -93,8 +93,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The window that shows |tab|'s page, focused or beside the tab it shows in a split view, else
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
-  // Gives an agent's page its own size again, the user's size gone with the tab, unless a window
-  // shows it. Nothing for null.
+  // Gives an agent's page the size a watch gives it, the front window's or, with none open, the
+  // last one's (AgentPageArea), so watching it never lays it out again. Not while a window shows
+  // it, whose frame it has, nor for null.
   static void GiveAgentPageItsSize(content::WebContents* contents);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
@@ -293,6 +294,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Where the selected tab's page goes, in the window, and the radius of its corners. A split view
   // shares it out between its pages.
   void SetPageFrame(const gfx::Rect& frame, double corner_radius);
+  // The size this window gives a thread's page it watches (bc_window_set_agent_page_size).
+  void SetAgentPageSize(const gfx::Size& size) { agent_page_size_ = size; }
+  // That size, or the page frame's until the app gives one.
+  gfx::Size AgentPageSize() const {
+    return agent_page_size_.IsEmpty() ? page_frame_.size() : agent_page_size_;
+  }
   // The ring the focused page of a split view has inside its edge, 0xRRGGBB.
   void SetFocusColor(uint32_t color);
   // What the pages it shows show until their first frame, 0xRRGGBB.
@@ -601,6 +608,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The tab each Space the window showed had shown when it left that Space.
   std::map<bc_id, bc_id> selected_in_space_;
   gfx::Rect page_frame_;
+  // The size a watch here gives a thread's page, empty until the app says.
+  gfx::Size agent_page_size_;
   // The focused page's part of it in a split view, else all of it: where the tab's dialogs go.
   gfx::Rect focused_frame_;
   double page_corner_radius_ = 0;

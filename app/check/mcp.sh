@@ -26,7 +26,8 @@
 # and then clicked, as Tab would bring it, and a click on one off the page that can't take focus
 # is refused rather than answered as done.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
-# activity log, and is refused a tab of the user's.
+# activity log, and is refused a tab of the user's. A page it opens is the user's page area from
+# its start, so watching it lays nothing out again (#4355).
 # Every answer is 12,000 characters at most: an article's, a 120-row table's, a JSON response's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
@@ -1367,6 +1368,32 @@ if [ "$driven" = 1 ]; then
     -e "^browser: agent mcp-client taken over in $split_c\$" &&
     fail "the agent's own click in its watched split view took its tab over"
   to_pages "the split view"
+  # An agent's page is the user's size from the start, so watching it lays nothing out again
+  # (#4355). The page counts its resizes, and the agent's press, once it's watched, sends its size
+  # and the count in one request, which no resize before it can overtake.
+  printf '%s' '<!doctype html><title>Sized</title><script>
+let resized = 0;
+const say = (what) => fetch("/size?" + what + "=" + innerWidth + "x" + innerHeight + "&resized=" + resized);
+addEventListener("resize", () => resized++);
+addEventListener("load", () => say("made"));
+</script><button onclick="say(&quot;watched&quot;)">Say size</button>' > "$out/site/sized.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/sized.html\"}")
+  sized_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$sized_tab" ] || fail "open_tab sized.html answered: $opened"
+  served "localhost:$port/size?made=" "the agent's sized.html never sent its size as it loaded"
+  made=$(sed -n "s|.*localhost:$port/size?made=\([0-9]*x[0-9]*&resized=[0-9]*\).*|\1|p" "$out/site.log" | tail -1)
+  watch "$sized_tab"
+  ref=$(call snapshot "{\"tab\":$sized_tab}" | sed -n 's/.*- button "Say size" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$ref" ] || fail "the snapshot of the agent's sized.html had no Say size button"
+  clicked=$(call click "{\"tab\":$sized_tab,\"ref\":\"$ref\"}")
+  case "$clicked" in "error: "*) fail "the agent's click on sized.html, watched, answered: $clicked" ;; esac
+  served "localhost:$port/size?watched=" "the agent's click on sized.html, watched, sent no size"
+  watched_size=$(sed -n "s|.*localhost:$port/size?watched=\([0-9]*x[0-9]*&resized=[0-9]*\).*|\1|p" "$out/site.log" | tail -1)
+  [ "$watched_size" = "$made" ] ||
+    fail "the agent's page was laid out again as it was watched: loaded at ${made%%&*} after ${made##*=} resizes, watched at ${watched_size%%&*} after ${watched_size##*=}"
+  to_pages "tab $sized_tab"
+  closed=$(call close_tab "{\"tab\":$sized_tab}")
+  case "$closed" in "Closed tab $sized_tab."*) ;; *) fail "close_tab on sized.html answered: $closed" ;; esac
   watch "$agent_tab"
 fi
 # The split views' pages close, so the conversation's grid has the pages the steps after it count on.

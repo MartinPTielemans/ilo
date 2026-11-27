@@ -2779,6 +2779,11 @@ BC_EXPORT bc_id bc_window_space_tab(bc_id window, bc_id space);
 // side by side, or as tall stacked.
 BC_EXPORT void bc_window_set_page_frame(bc_id window, bc_rect frame, double corner_radius);
 
+// The size the window gives a thread's page it watches, in points. The core makes each agent's page
+// at the front window's, or with none open the last one's, so watching it lays nothing out again;
+// until the app sets it, the window's page frame's size.
+BC_EXPORT void bc_window_set_agent_page_size(bc_id window, double width, double height);
+
 // The colour of the ring inside the edge of the focused page of a split view, 0xRRGGBB.
 BC_EXPORT void bc_window_set_focus_color(bc_id window, uint32_t color);
 
