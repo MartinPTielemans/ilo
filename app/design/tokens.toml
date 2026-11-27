@@ -3747,7 +3747,7 @@ button-inset = 14.0
 line = 18.0
 
 [site-controls]
-# The body's inside edge to its tiles: with the tiles' 6, the body's 16.
+# The body's inside edge to its tiles: with the plates' 6, the body's 16.
 padding = 10.0
 radius = 16.0
 gap = 8.0
@@ -3766,78 +3766,83 @@ window-margin = 8.0
 # Its rim is the popover level's, in the ink.
 text = 0.8
 secondary = 0.45
-# "Manage" and "More", which the headings show under the pointer.
-link = 0.48
+# Ours (#4404): the header is the site, as Arc's is: its icon on a small plate, its name, the
+# connection in quiet words under it, the profile's chip while there's more than one, and "…".
+header = 36.0
+header-inset = 2.0
+header-to-tiles = 10.0
+favicon-plate = 20.0
+favicon-radius = 6.0
+favicon = 16.0
+favicon-glyph = 13.0
+favicon-gap = 9.0
+name-size = 13.0
+name-line = 16.0
+connection-size = 11.0
+connection-line = 14.0
+connection-glyph = 11.0
+connection-glyph-gap = 4.0
+# The connection's words take the pointer's plate around them this far out, a click opening the
+# certificate.
+connection-pad = 4.0
+# "…" and the profile's chip: no plate at rest, the ladder's under the pointer.
+more = 28.0
+more-fill = 0.0
+more-glyph = 17.5
+# Ours (#2339): the profile's chip, before "…" while there's more than one profile: the Profiles
+# glyph, the name, and this chevron this far after it, in the secondary ink. The site's name keeps
+# its room, so the chip's name cuts first, and with less room than this it goes, the glyph and
+# chevron left, as a letter and an ellipsis say nothing.
+chip-inset = 6.0
+chip-glyph = 15.0
+profile-chevron = 12.0
+profile-chevron-gap = 4.0
+profile-name-min = 24.0
 tile-width = 48.0
 tile-height = 32.0
+# Every plate's, by the concentric rule: the body's 16 less its 10 inside (#4404).
 tile-radius = 6.0
-# An action tile is a plate, stronger at its top, with a line of the ink along its top inside.
+# Kept for the accent's search in palette.rs, which still asks it to read on a tile tinted with
+# it; the panel draws neither since #4404.
 tile-top = 0.1
 tile-bottom = 0.04
-tile-highlight = 0.2
-# The + tile's, an extension's and the lock button's plate.
+tint = 0.16
+# A tile's, an extension's and the site's plate, flat.
 plate = 0.05
 # Ours: an extension's icon, as the toolbar's is.
 extension-icon = 16.0
 plus-glyph = 16.5
-heading-size = 13.0
-link-size = 11.0
-name-size = 13.0
-# Ours (#2334): the action row's last tile is the shield, and under the row go only the switches
-# special to the site. One alone is a strip as tall as a tile, its state in words; two or more are
-# tiles this tall, two to a line, a glyph over its name.
-switch-height = 52.0
-switch-glyph = 16.0
-switch-name-gap = 5.0
-strip-left = 12.0
-strip-name-gap = 10.0
-# A switch while on, and the shield while it blocks: the accent over the plate at this, a step
-# more under the pointer and another pressed. Off is the plain plate.
-tint = 0.16
-tint-hovered = 0.22
-tint-pressed = 0.28
-# Ours (#2334): "This site"'s lines, each a glyph, a name and its value at the right in the
-# secondary ink, in place of Arc's 43 pt rows with a circle and a second line.
-item-height = 28.0
-item-pitch = 30.0
+tile-glyph = 19.5
+# "This site" and "Extensions", over their plates.
+label-size = 11.0
+label-line = 14.0
+label-above = 14.0
+label-below = 6.0
+# The site's plate (#4404): a row each, a glyph, a name and its value at the right in the
+# secondary ink with a chevron where a click opens a menu, or a switch; hairlines between them
+# from the names' edge.
+row = 30.0
 item-inset = 8.0
 item-glyph = 16.0
-# The name's widest, past which the value gives way first.
-item-name = 132.0
-# The glyph's ink while its value isn't on or Allow; on, it's the accent.
 item-glyph-off = 0.6
-heading-to-items = 17.0
-items-to-divider = 9.0
+# The name's widest, past which the value gives way first.
+# A row's value at its widest; its name takes the rest, cut at its end.
+item-value = 96.0
+chevron = 12.0
+hairline = 0.12
 # Ours: a policy's row, which the user can't change.
 managed-opacity = 0.5
-divider = 0.17
-footer = 32.0
-lock-radius = 6.0
-lock-left = 10.0
-lock-slot = 10.0
-lock-glyph = 15.0
-lock-text-gap = 6.0
-lock-right = 8.0
-# Ours (#2339): the profile's chip, against "…" while there's more than one profile: the Profiles
-# glyph, the name, and this chevron this far after it, in the secondary ink.
-profile-chevron = 12.0
-profile-chevron-gap = 4.0
-# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
-# the glyph and chevron left, as a letter and an ellipsis say nothing.
-profile-name-min = 24.0
-# The lock's words' cap top in its plate.
-lock-cap = 11.5
-# Ours: the lock button with no certificate to show.
-disabled-opacity = 0.5
-more-fill = 0.05
-more-glyph = 17.5
-heading-to-tiles = 23.0
-divider-to-footer = 11.0
-# SF's ascent, descent and cap height for its size, which put a line's cap where it was measured.
-ascent = 0.967
-descent = 0.211
-cap = 0.705
-line = 20.0
+# The switch, in the ink: its track at these alphas on and off, its knob the panel's fill.
+switch-width = 26.0
+switch-height = 16.0
+switch-knob = 12.0
+switch-on = 0.85
+switch-off = 0.18
+# The foot, only while Reset permissions has something to reset: a hairline this far under the
+# extensions, and its row this far under the line.
+foot-above = 12.0
+foot-below = 6.0
+foot-row = 28.0
 
 [tab-switcher]
 # ⌃Tab held shows the Space's recent tabs (#2954). Arc's was never recorded, so it's ours: ⌘T's

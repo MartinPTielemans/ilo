@@ -1440,6 +1440,7 @@ impl Browser for Fake {
         tab: u64,
         place: site_controls::Place,
         window: Size<Pixels>,
+        favicon: Option<Arc<gpui::Image>>,
         extensions: Vec<site_controls::Extension>,
         profiles: Option<site_controls::Profiles>,
         cx: &mut App,
@@ -1451,7 +1452,7 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
-            site_controls::show(tab, place, window, extensions, profiles, cx);
+            site_controls::show(tab, place, window, favicon, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
     }
