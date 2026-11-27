@@ -706,7 +706,7 @@ void NeverKey(NSWindow* window) {
     if (!told) {
       told = true;
       fprintf(stderr, "browser: an overlay of class %s isn't GPUI's panel, so it can take keys\n",
-              class_getName([window class]));
+              ClassName(window));
     }
     return;
   }
