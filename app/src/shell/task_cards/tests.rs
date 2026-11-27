@@ -8,7 +8,10 @@ use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, Vis
 use super::card::{Look, look, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip};
+use crate::agents::Step;
+use crate::agents::task::Wait;
 use crate::agents::task::{FINDING_KEPT, Message, TOLD_KEPT, Who, Word, finding, told, told_line};
+use crate::agents::tier::{Tier, Why};
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
 
@@ -28,6 +31,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         ended_at: None,
         asks: false,
         dot,
+        wait: Default::default(),
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
@@ -248,12 +252,19 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     done.status = said.into();
     let mut asks = card(3, Dot::Waiting);
     asks.asks = true;
+    asks.wait = Wait::Asked;
     asks.status = "Which would you rather visit?".into();
     assert_eq!(
         second_line(&asks, Form::Waits, "maat.pt").as_ref(),
+        "Asked a question"
+    );
+    // A wait of no kind the browser knows says N1's fallback.
+    let waits = card(5, Dot::Waiting);
+    assert_eq!(
+        second_line(&waits, Form::Waits, "maat.pt").as_ref(),
         "Needs you · maat.pt"
     );
-    assert_eq!(second_line(&asks, Form::Waits, "").as_ref(), "Needs you");
+    assert_eq!(second_line(&waits, Form::Waits, "").as_ref(), "Needs you");
     let mut ended = card(4, Dot::Ended);
     ended.status = "Stopped after 6 steps".into();
     ended.fuller = true;
@@ -268,6 +279,83 @@ fn a_card_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     assert!(second_line(&done, Form::Unseen, "maat.pt").is_empty());
     let (shell, _, cx) = shell_with(cx, vec![done]);
     assert_eq!(today(&shell, cx), ["task-1", "10", "11"]);
+}
+
+/// A waiting line's second line is picked by its kind of wait, in the product's words, its reason
+/// first so a long host cuts and never the reason, in at most 30 characters before the site. The
+/// page's button and field words, which the card's status and question carry, never reach it, nor
+/// do the agent's, whatever the wait (words table, N1, N1a–N1k).
+#[test]
+fn a_waiting_lines_words_are_its_kinds_never_the_pages() {
+    let (order, field, reason) = ("Place order", "Résumé", "Sign in, please");
+    let words = |wait: Wait, site: &str| {
+        let card = Card {
+            status: format!("Stopped at {order}").into(),
+            question: Some(crate::agents::Question {
+                why: format!("Choose a file for “{field}”. {reason}").into(),
+                ..Default::default()
+            }),
+            wait,
+            ..card(1, Dot::Waiting)
+        };
+        let line = second_line(&card, Form::Waits, site);
+        assert_eq!(spoken(&card, Form::Waits, site), line, "{wait:?}");
+        for page in [order, field, reason] {
+            assert!(!line.contains(page), "{wait:?}: {line}");
+        }
+        line.to_string()
+    };
+    let refused = |why: Why, level: Option<Tier>| Wait::Refused(why, level);
+    let cases = [
+        (Wait::Asked, "Asked a question"),
+        (Wait::Step(Step::SignIn), "Sign in · maat.pt"),
+        (
+            Wait::Step(Step::Files { many: false }),
+            "Choose a file · maat.pt",
+        ),
+        (
+            Wait::Step(Step::Files { many: true }),
+            "Choose files · maat.pt",
+        ),
+        (Wait::Step(Step::HandOff), "Your step · maat.pt"),
+        (Wait::Step(Step::Back), "Needs you · maat.pt"),
+        (
+            refused(Why::Order, Some(Tier::Full)),
+            "Paused before an order",
+        ),
+        (
+            refused(Why::Message, Some(Tier::Full)),
+            "Paused before sending",
+        ),
+        (
+            refused(Why::Download, Some(Tier::Work)),
+            "Paused before downloading",
+        ),
+        (
+            refused(Why::Discard, Some(Tier::Full)),
+            "Paused before discarding text",
+        ),
+        (refused(Why::SignIn, Some(Tier::Work)), "Sign in · maat.pt"),
+        (
+            refused(Why::SignInBank, Some(Tier::Full)),
+            "Bank sign-in · maat.pt",
+        ),
+        (refused(Why::Act, Some(Tier::Work)), "Needs Work on pages"),
+        (refused(Why::Bank, Some(Tier::Full)), "Needs Full access"),
+        (refused(Why::Request, Some(Tier::Full)), "Needs Full access"),
+        (refused(Why::Fenced, None), "Needs you · maat.pt"),
+        (refused(Why::Never, None), "Needs you · maat.pt"),
+        (Wait::Other, "Needs you · maat.pt"),
+    ];
+    for (wait, said) in cases {
+        assert_eq!(words(wait, "maat.pt"), said);
+        let reason = words(wait, "");
+        assert!(said.starts_with(&reason), "{wait:?}: the reason leads");
+        assert!(reason.chars().count() <= 30, "{reason}");
+    }
+    // A long host comes after the reason, which the line's end cuts first.
+    let long = "tickets.a-very-long-museum-name.example";
+    assert!(words(Wait::Step(Step::SignIn), long).starts_with("Sign in · "));
 }
 
 /// An outside app's card has its line from the kind of its connection alone, a session with no
@@ -1246,9 +1334,8 @@ fn one_thing_in_the_sidebar_is_shown_at_a_time(cx: &mut TestAppContext) {
     assert_eq!(shown(&shell, cx), (true, None));
 }
 
-/// A waiting line grows a second line that says so in the product's words, the site of the page
-/// it waits on after them, the host alone; never the page's own button words where the browser
-/// paused, and nothing on it to press. A screen reader hears it as drawn, a thread's row. Its
+/// A waiting line grows a second line that says so in the product's words for its kind of wait;
+/// never the page's own button words where the browser paused, and nothing on it to press. A screen reader hears it as drawn, a thread's row. Its
 /// click stands on the page it waits on and does nothing else: the task is told nothing and an
 /// agent's page isn't given the keyboard.
 #[gpui::test]
@@ -1256,6 +1343,7 @@ fn a_waiting_lines_click_shows_its_page_and_nothing_else(cx: &mut TestAppContext
     use crate::tokens::shell::task_card::{LINE, NEEDS_LINE};
     let paused = Card {
         status: "Stopped at Place order".into(),
+        wait: Wait::Refused(Why::Order, Some(Tier::Full)),
         ..paged(1, Dot::Waiting, &[1010, 1011])
     };
     let (shell, host, cx) = with_task_spaces(cx, vec![paused]);
@@ -1267,11 +1355,7 @@ fn a_waiting_lines_click_shows_its_page_and_nothing_else(cx: &mut TestAppContext
     let line = shell.read_with(cx, |shell, _| shell.task_plate_drawn("task-1"));
     let line = line.expect("its line");
     assert_eq!(f32::from(line.size.height), LINE + NEEDS_LINE);
-    let site = shell.read_with(cx, |shell, _| crate::agents::site(&shell.page(1010).url));
-    let said = match site.is_empty() {
-        true => "Find a flight to Lisbon, Needs you".to_string(),
-        false => format!("Find a flight to Lisbon, Needs you · {site}"),
-    };
+    let said = "Find a flight to Lisbon, Paused before an order".to_string();
     let tree = cx.a11y_tree().expect("GPUI built a tree");
     let names: Vec<(String, Option<String>)> = (tree.nodes.iter())
         .filter_map(|(_, node)| {

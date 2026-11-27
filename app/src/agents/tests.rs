@@ -3550,6 +3550,21 @@ fn an_order_is_refused_until_the_user_gives_full_access(cx: &mut TestAppContext)
         "example.com".into(),
         "Placing an order isn't part of Work on pages.".into()
     )));
+    // Its thread's line takes the refusal's kind and the level that lifts it, never the button's
+    // words, which the card's status alone carries (words table, N1f).
+    let waits: Vec<_> = agents.read_with(cx, |agents, cx| {
+        (agents.tasks.tasks.iter())
+            .map(|task| agents.card(task, cx))
+            .map(|card| (card.dot, card.wait))
+            .collect()
+    });
+    assert_eq!(
+        waits,
+        [(
+            task::Dot::Waiting,
+            task::Wait::Refused(Why::Order, Some(Tier::Full))
+        )]
+    );
 
     // The same refusal again counts on its line rather than adding one.
     refused(
@@ -5055,6 +5070,11 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
     let question = shown(&agents, cx).expect("the sign-in didn't ask");
     let why = "auth.example asks you to sign in. Hand the tab back when you’re done.";
     assert_eq!((question.tab, question.why.as_ref()), (30, why));
+    assert_eq!(
+        question.step,
+        Step::SignIn,
+        "its thread's line says Sign in"
+    );
     assert!(browser.held.borrow().contains(&30));
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(30, why.into())]);
@@ -6924,7 +6944,7 @@ mod tasks {
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::sign_in::Offer;
-    use crate::agents::task::{AskedOn, Dot, State, TITLE_KEPT, TaskAction};
+    use crate::agents::task::{AskedOn, Dot, State, TITLE_KEPT, TaskAction, Wait};
 
     /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
     /// is in a folder of its own: tests running at once that shared one would rewrite the script
@@ -8079,6 +8099,7 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Stopped at chase.com", Dot::Waiting)
         );
+        assert_eq!(card.wait, Wait::Refused(Why::Bank, Some(Tier::Full)));
         assert!(card.question.is_none(), "a refusal asked");
         // One state, one word: the conversation's header follows the card.
         assert_eq!(
@@ -8106,6 +8127,8 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Needs you · Sign in, please", Dot::Waiting)
         );
+        // The agent's reason is its status, never its line's kind: a handoff is the user's step.
+        assert_eq!(card.wait, Wait::Step(Step::HandOff));
         assert_eq!(card.question.map(|question| question.tab), Some(31));
     }
 

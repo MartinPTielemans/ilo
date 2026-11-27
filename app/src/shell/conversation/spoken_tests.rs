@@ -58,6 +58,7 @@ fn send(shell: &Entity<Shell>, cards: Vec<Card>, cx: &mut VisualTestContext) {
 fn at(dot: Dot) -> Card {
     Card {
         dot,
+        wait: Default::default(),
         word: Word::for_dot(dot),
         ..card()
     }

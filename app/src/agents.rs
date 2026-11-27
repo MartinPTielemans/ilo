@@ -176,6 +176,24 @@ pub struct Question {
     pub tab: u64,
     /// Whether the agent asks for the tab back (ask_for_tab), rather than handing it to the user.
     pub back: bool,
+    /// What the step is, by the browser's own facts, for its thread's line.
+    pub step: Step,
+}
+
+/// What a step handed to the user is, by what the browser knows of it and never by the agent's or
+/// the page's words, which its thread's line in the sidebar says (words table, N1).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Step {
+    /// The agent handed the tab over (hand_off), or the user took it, or its page asked for a
+    /// passkey.
+    #[default]
+    HandOff,
+    /// The page's sign-in, which the browser handed over itself (`sign_in_hand_off`).
+    SignIn,
+    /// A file field's, for one file or several (upload).
+    Files { many: bool },
+    /// The agent asks for the tab back (ask_for_tab).
+    Back,
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -1037,9 +1055,10 @@ struct Held {
     reply: Option<mpsc::Sender<ToolResult>>,
     /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
     timer: Option<Task<()>>,
-    /// Whether the browser handed the tab off for its page's sign-in, which the agent's call
-    /// that met it waits on (`sign_in_hand_off`), so its answer says why.
-    sign_in: bool,
+    /// What it was handed over for: `Step::SignIn` where the browser handed it off for its page's
+    /// sign-in, which the agent's call that met it waits on (`sign_in_hand_off`), so its answer
+    /// says why. Never `Step::Back`, which `back` says.
+    step: Step,
     /// Whether the user took the tab over (`take_over`), never handed it by the agent or held for
     /// a page's passkey.
     taken: bool,
@@ -1940,7 +1959,7 @@ impl Agents {
                 back: None,
                 reply: None,
                 timer: None,
-                sign_in: false,
+                step: Step::HandOff,
                 taken: false,
             };
             self.hold(tab, held);
@@ -2474,7 +2493,7 @@ impl Agents {
                     back: None,
                     reply: Some(reply),
                     timer: None,
-                    sign_in: false,
+                    step: Step::HandOff,
                     taken: false,
                 };
                 self.hold(tab, held);
@@ -3251,7 +3270,7 @@ impl Agents {
             back: None,
             reply: Some(reply),
             timer: None,
-            sign_in: true,
+            step: Step::SignIn,
             taken: false,
         };
         self.hold(tab, held);
@@ -3306,7 +3325,10 @@ impl Agents {
             .filter_map(|task| task.session.as_ref())
             .any(|session| session.withheld && session.tabs.contains(&tab));
         let sign_in = matches!(self.dialogs.get(&tab), Some((DialogKind::SignIn, _)))
-            || self.held.get(&tab).is_some_and(|held| held.sign_in)
+            || self
+                .held
+                .get(&tab)
+                .is_some_and(|held| held.step == Step::SignIn)
             || sign_in::quiet(tab);
         !(self.held.contains_key(&tab)
             || self.unkept.marked(tab)
@@ -3336,7 +3358,7 @@ impl Agents {
             back: None,
             reply: None,
             timer: None,
-            sign_in: false,
+            step: Step::HandOff,
             taken: true,
         };
         self.hold(tab, held);
@@ -3511,7 +3533,7 @@ impl Agents {
             {
                 let mut answer = answer_of(tab, event);
                 // The call that met the sign-in asked for no handoff, so it hears why it waited.
-                if held.sign_in {
+                if held.step == Step::SignIn {
                     answer.text = format!("{SIGNED_IN} {}", answer.text);
                 }
                 _ = reply.send(answer);
@@ -4038,9 +4060,10 @@ impl Agents {
         self.browser.file_field_drop(id);
         let label = field.get("label").and_then(Value::as_str).unwrap_or("");
         let label = page::clip(&request::plain(label), 60);
-        let files = match field.get("many").and_then(Value::as_bool) {
-            Some(true) => "files",
-            _ => "a file",
+        let many = field.get("many").and_then(Value::as_bool) == Some(true);
+        let files = match many {
+            true => "files",
+            false => "a file",
         };
         let why = match label.is_empty() {
             true => format!("Choose {files}."),
@@ -4076,7 +4099,7 @@ impl Agents {
             back: None,
             reply: Some(reply),
             timer: None,
-            sign_in: false,
+            step: Step::Files { many },
             taken: false,
         };
         self.hold(tab, held);
@@ -4273,6 +4296,10 @@ impl Agents {
             why: held.back.as_ref().unwrap_or(&held.why).clone().into(),
             tab,
             back: held.back.is_some(),
+            step: match held.back {
+                Some(_) => Step::Back,
+                None => held.step,
+            },
         })
     }
 

@@ -673,6 +673,8 @@ pub struct Card {
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
+    /// Why it waits on the user, from its state alone: what its line says under its title.
+    pub wait: Wait,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
     /// Its pages now, in its Space's order: the icons on its card in the sidebar.
@@ -725,6 +727,22 @@ pub enum Dot {
     Done,
     /// A hollow ring: stopped, at its limit, or it couldn't go on.
     Ended,
+}
+
+/// Why a task waits on the user, read from its state alone, never from its agent's or a page's
+/// words: what its line in the sidebar says under its title (words table, N1).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Wait {
+    /// It doesn't wait, or waits on nothing whose kind the browser knows.
+    #[default]
+    Other,
+    /// Its agent asked the user a question.
+    Asked,
+    /// A step on a page its agent handed the user, or a tab it asks back.
+    Step(super::Step),
+    /// A step its access refused, of what kind, and the lowest level that would allow it: None
+    /// where no level does (Off limits, Never).
+    Refused(tier::Why, Option<Tier>),
 }
 
 /// A task's state in one word. Its card, the list of tasks, the Archive's rows and the strip under
@@ -1542,6 +1560,16 @@ impl Agents {
     pub fn card(&self, task: &Task, cx: &App) -> Card {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
+        let refused = task.stops.iter().rfind(|stop| !stop.settled);
+        // Read from the same facts as the status, in the same order: a step handed over first.
+        let wait = match (&task.state, &question, refused) {
+            (State::Working | State::Asking { .. }, Some(question), _) => Wait::Step(question.step),
+            (State::Working, None, Some(stop)) => {
+                Wait::Refused(stop.why, stop.tier.lifting(stop.why))
+            }
+            (State::Asking { .. }, None, _) => Wait::Asked,
+            _ => Wait::Other,
+        };
         // With each status, whether it's its state's word in the fuller form (`Card::fuller`) and
         // how much of it leads it (`Card::lead`).
         let (status, dot, fuller, lead) = match (&task.state, &question) {
@@ -1549,7 +1577,7 @@ impl Agents {
                 (needs_you(question), Dot::Waiting, false, NEEDS_YOU.len())
             }
             // A refusal the user hasn't settled says where it stopped, as its line says why.
-            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => (
+            (State::Working, None) if let Some(stop) = refused => (
                 format!("{STOPPED_AT} {}", stop.at).into(),
                 Dot::Waiting,
                 false,
@@ -1631,6 +1659,7 @@ impl Agents {
             ended_at: None,
             asks,
             dot,
+            wait,
             word: Word::of(&task.state, dot == Dot::Waiting),
             visited: visited(task, &pages),
             ended_time: (task.ended)

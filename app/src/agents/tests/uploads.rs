@@ -135,6 +135,7 @@ fn an_upload_hands_the_tab_to_the_user_naming_the_field(cx: &mut TestAppContext)
         ),
     ];
     for (described, why) in cases {
+        let many = described["many"].as_bool() == Some(true);
         let (agents, browser) = at_the_form(cx);
         let _answer = handed(&agents, &browser, described, cx);
         assert!(
@@ -144,6 +145,9 @@ fn an_upload_hands_the_tab_to_the_user_naming_the_field(cx: &mut TestAppContext)
         assert_eq!(*browser.dropped.borrow(), [7]);
         let held = agents.read_with(cx, |agents, _| agents.held[&20].why.clone());
         assert_eq!(held, why);
+        // The thread's line has how many files from the field's kind, never its label (N1d).
+        let step = agents.read_with(cx, |agents, _| agents.held[&20].step);
+        assert_eq!(step, Step::Files { many }, "{why}");
     }
 }
 

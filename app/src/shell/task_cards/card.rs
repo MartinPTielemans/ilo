@@ -11,7 +11,9 @@ use gpui::{
 
 use super::glyph::{self, Mark, MarkInks, State};
 use super::{Form, SLOT, Shell, clock, drawn_listener};
-use crate::agents::task::{Card, Dot, NEEDS_YOU};
+use crate::agents::Step;
+use crate::agents::task::{Card, Dot, NEEDS_YOU, Wait};
+use crate::agents::tier::Why;
 use crate::palette::Palette;
 use crate::shell::conversation::stage_fill;
 use crate::shell::page_ends::StripStop;
@@ -24,12 +26,36 @@ use crate::tokens::shell::task_card::{
 };
 use crate::tokens::text;
 
-/// A waiting line's second line: the state's word, then the site of the page it waits on, the
-/// host alone, which a long one cuts and never the word (words table, N1).
-fn needs_you(site: &str) -> SharedString {
+/// `words`, then the site of the page the thread waits on, the host alone, which a long one cuts
+/// and never the words (words table, N1).
+fn at_site(words: &str, site: &str) -> SharedString {
     match site.is_empty() {
-        true => NEEDS_YOU.into(),
-        false => format!("{NEEDS_YOU} · {site}").into(),
+        true => words.into(),
+        false => format!("{words} · {site}").into(),
+    }
+}
+
+/// A waiting line's second line for each kind of wait, in the product's words alone: nothing of
+/// the agent's or the page's, so a page's button never names itself here (words table, N1a–N1k).
+/// A kind the browser doesn't know, a tab asked back and a site no level opens say N1's
+/// `Needs you`.
+fn waiting(wait: Wait, site: &str) -> SharedString {
+    match wait {
+        Wait::Asked => "Asked a question".into(),
+        Wait::Step(Step::SignIn) | Wait::Refused(Why::SignIn, _) => at_site("Sign in", site),
+        Wait::Step(Step::Files { many: false }) => at_site("Choose a file", site),
+        Wait::Step(Step::Files { many: true }) => at_site("Choose files", site),
+        Wait::Step(Step::HandOff) => at_site("Your step", site),
+        // The browser can't tell paying from ordering (page::ORDER), so it says the order.
+        Wait::Refused(Why::Order, _) => "Paused before an order".into(),
+        Wait::Refused(Why::Message, _) => "Paused before sending".into(),
+        Wait::Refused(Why::Download, _) => "Paused before downloading".into(),
+        Wait::Refused(Why::Discard, _) => "Paused before discarding text".into(),
+        Wait::Refused(Why::SignInBank, _) => at_site("Bank sign-in", site),
+        Wait::Refused(Why::Fenced | Why::Never, _) => at_site(NEEDS_YOU, site),
+        Wait::Refused(_, Some(level)) => format!("Needs {}", level.label()).into(),
+        Wait::Refused(_, None) => "Needs more access".into(),
+        Wait::Step(Step::Back) | Wait::Other => at_site(NEEDS_YOU, site),
     }
 }
 
@@ -52,11 +78,11 @@ pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
     }
 }
 
-/// A waiting line's second line: the product's words alone, never the assistant's or a page's.
-/// Empty for a line in any other `form`, which has none.
-pub(super) fn second_line(_card: &Card, form: Form, site: &str) -> SharedString {
+/// A waiting line's second line: the product's words for its kind of wait alone, never the
+/// assistant's or a page's. Empty for a line in any other `form`, which has none.
+pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
     match form {
-        Form::Waits => needs_you(site),
+        Form::Waits => waiting(card.wait, site),
         _ => SharedString::default(),
     }
 }

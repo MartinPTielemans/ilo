@@ -52,6 +52,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         ended_at: None,
         asks: false,
         dot,
+        wait: Default::default(),
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
@@ -78,6 +79,7 @@ fn waiting(agent: &str, name: &str, id: u64, why: &str) -> Card {
         why: why.to_string().into(),
         tab: 30,
         back: false,
+        step: Default::default(),
     };
     Card {
         status: "Waiting for you".into(),

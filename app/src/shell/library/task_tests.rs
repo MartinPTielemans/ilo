@@ -57,6 +57,7 @@ fn card() -> Card {
         ended_at: None,
         asks: false,
         dot: Dot::Done,
+        wait: Default::default(),
         word: Word::for_dot(Dot::Done),
         pages: Vec::new(),
         tier: Default::default(),

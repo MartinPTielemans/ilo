@@ -228,6 +228,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         ended_at: None,
         asks: false,
         dot,
+        wait: Default::default(),
         word: Word::for_dot(dot),
         pages: (task_pages((at - FIRST_TASK) as usize).iter())
             .map(|&(tab, ..)| tab)
@@ -280,6 +281,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             fuller: dot == Dot::Done,
             lead: 0,
             dot,
+            wait: Default::default(),
             word: Word::for_dot(dot),
             pages: Vec::new(),
             tier: Default::default(),

@@ -51,6 +51,7 @@ pub(super) fn card() -> Card {
         ended_at: None,
         asks: false,
         dot: Dot::Working,
+        wait: Default::default(),
         word: Word::for_dot(Dot::Working),
         pages: Vec::new(),
         tier: Default::default(),
@@ -4245,11 +4246,13 @@ fn row_cases() -> Vec<RowCaseShown> {
     };
     let waits = Card {
         dot: Dot::Waiting,
+        wait: Default::default(),
         word: Word::for_dot(Dot::Waiting),
         ..card()
     };
     let done = Card {
         dot: Dot::Done,
+        wait: Default::default(),
         word: Word::for_dot(Dot::Done),
         open: vec![(30, "skyscanner.net".into())],
         ..card()
@@ -5582,6 +5585,7 @@ fn at_a_wait_the_sign_alone_moves(cx: &mut TestAppContext) {
 fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut TestAppContext) {
     let waits = Card {
         dot: Dot::Waiting,
+        wait: Default::default(),
         word: Word::for_dot(Dot::Waiting),
         ..card()
     };
