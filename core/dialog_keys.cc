@@ -1,5 +1,6 @@
 #include "browser_core/dialog_keys.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -13,6 +14,7 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/dialog_take_back_rule.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -52,6 +54,9 @@ bool Driven() {
 
 // The key a tab's dialog is asking the app about, while it asks.
 const input::NativeWebKeyboardEvent* g_asking = nullptr;
+
+// The pages that took the keyboard, so a dialog takes it back only from the page that still has it.
+constinit dialog_take_back_rule::Turns g_turns;
 
 // "ctrl-shift-key 0x31": a key held with ⌃ or ⌘ by its code, never what it types.
 std::string Chord(bool control, bool alt, bool shift, bool command, int code) {
@@ -180,8 +185,9 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
   // Chrome's dialog manager does on a key or wheel the page ignored. A click the page ignores isn't
   // reported, and on the Mac AppKit makes the clicked page view first responder all the same, as
   // Windows gives a pane's HWND the keyboard (platform/win/window_views.cc). Only |page|'s own
-  // dialog: an agent's tab a tile shows may have one in the window over another tab's page.
-  void PageFocused(content::WebContents* page) {
+  // dialog: an agent's tab a tile shows may have one in the window over another tab's page. |turn|
+  // is the page's in g_turns.
+  void PageFocused(content::WebContents* page, uint64_t turn) {
     tabs::TabDialogManager* dialogs = Window::DialogsOf(page);
     if (!dialog_->IsVisible() || ShownPage(window_) != page || !dialogs ||
         !dialogs->IsDialogManaged(dialog_)) {
@@ -192,9 +198,17 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(
-            [](base::WeakPtr<views::Widget> dialog, base::WeakPtr<views::Widget> window) {
+            [](base::WeakPtr<views::Widget> dialog, base::WeakPtr<views::Widget> window,
+               uint64_t turn) {
               if (!dialog || !window || dialog->IsClosed() || !dialog->IsVisible() ||
                   !window->IsActive()) {
+                return;
+              }
+              // Another page took the keyboard since, as the page a press beside the dialog
+              // focuses once the window it made key has focused the dialog's (#3212).
+              if (!g_turns.Holds(turn)) {
+                fprintf(stderr,
+                        "browser: tab dialog left the keyboard to a page focused since\n");
                 return;
               }
               if (views::WidgetDelegate* delegate = dialog->widget_delegate()) {
@@ -205,11 +219,11 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
               dialog->Activate();
               fprintf(stderr, "browser: tab dialog took the keyboard back\n");
             },
-            dialog_->GetWeakPtr(), window_->GetWeakPtr()));
+            dialog_->GetWeakPtr(), window_->GetWeakPtr(), turn));
   }
 
 #if !BUILDFLAG(IS_MAC)
-  void PageViewFocused(gfx::NativeView view) {
+  void PageViewFocused(gfx::NativeView view, uint64_t turn) {
     content::WebContents* page = ShownPage(window_);
     if (!page || !view) {
       return;
@@ -218,7 +232,7 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     // dialog, won't take it, as the pane's on Windows.
     gfx::NativeView page_view = page->GetNativeView();
     if (page_view->Contains(view) || view->Contains(page_view)) {
-      PageFocused(page);
+      PageFocused(page, turn);
     }
   }
 #endif
@@ -280,15 +294,17 @@ void KeyGate(const input::NativeWebKeyboardEvent& key, const char* why) {
 }
 
 void PageFocused(content::WebContents* page) {
+  const uint64_t turn = g_turns.Took();
   for (auto& watched : Watched()) {
-    watched.second->PageFocused(page);
+    watched.second->PageFocused(page, turn);
   }
 }
 
 #if !BUILDFLAG(IS_MAC)
 void PageViewFocused(gfx::NativeView view) {
+  const uint64_t turn = g_turns.Took();
   for (auto& watched : Watched()) {
-    watched.second->PageViewFocused(view);
+    watched.second->PageViewFocused(view, turn);
   }
 }
 #endif

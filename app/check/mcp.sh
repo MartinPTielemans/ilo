@@ -214,8 +214,9 @@ serve
 plain="mcp-plain-$(date +%s).example.com"
 # The client's calls pause for the run's own work between them, as engine_has's git does for over a
 # minute on Windows, so its task's quiet end after its last page waits an hour, past the run, with
-# the spec's ask and handoff waits; the waits relaunch below sees the quiet end (#3652).
-BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
+# the spec's ask and handoff waits; the waits relaunch below sees the quiet end (#3652). The keys
+# log says where each of ⌘↩'s presses went, which a lost one's failure names.
+BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" --agent-waits=300,900,3600 \
   --host-resolver-rules="MAP $plain 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -980,7 +981,9 @@ hand_back_pressed() {
   handed=$(grep -c "^browser: agent mcp-client handed back $pressed\$" "$log" || true)
   send key return cmd
   await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
-    fail "⌘↩ didn't hand back the page a click took, $pressed"
+    fail "⌘↩ didn't hand back the page a click took, $pressed: $(since |
+      grep -e '^browser: \[keys\]' -e '^browser: tab dialog' -e '^browser: drive' | tail -6 |
+      tr '\n' ' ')"
 }
 # Focus Agent Question's key (#3869).
 if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
