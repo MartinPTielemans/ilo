@@ -2501,6 +2501,39 @@ void Window::SetSidebarWidth(double width) {
   SessionChanged();
 }
 
+void Window::SetSidebarHidden(bool hidden) {
+  // A window with a Space of its own, a private one's too, is never saved.
+  if (std::exchange(sidebar_hidden_, hidden) != hidden && !own_space_) {
+    SessionChanged();
+  }
+}
+
+void Window::SetOnTop(bool on_top) {
+  if (std::exchange(on_top_, on_top) != on_top && !own_space_) {
+    SessionChanged();
+  }
+}
+
+double Window::SpaceScroll(bc_id space) const {
+  auto it = space_scrolls_.find(space);
+  return it == space_scrolls_.end() ? 0 : it->second;
+}
+
+void Window::SetSpaceScroll(bc_id space, double offset) {
+  offset = std::max(offset, 0.);
+  if (SpaceScroll(space) == offset) {
+    return;
+  }
+  if (offset == 0) {
+    space_scrolls_.erase(space);
+  } else {
+    space_scrolls_[space] = offset;
+  }
+  if (!own_space_) {
+    SessionChanged();
+  }
+}
+
 void Window::ShowNothing() {
   HoldPictured();
   selected_ = 0;

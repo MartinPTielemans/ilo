@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -291,6 +292,21 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Chromium's restored bounds don't know (#1454).
   gfx::Rect RestoredFrame() const;
   void SetSidebarWidth(double width);
+  // Whether the user hid the docked sidebar, kept with the window as its width is (#4415).
+  bool sidebar_hidden() const { return sidebar_hidden_; }
+  void SetSidebarHidden(bool hidden);
+  // Whether the user keeps the window over other apps' (Stay On Top), kept as the hidden
+  // sidebar is.
+  bool on_top() const { return on_top_; }
+  void SetOnTop(bool on_top);
+  // The window's tabs, most recently shown first, as the UI's ⌃Tab walks them. Kept for the next
+  // launch by each tab's place; a selection saves the session already, so setting it only stores.
+  const std::vector<bc_id>& recent_tabs() const { return recent_tabs_; }
+  void SetRecentTabs(std::vector<bc_id> tabs) { recent_tabs_ = std::move(tabs); }
+  // How far down the sidebar's list of |space| is scrolled, in points, 0 at its top.
+  double SpaceScroll(bc_id space) const;
+  void SetSpaceScroll(bc_id space, double offset);
+  const std::map<bc_id, double>& space_scrolls() const { return space_scrolls_; }
   // Where the selected tab's page goes, in the window, and the radius of its corners. A split view
   // shares it out between its pages.
   void SetPageFrame(const gfx::Rect& frame, double corner_radius);
@@ -616,6 +632,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether the app is moving the page frame on its own (SetPageMoving).
   bool page_moving_ = false;
   double sidebar_width_;
+  bool sidebar_hidden_ = false;
+  bool on_top_ = false;
+  std::vector<bc_id> recent_tabs_;
+  std::map<bc_id, double> space_scrolls_;
   // On Linux, the last frames the window had out of maximized and full screen, newest last
   // (KeepNormalFrame), for RestoredFrame.
   std::vector<gfx::Rect> normal_frames_;

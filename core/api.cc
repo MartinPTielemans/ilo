@@ -1192,6 +1192,18 @@ size_t bc_profiles(bc_id* profiles, size_t capacity) {
   return all.size();
 }
 
+size_t bc_settings_section(char* section, size_t capacity) {
+  return CopyString(browser_core::SettingsSection(), section, capacity);
+}
+
+void bc_set_settings_section(const char* section) {
+  std::string& kept = browser_core::SettingsSection();
+  if (kept != (section ? section : "")) {
+    kept = section ? section : "";
+    browser_core::SessionChanged();
+  }
+}
+
 size_t bc_profile_name(bc_id profile, char* name, size_t capacity) {
   return CopyString(browser_core::ProfileName(profile), name, capacity);
 }
@@ -1839,6 +1851,57 @@ double bc_window_sidebar_width(bc_id window_id) {
 void bc_window_set_sidebar_width(bc_id window_id, double width) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->SetSidebarWidth(width);
+  }
+}
+
+bool bc_window_sidebar_hidden(bc_id window_id) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->sidebar_hidden();
+}
+
+void bc_window_set_sidebar_hidden(bc_id window_id, bool hidden) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetSidebarHidden(hidden);
+  }
+}
+
+bool bc_window_on_top(bc_id window_id) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->on_top();
+}
+
+void bc_window_set_on_top(bc_id window_id, bool on_top) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetOnTop(on_top);
+  }
+}
+
+void bc_window_set_recent_tabs(bc_id window_id, const bc_id* tabs, size_t count) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetRecentTabs(tabs ? std::vector<bc_id>(tabs, tabs + count) : std::vector<bc_id>());
+  }
+}
+
+size_t bc_window_recent_tabs(bc_id window_id, bc_id* tabs, size_t capacity) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  if (!window) {
+    return 0;
+  }
+  const std::vector<bc_id>& recent = window->recent_tabs();
+  for (size_t i = 0; tabs && i < std::min(capacity, recent.size()); ++i) {
+    tabs[i] = recent[i];
+  }
+  return recent.size();
+}
+
+double bc_window_space_scroll(bc_id window_id, bc_id space) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window ? window->SpaceScroll(space) : 0;
+}
+
+void bc_window_set_space_scroll(bc_id window_id, bc_id space, double offset) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetSpaceScroll(space, offset);
   }
 }
 

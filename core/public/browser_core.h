@@ -2447,6 +2447,12 @@ BC_EXPORT bool bc_space_set_profile(bc_id space, bc_id profile);
 // history, logins and extensions, which the Spaces in it share (decision 5).
 BC_EXPORT size_t bc_profiles(bc_id* profiles, size_t capacity);
 
+// Copies the page the Settings window last showed, by the app's name for it, into |section| as
+// bc_space_name does: empty for none, and the next launch gives back the last one. This
+// computer's, never in sync.
+BC_EXPORT size_t bc_settings_section(char* section, size_t capacity);
+BC_EXPORT void bc_set_settings_section(const char* section);
+
 // Copies the profile's name into |name| as bc_space_name does. "Default" for one no one named.
 BC_EXPORT size_t bc_profile_name(bc_id profile, char* name, size_t capacity);
 
@@ -2916,6 +2922,31 @@ BC_EXPORT void bc_window_show_space(bc_id window, bc_id space);
 // the Spaces, and a window opens with the one the last launch saved.
 BC_EXPORT double bc_window_sidebar_width(bc_id window);
 BC_EXPORT void bc_window_set_sidebar_width(bc_id window, double width);
+
+// Whether the user hid the window's docked sidebar. The core keeps it with the window, as the
+// width, and bc_window_restore and bc_window_open_saved give a window the one the last launch
+// saved. This computer's alone: never in sync, and never saved for a private window. The user's:
+// agents get none, as it changes what the user sees.
+BC_EXPORT bool bc_window_sidebar_hidden(bc_id window);
+BC_EXPORT void bc_window_set_sidebar_hidden(bc_id window, bool hidden);
+
+// Whether the user keeps the window over other apps' windows, by Stay On Top. The core only
+// keeps it, as the hidden sidebar: the app puts the window there.
+BC_EXPORT bool bc_window_on_top(bc_id window);
+BC_EXPORT void bc_window_set_on_top(bc_id window, bool on_top);
+
+// The window's tabs, most recently shown first, as the app's ⌃Tab walks them. The core keeps each
+// by its place in the Spaces, and bc_window_restore and bc_window_open_saved give them back by the
+// ids they came back with, leaving out those that didn't. Setting it saves nothing of its own: a
+// selection saves the Spaces already. Kept as the hidden sidebar is.
+BC_EXPORT void bc_window_set_recent_tabs(bc_id window, const bc_id* tabs, size_t count);
+// Copies up to |capacity| of them into |tabs| and returns how many there are.
+BC_EXPORT size_t bc_window_recent_tabs(bc_id window, bc_id* tabs, size_t capacity);
+
+// How far down the sidebar's list of |space| is scrolled in the window, in points, 0 at its top.
+// Kept as the hidden sidebar is, by the Space.
+BC_EXPORT double bc_window_space_scroll(bc_id window, bc_id space);
+BC_EXPORT void bc_window_set_space_scroll(bc_id window, bc_id space, double offset);
 
 // The tab bc_window_show_space would show for |space|, or the tab shown for the Space shown. 0 for
 // none.
@@ -4326,8 +4357,8 @@ BC_EXPORT void bc_tab_rename(bc_id tab, const char* name);
 // is; empty gives it back its favicon. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
 
-// Mutes or unmutes the tab, whatever page it's at. Duplicating it and ⇧⌘T keep it muted; a quit
-// doesn't. Then tab_state_changed.
+// Mutes or unmutes the tab, whatever page it's at. Duplicating it, ⇧⌘T and a quit keep it muted.
+// Then tab_state_changed.
 BC_EXPORT void bc_tab_set_muted(bc_id tab, bool muted);
 
 // Sets the tab's volume, from 0 to 1, as Arc's Adjust Tab Volume: the sound of the page's audio and

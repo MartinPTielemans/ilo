@@ -47,6 +47,7 @@
 #include "browser_core/tab.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/window.h"
+#include "browser_core/window_view.h"
 #include "chrome/browser/browser_process.h"
 #include "build/build_config.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
@@ -83,6 +84,8 @@ struct SavedWindow {
   // or normal. A minimized window comes back normal, as Chrome's does. Never on the Mac, where
   // Chromium's widget calls a zoomed window maximized, and its zoom is a frame, which |bounds| has.
   bool maximized = false;
+  // This computer's view of it, never in sync (#4415).
+  WindowView view;
 };
 
 struct Saved {
@@ -95,6 +98,8 @@ struct Saved {
   Settings settings;
   // The last id handed out, 0 for a session saved before ids were kept.
   bc_id last_id = 0;
+  // The page the Settings window last showed, never in sync (#4415).
+  std::string settings_section;
 };
 
 // The windows the last launch saved, for the app to open again, and the Spaces RestoreSession
@@ -106,6 +111,11 @@ std::vector<SavedWindow>& LoadedWindows() {
 std::vector<bc_id>& RestoredSpaces() {
   static base::NoDestructor<std::vector<bc_id>> spaces;
   return *spaces;
+}
+// The tabs RestoreSession brought back, by their places in the session.
+std::map<TabPlace, bc_id>& RestoredTabs() {
+  static base::NoDestructor<std::map<TabPlace, bc_id>> tabs;
+  return *tabs;
 }
 
 // The Spaces put back, as SpaceShownAtLaunch sees them.
@@ -295,7 +305,8 @@ SavedTab SaveTab(content::WebContents& contents) {
 SavedSpace SaveSpace(const Space& space,
                      bc_id shown,
                      std::vector<bc_id>* today,
-                     bool handed_as_users) {
+                     bool handed_as_users,
+                     std::map<bc_id, int>* places) {
   SavedSpace to;
   to.name = space.name();
   to.node = space.node();
@@ -381,11 +392,17 @@ SavedSpace SaveSpace(const Space& space,
         }
         above = id;
         tabs->push_back(std::move(tab));
+        if (places) {
+          (*places)[id] = index;
+        }
         ++index;
         continue;
       }
       if (id == shown) {
         to.shown = index;
+      }
+      if (places) {
+        (*places)[id] = index;
       }
       tab.split = above && std::ranges::contains(space.Panes(id), above);
       tab.stacked = tab.split && space.Stacked(id);
@@ -440,6 +457,7 @@ Saved Collect() {
   std::vector<Window*> windows = Window::All();
   std::erase_if(windows, [](const Window* each) { return each->own_space(); });
   saved.settings = UserSettings();
+  saved.settings_section = SettingsSection();
   saved.last_id = LastId();
   // Each Space saved, by its place among them.
   std::map<bc_id, int> spaces;
@@ -457,8 +475,14 @@ Saved Collect() {
     favorites[id] = saved.favorites.size();
     saved.favorites.push_back(std::move(tab));
   }
+  // Each tab saved, by its place.
+  std::map<bc_id, TabPlace> places;
+  for (const auto& [id, at] : favorites) {
+    places[id] = {-1, at};
+  }
   for (Space* space : Space::All()) {
-    spaces[space->id()] = saved.spaces.size();
+    const int at = static_cast<int>(saved.spaces.size());
+    spaces[space->id()] = at;
     // The tab the window active last showed there, else the one another window showed.
     bc_id shown = 0;
     for (const Window* each : windows) {
@@ -466,8 +490,12 @@ Saved Collect() {
         break;
       }
     }
+    std::map<bc_id, int> in_space;
     SavedSpace& to = saved.spaces.emplace_back(
-        SaveSpace(*space, shown, /*today=*/nullptr, /*handed_as_users=*/true));
+        SaveSpace(*space, shown, /*today=*/nullptr, /*handed_as_users=*/true, &in_space));
+    for (const auto& [id, index] : in_space) {
+      places[id] = {at, index};
+    }
     if (auto favorite = favorites.find(shown); favorite != favorites.end()) {
       to.shown_favorite = favorite->second;
     }
@@ -486,6 +514,19 @@ Saved Collect() {
          .maximized = widget && widget->IsMaximized() && !widget->IsFullscreen(),
 #endif
         });
+    WindowView& view = saved.windows.back().view;
+    view.sidebar_hidden = window->sidebar_hidden();
+    view.on_top = window->on_top();
+    for (bc_id tab : window->recent_tabs()) {
+      if (auto place = places.find(tab); place != places.end()) {
+        view.recent.push_back(place->second);
+      }
+    }
+    for (const auto& [id, offset] : window->space_scrolls()) {
+      if (auto place = spaces.find(id); place != spaces.end()) {
+        view.scroll.push_back({place->second, offset});
+      }
+    }
   }
   saved.archive = Archived();
   return saved;
@@ -565,6 +606,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (!tab.session_storage.empty()) {
         dict.Set("session_storage", tab.session_storage);
+      }
+      if (tab.muted) {
+        dict.Set("muted", true);
       }
       list.Append(std::move(dict));
     }
@@ -654,6 +698,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
     if (window.sidebar_width > 0) {
       dict.Set("sidebar_width", window.sidebar_width);
     }
+    WriteWindowView(window.view, dict);
     if (window.fullscreen) {
       dict.Set("fullscreen", true);
     }
@@ -677,6 +722,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
   root.Set("archive", std::move(archive));
   // A string, as JSON's numbers can't hold every id.
   root.Set("last_id", base::NumberToString(saved.last_id));
+  if (!saved.settings_section.empty()) {
+    root.Set("settings_section", saved.settings_section);
+  }
   root.Set("settings", base::DictValue()
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
                            .Set("little_archive_after",
@@ -771,6 +819,7 @@ std::optional<SavedTab> ReadTab(const base::Value& value) {
   if (const std::string* storage = dict->FindString("session_storage")) {
     tab.session_storage = *storage;
   }
+  tab.muted = dict->FindBool("muted").value_or(false);
   return tab;
 }
 
@@ -797,6 +846,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
       }
     }
   }
+  // Where each tab saved in each Space read went among those read, or -1, by its place.
+  std::vector<std::vector<int>> kept_at;
   for (const base::Value& value : *spaces) {
     const base::DictValue* space = value.GetIfDict();
     const std::string* name = space ? space->FindString("name") : nullptr;
@@ -805,6 +856,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       continue;
     }
     SavedSpace& to = saved.spaces.emplace_back();
+    std::vector<int>& places = kept_at.emplace_back();
     to.name = *name;
     to.node = ReadNode(*space);
     if (std::optional<int> color = space->FindInt("color")) {
@@ -908,6 +960,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
           continue;
         }
         std::optional<SavedTab> tab = ReadTab(row);
+        places.push_back(tab ? kept : -1);
         if (index++ == shown && tab) {
           to.shown = kept;
         }
@@ -952,6 +1005,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       to.sidebar_width = window->FindDouble("sidebar_width").value_or(0);
       to.fullscreen = window->FindBool("fullscreen").value_or(false);
       to.maximized = window->FindBool("maximized").value_or(false);
+      to.view = ReadWindowView(*window, favorites, kept_at, last_space);
     }
   } else {
     // Saved when the session kept one window, without its frame.
@@ -976,6 +1030,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
              .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid()});
       }
     }
+  }
+  if (const std::string* section = root->FindString("settings_section")) {
+    saved.settings_section = *section;
   }
   if (const std::string* last_id = root->FindString("last_id")) {
     base::StringToUint64(*last_id, &saved.last_id);
@@ -1383,6 +1440,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     if (saved) {
       LoadArchive(std::exchange(saved->archive, {}));
       UserSettings() = saved->settings;
+      SettingsSection() = saved->settings_section;
       LoadedWindows() = std::exchange(saved->windows, {});
       // Without the last session's windows, the launch opens one, where the front one was, and
       // out of full screen, as a new window would be. Maximized it stays so, as Windows' launch
@@ -1493,6 +1551,11 @@ Settings& UserSettings() {
   return settings;
 }
 
+std::string& SettingsSection() {
+  static base::NoDestructor<std::string> section;
+  return *section;
+}
+
 void ApplyAppearance() {
 #if !BUILDFLAG(IS_MAC)
   // Chromium's own override of the system's scheme, which every page's color provider follows.
@@ -1526,6 +1589,20 @@ bool RestoreSavedWindow(Window& window, size_t index) {
   }
   const SavedWindow& saved = LoadedWindows()[index];
   window.SetSidebarWidth(saved.sidebar_width);
+  window.SetSidebarHidden(saved.view.sidebar_hidden);
+  window.SetOnTop(saved.view.on_top);
+  std::vector<bc_id> recent;
+  for (const TabPlace& place : saved.view.recent) {
+    if (auto tab = RestoredTabs().find(place); tab != RestoredTabs().end() && tab->second) {
+      recent.push_back(tab->second);
+    }
+  }
+  window.SetRecentTabs(std::move(recent));
+  for (const auto& [at, offset] : saved.view.scroll) {
+    if (static_cast<size_t>(at) < RestoredSpaces().size() && RestoredSpaces()[at]) {
+      window.SetSpaceScroll(RestoredSpaces()[at], offset);
+    }
+  }
   const size_t saved_at = static_cast<size_t>(saved.space);
   if (saved_at >= RestoredSpaces().size() || !RestoredSpaces()[saved_at]) {
     return false;
@@ -1555,7 +1632,8 @@ Space* RestoreSpace(Window& window,
                     const std::string& profile,
                     const SavedSpace& saved_space,
                     bc_id id,
-                    size_t at) {
+                    size_t at,
+                    std::vector<bc_id>* restored) {
   Space* space = Space::Create(saved_space.name, id, saved_space.agent, at);
   space->SetColor(saved_space.color);
   space->SetIcon(saved_space.icon);
@@ -1721,6 +1799,10 @@ Space* RestoreSpace(Window& window,
       }
     }
   }
+  if (restored) {
+    *restored = pinned_ids;
+    restored->insert(restored->end(), today_ids.begin(), today_ids.end());
+  }
   return space;
 }
 
@@ -1806,8 +1888,18 @@ bool RestoreSavedSession(Window& window) {
   }
   RestoreFavoriteSplits(saved->favorites, favorites);
   RestoredSpaces().clear();
+  RestoredTabs().clear();
+  for (size_t j = 0; j < favorites.size(); ++j) {
+    RestoredTabs()[{-1, static_cast<int>(j)}] = favorites[j];
+  }
   for (const SavedSpace& saved_space : saved->spaces) {
-    Space* space = RestoreSpace(window, HomeFor(saved_space.profile), saved_space);
+    std::vector<bc_id> tabs;
+    Space* space = RestoreSpace(window, HomeFor(saved_space.profile), saved_space, /*id=*/0,
+                                /*at=*/SIZE_MAX, &tabs);
+    const int at = static_cast<int>(RestoredSpaces().size());
+    for (size_t j = 0; j < tabs.size(); ++j) {
+      RestoredTabs()[{at, static_cast<int>(j)}] = tabs[j];
+    }
     RestoredSpaces().push_back(space->id());
     if (UserSettings().restore_windows && !saved_space.agent && saved_space.shown_favorite >= 0 &&
         favorites[saved_space.shown_favorite]) {

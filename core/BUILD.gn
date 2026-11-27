@@ -906,6 +906,16 @@ source_set("window_frames") {
   ]
 }
 
+# This computer's view of a window, which the session keeps and sync never carries, apart so
+# browser_core_unittests tests its reading alone (#4415).
+source_set("window_view") {
+  sources = [
+    "window_view.cc",
+    "window_view.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # A page's text as its accessibility tree has it, an element's too, with no field's value: what
 # bc_tab_read_text and Point read.
 source_set("ax_text") {
@@ -1267,6 +1277,7 @@ source_set("browser_core") {
     ":typed_http",
     ":typing_keys",
     ":window_frames",
+    ":window_view",
     ":closing_way_back",
     ":withheld_fields",
     "//base",
@@ -1660,6 +1671,7 @@ test("browser_core_unittests") {
     "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
+    "window_view_unittest.cc",
     "withheld_fields_unittest.cc",
   ]
   # Where the split view's keys run on each layout, which the app's tests read too (#3509).
@@ -1738,6 +1750,7 @@ test("browser_core_unittests") {
     ":typed_http",
     ":typing_keys",
     ":window_frames",
+    ":window_view",
     ":closing_way_back",
     ":withheld_fields",
     "//base",

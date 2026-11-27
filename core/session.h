@@ -57,7 +57,8 @@ struct SavedTab {
   int folder = -1;
   // A pinned or Today tab's node, or none if it was saved before they had them.
   Space::Node node;
-  // Whether it was muted, for a tab closed and reopened. The session file doesn't keep it.
+  // Whether it was muted, by the user or an extension, for a tab closed and reopened and for the
+  // next launch (#4415).
   bool muted = false;
   // The id of its page's sessionStorage in its profile, which the session file alone keeps, so the
   // next launch gives the tab its own back (Tab::SessionStorageId), as Chrome's session does
@@ -132,16 +133,20 @@ struct SavedSpace {
 SavedSpace SaveSpace(const Space& space,
                      bc_id shown,
                      std::vector<bc_id>* today = nullptr,
-                     bool handed_as_users = false);
+                     bool handed_as_users = false,
+                     std::map<bc_id, int>* places = nullptr);
 
 // Makes |saved| a Space in the profile in the directory |profile|, its tabs unloaded in |window|
 // and waiting for that profile if it's still loading (Tab::Restore), with the id |id|, a deleted
-// Space's, if it isn't 0. The window shows its shown tab there. Returns it.
+// Space's, if it isn't 0. The window shows its shown tab there. Returns it. |restored|, if not
+// null, gets the ids its tabs came back as, by the places SavedSpace::shown counts, 0 for one that
+// didn't.
 Space* RestoreSpace(Window& window,
                     const std::string& profile,
                     const SavedSpace& saved,
                     bc_id id = 0,
-                    size_t at = SIZE_MAX);
+                    size_t at = SIZE_MAX,
+                    std::vector<bc_id>* restored = nullptr);
 
 // The Spaces as the user left them: their names, their tabs with each tab's history, the tab each
 // showed and the Space the window showed, and the favorites. The core saves them a while after
@@ -250,6 +255,10 @@ struct Settings {
 
 // The user's settings. Call SessionChanged after changing them.
 Settings& UserSettings();
+
+// The page the Settings window last showed, by the app's name for it, empty for its first. Kept
+// with the Spaces and never in sync, as it's this computer's (#4415).
+std::string& SettingsSection();
 
 // Gives pages View › Appearance's choice as their prefers-color-scheme. Not on the Mac, where they
 // follow the app's NSAppearance, which the app sets.
