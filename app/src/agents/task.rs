@@ -6112,6 +6112,7 @@ mod finished_tests {
             page: Some(OnPage {
                 tab,
                 site: site.to_string().into(),
+                title: "".into(),
                 went: kind == tools::StepKind::Opened,
             }),
             says: tools::Note::default(),

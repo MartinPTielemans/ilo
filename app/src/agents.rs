@@ -2166,7 +2166,7 @@ impl Agents {
     }
 
     /// `call`, once it's known to be the agent's to make and in its thread's name if a strand's.
-    fn called(&mut self, call: Call, says: String, cx: &mut Context<Self>) {
+    fn called(&mut self, call: Call, says: tools::Note, cx: &mut Context<Self>) {
         // A task the user stopped keeps its connection for their next message, so its calls still
         // come: one that waited its turn in the server behind a slow page, or one its assistant
         // made as it was interrupted. Each is answered as stopped, and nothing of it is run,

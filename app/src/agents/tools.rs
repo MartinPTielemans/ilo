@@ -1805,14 +1805,14 @@ mod note_tests {
         for why in [
             Why::Message,
             Why::Order,
-            Why::Bank,
+            Why::Sensitive,
             Why::Download,
             Why::Discard,
             Why::Request,
             Why::Fenced,
             Why::Never,
             Why::SignIn,
-            Why::SignInBank,
+            Why::SignInSensitive,
         ] {
             let judged = did("click", Judged::Refusable(why));
             assert!(own(&judged, true) && own(&judged, false), "{why:?}");
