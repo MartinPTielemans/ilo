@@ -1735,8 +1735,11 @@ send key escape
 expect '^browser: rename cancelled$' \
   "escape in the name's field didn't cancel: $(lost_keyboard)"
 # Edit Theme… in ⌘T's bar, which "theme" finds first, opens the theme picker for the Space shown.
+# The Space shows no page here, so it rests on ⌘T's bar drawn in place, and ⌘T gives that bar the
+# keyboard rather than opening another over it (774d98f07, #4140).
 send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar for Edit Theme…"
+expect '^browser: resting field has the keyboard$' \
+  "⌘T didn't give the empty Space's resting bar the keyboard for Edit Theme…"
 send type theme
 send key return
 expect '^browser: command edit-theme via ' "Edit Theme… in the command bar didn't run"
