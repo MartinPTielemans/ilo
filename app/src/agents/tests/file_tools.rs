@@ -215,15 +215,18 @@ fn an_outside_agent_has_no_file_tools(cx: &mut TestAppContext) {
 /// runs has them.
 #[gpui::test]
 fn a_codex_thread_is_handed_no_file_tools(cx: &mut TestAppContext) {
-    let (codex, claude) = (
-        tools::handed("task-1", Cli::Codex),
-        tools::handed("task-1", Cli::Claude),
-    );
-    for tool in tools::FILE_TOOLS {
-        assert!(
-            !codex.contains(&tool.to_string()) && claude.contains(&tool.to_string()),
-            "{tool}"
+    // A thread's strand is handed its thread's tools, so none of these either.
+    for agent in ["task-1", "task-1-1"] {
+        let (codex, claude) = (
+            tools::handed(agent, Cli::Codex),
+            tools::handed(agent, Cli::Claude),
         );
+        for tool in tools::FILE_TOOLS {
+            assert!(
+                !codex.contains(&tool.to_string()) && claude.contains(&tool.to_string()),
+                "{agent} {tool}"
+            );
+        }
     }
     let thread = Thread::new("codex", Cli::Codex, Tier::Work, cx);
     let read = thread.read(&thread.at("home/Taxes/notes.txt"), cx);

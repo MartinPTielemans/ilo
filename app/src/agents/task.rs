@@ -2462,7 +2462,7 @@ impl Agents {
             model: self.launch_model(thread, cli),
             effort: task.effort.clone(),
             instructions: tools::STRAND_INSTRUCTIONS.into(),
-            tools: tools::names(strand),
+            tools: tools::handed(strand, cli),
             wall,
             reads: (task.files.folder.iter())
                 .map(|folder| folder.root().to_path_buf())
