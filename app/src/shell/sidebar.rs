@@ -341,12 +341,13 @@ impl Shell {
         if self.page_fullscreen {
             return;
         }
-        // Ours: the sidebar comes back from the Library as it was.
-        if self.library_open {
-            return self.set_library(false, cx);
-        }
         if self.dock(cx) {
             return;
+        }
+        // ⌘S hides the sidebar whatever it shows (#4414): the Library goes back in as it goes, and
+        // the sidebar comes back without it. Its glyph opens it again.
+        if !self.sidebar_hidden {
+            self.set_library(false, cx);
         }
         let from = self.card_left();
         self.sidebar_hidden = !self.sidebar_hidden;
