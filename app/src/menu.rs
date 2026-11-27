@@ -16,9 +16,9 @@ use std::{rc::Rc, time::Duration};
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Global, Hsla,
     KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, Radians, Rgba, Role, SharedString, Subscription, Task, TitlebarOptions,
-    Transformation, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    Pixels, Point, Radians, Rgba, Role, ScrollEvent, SharedString, Subscription, Task,
+    TitlebarOptions, Transformation, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -364,6 +364,52 @@ pub(crate) struct Level {
     tops: Vec<f32>,
     /// Whether a column for checks comes before the titles: a level of choices, in quiet rows.
     checks: bool,
+    /// The run of rows that scroll, where it's longer than `SCROLL_ROWS`.
+    scroll: Option<Scroll>,
+}
+
+/// A run of rows marked `scrolls` that shows `SCROLL_ROWS` of them at a time, as the Space
+/// button's menu shows its Spaces, with the rows after it kept in place under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Scroll {
+    /// The run's first and last rows, in the level.
+    first: usize,
+    last: usize,
+    /// Where the run starts, from the panel's top, how tall it shows and how tall it is.
+    top: f32,
+    shown: f32,
+    whole: f32,
+    /// How far down it's scrolled.
+    by: f32,
+}
+
+impl Scroll {
+    fn holds(&self, row: usize) -> bool {
+        (self.first..=self.last).contains(&row)
+    }
+
+    /// Scrolled by `by`, as far as the run goes.
+    fn to(mut self, by: f32) -> Scroll {
+        self.by = by.clamp(0., self.whole - self.shown);
+        self
+    }
+}
+
+/// The run of `heights`' rows marked to scroll, its first and last, how tall `SCROLL_ROWS` of them
+/// are and how tall it is, where it's longer than that.
+fn scroll_run(heights: &[(bool, f32)]) -> Option<(usize, usize, f32, f32)> {
+    let first = heights.iter().position(|&(scrolls, _)| scrolls)?;
+    let last = first
+        + heights[first..]
+            .iter()
+            .take_while(|&&(scrolls, _)| scrolls)
+            .count()
+        - 1;
+    let run = &heights[first..=last];
+    (run.len() > SCROLL_ROWS as usize).then(|| {
+        let shown = run.iter().take(SCROLL_ROWS as usize).map(|&(_, h)| h).sum();
+        (first, last, shown, run.iter().map(|&(_, h)| h).sum())
+    })
 }
 
 /// How tall `entry` stands in its level, a line or a row, quiet in a level of choices.
@@ -379,6 +425,28 @@ fn row_height(entry: &MenuEntry, choices: bool) -> f32 {
 }
 
 impl Level {
+    /// Whether row `at` takes the pointer at `point`: under it, and where the run of rows that
+    /// scroll shows, if it's one of them.
+    fn takes(&self, at: usize, point: Point<Pixels>, entries: &[MenuEntry]) -> bool {
+        let shows = self
+            .scroll
+            .filter(|scroll| scroll.holds(at))
+            .is_none_or(|scroll| {
+                let y = f32::from(point.y - self.bounds.origin.y);
+                (scroll.top..scroll.top + scroll.shown).contains(&y)
+            });
+        shows && self.row_bounds(at, entries).contains(&point)
+    }
+
+    /// The run scrolled as far as keeps row `at` in sight, if it's one of the run's.
+    fn revealing(&self, at: usize, entries: &[MenuEntry]) -> Option<Scroll> {
+        let scroll = self.scroll.filter(|scroll| scroll.holds(at))?;
+        let top = self.tops[at] - scroll.top;
+        let bottom = top + row_height(&entries[self.items[at]], self.checks);
+        let by = scroll.by.min(top).max(bottom - scroll.shown);
+        Some(scroll.to(by))
+    }
+
     /// The panel's corner and its rows', quiet in a level of choices.
     fn radii(&self) -> (f32, f32) {
         match self.checks {
@@ -389,7 +457,8 @@ impl Level {
 
     fn row_bounds(&self, at: usize, entries: &[MenuEntry]) -> Bounds<Pixels> {
         let height = row_height(&entries[self.items[at]], self.checks);
-        let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at]));
+        let by = (self.scroll.filter(|scroll| scroll.holds(at))).map_or(0., |scroll| scroll.by);
+        let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at] - by));
         Bounds::new(
             origin,
             size(self.bounds.size.width - px(2. * PADDING), px(height)),
@@ -530,8 +599,11 @@ pub(crate) fn root_width(entries: &[MenuEntry], window: &Window) -> f32 {
 pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
     let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
     let choices = top.clone().any(marked);
-    let rows: f32 = top.map(|entry| row_height(entry, choices)).sum();
-    PADDING + rows + PADDING
+    let heights: Vec<(bool, f32)> =
+        (top.map(|entry| (entry.scrolls, row_height(entry, choices)))).collect();
+    let rows: f32 = heights.iter().map(|&(_, height)| height).sum();
+    let hidden = scroll_run(&heights).map_or(0., |(_, _, shown, whole)| whole - shown);
+    PADDING + rows - hidden + PADDING
 }
 
 /// Lays `entries` out as a menu with its top left at `at`, flipping up or left where `area` has
@@ -571,11 +643,34 @@ fn lay_out_wide(
             .collect();
         let checks =
             items.iter().any(|&item| marked(&entries[item])) || (choices && parent.is_none());
+        let heights: Vec<(bool, f32)> = (items.iter())
+            .map(|&item| (entries[item].scrolls, row_height(&entries[item], checks)))
+            .collect();
+        let run = scroll_run(&heights);
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
-        for &item in &items {
+        let mut scroll = None;
+        for (row, &(_, height)) in heights.iter().enumerate() {
+            if let Some((first, _, shown, whole)) = run
+                && row == first
+            {
+                scroll = Some(Scroll {
+                    first,
+                    last: run.map_or(first, |run| run.1),
+                    top: y,
+                    shown,
+                    whole,
+                    by: 0.,
+                });
+            }
             tops.push(y);
-            y += row_height(&entries[item], checks);
+            y += height;
+            // The rows after the run stand under what it shows.
+            if let Some((_, last, shown, whole)) = run
+                && row == last
+            {
+                y -= whole - shown;
+            }
         }
         let width = panel_width(entries, &items, checks, width_of);
         let width = if parent.is_none() {
@@ -624,6 +719,7 @@ fn lay_out_wide(
             bounds,
             tops,
             checks,
+            scroll,
         });
     }
     let frame = framed(&levels, crate::elevation::menu_reach());
@@ -730,11 +826,17 @@ pub(crate) fn in_triangle(
 }
 
 impl Tracking {
-    pub(crate) fn new(entries: Vec<MenuEntry>, layout: Layout, at: Point<Pixels>) -> Self {
+    pub(crate) fn new(entries: Vec<MenuEntry>, mut layout: Layout, at: Point<Pixels>) -> Self {
         // A pop-up's menu opens with its current item highlighted.
         let over = (layout.levels[0].items.iter().copied()).find(|&item| {
             entries[item].over && entries[item].enabled && !entries[item].title.is_empty()
         });
+        // A run of rows that scrolls opens with its checked one in sight.
+        let root = &layout.levels[0];
+        let checked = (root.items.iter()).position(|&item| entries[item].checked);
+        if let Some(scroll) = checked.and_then(|row| root.revealing(row, &entries)) {
+            layout.levels[0].scroll = Some(scroll);
+        }
         Tracking {
             entries,
             layout,
@@ -783,8 +885,7 @@ impl Tracking {
             if !level.bounds.contains(&at) {
                 continue;
             }
-            let row = (0..level.items.len())
-                .find(|&row| level.row_bounds(row, &self.entries).contains(&at));
+            let row = (0..level.items.len()).find(|&row| level.takes(row, at, &self.entries));
             return match row {
                 Some(row)
                     if !self.entries[level.items[row]].title.is_empty()
@@ -1039,7 +1140,42 @@ impl Tracking {
             }
             Key::Char(_) => {}
         }
+        self.reveal();
         Outcome::Stay
+    }
+
+    /// Scrolls each open level's run as far as keeps its highlighted row in sight.
+    fn reveal(&mut self) {
+        for open in &self.open {
+            let level = &self.layout.levels[open.level];
+            let row = (open.highlight).and_then(|item| level.items.iter().position(|&i| i == item));
+            if let Some(scroll) = row.and_then(|row| level.revealing(row, &self.entries)) {
+                self.layout.levels[open.level].scroll = Some(scroll);
+            }
+        }
+    }
+
+    /// Whether `at` is over a run of rows that scrolls, in an open level.
+    pub(crate) fn over_scroll(&self, at: Point<Pixels>) -> bool {
+        (self.open.iter()).any(|open| {
+            let level = &self.layout.levels[open.level];
+            level.scroll.is_some_and(|scroll| {
+                let y = f32::from(at.y - level.bounds.origin.y);
+                level.bounds.contains(&at) && (scroll.top..scroll.top + scroll.shown).contains(&y)
+            })
+        })
+    }
+
+    /// The run of rows under `at` scrolled `down` points further, and what's under the pointer
+    /// highlighted, as the rows moved under it.
+    pub(crate) fn scrolled(&mut self, at: Point<Pixels>, down: f32) {
+        for open in self.open.clone() {
+            let level = &mut self.layout.levels[open.level];
+            if let Some(scroll) = level.scroll.filter(|_| level.bounds.contains(&at)) {
+                level.scroll = Some(scroll.to(scroll.by + down));
+            }
+        }
+        self.point_at(at);
     }
 
     /// Type-to-select, as a list's type-ahead finds a row (list_keys.rs): in the deepest level,
@@ -1295,6 +1431,23 @@ struct Shown {
     blends: bool,
     /// Its search, where its first row is a field (`MenuEntry::field`).
     search: Option<Search>,
+    /// Whether a drag in the browser window opened it and drives it (`lead_by_drag`): the
+    /// pointer's moves and release are the drag's, which the browser window hears.
+    led: bool,
+}
+
+/// Set for the next menu shown, which a drag in the browser window drives (`lead_by_drag`).
+struct LedByDrag;
+
+impl Global for LedByDrag {}
+
+/// Whether the next menu shown was to be led by a drag, which only it is.
+fn take_led(cx: &mut App) -> bool {
+    let led = cx.has_global::<LedByDrag>();
+    if led {
+        cx.remove_global::<LedByDrag>();
+    }
+    led
 }
 
 /// A menu's search: what's typed in its field narrows its rows (`narrowed`). The text lives in the
@@ -1517,6 +1670,7 @@ pub fn show(request: Request, cx: &mut App) {
             drawn_open: Vec::new(),
             blends,
             search,
+            led: take_led(cx),
         };
         let (panels, glass, light) = (shown.panels(), shown.glass(), shown.look.light);
         // A search's field has the keyboard, so the cursor is in it as the menu opens.
@@ -1533,6 +1687,47 @@ pub fn show(request: Request, cx: &mut App) {
             host.glass(&glass, light);
         });
         cx.notify();
+    });
+}
+
+/// Makes the next menu shown one a drag in the browser window drives, as a tab held over the
+/// Space button opens its menu: the drag's moves highlight its rows (`dragged_over`) and the
+/// browser window's drop asks what's highlighted (`drag_target`), as the menu doesn't take the
+/// pointer from the drag. One that never shows is let go with the drag (`drag_ended`).
+pub fn lead_by_drag(cx: &mut App) {
+    cx.set_global(LedByDrag);
+}
+
+/// The drag leading the menu is at `at`, in the browser window's content: what's under it takes
+/// the highlight.
+pub fn dragged_over(at: Point<Pixels>, cx: &mut App) {
+    update(cx, |menu, _, cx| {
+        if let Some(shown) = menu.shown.as_mut().filter(|shown| shown.led) {
+            shown.tracking.point_at(at);
+            menu.changed(cx);
+            cx.notify();
+        }
+    });
+}
+
+/// The item highlighted in the menu the drag leads, if one is.
+pub fn drag_target(cx: &mut App) -> Option<usize> {
+    let mut target = None;
+    update(cx, |menu, _, _| {
+        let shown = menu.shown.as_ref().filter(|shown| shown.led);
+        target = shown.and_then(|shown| shown.tracking.open[0].highlight);
+    });
+    target
+}
+
+/// The drag leading the menu ended: the menu closes, choosing nothing, as the browser window
+/// does what the drop asked itself.
+pub fn drag_ended(cx: &mut App) {
+    take_led(cx);
+    update(cx, |menu, _, cx| {
+        if menu.shown.as_ref().is_some_and(|shown| shown.led) {
+            menu.close(Closing::Left, cx);
+        }
     });
 }
 
@@ -1748,11 +1943,27 @@ impl ContextMenu {
         self.shown.as_ref().map_or(at, |shown| shown.origin + at)
     }
 
+    /// A scroll over the menu's window, which only a run of rows that scrolls takes.
+    fn wheel(&mut self, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
+        let at = self.in_content(event.position);
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
+        let down = -f32::from(event.delta.pixel_delta(window.line_height()).y);
+        shown.tracking.scrolled(at, down);
+        self.changed(cx);
+        cx.notify();
+    }
+
     fn pointer(&mut self, event: Pointer, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let at = self.in_content(at);
         let Some(shown) = self.shown.as_mut() else {
             return false;
         };
+        // A drag in the browser window leads it, and has the pointer's moves and its release.
+        if shown.led && event != Pointer::Scrolled {
+            return false;
+        }
         let tracking = &mut shown.tracking;
         match event {
             Pointer::Moved => {
@@ -1782,8 +1993,9 @@ impl ContextMenu {
                 true
             }
             // A scroll is the menu's wherever the pointer is: it stays open, and nothing under
-            // the pointer outside it scrolls.
-            Pointer::Scrolled => true,
+            // the pointer outside it scrolls. Over rows that scroll it goes on to the menu's own
+            // window, whose run of rows takes it.
+            Pointer::Scrolled => !tracking.over_scroll(at),
         }
     }
 
@@ -1983,7 +2195,9 @@ impl ContextMenu {
         let item = lay.items[row];
         let entry = &tracking.entries[as_held(&tracking.entries, item, shown.alt)];
         let bounds = lay.row_bounds(row, &tracking.entries);
-        let top = bounds.origin.y - lay.bounds.origin.y;
+        // A row of the run that scrolls stands in the run's own box, which hides what's out of it.
+        let run = (lay.scroll.filter(|scroll| scroll.holds(row))).map_or(0., |scroll| scroll.top);
+        let top = bounds.origin.y - lay.bounds.origin.y - px(run);
         let (_, row_radius) = lay.radii();
         let placed = div()
             .absolute()
@@ -2226,10 +2440,26 @@ impl ContextMenu {
         let level = &tracking.layout.levels[open.level];
         let at = level.bounds.origin - shown.origin;
         let next = tracking.open.get(depth + 1).map(|next| next.level);
-        let rows = (0..level.items.len()).map(|row| {
+        let row = |row: usize| {
             let opens = next
                 .is_some_and(|next| tracking.layout.levels[next].parent == Some(level.items[row]));
             self.row(shown, open.level, row, open.highlight, opens)
+        };
+        let scrolls = |at: &usize| level.scroll.is_some_and(|scroll| scroll.holds(*at));
+        let rows: Vec<gpui::AnyElement> = (0..level.items.len())
+            .filter(|at| !scrolls(at))
+            .map(row)
+            .collect();
+        let run = level.scroll.map(|scroll| {
+            div()
+                .id(("menu-scroll", open.level))
+                .absolute()
+                .left_0()
+                .top(px(scroll.top))
+                .w_full()
+                .h(px(scroll.shown))
+                .overflow_hidden()
+                .children((scroll.first..=scroll.last).map(row))
         });
         let name = level.parent.map_or(SharedString::from("Menu"), |parent| {
             tracking.entries[parent].title.clone()
@@ -2245,6 +2475,7 @@ impl ContextMenu {
         glass(panel, shown.look.light, level.radii().0, shown.blends)
             .text_size(px(TEXT))
             .children(rows)
+            .children(run)
             // The root level's rows go under the window's own node, which has the keyboard.
             .when(self.a11y && level.parent.is_some(), |panel| {
                 panel.role(Role::Menu).aria_label(name)
@@ -2360,6 +2591,9 @@ impl Render for ContextMenu {
         .on_mouse_up(
             MouseButton::Right,
             move |event: &MouseUpEvent, window, cx| right_released(&event.position, window, cx),
+        )
+        .on_scroll(
+            cx.listener(|menu, event: &ScrollEvent, window, cx| menu.wheel(event, window, cx)),
         )
         .children(panels)
     }

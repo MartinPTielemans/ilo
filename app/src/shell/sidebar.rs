@@ -2118,8 +2118,8 @@ mod tests {
         );
     }
 
-    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 10
-    /// past it, and beside the + what's past its plate.
+    /// The header's buttons and the footer's Space button keep their plates: beside reload the edge
+    /// is the 10 past it, and beside the Space button what's past its plate.
     #[gpui::test]
     fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
         let (shell, _, cx) = edge_window(cx);

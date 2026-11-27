@@ -52,7 +52,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_FOCUS_SIDEBAR", values: "1", shows: "the sidebar with the keyboard, its ring on the tab shown's row" },
     State { name: "PREVIEW_FOOT_BAR", values: "arrange, point, long", shows: "the foot bar over the page's bottom centre" },
     State { name: "PREVIEW_HOVER", values: "<x>,<y>", shows: "the pointer resting there, and the tooltip it brings" },
-    State { name: "PREVIEW_ICON_PICKER", values: "<emoji, or empty>", shows: "the icon picker for a Space with that icon" },
+    State { name: "PREVIEW_ICON_PICKER", values: "<glyph:name, emoji, or empty>", shows: "the icon picker for a Space with that glyph or none, or a tab with that emoji" },
     State { name: "PREVIEW_LIBRARY", values: "1, downloads, spaces, boards, …", shows: "the Library at that section" },
     State { name: "PREVIEW_LIBRARY_ROW", values: "<n>", shows: "the Library's list with its nth row rung" },
     State { name: "PREVIEW_LIVE_FOLDER", values: "open, closed, signed-out, failed, states", shows: "a Live Folder of made-up pull requests, or that answer" },

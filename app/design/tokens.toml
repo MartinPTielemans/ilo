@@ -897,6 +897,9 @@ check = 12.0
 chevron = 12.0
 min-width = 200.0
 max-width = 320.0
+# A run of rows that scroll, as the Space button's menu's Spaces, shows this many at a time, the
+# rows after it staying in place under it (ours, #4400).
+scroll-rows = 8
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
 # A menu's search field, its first row, as the model menu's (Z9): a row's text at a row's inset,
@@ -1902,23 +1905,21 @@ clear-height = 20.0
 # The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
 # line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
 broom-size = 14.0
-# The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
-# the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
-# sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
-# as far from the other side, so its dots stay centred.
+# The footer: the Library button at its left and the Space button at its right (#4400). Its row is
+# 34 tall, 6 over the sidebar's foot and as far under the list, and the Space button's plate ends 10
+# inside the sidebar's 8.
 footer-height = 46.0
 foot-row = 34.0
-switcher-inset = 44.0
 plus-inset = 10.0
 foot-glyph = 16.0
 # The Library button, at the foot's left.
 library-button = 36.0
 # The foot's two buttons while what they open is up, as the redesign draws them: a plate 28 across
 # with corners of 8. The Library button's is the shown plate's ink while the Library is open, 0.20
-# on a dark window and 0.16 on a light one, under its glyph in the text's. The +'s is the button
-# plate's, 0.10, while its menu is up, and that box is where the + takes the pointer. Under the
-# pointer the + has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells
-# from the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
+# on a dark window and 0.16 on a light one, under its glyph in the text's. The Space button's is the
+# button plate's, 0.10, while its menu is up, and that box is where it takes the pointer. Under the
+# pointer it has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells from
+# the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
 foot-plate = 28.0
 foot-plate-radius = 8.0
 library-open-plate = 0.2
@@ -1926,39 +1927,17 @@ light-library-open-plate = 0.16
 library-open-glyph = 1.0
 plus-plate = 0.1
 # The Space button at the foot's right (#4400), where the + was: the Space's mark at the glyph's
-# size and a chevron after it, on the +'s plate under the pointer and while its menu is up. Its
+# size and a chevron after it, on the plate above under the pointer and while its menu is up. Its
 # menu hangs from it, right edges together. A Space with no glyph shows its first letter,
 # uppercased, at this share of the glyph's box, here and in the menu's rows (Proposed).
 space-button-pad = 6.0
 space-button-gap = 3.0
 space-button-chevron = 10.0
 space-letter = 0.75
-# A Space's dot is 7 across and the dots are 10 apart. A Space with an icon keeps the pitch it
-# had: the redesign draws dots alone.
-space-pitch = 17.0
-space-icon-pitch = 34.0
-space-height = 34.0
-# A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
-# pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window, as the redesign's foot has it, where that reads at 3:1 on the footer; otherwise
-# only as much nearer the ink as 3:1 needs, and never weaker than the other dots (the lead, 25 Nov).
-space-swatch-shown = 7.0
-space-swatch = 7.0
-space-swatch-hovered = 9.0
-space-dot-tone = 0.55
-# More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
-# under a dot's pitch, the Space shown keeps that and the others share the rest: 13 and 9.5 with
-# 16 and 22 Spaces in a sidebar 300 wide (the rule is Arc 1.171's). A squeezed item's ink keeps 4
-# clear of its neighbours, and never goes under 4 (ours).
-space-shown-least = 17.0
-space-clear = 4.0
-space-least = 4.0
-# A Space's dot dragged along the switcher, or its card by its handle along the Library's: its place
-# dims to half while its copy follows the pointer, and the gap it would go into shows the rows' drop
-# line stood up, among the dots 16 tall on their middle without the ring, which would be a dot's
-# size, and among the cards with it, as the rows' (ours: Arc's isn't recorded).
+# A Space's card dragged by its handle along the Library's: its place dims to half while its copy
+# follows the pointer, and the gap it would go into shows the rows' drop line stood up, with its
+# ring (ours: Arc's isn't recorded).
 space-dragged = 0.5
-space-drop-line = 16.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -2065,11 +2044,8 @@ nav = 0.6
 nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name is the text colour, collapsed or not: the chevron says its pinned tabs are
-# collapsed. The switcher's other Spaces are the palette's quietest text, and its quiet text under
-# the pointer; an emoji dims by these ratios of the Space shown's.
+# collapsed.
 space-name = 1.0
-space-other = 0.42
-space-hovered = 0.6
 # The form (Arc): a title in the ink, plates of 0.075, a placeholder of 0.55, and Create Space in
 # the palette's accent and its label, all of it at 0.4 until there's a name.
 form-text = 1.0
@@ -3076,6 +3052,16 @@ leave = 0.07
 come = 0.04
 shrunk = 0.6
 small = 0.8
+
+[shell.space-button.motion]
+# Seconds (Proposed, #4400). After a switch in this window, once the rows have slid, the Space
+# button's mark slides over `slide` on an ease-out, the one before leaving toward the side it was
+# on as the new one comes in from its own, by the mark's box; under Reduce Motion they cross-fade
+# over it. The Space's name shows in a pill above the button for `pill`, fading in and out over
+# `pill-fade` (ours: Arc has no such button).
+slide = 0.22
+pill = 1.2
+pill-fade = 0.15
 
 [shell.media.motion]
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table

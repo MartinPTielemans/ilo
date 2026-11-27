@@ -288,20 +288,10 @@ fn card_view(
         false => (CARD_TINT_TOP, CARD_TINT_BOTTOM),
     };
     let tint = |by: f32| -> Hsla { look.surface.blend(base.opacity(by)).into() };
-    let glyph = match SpaceIcon::parse(&card.icon) {
-        SpaceIcon::Emoji(emoji) => div()
-            .text_size(px(CARD_GLYPH - 2.))
-            .line_height(px(CARD_GLYPH))
-            .child(emoji.to_string())
-            .into_any_element(),
-        icon => match icon.glyph_path() {
-            Some(path) => svg()
-                .path(path)
-                .size(px(CARD_GLYPH))
-                .text_color(look.ink)
-                .into_any_element(),
-            None => div().size(px(CARD_GLYPH)).into_any_element(),
-        },
+    // A Space's mark is its glyph alone (#4400): one with none, or with an emoji, keeps the room.
+    let glyph = match SpaceIcon::parse(&card.icon).glyph_path() {
+        Some(_) => crate::space_icon::mark(&card.icon, "", CARD_GLYPH, look.ink.into()),
+        None => div().size(px(CARD_GLYPH)).into_any_element(),
     };
     let (count, rolling) = card.count_at(now);
     let said = |count: usize| match card.done {

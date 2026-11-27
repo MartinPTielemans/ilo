@@ -137,6 +137,12 @@ pub fn has_icon(icon: &str) -> bool {
     SpaceIcon::parse(icon) != SpaceIcon::Dot
 }
 
+/// Whether a Space's `icon` draws as a glyph: a Space draws no emoji, and shows its first letter
+/// for one, so what the Space's own places go by, as the picker's trash and the name's place.
+pub fn has_glyph(icon: &str) -> bool {
+    SpaceIcon::parse(icon).glyph_path().is_some()
+}
+
 /// What a Space keeps for the glyph at `index` in `GLYPHS`.
 pub fn glyph(index: usize) -> String {
     format!("{GLYPH}{}", GLYPHS[index].0)
