@@ -1645,6 +1645,14 @@ impl Browser for Recorder {
         self.page_events.borrow_mut().push("layout");
     }
 
+    fn set_agent_page_size(&self, size: Size<Pixels>, _: &mut App) {
+        self.record(format!(
+            "agent page size {}x{}",
+            f32::from(size.width),
+            f32::from(size.height)
+        ))
+    }
+
     fn set_focus_color(&self, _: u32, _: &mut App) {}
 
     fn set_page_color(&self, _: u32, _: &mut App) {}

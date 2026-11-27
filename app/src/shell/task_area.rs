@@ -21,8 +21,7 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, Command, DialogKind, Folders, PagePicture, SIDEBAR_WIDTH, Shell, Space, SpaceEntry,
-    Theme,
+    Command, DialogKind, Folders, PagePicture, Shell, Space, SpaceEntry, Theme,
     agent_bar::Bar,
     card, card_outline, cubic_bezier,
     live_tiles::{LiveTiles, TILE_RADIUS, page_in},
@@ -134,46 +133,6 @@ impl Zoom {
     }
 }
 
-/// The size a window opens at by default, the app's (window_opening.rs, WINDOW_SIZE), which a test
-/// reads there.
-const DEFAULT_WINDOW: (f32, f32) = (1280., 800.);
-
-/// An agent's page's own size, which the core gives it (core/window.cc, kAgentPageSize) and a tile
-/// never changes: as wide as a card in a window at its default size, and as tall as keeps the shape
-/// of the page's part of that card beside the panel, so a watch there fills the part, scaled down,
-/// and never goes past 1:1 in another (#3788).
-pub(super) fn agent_page_size() -> Size<Pixels> {
-    let card = Bounds::new(
-        point(px(0.), px(0.)),
-        size(
-            px(DEFAULT_WINDOW.0 - SIDEBAR_WIDTH - CARD_INSET),
-            px(DEFAULT_WINDOW.1 - 2. * CARD_INSET),
-        ),
-    );
-    let (stage, _) = split(watched(card));
-    size(
-        card.size.width,
-        (card.size.width * (stage.size.height / stage.size.width)).round(),
-    )
-}
-
-/// Where an agent's page shows whole in `area`: at its own shape, by the one factor that fits it
-/// both ways and never past its own size, its top at the area's and centred across.
-fn fitted(area: Bounds<Pixels>) -> Bounds<Pixels> {
-    let own = agent_page_size();
-    let scale = (f32::from(area.size.width) / f32::from(own.width))
-        .min(f32::from(area.size.height) / f32::from(own.height))
-        .min(1.);
-    let shown = size(own.width * scale, own.height * scale);
-    Bounds::new(
-        point(
-            area.left() + (area.size.width - shown.width) / 2.,
-            area.top(),
-        ),
-        shown,
-    )
-}
-
 /// Where a watched page goes in its part of the card: all of it, as the panel beside it holds
 /// everything the page's strip under it did.
 fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -190,6 +149,11 @@ fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
         size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
     );
     (page, panel)
+}
+
+/// The size a thread's page watched in `card` has, which the core makes each agent's page at.
+pub(super) fn watch_size(card: Bounds<Pixels>) -> Size<Pixels> {
+    watched(split(card).0).size
 }
 
 /// The panel's width in a card `card` wide: its own while the page keeps its least beside it, then
@@ -776,10 +740,10 @@ impl Shell {
     }
 
     /// Where the watched page's tile goes at `now`, and its corners: out of its picture's place as
-    /// it zooms, then whole in the area, at the page's own shape.
+    /// it zooms, then the page's part of the card, the page's own size (#4355).
     fn watch_tile_frame(&self, page: &Watched, now: Instant) -> (Bounds<Pixels>, f32) {
         let (card, _) = self.page_frame(self.viewport);
-        let place = fitted(watched(self.page_part(card)));
+        let place = watched(self.page_part(card));
         let way = page.zoom.at(now);
         let radius = TILE_RADIUS + (self.card_radius() - TILE_RADIUS) * way;
         (between(page_in(page.thumb), place, way), radius)

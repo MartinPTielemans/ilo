@@ -671,6 +671,9 @@ pub trait Browser {
     /// Lays the page out at `frame` in the window, with corners of `radius`
     /// (`Shell::page_frame`). A split view's pages share it.
     fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App);
+    /// The size a thread's page watched here is laid out at, so the core makes each agent's page
+    /// at it and a watch lays nothing out again (#4355).
+    fn set_agent_page_size(&self, size: Size<Pixels>, cx: &mut App);
     /// The colour of the ring inside a split view's focused page, 0xRRGGBB.
     fn set_focus_color(&self, color: u32, cx: &mut App);
     /// What the window's pages show until their first frame, 0xRRGGBB.

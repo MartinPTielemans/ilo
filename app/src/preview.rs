@@ -1718,6 +1718,8 @@ impl Browser for Fake {
     // There's no page, and the window's buttons stay where GPUI put them.
     fn lay_out_page(&self, _: Bounds<Pixels>, _: f32, _: &mut App) {}
 
+    fn set_agent_page_size(&self, _: Size<Pixels>, _: &mut App) {}
+
     fn set_focus_color(&self, _: u32, _: &mut App) {}
 
     fn set_page_color(&self, _: u32, _: &mut App) {}

@@ -1485,6 +1485,16 @@ impl Browser for Engine {
         set_page_frame(self.window, (frame, radius));
     }
 
+    fn set_agent_page_size(&self, size: Size<Pixels>, _: &mut App) {
+        unsafe {
+            bc::bc_window_set_agent_page_size(
+                self.window,
+                f64::from(f32::from(size.width)),
+                f64::from(f32::from(size.height)),
+            )
+        };
+    }
+
     fn preview_page_moved(&self, page: (Bounds<Pixels>, f32), cx: &mut App) {
         // After the shell's update, which may be drawing its window.
         let window = self.window;
