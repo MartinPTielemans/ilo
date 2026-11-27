@@ -42,6 +42,12 @@ class TileRule {
   // view of the tile it was, or null.
   const void* Left(uint64_t tab);
 
+  // Whether the wheel over |tab|'s tile scrolls its page (#4441): it's a tile, last shown with
+  // SetTakesWheel's |takes_wheel|, as the tile a thread's page is watched in is. Never parked, in a
+  // card or out of its tile, where it's shown with it again or not at all.
+  void SetTakesWheel(uint64_t tab, bool takes_wheel);
+  bool TakesWheel(uint64_t tab) const;
+
   // Whether End parked |tab|'s page and nothing has had it since.
   bool Parked(uint64_t tab) const;
 
@@ -76,6 +82,7 @@ class TileRule {
   base::flat_map<uint64_t, const void*> views_;
   base::flat_set<uint64_t> cards_;
   base::flat_set<uint64_t> parked_;
+  base::flat_set<uint64_t> wheels_;
 };
 
 }  // namespace browser_core

@@ -2193,7 +2193,11 @@ bool CanTile() {
   return false;
 }
 
-void ShowTile(content::WebContents*, void*, const gfx::Rect&, double) {}
+void ShowTile(content::WebContents*, void*, const gfx::Rect&, double, bool) {}
+
+void ResizeTilePage(content::WebContents* contents, const gfx::Size& size) {
+  contents->Resize(gfx::Rect(size));
+}
 
 std::string DescribeTile(content::WebContents*) {
   return {};

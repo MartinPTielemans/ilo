@@ -129,12 +129,17 @@ bool CanTile();
 // Shows |contents|' page in |view|, an NSView of the app's, at |frame| from its top-left, over what
 // the view draws, with corners of |corner_radius|: at the page's own size, scaled by the frame's
 // width over the page's from its top-left and cut at its foot, and taking no input there
-// (content::SetPageTile). Called again, it moves to the view and frame of that call. Only where
-// CanTile.
+// (content::SetPageTile), but for the wheel where |takes_wheel|, which scrolls the page. Called
+// again, it moves to the view and frame of that call. Only where CanTile.
 void ShowTile(content::WebContents* contents,
               void* view,
               const gfx::Rect& frame,
-              double corner_radius);
+              double corner_radius,
+              bool takes_wheel);
+
+// Gives |contents|' page, in a tile or parked from one, |size| as its own, which the page hears,
+// though the tile never tells it the size it scales its views to. Elsewhere, WebContents::Resize.
+void ResizeTilePage(content::WebContents* contents, const gfx::Size& size);
 
 // What a check reads of |contents|' tile, to see its page drawn at the tile's own size and its
 // window's scale (#4441): "page WxH dsf D in tile WxH at (X,Y) window scale S", in points from the

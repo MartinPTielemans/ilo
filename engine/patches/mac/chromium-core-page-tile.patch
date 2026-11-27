@@ -1,10 +1,12 @@
 Lets the core show an agent's page live in a view of the app's, as a tile the user watches it work
 in (#4115), through content::SetPageTile. A tile's views take no pointer, cursor, tooltip or drop,
-never take the keyboard, and don't tell the page the frame or screen the tile moves them to, so the
-page keeps its size and screen and the core scales its layer into the tile. Its select opens no menu,
-which would open over the user's window at the tile and take the pointer and keys. Visibility is
-untouched: the page draws while the tile is on screen, as one its window shows does. A hook only:
-the core decides which pages are tiles.
+and the wheel only where the core's tile passes it on, to scroll the page and never to swipe through
+its history (#4441). They never take the keyboard, and don't tell the page the frame the tile moves
+them to, so the page keeps its size and the core scales its layer into the tile. It takes the screen
+of the tile's window, as any page does of its window's, so a 2x window has a 2x page. Its select
+opens no menu, which would open over the user's window at the tile and take the pointer and keys.
+Visibility is untouched: the page draws while the tile is on screen, as one its window shows does. A
+hook only: the core decides which pages are tiles.
 
 --- a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
 +++ b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
@@ -21,7 +23,7 @@ the core decides which pages are tiles.
  }
  
 +// browser_core: whether |view|'s page is a tile (content::SetPageTile), which takes no pointer,
-+// cursor, tooltip or keyboard, and keeps the frame and screen it had.
++// cursor, tooltip or keyboard, and keeps the frame it had.
 +bool InPageTile(NSView* view) {
 +  for (NSView* above = view.superview; above; above = above.superview) {
 +    if (WebContentsViewCocoa* page =
@@ -83,16 +85,18 @@ the core decides which pages are tiles.
    NSWindow* window = self.window;
    if (theEvent.type == NSEventTypeMouseMoved) {
      AcceptMouseEvents option = [self acceptsMouseEventsOption];
-@@ -1989,6 +2009,9 @@ static NSWindow* __weak _deferredResignKeyWindow;
- }
- 
- - (void)updateScreenProperties {
-+  if (InPageTile(self)) {
-+    return;
-+  }
-   // This does not require enclosing window to exist, and allowing screen
-   // properties change to propagate when it does not ensures that screen infos
-   // are properly updated when running headless.
+@@ -1834,7 +1854,10 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ - (void)scrollWheel:(NSEvent*)event {
+   // Consult with the delegate to see if it wants to handle the event. If the
+   // delegate has handled the event, it takes priority over the page scrolling.
+-  if ([_responderDelegate respondsToSelector:@selector(handleEvent:)]) {
++  // browser_core: not in a tile, whose wheel only scrolls its page: Chrome's delegate there would
++  // swipe the agent's page back or forward in its history, which only taking it over may do.
++  if (!InPageTile(self) &&
++      [_responderDelegate respondsToSelector:@selector(handleEvent:)]) {
+     BOOL handled = [_responderDelegate handleEvent:event];
+     if (handled)
+       return;
 @@ -2046,7 +2069,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
  }
  
@@ -240,9 +244,9 @@ the core decides which pages are tiles.
 +class WebContents;
 +
 +// Whether |contents|' page is a tile: its views take no pointer, cursor, tooltip or drop, never
-+// take the keyboard, and don't tell the page the frame or screen the tile moves them to, so it
-+// keeps the size and screen it had. Set before the core moves the view into the tile, and cleared
-+// after it moves it out.
++// take the keyboard, and don't tell the page the frame the tile moves them to, so it keeps its
++// size, though it takes its window's screen. Set before the core moves the view into the tile, and
++// cleared after it moves it out.
 +CONTENT_EXPORT void SetPageTile(WebContents* contents, bool tile);
 +
 +}  // namespace content

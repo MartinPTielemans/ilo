@@ -52,6 +52,46 @@ TEST(TileRule, RefusalsLeaveTheTabAsItWas) {
   EXPECT_EQ(tiles.End(4), &kView);
 }
 
+TEST(TileRule, OnlyATileShownToTakeTheWheelTakesIt) {
+  // The tile a thread's page is watched in scrolls it under the wheel; a picture in a rail, shown
+  // without, leaves the wheel to the rail (#4441).
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  tiles.SetTakesWheel(1, false);
+  EXPECT_FALSE(tiles.TakesWheel(1));
+  tiles.SetTakesWheel(1, true);
+  EXPECT_TRUE(tiles.TakesWheel(1));
+  EXPECT_EQ(tiles.Show(1, &kView, true, false, true), Shown::kFramed);
+  tiles.SetTakesWheel(1, false);
+  EXPECT_FALSE(tiles.TakesWheel(1));
+  // A tab no tile holds takes none, asked or not, nor one a refusal left out of its tile.
+  tiles.SetTakesWheel(2, true);
+  EXPECT_FALSE(tiles.TakesWheel(2));
+  EXPECT_EQ(tiles.Show(3, &kView, /*agent_tab=*/false, false, true), Shown::kUsersTab);
+  tiles.SetTakesWheel(3, true);
+  EXPECT_FALSE(tiles.TakesWheel(3));
+  // Parked, in a card or out of its tile, it takes none, and shown again only with it again.
+  for (int way = 0; way < 3; way++) {
+    tiles.Show(4, &kView, true, false, true);
+    tiles.SetTakesWheel(4, true);
+    switch (way) {
+      case 0:
+        tiles.End(4);
+        break;
+      case 1:
+        tiles.ShowInCard(4);
+        tiles.Left(4);
+        break;
+      default:
+        tiles.Left(4);
+    }
+    EXPECT_FALSE(tiles.TakesWheel(4)) << way;
+    tiles.Show(4, &kView, true, false, true);
+    EXPECT_FALSE(tiles.TakesWheel(4)) << way;
+    tiles.End(4);
+  }
+}
+
 TEST(TileRule, ACardShowingTheTabKeepsIt) {
   // bc_tab_show_in gives the page its input, as for a hand-off: a tile would take it from the user.
   TileRule tiles;

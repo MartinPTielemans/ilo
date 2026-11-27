@@ -2930,7 +2930,8 @@ BC_EXPORT void bc_window_set_page_frame(bc_id window, bc_rect frame, double corn
 
 // The size the window gives a thread's page it watches, in points. The core makes each agent's page
 // at the front window's, or with none open the last one's, so watching it lays nothing out again;
-// until the app sets it, the window's page frame's size.
+// until the app sets it, the window's page frame's size. A change resizes the agent's pages already
+// made that no window shows, a tile's too, so a watched tile shows its page at its own size.
 BC_EXPORT void bc_window_set_agent_page_size(bc_id window, double width, double height);
 
 // The colour of the ring inside the edge of the focused page of a split view, 0xRRGGBB.
@@ -3468,18 +3469,26 @@ BC_EXPORT void bc_tab_draw_preview(bc_id tab,
 // (#4115). The user's alone: no agent path reaches them. A tile's page is visible, so it draws,
 // while the tile is on screen, as a page its window shows is; otherwise it's as any agent's page
 // out of sight is. Visible isn't focused: its tab isn't activated, and the page is never told it
-// has the keyboard. It keeps the size and screen it had, and showing or ending a tile never resizes
-// it.
+// has the keyboard. It keeps its own size, which only bc_window_set_agent_page_size changes, and
+// takes the screen of the tile's window, so it draws at that window's scale; showing, moving or
+// ending a tile never resizes it.
 
 // Shows the page of |tab|, an agent's tab that no window shows, such as one in its Agent Space, in
 // |view|, an NSView of the app's, at |frame| in points from the view's top-left, scaled from the
 // page's size, over what the view draws, with corners of |corner_radius|. The page never takes the
-// keyboard or makes its window key, whatever it or a commit asks, and gets no pointer, wheel, keys
-// or drops: a click on it is the view's. Call it again as the frame changes; a call with another
-// view moves it there. Returns false and shows nothing for a user's tab, a tab a window shows, and
-// on Windows and Linux, where the app shows the tab's picture instead. A window showing the tab, as
-// a Take over or a hand-off does, ends the tile first.
-BC_EXPORT bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius);
+// keyboard or makes its window key, whatever it or a commit asks, and gets no pointer, keys or
+// drops: a click on it is the view's. Where |takes_wheel|, as for the tile a thread's page is
+// watched in, the wheel and trackpad over it scroll its page, and nothing else of theirs reaches
+// it, such as a swipe through its history (#4441); otherwise the wheel is the view's too, as over
+// a picture in a rail that scrolls. Call it again as the frame changes; a call with another view
+// moves it there. Returns false and shows nothing for a user's tab, a tab a window shows, and on
+// Windows and Linux, where the app shows the tab's picture instead. A window showing the tab, as a
+// Take over or a hand-off does, ends the tile first.
+BC_EXPORT bool bc_tab_show_tile(bc_id tab,
+                                void* view,
+                                bc_rect frame,
+                                double corner_radius,
+                                bool takes_wheel);
 
 // Takes |tab|'s page out of the view bc_tab_show_tile showed it in, back to an agent's page out of
 // sight. Nothing if it isn't a tile, as after its tab or the view went.

@@ -147,7 +147,7 @@ bool Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
 
 }  // namespace
 
-bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
+bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius, bool takes_wheel) {
   content::WebContents* contents = Tab::FromId(tab);
   if (!contents) {
     return false;
@@ -168,7 +168,13 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
           !DialogHolds().contains(tab)) {
         DialogHolds().emplace(tab, std::make_unique<DialogHold>(tab));
       }
-      platform::ShowTile(contents, view, frame, corner_radius);
+      Rule().SetTakesWheel(tab, takes_wheel);
+      platform::ShowTile(contents, view, frame, corner_radius, Rule().TakesWheel(tab));
+      // Into a tile, the page takes the size a watch gives it, whatever size the place it came from
+      // gave it, such as a window's pages', so the tile shows it at its own size (#4441).
+      if (shown != TileRule::Shown::kFramed) {
+        Window::GiveAgentPageItsSize(contents);
+      }
       if (Checked()) {
         SayTile(tab, contents);
       }

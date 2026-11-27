@@ -284,8 +284,11 @@
 @end
 
 // A tile's holder (#4115): clips the page to the tile's rounded frame, and takes no pointer, so a
-// click on the tile is the app's view's under it.
+// click on the tile is the app's view's under it. The wheel too, unless it takes the wheel.
 @interface BrowserCoreTileView : NSView
+// Whether the wheel over the tile scrolls its page (#4441), as over the tile a thread's page is
+// watched in, rather than a rail of pictures that scrolls.
+@property(nonatomic) BOOL takesWheel;
 @end
 
 @implementation BrowserCoreTileView
@@ -294,6 +297,11 @@
 }
 
 - (NSView*)hitTest:(NSPoint)point {
+  // The window asks this of each event it hands to the view under the pointer. A tile's page
+  // takes only the scroll from the wheel (the engine's patch).
+  if (self.takesWheel && NSApp.currentEvent.type == NSEventTypeScrollWheel) {
+    return [super hitTest:point];
+  }
   return nil;
 }
 @end
@@ -719,13 +727,14 @@ bool CanTile() {
 void ShowTile(content::WebContents* contents,
               void* view,
               const gfx::Rect& frame,
-              double corner_radius) {
+              double corner_radius,
+              bool takes_wheel) {
   NSView* holder = (__bridge NSView*)view;
   NSView* page_view = contents->GetNativeView().GetNativeNSView();
   if (!holder || !page_view) {
     return;
   }
-  // Before the page is in the tile's window, which it's never told it moved to.
+  // Before the page is in the tile's window, which tells it only that window's screen.
   content::SetPageTile(contents, true);
   BrowserCoreTileView* tile = TileOf(page_view);
   const bool placed = !tile || tile.superview != holder;
@@ -746,6 +755,7 @@ void ShowTile(content::WebContents* contents,
     // the top: in an unflipped view, by a flexible bottom margin.
     tile.autoresizingMask = holder.isFlipped ? NSViewNotSizable : NSViewMinYMargin;
   }
+  tile.takesWheel = takes_wheel;
   RoundCorners(tile, corner_radius, kAllCorners);
   // A page taller than the tile at its width is cut at the tile's foot, whatever its corners.
   tile.layer.masksToBounds = YES;
@@ -760,6 +770,33 @@ void ShowTile(content::WebContents* contents,
   if (placed) {
     UpdateOcclusion(holder.window);
   }
+}
+
+void ResizeTilePage(content::WebContents* contents, const gfx::Size& size) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  BrowserCoreTileView* tile = page_view ? TileOf(page_view) : nil;
+  content::RenderWidgetHostView* widget = contents->GetRenderWidgetHostView();
+  if (!tile || !widget) {
+    contents->Resize(gfx::Rect(size));
+    return;
+  }
+  const NSSize own = NSMakeSize(size.width(), size.height());
+  if (NSEqualSizes(page_view.frame.size, own)) {
+    return;
+  }
+  // The page hears its views' size only while they're no tile's, and as the window measures them,
+  // so for this one change the tile shows them unscaled and lets them tell it. Nothing comes
+  // between, so no input reaches the page meanwhile.
+  NSView* scale = page_view.superview;
+  [scale setBoundsSize:scale.frame.size];
+  content::SetPageTile(contents, false);
+  [page_view setFrameSize:own];
+  NSView* view = widget->GetNativeView().GetNativeNSView();
+  if (view.superview == page_view && !NSEqualRects(view.frame, page_view.bounds)) {
+    view.frame = page_view.bounds;
+  }
+  content::SetPageTile(contents, true);
+  FitTile(tile, page_view);
 }
 
 std::string DescribeTile(content::WebContents* contents) {
@@ -802,6 +839,7 @@ void ParkTile(content::WebContents* contents) {
   NSRect frame = tile.frame;
   frame.size = NSZeroSize;
   tile.frame = frame;
+  tile.takesWheel = NO;
 }
 
 void HideTile(content::WebContents* contents, bool hidden) {

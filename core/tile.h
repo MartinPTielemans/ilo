@@ -10,7 +10,7 @@
 namespace browser_core::tiles {
 
 // bc_tab_show_tile.
-bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius);
+bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius, bool takes_wheel);
 
 // Its page going: takes the page out of its tile or the park, and its window, and a card has it no
 // more. Nothing if none had it.

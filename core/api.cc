@@ -129,6 +129,7 @@
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -2443,8 +2444,17 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
   contents->Focus();
 }
 
-bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius) {
-  return browser_core::tiles::Show(tab, view, ToRect(frame), corner_radius);
+bool bc_tab_show_tile(bc_id tab,
+                      void* view,
+                      bc_rect frame,
+                      double corner_radius,
+                      bool takes_wheel) {
+  // Its origin and size each rounded, as the page's size is (bc_window_set_agent_page_size): an
+  // enclosing rect is a point wider than the page from a half-point origin, which scales the whole
+  // page by a hair and blurs it (#4441). Whole points are whole device pixels.
+  const gfx::Rect rounded(gfx::ToRoundedPoint(gfx::PointF(frame.x, frame.y)),
+                          gfx::ToRoundedSize(gfx::SizeF(frame.width, frame.height)));
+  return browser_core::tiles::Show(tab, view, rounded, corner_radius, takes_wheel);
 }
 
 void bc_tab_end_tile(bc_id tab) {

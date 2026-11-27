@@ -41,6 +41,7 @@ const void* TileRule::Take(uint64_t tab) {
   }
   const void* view = it->second;
   views_.erase(it);
+  wheels_.erase(tab);
   return view;
 }
 
@@ -62,6 +63,18 @@ const void* TileRule::Left(uint64_t tab) {
   cards_.erase(tab);
   parked_.erase(tab);
   return Take(tab);
+}
+
+void TileRule::SetTakesWheel(uint64_t tab, bool takes_wheel) {
+  if (takes_wheel && Holds(tab)) {
+    wheels_.insert(tab);
+  } else {
+    wheels_.erase(tab);
+  }
+}
+
+bool TileRule::TakesWheel(uint64_t tab) const {
+  return wheels_.contains(tab);
 }
 
 bool TileRule::Parked(uint64_t tab) const {
