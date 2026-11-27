@@ -46,6 +46,7 @@ impl Shell {
     }
 
     /// Whether `space`'s card is being dragged.
+    #[cfg(test)]
     pub(super) fn space_dragged(&self, space: u64) -> bool {
         self.space_drag().is_some_and(|drag| drag.space == space)
     }
