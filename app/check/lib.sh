@@ -1283,13 +1283,36 @@ expect_page() {
   case $1 in http://*) url=$1 ;; esac
   expect "^browser: page $tab back $2 forward $3 loading 0 $url\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
 }
-# Loads https://$1 in the tab from the command bar.
+# Whether ⌘L in the window the app last made main gives the keyboard to its Space's resting bar:
+# only in a browser window that has said it shows no page. A Little ilo window with none opens
+# the command bar inside it, and a window that never said counts as showing a page.
+main_rests() {
+  local main
+  main=$(grep -E '^browser: window [0-9]+ main true$' "$log" | tail -1 | cut -d' ' -f3)
+  [ -n "$main" ] || return 1
+  grep -qE "^browser: little window opened $main " "$log" && return 1
+  [ "$(grep -E "^browser: window $main shows [0-9]+\$" "$log" | tail -1 | cut -d' ' -f5)" = 0 ]
+}
+# Loads https://$1 in the tab from the command bar. In a browser window showing no page, ⌘L gives
+# the keyboard to its Space's resting bar, the same bar drawn in the empty Space, which never logs
+# shown or hidden (#4140), so the go it logs says it went.
 go_from_bar() {
-  send key l cmd
-  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-  send type "$1"
-  send key return
-  expect '^browser: command bar hidden$' "going to $1 didn't close the command bar"
+  if ! main_rests; then
+    send key l cmd
+    expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+    send type "$1"
+    send key return
+    expect '^browser: command bar hidden$' "going to $1 didn't close the command bar"
+  else
+    resting_key l "page-less window"
+    send type "$1"
+    send key return
+    local typed
+    # expect's pattern is a basic one, where only these are special.
+    typed=$(printf '%s' "${1%/}" | sed 's/[][\.*^$]/\\&/g')
+    expect "^browser: command bar go https\{0,1\}://$typed/\{0,1\}\$" \
+      "going to $1 from the page-less window's resting bar didn't go there"
+  fi
 }
 # Runs command $1, named $2, from the command bar, found by typing $3.
 bar_command() {
