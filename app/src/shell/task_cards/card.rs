@@ -13,7 +13,7 @@ use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, numb
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::palette::Palette;
-use crate::shell::conversation::{stage_fill, words};
+use crate::shell::conversation::words;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
 use crate::tokens::shell::FAVICON_DRAWN;
@@ -307,7 +307,13 @@ impl Shell {
         // shape has round it, in the same width of room, so nothing inside it moves.
         let frame = match framed {
             Framed::Own => {
-                let shape = self.in_own_colour(stage_fill(&self.palette), 1., RADIUS);
+                // The open tab's pane, with no light: a thread has no icon of its own.
+                let look = crate::shell::pane::Pane {
+                    tone: self.palette.tone,
+                    glow: None,
+                    hovered: 0.,
+                };
+                let shape = crate::shell::pane::pane(look, RADIUS, 1.);
                 // Placed from the frame's corner: left to itself it starts inside the room.
                 (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
             }

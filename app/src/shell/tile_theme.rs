@@ -12,6 +12,7 @@ use crate::palette::Tone;
 
 /// The icon is looked at, and blurred, at no more than this on its long side.
 const MAX_SIDE: usize = 32;
+use crate::tokens::shell::pane::{GLOW_SATURATION, GLOW_SHARE, GLOW_VALUE};
 use crate::tokens::shell::tile_theme::BLACK;
 use crate::tokens::shell::tile_theme::BLUR_OPACITY;
 use crate::tokens::shell::tile_theme::BLUR_SCALE;
@@ -124,6 +125,40 @@ impl Icon {
             .sum::<f32>()
             / count;
         Some((mean, distance))
+    }
+
+    /// The mean of the most common saturated hue's pixels, if enough of the opaque ones are it.
+    fn main_colour(&self) -> Option<[f32; 3]> {
+        const BUCKETS: usize = 12;
+        let mut buckets = [([0f32; 3], 0usize); BUCKETS];
+        let mut opaque = 0;
+        for &[r, g, b, a] in &self.pixels {
+            if a < OPAQUE {
+                continue;
+            }
+            opaque += 1;
+            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+            let saturation = if max > 0. { (max - min) / max } else { 0. };
+            if saturation < GLOW_SATURATION || max < GLOW_VALUE {
+                continue;
+            }
+            let chroma = max - min;
+            let hue = if max == r {
+                ((g - b) / chroma).rem_euclid(6.)
+            } else if max == g {
+                (b - r) / chroma + 2.
+            } else {
+                (r - g) / chroma + 4.
+            } / 6.;
+            let bucket = &mut buckets[((hue * BUCKETS as f32) as usize).min(BUCKETS - 1)];
+            for (sum, c) in bucket.0.iter_mut().zip([r, g, b]) {
+                *sum += c;
+            }
+            bucket.1 += 1;
+        }
+        let (sum, count) = buckets.into_iter().max_by_key(|bucket| bucket.1)?;
+        (count > 0 && count as f32 >= GLOW_SHARE * opaque as f32)
+            .then(|| sum.map(|c| c / count as f32))
     }
 
     /// None for an icon with no opaque pixel, which themes nothing.
@@ -440,6 +475,33 @@ fn paint_blur(
             false,
         )
         .ok();
+}
+
+/// `favicon`'s main colour, 0…1, for the light behind it on the open tab's pane (pane.rs): the mean
+/// of its most common saturated hue, or None for an icon of no colour (black, white, gray) or of
+/// colours scattered too thin. Found once for each favicon, as `ink_copy` is.
+pub(super) fn main_colour(favicon: &Image) -> Option<[f32; 3]> {
+    const MAIN_COLOURS: usize = 512;
+    thread_local! {
+        static FOUND: RefCell<HashMap<u64, Option<[f32; 3]>>> = RefCell::default();
+    }
+    FOUND.with_borrow_mut(|found| {
+        if found.len() >= MAIN_COLOURS {
+            found.clear();
+        }
+        *found.entry(favicon.id).or_insert_with(|| {
+            #[cfg(test)]
+            MAIN_COLOURS_FOUND.set(MAIN_COLOURS_FOUND.get() + 1);
+            let decoded = image::load_from_memory(&favicon.bytes).ok()?.into_rgba8();
+            Icon::new(&decoded).main_colour()
+        })
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many favicons `main_colour` has decoded, for a test that a tab switch decodes none.
+    pub(super) static MAIN_COLOURS_FOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `favicon` in the ink of `tone`, if it's one colour and would barely show on that tone's

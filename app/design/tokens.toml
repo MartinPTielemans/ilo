@@ -2120,6 +2120,37 @@ little-spaces-width = 240.0
 little-spaces-below = 4.0
 little-spaces-edge = 8.0
 
+# The open tab's line, and the shown thread's card, as a pane lifted out of the sidebar's glass
+# (#4398, Proposed): on a dark window a fill brighter at its top than its foot, a lit top edge, a
+# hairline round it and a shadow under it; on a light window the white and shadow of Settings'
+# selected section, the sidebar's light-selected one, with an ink hairline. Under the pointer its
+# fill is `hovered` stronger.
+[shell.pane]
+dark-top = 0xffffff2e
+dark-bottom = 0xffffff1c
+dark-edge = 0xffffff29
+dark-hairline = 0xffffff14
+dark-shadow = 0x00000073
+dark-shadow-y = 1.0
+dark-shadow-blur = 3.0
+light-fill = 0xffffffd9
+light-hairline = 0x00000014
+light-shadow = 0x00000033
+light-shadow-y = 1.0
+light-shadow-blur = 2.0
+hovered = 0.04
+# A faint light in the icon's main colour behind it: full at the icon's middle, gone `glow-reach`
+# past it, at `glow-dark` on a dark window and `glow-light` on a light one. An icon with no
+# saturated colour gives none.
+glow-reach = 42.0
+glow-dark = 0.33
+glow-light = 0.2
+# The main colour is the most common hue of the icon's opaque pixels past `glow-saturation` and
+# `glow-value`, in twelve buckets, if at least `glow-share` of them are in it.
+glow-saturation = 0.35
+glow-value = 0.25
+glow-share = 0.1
+
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
 # the window shows, its pointer, Lucide's mouse-pointer-2, in `primary` with the name of its Space

@@ -11,7 +11,6 @@ use gpui::{
 };
 
 use super::Space;
-use super::own_shape::own_shape;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_RIGHT, CLOSE_SIZE,
     CancelName, Closing, Command, Curve, EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X,
@@ -304,16 +303,13 @@ impl Shell {
             && matches!(row, Row::Tab(_))
             && !folder
             && self.page(self.selected).developer_mode;
-        // The open tab's line is its page's own colour, a shape of its own (own_shape.rs); the
-        // plain plate is for a page that has reported none.
-        let page = match row {
-            Row::Tab(tab) if selected => self.page_fill(tab),
-            _ => None,
-        };
+        // The open tab's line is a pane lifted out of the sidebar's glass (pane.rs); the plain
+        // plate is for a line that has none.
+        let open_pane = matches!(row, Row::Tab(_)) && selected && !developer && self.pane_shows();
         let plate = content
             .relative()
             .children(ring)
-            .when(selected && page.is_none(), |plate| {
+            .when(selected && !open_pane, |plate| {
                 selected_plate(&self.palette, plate, plate_in, hover.unwrap_or(0.))
             })
             .when(developer && !ghost, |plate| {
@@ -344,13 +340,11 @@ impl Shell {
                     .on_mouse_down(MouseButton::Left, |_, _, _| {})
                     .group_active("row", |style| style.bg(self.palette.shown(0.)))
             })
-            // A ghost covers the rows it passes, in the colours its row has in place: the open
-            // tab's in its page's colour.
+            // A ghost covers the rows it passes, in the colours its row has in place.
             .when(ghost, |plate| {
-                let fill = match (page, selected) {
-                    (Some(page), _) => return plate.bg(page),
-                    (None, true) => self.palette.shown(0.),
-                    (None, false) => self.palette.hovered_row(),
+                let fill = match selected {
+                    true => self.palette.shown(0.),
+                    false => self.palette.hovered_row(),
                 };
                 plate.bg(self.window_fill().blend(fill))
             });
@@ -381,10 +375,11 @@ impl Shell {
                 self.row_access(element, row, selected)
             })
             // Under the plate, in its place and pressed smaller with it, as its plain fill is.
-            .children(
-                page.filter(|_| !ghost)
-                    .map(|page| scaled_from_middle(self.own_line(page, depth, plate_in), scale)),
-            )
+            .children((open_pane && !ghost).then(|| {
+                let Row::Tab(tab) = row else { unreachable!() };
+                let pane = self.open_pane(tab, depth, plate_in, hover.unwrap_or(0.));
+                scaled_from_middle(pane, scale)
+            }))
             .child(scaled_from_middle(plate, scale))
     }
 
@@ -432,19 +427,18 @@ impl Shell {
         }
     }
 
-    /// The page's own colour for the line or the tile of `tab`, once its page has reported one:
-    /// the tab shown, alone in the page area beside the docked sidebar. A split view's line is no
-    /// one page's and keeps the plain plate whatever its panes' colours, and Developer Mode's
-    /// line keeps its own look.
+    /// The page's own colour for the tile of favourite `tab`, once its page has reported one: the
+    /// tab shown, alone in the page area beside the docked sidebar, not in Developer Mode. A
+    /// tab's line wears none: it's the pane (pane.rs).
     pub(super) fn page_fill(&self, tab: u64) -> Option<Rgba> {
-        let shown = tab == self.selected && self.shown_has_plate();
+        let shown = tab == self.selected && self.shown_has_plate() && self.favorites.contains(&tab);
         let color = self.tab_background(tab).filter(|_| shown)?;
         let own = self.panes(tab).len() == 1 && !self.page(tab).developer_mode;
         (self.beside_page_area() && own).then(|| gpui::rgb(color))
     }
 
-    /// The inks of `tab`'s line or tile: the window's, or on its page's own colour the ink that
-    /// reads there, so no page makes its own tab unreadable.
+    /// The inks of `tab`'s line or tile: the window's, or on an open favourite's page colour the
+    /// ink that reads there, so no page makes its own tile unreadable.
     pub(super) fn line_palette(&self, tab: u64) -> Palette {
         match self.page_fill(tab) {
             Some(fill) => self.palette.on_fill(fill),
@@ -452,32 +446,37 @@ impl Shell {
         }
     }
 
-    /// The open tab's line in `page`, its page's own colour, at `opacity`: a shape of its own in
-    /// its plate's place, `depth` folders in, on whichever side the sidebar is.
-    fn own_line(&self, page: Rgba, depth: usize, opacity: f32) -> Div {
+    /// Whether the open tab's line, or its split view's, is the pane: beside the docked sidebar,
+    /// with the page area beside it. Developer Mode's line keeps its own look, and a hidden
+    /// sidebar's line, brought out over the page, the plain plate.
+    pub(super) fn pane_shows(&self) -> bool {
+        self.shown_has_plate()
+            && self.beside_page_area()
+            && !self.page(self.selected).developer_mode
+    }
+
+    /// The open tab's pane at `opacity`, `hover` of the way to its pointer's step, in its plate's
+    /// place, `depth` folders in, with the light of its favicon's main colour behind the icon. A
+    /// split view's has no one icon, and no light.
+    fn open_pane(&self, tab: u64, depth: usize, opacity: f32, hover: f32) -> Div {
         let inset = (ROW_HEIGHT - PLATE_HEIGHT) / 2.;
+        let each = self.tabs.get(&tab).filter(|_| self.panes(tab).len() == 1);
+        let glow = (each.filter(|each| !crate::space_icon::has_icon(&each.page.icon)))
+            .and_then(|each| each.favicon.as_deref())
+            .and_then(super::tile_theme::main_colour)
+            .map(|colour| (colour, FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2.));
+        let look = super::pane::Pane {
+            tone: self.palette.tone,
+            glow,
+            hovered: hover,
+        };
         div()
             .absolute()
             .top(px(inset))
             .bottom(px(inset))
             .left(px(PLATE_INSET + depth as f32 * FOLDER_INDENT))
             .right(px(PLATE_INSET))
-            .child(self.in_own_colour(page, opacity, PLATE_RADIUS))
-    }
-
-    /// A line of the sidebar in `fill`, the colour of what it opens in the page area, at
-    /// `opacity`, as a shape of its own with corners of `corner` (own_shape.rs): the open tab's
-    /// line in its page's colour, and the shown thread's card in its stage's.
-    pub(super) fn in_own_colour(
-        &self,
-        fill: Rgba,
-        opacity: f32,
-        corner: f32,
-    ) -> impl IntoElement + use<> {
-        let on = self.palette.on_fill(fill);
-        // A dark shape is told from a dark window by a line of light round it.
-        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
-        own_shape(Hsla::from(fill).opacity(opacity), outline, corner)
+            .child(super::pane::pane(look, PLATE_RADIUS, opacity))
     }
 
     /// Whether the page area starts at the sidebar's edge, where a line of the sidebar wears the
