@@ -274,13 +274,13 @@ fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppC
     assert_eq!(run.kept(cx), (2, 0));
 }
 
-/// A reply to a task that ended takes it up: at Work on pages though it ended at Full access,
-/// which ilo's line over the reply says, by a run that goes on with the same conversation and is
-/// started with everything a new task's run is, since its assistant brings back no tool or
+/// A reply to a task that ended takes it up at the level it ended at, Full access too (#4360), so
+/// no line of the app's goes over the reply, by a run that goes on with the same conversation and
+/// is started with everything a new task's run is, since its assistant brings back no tool or
 /// permission by itself. The run is told the reply alone, as the assistant has what came before.
 #[cfg(unix)]
 #[gpui::test]
-fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
+fn a_reply_takes_an_ended_task_up_at_the_level_it_ended_at(cx: &mut TestAppContext) {
     let run = Run::new("resumed", cx);
     let agent = run.start(Cli::Claude, cx);
     let (new, _) = run.ran(1);
@@ -310,42 +310,32 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     let tier = |cx: &mut TestAppContext| {
         (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().tier)
     };
-    assert_eq!(tier(cx), Tier::Work);
+    assert_eq!(tier(cx), Tier::Full);
 
-    // ilo's line is right over the reply, under the first run's work and answer.
+    // The reply follows the first run's work and answer, with no line over it.
     let talk = run.talk(&agent, cx);
     let at = (talk.lines.iter())
         .position(|line| matches!(line, Line::You(said) if said.as_ref() == reply))
         .expect("the reply");
-    assert!(matches!(
-        &talk.lines[at - 1],
-        Line::Ilo(IloLine {
-            kind: IloKind::Resumed { tier: Tier::Work },
-            ..
-        })
-    ));
-    let answer = (talk.lines[..at - 1].iter())
+    let answer = (talk.lines[..at].iter())
         .any(|line| matches!(line, Line::Said(said) if said.contains("9:05")));
     assert!(answer, "the first run's answer");
+    let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
+    let lines = run.ilo_lines(&agent, cx);
+    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 0);
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(run.kept(cx), (1, 0), "a pick-up is the same conversation");
     // The activity log has it once, under the task.
     let noted = log(&run.agents, &agent, cx);
     let resumes = (noted.iter()).filter(|(action, _, _)| action == "resumed");
     assert_eq!(resumes.count(), 1, "{noted:?}");
-    // A reply while it works is a reply, with no line of ilo's.
-    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "By the window", cx));
-    let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
-    let lines = run.ilo_lines(&agent, cx);
-    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
-    // Done again at Work on pages, the next reply takes it up there: the reply is the resume, and
-    // ilo has no second line.
+    // Done again, the next reply takes it up at Full access again.
     run.finish(&agent, cx);
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And Monday?", cx));
     assert_eq!(run.state(&agent, cx), State::Working);
-    assert_eq!(tier(cx), Tier::Work);
+    assert_eq!(tier(cx), Tier::Full);
     let lines = run.ilo_lines(&agent, cx);
-    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
+    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 0);
     // And a task that only looked comes back only looking.
     assert_eq!(kept::comes_back(Tier::Look), Tier::Look);
 }
