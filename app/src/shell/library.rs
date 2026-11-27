@@ -735,6 +735,15 @@ impl Shell {
         !self.private || matches!(section, Section::Media | Section::Downloads)
     }
 
+    /// The section the Library opens on, by any way in: the last it showed, or a private window's
+    /// downloads where that's a section it hasn't.
+    pub(super) fn opening_section(&self) -> Section {
+        match self.has_section(self.section) {
+            true => self.section,
+            false => Section::Downloads,
+        }
+    }
+
     /// The downloads changed, all of them, newest first: the window keeps those it lists.
     pub fn set_downloads(&mut self, downloads: Vec<Download>, cx: &mut Context<Self>) {
         let downloads: Vec<Download> = downloads
@@ -1014,12 +1023,8 @@ impl Shell {
         if open == self.library_open || (open && (self.page_fullscreen || self.blank)) {
             return;
         }
-        // A private window's Library opens on its downloads where it last showed a section it
-        // hasn't.
-        if open && !self.has_section(self.section) {
-            self.section = Section::Downloads;
-        }
         if open {
+            self.section = self.opening_section();
             self.hide_link(cx);
         }
         let speed = self.library_step().map_or(0., |(_, speed)| speed);
