@@ -34,6 +34,16 @@ impl Boxes {
     fn maker(&self) -> PutUp {
         let (asked, refuses) = (self.asked.clone(), self.refuses.clone());
         Rc::new(move |wall: &WallFor| {
+            // The system's box resolves every path its rules name, so the run's folder and its
+            // config's are there before it's asked for, in a profile no run has used yet too.
+            assert!(
+                wall.task_dir.is_dir(),
+                "the run's folder is made before its box"
+            );
+            assert!(
+                wall.config.parent().is_some_and(Path::is_dir),
+                "and its config's"
+            );
             let name = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
             let each = (name(wall.task_dir), name(wall.config), wall.keeps);
             asked.borrow_mut().push(each);

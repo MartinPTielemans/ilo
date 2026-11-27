@@ -421,6 +421,11 @@ fn boxed(name: &str, cx: &mut TestAppContext) -> (Run, Boxes, String) {
     (run.agents).update(cx, |agents, _| {
         agents.tasks.box_available = Some(Ok(()));
         agents.tasks.wall = Some(std::rc::Rc::new(move |wall: &WallFor| {
+            // As the system's box resolves them, each strand's folder is there before its box.
+            assert!(
+                wall.task_dir.is_dir(),
+                "the strand's folder is made before its box"
+            );
             let name = |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().into();
             (asked.borrow_mut()).push((name(wall.task_dir), name(wall.config), wall.keeps));
             Ok(Wall::for_test(None))

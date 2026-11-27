@@ -73,6 +73,16 @@ impl Agents {
             Runs::Boxed => {}
         }
         let dir = self.tasks_dir();
+        // The system's box resolves every path its rules name, so the run's folder and the one
+        // its config goes in are made first: in a profile no run has used yet, neither is there.
+        if (std::fs::create_dir_all(task_dir).and_then(|()| std::fs::create_dir_all(&dir))).is_err()
+        {
+            log!(
+                "browser: {run} couldn't start {}: its folder couldn't be made",
+                cli.id()
+            );
+            return Err(());
+        }
         let config = dir.join(format!("{run}.json"));
         let places = dir.join(wall::leftovers::ROOT);
         let found = self.tasks.found.get(&cli);

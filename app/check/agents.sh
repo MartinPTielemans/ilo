@@ -971,10 +971,10 @@ EOF
   expect '^browser: command bar runs a task on claude$' "↩ didn't run the task on claude"
   expect_late '^browser: task task-[0-9]* on claude asked from space ' "the task on claude didn't start"
   task=$(sed -n 's/^browser: task \(task-[0-9]*\) on claude asked from space .*/\1/p' "$log" | tail -1)
-  expect_late "^browser: task $task \\(is boxed in\\|wasn't boxed in: .*\\|couldn.t start.*\\)\$" \
+  expect_late "^browser: task $task \\(is boxed in\\|wasn't boxed in: .*\\|failed: .*\\)\$" \
     "the task's claude neither rose in its box nor failed"
   grep -q "^browser: task $task is boxed in\$" "$log" ||
-    fail "the task's claude didn't rise in its box: $(grep "^browser: task $task " "$log" | tail -1)"
+    fail "the task's claude didn't rise in its box: $(grep -e "^browser: task $task " -e "^browser: $task couldn.t start " "$log" | tail -2 | tr '\n' ' ')"
   probe=
   for _ in $(seq 600); do
     probe=$(find "${BROWSER_PROFILE_DIR:-$profile_dir}" -name box-probe.json 2>/dev/null | head -1)
