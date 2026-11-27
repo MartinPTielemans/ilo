@@ -28,10 +28,13 @@ pub(crate) struct Page<'a> {
 }
 
 impl Page<'_> {
-    /// The steps that have lines under it.
+    /// The steps that have lines under it: going there too when a line under it says more, as the
+    /// profile a tab opened in (#4376).
     pub fn shown(&self) -> impl Iterator<Item = &TraceStep> {
         let went = |step: &TraceStep| step.page.as_ref().is_some_and(|page| page.went);
-        (self.steps.iter().copied()).filter(move |step| !went(step) || step.failed || step.running)
+        (self.steps.iter().copied()).filter(move |step| {
+            !went(step) || step.failed || step.running || !step.under.is_empty()
+        })
     }
 }
 

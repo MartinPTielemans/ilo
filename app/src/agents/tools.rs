@@ -457,11 +457,19 @@ fn shared() -> Value {
     let wait_for = json!({ "type": "string", "description": "Text to wait for in the page, as an app's content that comes after its page has loaded. The answer says whether it showed." });
     let wait_seconds = json!({ "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT, "description": "How long wait_for waits, in seconds; 5 if not given." });
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
+    let profile = json!({ "type": "string", "description": format!("The profile to open it in, by its name from list_profiles: each has its own sign-ins, cookies and history. Name the profile the user named; otherwise leave it out and {PRODUCT} picks one.") });
     json!([
+        {
+            "name": "list_profiles",
+            "title": "List profiles",
+            "description": "List the names of the user's profiles you may open tabs in, one a line.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
+        },
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned, and the profile it's in when the user has several. * marks the tab you used last. A tab the user holds, after a handoff or a take-over, is listed by its id with \"With the user until they hand it back\" and no title or URL, until they hand it back.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
@@ -473,6 +481,7 @@ fn shared() -> Value {
                 "type": "object",
                 "properties": {
                     "url": { "type": "string", "description": "A URL, or words to search for." },
+                    "profile": profile,
                     "answer": answer,
                     "wait_for": wait_for,
                     "seconds": wait_seconds,
@@ -807,6 +816,16 @@ pub const MAX_TEXT_WAIT: f64 = 300.0;
 
 /// list_tabs' answer.
 pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
+    tab_list_in(tabs, current, mine, |_| None)
+}
+
+/// list_tabs' answer, each tab with the name of the profile it's in, where `profile` gives one.
+pub fn tab_list_in(
+    tabs: &[TabInfo],
+    current: Option<u64>,
+    mine: &[u64],
+    profile: impl Fn(u64) -> Option<String>,
+) -> String {
     if tabs.is_empty() {
         return "You have no tabs yet. Open one with open_tab.".into();
     }
@@ -817,7 +836,12 @@ pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String 
             (true, true) => "  pinned by you",
             (true, false) => "  pinned by the user",
         };
-        format!("{mark} {}  {}  {}{pinned}", tab.id, tab.title, tab.url)
+        let profile =
+            profile(tab.id).map_or(String::new(), |name| format!("  profile: \"{name}\""));
+        format!(
+            "{mark} {}  {}  {}{pinned}{profile}",
+            tab.id, tab.title, tab.url
+        )
     });
     lines.collect::<Vec<_>>().join("\n")
 }
@@ -1184,6 +1208,12 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't look over",
             "its tabs".to_string(),
         ),
+        "list_profiles" => (
+            "Looking at",
+            "Looked at",
+            "Couldn't look at",
+            "your profiles".to_string(),
+        ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
         "pin_tab" => ("Pinning", "Pinned", "Couldn't pin", site("a tab")),
         "unpin_tab" => ("Unpinning", "Unpinned", "Couldn't unpin", site("a tab")),
@@ -1312,6 +1342,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
             "icons/app-window.svg"
         }
+        "list_profiles" => "icons/users.svg",
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
@@ -1384,10 +1415,11 @@ pub fn tabs_named(arguments: &Value) -> Vec<u64> {
 }
 
 /// The tools that never act on the tab their connection used last.
-pub const NO_TAB_OF_ITS_OWN: [&str; 7] = [
+pub const NO_TAB_OF_ITS_OWN: [&str; 8] = [
     "open_tab",
     SEARCHED,
     "list_tabs",
+    "list_profiles",
     "title",
     "done",
     "sort_tabs_by_site",
@@ -1427,6 +1459,7 @@ pub fn describe(action: &str) -> &'static str {
     match action {
         NOT_SECURE_ACTION => NOT_SECURE,
         "list_tabs" => "Listed its tabs",
+        "list_profiles" => "Looked at your profiles",
         "read_page" => "Read the page",
         "open_tab" => "Opened a page",
         "navigate" => "Went to a page",

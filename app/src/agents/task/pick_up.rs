@@ -500,6 +500,8 @@ impl Agents {
     /// with it, by the way Remove takes one, so no row waits for a profile that later gets the
     /// same folder. A task with nowhere to work looks again, as its profile may have a Space now.
     pub fn profiles_are(&mut self, profiles: Vec<String>, cx: &mut Context<Self>) {
+        // A profile that loaded lets the opens waiting on it go (#4376).
+        self.profiles_loaded(cx);
         // The core always has one, so none is a core with nothing to say yet.
         if profiles.is_empty() {
             return;

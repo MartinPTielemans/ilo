@@ -44,10 +44,10 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
-    command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
-    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
-    stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, checked_row,
+    chevron_slot, chip, command_export, command_text, detailed_row, end, folder_popup, frame,
+    glyph_plate, group, group_lined, mark_row, named_button, named_check, named_popup, ring, row,
+    segmented, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -3936,6 +3936,9 @@ impl Settings {
         // Where a new thread starts, while threads are on, as the drawing has it under the switch.
         if on {
             threads.extend(self.new_thread(agents, cx));
+            let hint = agents::profiles::threads_one_stays_on();
+            let key = agents::profiles::THREADS;
+            threads.extend(self.profiles_may_use(agents, key, hint, accent, cx));
         }
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
@@ -3994,7 +3997,15 @@ impl Settings {
                             true => agents::tools::Tense::Done,
                             false => agents::tools::Tense::Failed,
                         };
-                        let title = agents::tools::step_title(&did, tense);
+                        let title = match &entry.opened_in {
+                            // Where the tab opened and why (#4376), which only the log says.
+                            Some(opened) => {
+                                let app = (!agents::is_task(&entry.agent))
+                                    .then(|| model.agent_name(&entry.agent));
+                                opened.log_line(app.as_deref(), &entry.site).into()
+                            }
+                            None => agents::tools::step_title(&did, tense),
+                        };
                         // The call's answer carried a site's notes (#4122).
                         match entry.notes.is_empty() {
                             true => title,
@@ -4027,7 +4038,18 @@ impl Settings {
                     self.request_row(agents, entry, what, detail, said, ago, cx)
                 })
                 .collect();
-            if grants.is_none() && entries.is_empty() {
+            // The profiles it may use, for an app that's connected or did something (#4376).
+            let profiles =
+                match model.is_connected(client) || grants.is_some() || !entries.is_empty() {
+                    true => {
+                        let nameless = model.nameless(client.id());
+                        let app = (!nameless).then(|| model.agent_name(client.id()));
+                        let hint = agents::profiles::one_stays_on(app.as_deref());
+                        self.profiles_may_use(agents, client.id(), hint, accent, cx)
+                    }
+                    false => Vec::new(),
+                };
+            if grants.is_none() && entries.is_empty() && profiles.is_empty() {
                 continue;
             }
             listed_any = true;
@@ -4038,6 +4060,7 @@ impl Settings {
                 false => format!("What {} may do", model.agent_name(client.id())).into(),
             };
             blocks.push(Block::Heading(heading));
+            blocks.extend(profiles);
             blocks.extend(grants.map(Block::Group));
             if !entries.is_empty() {
                 blocks.push(Block::Group(group(look, entries)));
@@ -4081,6 +4104,50 @@ impl Settings {
                 blocks,
             ),
         ]
+    }
+
+    /// The checkmarks of the profiles `key`'s agents may use (#4376), `hint` beside the last one
+    /// on, which stays on; none drawn while the user has one profile.
+    fn profiles_may_use(
+        &self,
+        agents: &Entity<Agents>,
+        key: &'static str,
+        hint: String,
+        accent: Rgba,
+        cx: &App,
+    ) -> Vec<Block> {
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.several_profiles() {
+            return Vec::new();
+        }
+        let choices = model.profile_choices(key);
+        let last = choices.iter().filter(|(_, on)| *on).count() == 1;
+        let rows = (choices.into_iter().enumerate()).map(|(index, (profile, on))| {
+            let (agents, folder) = (agents.clone(), profile.folder.clone());
+            let hint = (on && last).then(|| div().text_color(look.detail).child(hint.clone()));
+            div()
+                .id((SharedString::from(format!("agent-profile {key}")), index))
+                .when(self.a11y, |row| named_check(row, profile.name.clone(), on))
+                .on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| {
+                        agents.set_profile_allowed(key, &folder, !on, cx)
+                    })
+                })
+                .child(checked_row(look, on, profile.name, accent, look.knob_on).children(hint))
+        });
+        let rows = rows.map(|row| div().child(row));
+        // Threads' list has its own heading; an app's is a group of its page under the app's.
+        match key {
+            agents::profiles::THREADS => vec![
+                Block::Heading(agents::profiles::THREADS_MAY_USE.into()),
+                Block::Group(group(look, rows)),
+            ],
+            _ => {
+                let title = line_row(look, agents::profiles::MAY_USE, None, Vec::new());
+                vec![Block::Group(group(look, [title].into_iter().chain(rows)))]
+            }
+        }
     }
 
     /// Other apps' own switch (#4260), at the top of their page, where it is kept: only the user's
