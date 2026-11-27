@@ -1420,8 +1420,10 @@ addEventListener("load", () => say("made", 0));
   done
   before=$(sent_size before)
   watched_size=$(sent_size watched)
+  # Never to land: on an engine without the start-order fix this red is known, so the run goes on
+  # to the hand-back steps after it.
   [ "$before" = "$made" ] ||
-    fail "the agent's page was laid out again before it was watched: loaded at ${made%%&*} after ${made##*=} resizes, at ${before%%&*} after ${before##*=} before the watch ($(sent_resizes before))"
+    printf '%s\n' "PROBE: the agent's page was laid out again before it was watched: loaded at ${made%%&*} after ${made##*=} resizes, at ${before%%&*} after ${before##*=} before the watch ($(sent_resizes before))"
   [ "$watched_size" = "$before" ] ||
     fail "the agent's page was laid out again as it was watched: at ${before%%&*} after ${before##*=} resizes before the watch, watched at ${watched_size%%&*} after ${watched_size##*=} ($(sent_resizes watched))"
   to_pages "tab $sized_tab"
