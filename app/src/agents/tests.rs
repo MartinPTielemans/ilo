@@ -7827,6 +7827,11 @@ mod tasks {
             };
             let pattern = format!("\"{pattern}");
             for name in pattern.split('"').skip(1).step_by(2) {
+                // The file tools are a Unix system's alone, as its arm is, until the path floor
+                // runs elsewhere.
+                if !cfg!(unix) && tools::FILE_TOOLS.contains(&name) {
+                    continue;
+                }
                 let listed = match pattern.contains("if is_task(") {
                     true => task.iter().any(|each| each == name),
                     false => task.iter().chain(&outside).any(|each| each == name),
