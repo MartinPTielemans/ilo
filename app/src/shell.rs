@@ -122,6 +122,8 @@ mod panes;
 mod permission;
 mod portrait;
 #[cfg(test)]
+mod pure_page_tests;
+#[cfg(test)]
 mod side_tests;
 mod sort_folders;
 #[cfg(test)]
@@ -299,9 +301,9 @@ const REVEAL_OVERSHOOT: f32 = 8.;
 /// blur reaches, and on X11 and Windows nothing asks for one (#3676).
 const BLURRED: bool = cfg!(target_os = "macos");
 
-/// The width of the band inside the browser window's edges that resizes it on Linux, as the core's
-/// (`bc_window_start_resize`).
-const RESIZE_EDGE: f32 = 3.;
+/// The strip inside the browser window's sides that the UI keeps over the page: the hidden
+/// sidebar's edge, and on Linux the band that resizes the window (`bc_window_start_resize`).
+use crate::tokens::shell::EDGE_STRIP;
 
 // Rows make room and close it, a closed tab's row fades and new rows fade in on one spring, Arc's
 // (docs/ux-spec.md › Motion: Row motion). A row's hover fill comes and goes in one frame, and only
@@ -2831,10 +2833,9 @@ impl Shell {
     /// they make room for a side panel.
     pub fn page_frame(&self, viewport: Size<Pixels>) -> (Bounds<Pixels>, f32) {
         let (frame, _) = self.card_frames(viewport);
-        let radius = if self.card_left() == 0. {
-            0.
-        } else {
-            self.card_radius()
+        let radius = match self.page_fullscreen {
+            true => 0.,
+            false => self.card_radius(),
         };
         match self.adding_pane {
             Some(with) => {
@@ -2850,9 +2851,36 @@ impl Shell {
     }
 
     /// The radius of the card's corners and the page's: the same in every window, whatever corner
-    /// the OS gives it.
+    /// the OS gives it, and none once the hidden sidebar leaves the page the window, whose own
+    /// corners round it. It goes with the rim (`rim_shown`).
     pub fn card_radius(&self) -> f32 {
-        CARD_RADIUS
+        CARD_RADIUS * self.rim_shown()
+    }
+
+    /// How far in from the window's top, bottom and side away from the sidebar the card is: the
+    /// inset beside the sidebar, none while it's hidden or a page is full screen.
+    pub fn card_rim(&self) -> f32 {
+        match self.page_fullscreen {
+            true => 0.,
+            false => CARD_INSET * self.rim_shown(),
+        }
+    }
+
+    /// How much of the card's rim shows, from 1 beside the docked sidebar to 0 with it hidden,
+    /// where the page is the whole window (the owner, 26 Nov): the sidebar's motion takes it
+    /// between the two with the card's edge, and the Library opening over the hidden sidebar
+    /// brings it back with the Library, as the sidebar's would. A Little window keeps it, as it
+    /// keeps its bar.
+    pub(super) fn rim_shown(&self) -> f32 {
+        if self.little.is_some() {
+            return 1.;
+        }
+        let width = self.width();
+        let sidebar = match width > 0. {
+            true => (self.card_edge() / width).clamp(0., 1.),
+            false => 0.,
+        };
+        sidebar.max(self.library_edge().clamp(0., 1.))
     }
 
     /// Where the page goes as the window's content takes `viewport`, unless it's held where it is
@@ -2976,16 +3004,23 @@ impl Shell {
         })
     }
 
-    /// Where the card's left edge is: past the sidebar, or at the inset once ⌘S has hidden it,
-    /// and between the two while it moves. 0 while a page is full screen, which takes the window.
+    /// Where the card's left edge is: past the sidebar, or at the window's edge once ⌘S has hidden
+    /// it, and between the two while it moves. 0 while a page is full screen, which takes the
+    /// window.
     pub fn card_left(&self) -> f32 {
-        if self.page_fullscreen {
-            return 0.;
+        match self.page_fullscreen {
+            true => 0.,
+            false => self.card_edge(),
         }
-        let to = if self.sidebar_hidden {
-            CARD_INSET
-        } else {
-            self.width()
+    }
+
+    /// Where the card's left edge is out of full screen: past the sidebar, at the window's edge
+    /// with it hidden, or at the inset in a Little window, and between while the sidebar moves.
+    fn card_edge(&self) -> f32 {
+        let to = match (self.sidebar_hidden, self.little.is_some()) {
+            (false, _) => self.width(),
+            (true, true) => CARD_INSET,
+            (true, false) => 0.,
         };
         let Some((from, start)) = self.sidebar_motion else {
             return to;
@@ -2999,7 +3034,7 @@ impl Shell {
     /// Where the card's top-left corner is across the window, the Library's push aside: past the
     /// sidebar on the left, at the inset with it on the right, and 0 for a full-screen page.
     pub(super) fn card_corner(&self) -> f32 {
-        let card = page_frame(self.viewport, self.card_left(), 0.);
+        let card = page_frame(self.viewport, self.card_left(), self.card_rim(), 0.);
         f32::from(sidebar::mirrored(self.right, self.viewport.width, card).left())
     }
 
@@ -4452,15 +4487,44 @@ impl Shell {
             |_, _, _| {},
             move |_, _, window, _| {
                 let shell = shell.clone();
-                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        shell.update(cx, |shell, _| shell.page_keyboard = None).ok();
+                        let x = f32::from(event.position.x);
+                        shell.update(cx, |shell, cx| shell.ui_pressed(x, cx)).ok();
                     }
                 });
             },
         )
         .absolute()
         .size_full()
+    }
+
+    /// A press `x` across the window's own view. One in a strip at its side over the page leaves
+    /// the page the keyboard it had: the strip brings the sidebar out on hover and, on Linux,
+    /// resizes the window, neither of which is a press in the UI, so the host's move of the
+    /// keyboard to the UI with it is undone.
+    pub(super) fn ui_pressed(&mut self, x: f32, cx: &mut Context<Self>) {
+        if self.page_keyboard.is_some() && self.in_edge_strip(x) {
+            self.browser.focus_page(cx);
+            return;
+        }
+        self.page_keyboard = None;
+    }
+
+    /// Whether `x` across the window is in a strip at its side the UI keeps over the page: the
+    /// hidden sidebar's edge (`reveal_edge`) or, on Linux, a band that resizes the window
+    /// (`resize_bands`).
+    fn in_edge_strip(&self, x: f32) -> bool {
+        let width = f32::from(self.viewport.width);
+        let reveal = self.sidebar_hidden
+            && !self.page_fullscreen
+            && self.little.is_none()
+            && self.from_side(x) < EDGE_STRIP;
+        let band = cfg!(target_os = "linux")
+            && !self.maximized
+            && !self.full_screen
+            && (x < EDGE_STRIP || x >= width - EDGE_STRIP);
+        reveal || band
     }
 
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
@@ -4507,7 +4571,7 @@ impl Shell {
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .w(px(RESIZE_EDGE))
+                    .w(px(EDGE_STRIP))
                     .cursor(match right {
                         true => CursorStyle::ResizeRight,
                         false => CursorStyle::ResizeLeft,
@@ -4947,9 +5011,10 @@ impl Render for Shell {
             Section::Spaces => (None, library),
             _ => (library, None),
         };
-        // The sidebar leaves with the card's edge, all of it by the time the edge stops.
+        // The sidebar leaves with the card's edge, all of it by the time the edge stops at the
+        // window's.
         let width = self.width();
-        let sidebar_left = (card_left - width) * width / (width - CARD_INSET);
+        let sidebar_left = (card_left - width).min(0.);
         // On the right, the same motion mirrored: it leaves past the window's right edge.
         let sidebar_left = match self.right {
             true => f32::from(self.viewport.width) - width - sidebar_left,
@@ -5093,6 +5158,7 @@ impl Render for Shell {
             .children(own_buttons)
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
+            .children(self.reveal_edge(cx))
             .children(self.resize_bands(cx))
             .children(self.task_announcer())
     }

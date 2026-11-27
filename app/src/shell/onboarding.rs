@@ -1380,20 +1380,13 @@ impl Shell {
         });
         let inks = Inks::of(light);
         let exiting = onboarding.exit_clock(window.is_visible());
-        let length = onboarding.exit_length(still);
-        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still, viewport));
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still));
         if ended {
-            // A grown card stays drawn on the frame it ends on. First run's window, the size of
-            // the browser's by now, is on screen until the browser window is, and a frame of it
-            // without its card is its glass bare.
-            let last = (onboarding.grown(still)).then(|| {
-                let plate = exit::frame(length, true, viewport).plate;
-                let (_, _, w, h, radius) = plate;
-                if onboarding.shaped != Some((w, h, radius)) {
-                    self.browser.shape_first_run(w, h, radius);
-                }
-                (plate, (w, h, radius))
-            });
+            // A grown exit ends with the browser window whole under a card and glass faded out,
+            // so its last frame draws no card, as the cross-fade's doesn't.
+            if onboarding.grown(still) {
+                self.browser.reveal_first_run(1., 0.);
+            }
             self.onboarding = None;
             // check.sh waits for this line.
             log!("browser: onboarding done");
@@ -1418,16 +1411,8 @@ impl Shell {
                 }
             });
             #[cfg(test)]
-            exit::DRAWN.with_borrow_mut(|drawn| {
-                drawn.push(last.map(|(plate, glass)| (plate, grown_fill, glass)));
-            });
-            return last.map(|(plate, _)| {
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(card::plate(plate, grown_fill, inks.rim()))
-                    .into_any_element()
-            });
+            exit::DRAWN.with_borrow_mut(|drawn| drawn.push(None));
+            return None;
         }
         if onboarding.keys.is_none() {
             let id = window.window_handle().window_id();
@@ -1558,6 +1543,11 @@ impl Shell {
         let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
+        }
+        // Said on each grown frame, not only as it changes: until the window's first frame of its
+        // own, Chromium may put it back whole (host_set_first_run_reveal).
+        if let Some(exit) = exit.as_ref().filter(|_| growing && onboarding.grown(still)) {
+            self.browser.reveal_first_run(exit.window, exit.glass);
         }
         // The glass is the system's and reaches the screen a frame after the card drawn with it,
         // so the exit draws the card in the shape its glass was given the frame before, and fill
