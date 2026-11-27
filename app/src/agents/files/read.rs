@@ -4,7 +4,11 @@
 
 use std::io::Cursor;
 
+use base64::Engine as _;
+
 use image::{DynamicImage, ImageFormat, ImageReader, Limits, RgbImage};
+
+use super::words;
 
 /// The most bytes of a PDF read_file reads, as they're copied whole to the engine's reader.
 pub const MOST_PDF_BYTES: u64 = 200 * 1000 * 1000;
@@ -61,8 +65,7 @@ pub fn kind_of(head: &[u8]) -> Kind {
     }
 }
 
-/// Why an image or a PDF isn't read. Their words are owed to the wording pass (P-bytes, I-pixels),
-/// so read_file says them only once the table has them.
+/// Why an image or a PDF isn't read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unread {
     /// An image over `MOST_PIXELS`.
@@ -71,6 +74,15 @@ pub enum Unread {
     Bytes,
     /// An image its decoder refused: broken, or not what its first bytes said.
     Broken,
+    /// A PDF with a password (BC_PDF_LOCKED).
+    Locked,
+    /// A PDF the engine couldn't open, or didn't within its time, which it doesn't tell apart
+    /// (BC_PDF_BROKEN).
+    Damaged,
+    /// The read was dropped before its answer (BC_PDF_CLOSED).
+    Stopped,
+    /// Pages asked from `from` (from 1) of a PDF of `pages`.
+    Past { pages: usize, from: usize },
 }
 
 /// A picture for the assistant to look at, as JPEG.
@@ -132,6 +144,92 @@ fn on_white(image: &DynamicImage) -> RgbImage {
             ((u16::from(channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8
         };
         image::Rgb([over(r), over(g), over(b)])
+    })
+}
+
+/// The most pages one read gives, as the core reads at most these (BC_PDF_MOST_PAGES).
+pub const MOST_PAGES: usize = 30;
+/// The most page pictures one answer carries, so a scanned PDF's answer stays one a model reads.
+pub const MOST_PICTURES: usize = 10;
+/// What an answer's text holds at most, as every tool's does (#3657), less room for its last line.
+pub const TEXT_ROOM: usize = crate::agents::tools::MAX_ANSWER - 200;
+
+/// A PDF's pages, as the core read them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pdf {
+    /// A BC_PDF_ result.
+    pub result: i32,
+    pub page_count: usize,
+    /// Each page's text, and its picture as JPEG for one with almost no text, as a scan.
+    pub pages: Vec<(String, Option<Vec<u8>>)>,
+}
+
+pub const PDF_READ: i32 = 0;
+pub const PDF_LOCKED: i32 = 1;
+pub const PDF_BROKEN: i32 = 2;
+
+/// A PDF's pages as the assistant gets them: their text, the pictures for the model alone, and
+/// which pages they are, `(a, b, n)` from 1, where they aren't the whole of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PdfRead {
+    pub text: String,
+    pub pictures: Vec<String>,
+    pub cut: Option<(usize, usize, usize)>,
+}
+
+/// What the assistant gets of a PDF read from page `first` (from 0): each page headed with its
+/// number, its picture after the text for a page that has one, as whole pages as fit an answer,
+/// and, for a read that isn't the whole PDF, which pages are in it (PD1a). The pictures go to the
+/// model alone, never the step. Or why it wasn't read.
+pub fn pdf_answer(pdf: &Pdf, first: usize) -> Result<PdfRead, Unread> {
+    match pdf.result {
+        PDF_READ => {}
+        PDF_LOCKED => return Err(Unread::Locked),
+        PDF_BROKEN => return Err(Unread::Damaged),
+        _ => return Err(Unread::Stopped),
+    }
+    let total = pdf.page_count;
+    if first >= total {
+        return Err(Unread::Past {
+            pages: total,
+            from: first + 1,
+        });
+    }
+    let (mut text, mut pictures) = (String::new(), Vec::new());
+    let mut read = 0;
+    for (index, (words, picture)) in pdf.pages.iter().enumerate() {
+        let number = first + index + 1;
+        let mut page = format!("Page {number} of {total}\n\n");
+        if !words.trim().is_empty() {
+            page.push_str(&format!("{}\n\n", words.trim()));
+        }
+        if picture.is_some() {
+            page.push_str(&format!(
+                "[Its picture is picture {} below.]\n\n",
+                pictures.len() + 1
+            ));
+        }
+        let room = text.len() + page.len() > TEXT_ROOM;
+        let crowded = picture.is_some() && pictures.len() >= MOST_PICTURES;
+        // A page is never cut: one that doesn't fit is the next read's.
+        if read > 0 && (room || crowded) {
+            break;
+        }
+        text.push_str(&page);
+        if let Some(jpeg) = picture {
+            pictures.push(base64::engine::general_purpose::STANDARD.encode(jpeg));
+        }
+        read += 1;
+    }
+    let pages = (first + 1, first + read, total);
+    let cut = (pages != (1, total, total)).then_some(pages);
+    if let Some(pages) = cut {
+        text.push_str(&words::pages_included(pages));
+    }
+    Ok(PdfRead {
+        text: text.trim_end().to_string(),
+        pictures,
+        cut,
     })
 }
 

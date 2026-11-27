@@ -11,6 +11,8 @@ pub mod give;
 pub mod read;
 #[cfg(unix)]
 pub mod resolve;
+#[cfg(unix)]
+pub mod tool;
 
 /// Where a file is: one the user attached, which the assistant gets as ilo's copy, in a folder
 /// the user granted, or outside both, where only the product's own file tools reach (road B).
@@ -873,6 +875,57 @@ pub mod words {
             Refused::NotText => "it isn't text".into(),
         };
         format!("{}: {reason}", failed(step))
+    }
+
+    /// A PDF read that isn't the whole of it, its pages `a` to `b` of `n`: the trace's done line
+    /// (PD1), and what the assistant is told after the pages (PD1a).
+    pub fn read_pages(file: &str, (a, b, n): (usize, usize, usize)) -> String {
+        format!("Read {} \u{b7} pages {a}\u{2013}{b} of {n}", quoted(file))
+    }
+
+    pub fn pages_included((a, b, n): (usize, usize, usize)) -> String {
+        format!("Only pages {a}\u{2013}{b} of {n} are included. Read more with pages.")
+    }
+
+    /// Why a PDF or a picture wasn't read (PD2, PD3, PD5–PD7). PD4's, a PDF that took too long,
+    /// waits on the core telling it apart from one that won't open (BC_PDF_BROKEN is both).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Unopened {
+        Locked,
+        Damaged,
+        PdfOver,
+        PixelsOver,
+        NotPicture,
+    }
+
+    /// An unopened read's line in the trace: FL12's failed line and the reason.
+    pub fn unopened(step: Step, why: Unopened) -> String {
+        let reason = match why {
+            Unopened::Locked => "it's locked with a password".into(),
+            Unopened::Damaged => "it couldn't be opened".into(),
+            Unopened::PdfOver => "it's over 200 MB".into(),
+            Unopened::PixelsOver => "it's over 64 megapixels".into(),
+            Unopened::NotPicture => format!("it isn't a picture {PRODUCT} can open"),
+        };
+        format!("{}: {reason}", failed(step))
+    }
+
+    /// What the assistant is told of an unopened read. A locked PDF's asks for a copy without
+    /// its password, never the password, as agents get no secrets.
+    pub fn unopened_told(why: Unopened) -> String {
+        match why {
+            Unopened::Locked => format!(
+                "Not done: this PDF is locked with a password, and {PRODUCT} doesn't unlock it. Ask the user for a copy without one, or go on without it."
+            ),
+            Unopened::Damaged => "Not done: this PDF couldn't be opened. Go on without it.".into(),
+            Unopened::PdfOver => format!("Not done: {PRODUCT} reads PDFs up to 200 MB."),
+            Unopened::PixelsOver => {
+                format!("Not done: {PRODUCT} reads pictures up to 64 megapixels.")
+            }
+            Unopened::NotPicture => {
+                format!("Not done: {PRODUCT} couldn't open this picture. Go on without it.")
+            }
+        }
     }
 
     /// A step's failed line, with no reason the table names.
