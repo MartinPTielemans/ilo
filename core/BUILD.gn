@@ -697,6 +697,20 @@ mojom("pdf_reader") {
   ]
 }
 
+# One read in the reader, answered once, broken as its process goes or its deadline passes, apart
+# so browser_core_unittests tests its ending alone.
+source_set("pdf_read_wait") {
+  sources = [
+    "pdf_read_wait.cc",
+    "pdf_read_wait.h",
+  ]
+  public_deps = [
+    ":pdf_reader",
+    "//base",
+    "//mojo/public/cpp/bindings",
+  ]
+}
+
 # Whether a file the user picks for an agent's file field goes into it, and whether a page may open
 # its own file dialog, apart so browser_core_unittests tests the rule alone (#3656).
 source_set("agent_file_field_rule") {
@@ -1127,6 +1141,7 @@ source_set("browser_core") {
     ":clear_both_engines",
     ":drm_request",
     ":pdf_read",
+    ":pdf_read_wait",
     ":pdf_reader",
     ":history_removal",
     ":idle_check",
@@ -1500,6 +1515,7 @@ test("browser_core_unittests") {
     "tab_background_unittest.cc",
     "agent_file_field_rule_unittest.cc",
     "pdf_read_unittest.cc",
+    "pdf_read_wait_unittest.cc",
     "agent_permission_rule_unittest.cc",
     "agent_space_rule_unittest.cc",
     "link_preview_rule_unittest.cc",
@@ -1587,6 +1603,7 @@ test("browser_core_unittests") {
     ":tab_background",
     ":agent_file_field_rule",
     ":pdf_read",
+    ":pdf_read_wait",
     ":agent_permission_rule",
     ":agent_space_rule",
     ":link_preview_rule",

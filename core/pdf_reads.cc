@@ -13,9 +13,10 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
 #include "browser_core/pdf_read.h"
+#include "browser_core/pdf_read_wait.h"
 #include "browser_core/pdf_reader.mojom.h"
 #include "content/public/browser/service_process_host.h"
-#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 
 namespace browser_core {
 
@@ -27,7 +28,7 @@ constexpr size_t kMostBytes = size_t{256} << 20;
 static_assert(kMostPdfPages == BC_PDF_MOST_PAGES);
 
 struct Read {
-  mojo::Remote<mojom::PdfReader> reader;
+  std::unique_ptr<PdfReadWait> wait;
   bool answered = false;
   int result = BC_PDF_BROKEN;
   std::vector<mojom::PdfPagePtr> pages;
@@ -58,7 +59,7 @@ void Tell(bc_id id, int result, int page_count, int pages_read) {
   }
 }
 
-// The reader answered, or its process went, a crash in it too, which is BROKEN: the read keeps
+// The reader answered, or it's BROKEN as its process went or its deadline passed: the read keeps
 // what it read, and its process ends.
 void Answered(bc_id id,
               mojom::PdfReadResult result,
@@ -70,7 +71,6 @@ void Answered(bc_id id,
   }
   Read& read = *found->second;
   read.answered = true;
-  read.reader.reset();
   read.result = ResultOf(result);
   if (read.result == BC_PDF_READ) {
     read.pages = std::move(pages);
@@ -105,12 +105,13 @@ bc_id StartPdfRead(base::span<const uint8_t> bytes, int first, int count) {
   }
   memory.mapping.GetMemoryAsSpan<uint8_t>().copy_from(bytes);
   const bc_id id = g_next_read++;
-  auto read = std::make_unique<Read>();
-  read->reader = content::ServiceProcessHost::Launch<mojom::PdfReader>(
+  mojo::PendingRemote<mojom::PdfReader> reader;
+  content::ServiceProcessHost::Launch(
+      reader.InitWithNewPipeAndPassReceiver(),
       content::ServiceProcessHost::Options().WithDisplayName(u"PDF Reader").Pass());
-  read->reader.set_disconnect_handler(base::BindOnce(&Answered, id, mojom::PdfReadResult::kBroken,
-                                                     0, std::vector<mojom::PdfPagePtr>()));
-  read->reader->Read(std::move(memory.region), first, count, base::BindOnce(&Answered, id));
+  auto read = std::make_unique<Read>();
+  read->wait = std::make_unique<PdfReadWait>(std::move(reader), std::move(memory.region), first,
+                                             count, base::BindOnce(&Answered, id));
   Reads()[id] = std::move(read);
   LOG(ERROR) << "browser: pdf read " << id << " started, pages " << first << " to "
              << first + count - 1;
@@ -134,7 +135,7 @@ void DropPdfRead(bc_id id) {
     return;
   }
   const bool answered = found->second->answered;
-  // Its remote goes with it, which ends a reader still reading.
+  // Its wait goes with it, whose remote going ends a reader still reading.
   Reads().erase(found);
   if (!answered) {
     // Posted, so the app never hears inside its own call.
