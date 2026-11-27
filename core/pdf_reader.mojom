@@ -1,0 +1,28 @@
+module browser_core.mojom;
+
+import "mojo/public/mojom/base/big_buffer.mojom";
+import "mojo/public/mojom/base/shared_memory.mojom";
+import "sandbox/policy/mojom/sandbox.mojom";
+
+enum PdfReadResult {
+  kRead,
+  kLocked,
+  kBroken,
+};
+
+struct PdfPage {
+  string text;
+  // The page as JPEG, for a page with next to no text; else none.
+  mojo_base.mojom.BigBuffer? picture;
+};
+
+// The core's PDF reader (bc_pdf_read, #4367): PDFium, in a utility process of its own under the
+// utility sandbox Chromium's printing service reads PDFs in off Windows, so it never parses a file
+// in the browser's process. It renders into bitmaps, never a device context, so Windows needs no
+// other.
+[ServiceSandbox=sandbox.mojom.Sandbox.kUtility]
+interface PdfReader {
+  // Reads |pdf|'s pages |first| (from 0) on, |count| of them, 30 at most.
+  Read(mojo_base.mojom.ReadOnlySharedMemoryRegion pdf, int32 first, int32 count)
+      => (PdfReadResult result, int32 page_count, array<PdfPage> pages);
+};

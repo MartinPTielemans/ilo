@@ -44,6 +44,8 @@ class AgentFileField {
   // See bc_file_field_choose and bc_file_field_drop.
   static bool Choose(bc_id field, bc_id window);
   static void Drop(bc_id field);
+  // See bc_file_field_put.
+  static bool Put(bc_id field, std::vector<std::string> files);
   // The tab closed, or the agent's session in it ended: its fields are dropped.
   static void TabEnded(bc_id tab);
 
