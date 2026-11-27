@@ -74,8 +74,8 @@ fn a_change_rewrites_the_block_alone() {
 #[test]
 fn text_reads_on_the_ground_and_sizes_stay_in_bounds() {
     assert_eq!(ink(0xffffff), 0x161618);
-    assert_eq!(ink(0x000000), 0xf3f0e8);
-    assert_eq!(ink(0x3366cc), 0xf3f0e8);
+    assert_eq!(ink(0x000000), 0xf2f2f3);
+    assert_eq!(ink(0x3366cc), 0xf2f2f3);
     assert_eq!(ink(0xffd54a), 0x161618);
     let file = format!("{START}\n/* size 400 */\n{END}\n");
     assert_eq!(Style::of(&file).size, LARGEST);
