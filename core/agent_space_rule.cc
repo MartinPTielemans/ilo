@@ -1,5 +1,8 @@
 #include "browser_core/agent_space_rule.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace browser_core::agent_space_rule {
 
 bool Refuses(Ask ask, const Tab& tab) {
@@ -61,9 +64,9 @@ bool OpensIn(std::string_view profile, std::string_view given) {
   return !profile.empty() && profile == given;
 }
 
-uint64_t Picked(const std::vector<Candidate>& candidates) {
-  const Candidate* best = nullptr;
-  for (const Candidate& each : candidates) {
+uint64_t Picked(const std::vector<PickCandidate>& candidates) {
+  const PickCandidate* best = nullptr;
+  for (const PickCandidate& each : candidates) {
     if (!each.profile || !each.loaded || each.private_session || each.last_visit <= 0) {
       continue;
     }
@@ -73,6 +76,29 @@ uint64_t Picked(const std::vector<Candidate>& candidates) {
     }
   }
   return best ? best->profile : 0;
+}
+
+std::vector<std::string> PickHosts(std::string_view host, std::string_view site) {
+  std::vector<std::string> hosts;
+  for (std::string each : {std::string(host), std::string(site), "www." + std::string(site)}) {
+    if (!each.empty() && each != "www." &&
+        std::find(hosts.begin(), hosts.end(), each) == hosts.end()) {
+      hosts.push_back(std::move(each));
+    }
+  }
+  return hosts;
+}
+
+PickAnswer::PickAnswer(base::OnceCallback<void(int64_t)> answer) : answer_(std::move(answer)) {}
+
+PickAnswer::~PickAnswer() {
+  Answer(0);
+}
+
+void PickAnswer::Answer(int64_t last_visit) {
+  if (answer_) {
+    std::move(answer_).Run(last_visit);
+  }
 }
 
 }  // namespace browser_core::agent_space_rule

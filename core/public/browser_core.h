@@ -1583,10 +1583,6 @@ typedef struct bc_host {
   // The user's alone: agents get none.
   void (*history_listed)(void* context, bc_id profile, uint64_t request,
                          const bc_history_page* pages, size_t count, bool more);
-  // bc_profile_pick_for_site's answer for |request|: |profile| and BC_PICK_HISTORY, or 0 and 0
-  // when none of the profiles had visited the site. The user's alone: an agent's answer names the
-  // profile it opened in and never why.
-  void (*profile_picked)(void* context, uint64_t request, bc_id profile, int why);
   // The browser's own ad blocker, which blocks in place of uBlock Origin with
   // --ad-block-engine=native (#2111): the core finds the requests a page makes, and what it
   // shows, and the app's engine says what to do with them. No call comes for a page that isn't
@@ -1741,6 +1737,11 @@ typedef struct bc_host {
   // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
   // reaches no log line, no page and no agent's answer.
   const char* product;
+  // bc_profile_pick_for_site's answer for |request|, once a call: |profile| and BC_PICK_HISTORY,
+  // or 0 and 0 when none of the profiles had visited the site or a profile's history ended before
+  // it answered. Last, so the slots before it keep their places. The user's alone: an agent's
+  // answer names the profile it opened in and never why.
+  void (*profile_picked)(void* context, uint64_t request, bc_id profile, int why);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2447,10 +2448,12 @@ BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t 
 #define BC_PICK_HISTORY 1
 
 // Picks the profile for an agent's tab at |url| among the |count| |profiles| the user lets it use
-// (#4376): the one whose history visited the URL's site, as bc_url_site names it, last, the first
-// given on a tie. History is read on its own thread, off the UI thread, and only in profiles that
-// have loaded: none is loaded to look, and a private session's is never read. Then profile_picked
-// with |request|: the profile and BC_PICK_HISTORY, or 0 and 0 when none of them has the site, for
+// (#4376): the one whose history visited the URL's host, its site as bc_url_site names it, or the
+// site's www host last, the first given on a tie. History is read on its own thread, off the UI
+// thread, by the history's own index of addresses, so a pick costs the same however long the
+// history is, and only in profiles that have loaded: none is loaded to look, and a private
+// session's is never read. Then profile_picked with |request|, once, whatever comes of each
+// profile's read: the profile and BC_PICK_HISTORY, or 0 and 0 when none of them has the site, for
 // the app's own choice. Nothing of the history is answered but which profile won. Agent code calls
 // it, and the agent's answer names the profile and never why.
 BC_EXPORT void bc_profile_pick_for_site(const bc_id* profiles,

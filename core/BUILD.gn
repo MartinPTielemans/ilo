@@ -678,6 +678,8 @@ source_set("agent_space_rule") {
     "agent_space_rule.cc",
     "agent_space_rule.h",
   ]
+  # Its header holds a base::OnceCallback.
+  public_deps = [ "//base" ]
 }
 
 # Which permissions a page in an agent's Space is refused, what its activity entry carries and

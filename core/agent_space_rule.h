@@ -8,8 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <string>
 #include <string_view>
 #include <vector>
+
+#include "base/functional/callback.h"
 
 namespace browser_core::agent_space_rule {
 
@@ -113,7 +116,7 @@ int AgentSpaceIn(const std::vector<AgentSpace>& spaces,
 bool OpensIn(std::string_view profile, std::string_view given);
 
 // A profile as the pick for an agent's tab weighs it (#4376, bc_profile_pick_for_site).
-struct Candidate {
+struct PickCandidate {
   uint64_t profile = 0;
   // Its place among the profiles the app gave, which breaks a tie.
   size_t order = 0;
@@ -126,7 +129,28 @@ struct Candidate {
 
 // The profile whose history visited the site last, of those loaded and not private, the first
 // given on a tie; or 0 for none.
-uint64_t Picked(const std::vector<Candidate>& candidates);
+uint64_t Picked(const std::vector<PickCandidate>& candidates);
+
+// The hosts a pick for a page at |host| reads each profile's history for, by the history's own
+// index of addresses rather than every row: the page's host, its site, and the site's www host,
+// each once.
+std::vector<std::string> PickHosts(std::string_view host, std::string_view site);
+
+// One profile's answer to a pick, which comes exactly once: the newest visit it read, in
+// microseconds, or 0 if it's dropped unanswered, as a read is when its profile's history shuts
+// down first. So a pick always ends, whatever becomes of each profile's read.
+class PickAnswer {
+ public:
+  explicit PickAnswer(base::OnceCallback<void(int64_t)> answer);
+  ~PickAnswer();
+  PickAnswer(const PickAnswer&) = delete;
+  PickAnswer& operator=(const PickAnswer&) = delete;
+
+  void Answer(int64_t last_visit);
+
+ private:
+  base::OnceCallback<void(int64_t)> answer_;
+};
 
 }  // namespace browser_core::agent_space_rule
 

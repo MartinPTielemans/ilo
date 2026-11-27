@@ -1,5 +1,9 @@
 #include "browser_core/agent_space_rule.h"
 
+#include <memory>
+#include <vector>
+
+#include "base/functional/bind.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_core::agent_space_rule {
@@ -191,6 +195,37 @@ TEST(AgentSpaceRuleTest, APrivateOrUnloadedProfileIsNeverPicked) {
             1u);
   EXPECT_EQ(Picked({{.profile = 2, .loaded = true, .private_session = true, .last_visit = 9}}),
             0u);
+}
+
+TEST(AgentSpaceRuleTest, APickReadsThePagesHostItsSiteAndTheSitesWwwHostOnce) {
+  EXPECT_EQ(PickHosts("mail.example.com", "example.com"),
+            (std::vector<std::string>{"mail.example.com", "example.com", "www.example.com"}));
+  EXPECT_EQ(PickHosts("www.example.com", "example.com"),
+            (std::vector<std::string>{"www.example.com", "example.com"}));
+  EXPECT_EQ(PickHosts("localhost", "localhost"),
+            (std::vector<std::string>{"localhost", "www.localhost"}));
+  EXPECT_TRUE(PickHosts("", "").empty());
+}
+
+TEST(AgentSpaceRuleTest, AProfilesAnswerComesOnceWithTheVisitItRead) {
+  std::vector<int64_t> heard;
+  {
+    PickAnswer answer(base::BindOnce([](std::vector<int64_t>* heard,
+                                        int64_t last) { heard->push_back(last); },
+                                     &heard));
+    answer.Answer(42);
+    answer.Answer(7);
+  }
+  EXPECT_EQ(heard, std::vector<int64_t>{42});
+}
+
+// A profile whose history shuts down mid-read drops its task unrun: the pick still ends.
+TEST(AgentSpaceRuleTest, AReadDroppedUnansweredAnswersNone) {
+  std::vector<int64_t> heard;
+  auto answer = std::make_unique<PickAnswer>(base::BindOnce(
+      [](std::vector<int64_t>* heard, int64_t last) { heard->push_back(last); }, &heard));
+  answer.reset();
+  EXPECT_EQ(heard, std::vector<int64_t>{0});
 }
 
 }  // namespace
