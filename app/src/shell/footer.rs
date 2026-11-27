@@ -37,23 +37,21 @@ pub(super) fn space_button_width() -> f32 {
     2. * SPACE_BUTTON_PAD + FOOT_GLYPH + SPACE_BUTTON_GAP + SPACE_BUTTON_CHEVRON
 }
 
-/// The Space button's change after a switch in this window: the Space before's mark leaves
-/// toward the side the one before was on as the new one's comes in from its own, once the rows
-/// have slid (under Reduce Motion they cross-fade), and the new Space's name shows in a pill
-/// above the button for a moment, as a tooltip would, so a switch by keys says where it went.
+/// The Space button's change after a switch in this window, once the rows have slid: under
+/// Reduce Motion, where the pages land at once, the Space before's mark cross-fades into the new
+/// one's, and the new Space's name shows in a pill above the button for a moment, as a tooltip
+/// would, so a switch by keys says where it went. Otherwise the marks have slid with the pages.
 pub(super) struct ButtonSwitch {
     /// The mark leaving: the Space before's icon and name.
     before: (SharedString, SharedString),
-    /// Whether the Space shown is to the right of the one before, among the Spaces.
-    right: bool,
-    /// When the mark started moving: None while the rows still slide.
+    /// When the rows were in their places: None while they still slide.
     start: Option<Instant>,
     /// Whether the mark is in its place, which check.sh has heard.
     settled: bool,
 }
 
 impl ButtonSwitch {
-    /// How far along the mark's slide is, on its ease-out, `t` seconds in.
+    /// How far along the marks' cross-fade is, on its ease-out, `t` seconds in.
     fn along(t: f32) -> f32 {
         super::cubic_bezier(0., 0., 0.58, 1., (t / SLIDE).clamp(0., 1.))
     }
@@ -65,22 +63,21 @@ impl ButtonSwitch {
 }
 
 impl Shell {
-    /// The window has switched from `before` to another Space, to its right or not: the Space
-    /// button's mark slides once the rows have, and its name's pill shows.
-    pub(super) fn switch_space_button(&mut self, before: u64, right: bool) {
+    /// The window has switched from `before` to another Space: once the rows have slid, the Space
+    /// button's name's pill shows, and under Reduce Motion its marks cross-fade.
+    pub(super) fn switch_space_button(&mut self, before: u64) {
         let Some(space) = self.spaces.iter().find(|space| space.id == before) else {
             return;
         };
         self.space_button_switch = Some(ButtonSwitch {
             before: (space.icon.clone(), space.name.clone()),
-            right,
             start: None,
             settled: false,
         });
     }
 
-    /// Starts the Space button's slide once the rows' settle is over, keeps frames coming while it
-    /// or the pill moves, and drops the switch once both are done.
+    /// Starts the Space button's switch once the rows' settle is over, keeps frames coming while
+    /// its cross-fade or pill moves, and drops the switch once both are done.
     pub(super) fn step_space_button(&mut self, window: &mut Window) {
         let settling = self.settle.is_some();
         let now = self.clock.now();
@@ -103,8 +100,19 @@ impl Shell {
         }
     }
 
-    /// The Space button's mark box: the Space shown's mark, and while a switch's slide is on, the
-    /// Space before's leaving it.
+    /// Where the Space button's marks are across its box, by their Spaces: each page the sidebar
+    /// draws has its Space's mark as far across the box as the page is across the sidebar, so the
+    /// mark goes with a swipe, its spring, a cancel and the rubber band at the ends (#4400).
+    pub(super) fn space_button_places(&self) -> Vec<(u64, f32)> {
+        let width = self.width();
+        self.pages()
+            .into_iter()
+            .map(|(space, x)| (space, x / width * FOOT_GLYPH))
+            .collect()
+    }
+
+    /// The Space button's mark box: each Space's mark where its page is, clipped to the box, and
+    /// under Reduce Motion, while a switch's cross-fade is on, the Space before's fading out.
     fn space_button_marks(
         &self,
         icon: &str,
@@ -113,43 +121,43 @@ impl Shell {
         cx: &gpui::App,
     ) -> AnyElement {
         let mark = |icon: &str, name: &str| crate::space_icon::mark(icon, name, FOOT_GLYPH, ink);
-        // Until the rows have slid, the Space before's mark holds its place.
-        let moving = self.space_button_switch.as_ref().and_then(|switch| {
-            let along = (switch.start).map_or(0., |start| ButtonSwitch::along(self.since(start)));
-            (along < 1.).then_some((switch, along))
-        });
-        let Some((switch, along)) = moving else {
-            return mark(icon, name);
-        };
-        // From the side it's on among the Spaces, by the mark's box, as the page slides by its own.
-        let side = if switch.right {
-            FOOT_GLYPH
-        } else {
-            -FOOT_GLYPH
-        };
-        let still = crate::motion::still(cx);
         let placed = |element: AnyElement, x: f32, shown: f32| {
             div()
                 .absolute()
                 .top_0()
-                .left(px(if still { 0. } else { x }))
+                .left(px(x))
                 .size(px(FOOT_GLYPH))
-                .when(still, |element| element.opacity(shown))
+                .opacity(shown)
                 .child(element)
         };
-        let (before_icon, before_name) = &switch.before;
-        div()
+        let marks = div()
             .relative()
             .flex_none()
             .size(px(FOOT_GLYPH))
-            .overflow_hidden()
-            .child(placed(
-                mark(before_icon, before_name),
-                -side * along,
-                1. - along,
-            ))
-            .child(placed(mark(icon, name), side * (1. - along), along))
-            .into_any_element()
+            .overflow_hidden();
+        let fading = self.space_button_switch.as_ref().and_then(|switch| {
+            let along = ButtonSwitch::along(self.since(switch.start?));
+            (crate::motion::still(cx) && along < 1.).then_some((switch, along))
+        });
+        if let Some((switch, along)) = fading {
+            let (before_icon, before_name) = &switch.before;
+            return marks
+                .child(placed(mark(before_icon, before_name), 0., 1. - along))
+                .child(placed(mark(icon, name), 0., along))
+                .into_any_element();
+        }
+        let places = self.space_button_places();
+        if let [(space, x)] = places[..]
+            && space == self.space
+            && x == 0.
+        {
+            return mark(icon, name);
+        }
+        let spaces = places.into_iter().filter_map(|(id, x)| {
+            let space = self.spaces.iter().find(|space| space.id == id)?;
+            Some(placed(mark(&space.icon, &space.name), x, 1.))
+        });
+        marks.children(spaces).into_any_element()
     }
 
     /// The pill naming the Space a switch in this window showed, above the Space button with
@@ -659,10 +667,11 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
 
-    /// A switch in this window: the rows slide first, then the button's mark, and the Space's
-    /// name shows in its pill over the button for its moment and goes.
+    /// A switch in this window: the button's marks slide with the rows, the new Space's coming in
+    /// from its side, and once the rows are in place the Space's name shows in its pill over the
+    /// button for its moment and goes.
     #[gpui::test]
-    fn after_a_switch_the_mark_slides_once_the_rows_have_and_the_name_shows(
+    fn after_a_switch_the_marks_slide_with_the_rows_and_then_the_name_shows(
         cx: &mut TestAppContext,
     ) {
         let (shell, cx, _host) = window(cx);
@@ -678,7 +687,12 @@ mod tests {
         assert!(
             shell.read_with(cx, |shell, _| shell.settle.is_some()
                 && started(shell) == Some(false)),
-            "the mark moved while the rows still slid"
+            "the pill came while the rows still slid"
+        );
+        let places = shell.read_with(cx, |shell, _| shell.space_button_places());
+        assert!(
+            matches!(places[..], [(2, x), (1, _)] if x > 0.),
+            "the marks didn't slide with the rows: {places:?}"
         );
         cx.executor().advance_clock(Duration::from_secs(1));
         frame(cx);

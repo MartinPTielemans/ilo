@@ -679,6 +679,7 @@ mod tests {
         WindowButtonGeometry, recorder::Recorder,
     };
     use crate::text_input::TextInput;
+    use crate::tokens::shell::FOOT_GLYPH;
     use crate::tokens::shell::library::COLUMN_WIDTH;
 
     fn spaces(ids: &[u64]) -> Vec<Space> {
@@ -1172,6 +1173,101 @@ mod tests {
             }
         });
         assert_eq!(*host.shown.borrow(), [2, 3]);
+    }
+
+    /// The Space button's mark goes with the sidebar's pages, frame for frame (#4400): with the
+    /// fingers 0.6 of the way to the next Space, the shown Space's mark is that far out of its box
+    /// and the next one's the rest of the way in. Let go, both ride the pages' spring to the next
+    /// one's place. A swipe let go short, or pulled past the last Space's rubber band, brings the
+    /// mark back with its page.
+    #[gpui::test]
+    fn the_space_buttons_mark_goes_with_the_pages(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 2);
+        let near = |a: &[(u64, f32)], b: &[(u64, f32)]| {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 1e-3)
+        };
+        // Each frame till the pages are in their places, the marks are where the pages are, by
+        // the mark's box to the sidebar's width, and come to rest on `space`'s.
+        let settles = |shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64| {
+            for _ in 0..200 {
+                let (pages, places) = shell.read_with(cx, |shell, _| {
+                    let width = shell.width();
+                    let pages: Vec<_> = (shell.pages().into_iter())
+                        .map(|(space, x)| (space, x / width * FOOT_GLYPH))
+                        .collect();
+                    (pages, shell.space_button_places())
+                });
+                assert!(near(&places, &pages), "marks {places:?}, pages {pages:?}");
+                if near(&places, &[(space, 0.)]) {
+                    return;
+                }
+                cx.executor().advance_clock(Duration::from_millis(16));
+            }
+            panic!("the marks never came to rest on Space {space}'s place");
+        };
+        // Every event at one instant, so the fingers let go at rest: no flick.
+        let now = Instant::now();
+        let touch = |shell: &mut Shell,
+                     phase: TouchPhase,
+                     way: f32,
+                     window: &mut Window,
+                     cx: &mut Context<Shell>| {
+            let event = ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(way / SWIPE_TRACKING), px(0.))),
+                touch_phase: phase,
+                ..Default::default()
+            };
+            shell.scroll_at(&event, now, window, cx);
+        };
+        let half = FOOT_GLYPH / 2.;
+        shell.update_in(cx, |shell, window, cx| {
+            assert_eq!(shell.space_button_places(), [(2, 0.)]);
+            touch(shell, TouchPhase::Started, 0., window, cx);
+            let way = -0.6 * shell.width();
+            touch(shell, TouchPhase::Moved, way, window, cx);
+            let places = shell.space_button_places();
+            let want = [(2, -0.6 * FOOT_GLYPH), (3, 0.4 * FOOT_GLYPH)];
+            assert!(near(&places, &want), "0.6 of the way: {places:?}");
+            touch(shell, TouchPhase::Ended, 0., window, cx);
+        });
+        // The core shows the Space the swipe let go on as its pages settle.
+        assert_eq!(*host.shown.borrow(), [3]);
+        shell.update(cx, |shell, cx| shell.set_space(3, cx));
+        settles(&shell, cx, 3);
+        // Let go short of half way, the mark goes back with the page, and no Space is shown.
+        shell.update_in(cx, |shell, window, cx| {
+            touch(shell, TouchPhase::Started, 0., window, cx);
+            let way = 0.2 * shell.width();
+            touch(shell, TouchPhase::Moved, way, window, cx);
+            touch(shell, TouchPhase::Ended, 0., window, cx);
+            let places = shell.space_button_places();
+            assert!(
+                places[0].0 == 3 && places[0].1 > 0. && places[0].1 < half,
+                "{places:?}"
+            );
+        });
+        settles(&shell, cx, 3);
+        assert_eq!(*host.shown.borrow(), [3]);
+        // Past the last Space, the mark rubber-bands as its page does, alone, and comes back.
+        shell.update_in(cx, |shell, window, cx| {
+            touch(shell, TouchPhase::Started, 0., window, cx);
+            let way = -0.6 * shell.width();
+            touch(shell, TouchPhase::Moved, way, window, cx);
+            let places = shell.space_button_places();
+            let [(3, x)] = places[..] else {
+                panic!("past the last Space: {places:?}");
+            };
+            assert!(
+                x < 0. && x > -0.6 * FOOT_GLYPH,
+                "the mark went {x} of {FOOT_GLYPH}"
+            );
+            touch(shell, TouchPhase::Ended, 0., window, cx);
+        });
+        settles(&shell, cx, 3);
+        assert_eq!(*host.shown.borrow(), [3]);
     }
 
     /// The sidebar under the Library fades out whole and the Library fades in over it by what the

@@ -3316,7 +3316,7 @@ impl Shell {
         if let (Some(from), Some(to)) = (index(before), index(space))
             && from != to
         {
-            self.switch_space_button(before, to > from);
+            self.switch_space_button(before);
         }
         self.slides.clear();
         self.opened = None;
