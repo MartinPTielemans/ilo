@@ -1791,8 +1791,8 @@ fn a_line_of_what_a_task_went_without_says_what_ilo_did_and_why(_: &mut TestAppC
             IloKind::StartedWithout {
                 folder: "Trip".into(),
             },
-            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't give Claude that \
-             folder",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
+             that folder",
             "\u{201c}Trip\u{201d}",
         ),
         (

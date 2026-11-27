@@ -212,8 +212,10 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
 /// What a line says after its name, to its sentence's end, if anything.
 pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
     match kind {
+        // TODO-WORDS: X6 as written, whose reason is a box that couldn't be put up, where the one
+        // case left is a folder ilo couldn't give; a revised X6 is asked for.
         IloKind::StartedWithout { .. } => {
-            Some(format!(": {PRODUCT} couldn't give {agent} that folder"))
+            Some(format!(": {PRODUCT} couldn't limit {agent} to that folder"))
         }
         IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
