@@ -375,8 +375,8 @@ fn a_strands_entries_name_it_beside_its_thread(cx: &mut TestAppContext) {
     assert_eq!(
         searches,
         [
-            (thread.clone(), "“fares”".to_string(), id),
-            (thread.clone(), "“trains”".to_string(), String::new()),
+            (thread.clone(), "1".to_string(), id),
+            (thread.clone(), "1".to_string(), String::new()),
         ]
     );
 }

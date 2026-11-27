@@ -489,9 +489,9 @@ struct Act {
     call: u64,
     /// What the activity log names it, as `tools::describe` knows it.
     action: &'static str,
-    /// For the open or navigate a search makes, its words as its entries show them in place of
-    /// its action and the engine's site (AP25); else empty.
-    searched: String,
+    /// Whether it's the open or navigate a search makes, whose entries are the search's, with
+    /// neither its words nor the engine's site (Z46).
+    searched: bool,
     /// The strand of its thread's that made it, task-N-K, as its entries name it; else empty.
     strand: String,
     /// The tab, or 0 for open_tab, which makes it.
@@ -701,6 +701,8 @@ struct Acting {
     wait: Option<WaitText>,
     /// Its call's entry in the log, which says so if its answer carries a site's notes, or 0.
     entry: u64,
+    /// Whether it's a search's, whose entries are the search's (Z46).
+    searched: bool,
 }
 
 /// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
@@ -921,9 +923,9 @@ pub struct Agents {
     cleared: HashMap<u64, Cleared>,
     /// What each agent did last, as the log says it.
     doing: HashMap<String, SharedString>,
-    /// A search's words, as its entries show them (AP25): set by `search` for the act it makes,
-    /// which keeps them, and by that act again just before each entry it logs, which takes them.
-    searching: Option<String>,
+    /// Whether the entry about to be logged is a search's (Z46): set by `search` for the act it
+    /// makes, which keeps it, and by that act again just before each entry it logs, which takes it.
+    searching: bool,
     /// The strand whose call is under way, task-N-K, as the entries it logs name it beside its
     /// thread: set while its call runs, and by its act around each entry it logs later.
     strand_calling: Option<String>,
@@ -1146,7 +1148,7 @@ impl Agents {
             fenced: Vec::new(),
             cleared: HashMap::new(),
             doing: HashMap::new(),
-            searching: None,
+            searching: false,
             strand_calling: None,
             pins: HashMap::new(),
             held: HashMap::new(),
@@ -2376,7 +2378,7 @@ impl Agents {
                     connection,
                     call: id,
                     action: "open_tab",
-                    searched: self.searching.take().unwrap_or_default(),
+                    searched: std::mem::take(&mut self.searching),
                     strand: self.strand_calling.clone().unwrap_or_default(),
                     tab: 0,
                     what: format!("open {host}"),
@@ -2769,7 +2771,7 @@ impl Agents {
                     connection,
                     call: id,
                     action: "request",
-                    searched: String::new(),
+                    searched: false,
                     strand: self.strand_calling.clone().unwrap_or_default(),
                     tab,
                     url: String::new(),
@@ -3200,6 +3202,7 @@ impl Agents {
             opened_tabs: vec![],
             wait: None,
             entry: 0,
+            searched: false,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -3753,7 +3756,7 @@ impl Agents {
             connection,
             call,
             action: "snapshot",
-            searched: self.searching.take().unwrap_or_default(),
+            searched: std::mem::take(&mut self.searching),
             strand: self.strand_calling.clone().unwrap_or_default(),
             tab,
             url: String::new(),
@@ -4002,8 +4005,8 @@ impl Agents {
 
     /// A thread's search: an open of its words' results with the user's search engine for its
     /// Space's profile, or a navigate to them in the tab it names, as those calls go. The entries
-    /// they log are the search's, with its words and no engine's site (AP25), whenever they're
-    /// logged: at once, refused, or once the user answers what it asked.
+    /// they log are the search's, with neither its words nor the engine's site (Z46), whenever
+    /// they're logged: at once, refused, or once the user answers what it asked.
     fn search(&mut self, mut call: Call, cx: &mut Context<Self>) {
         let words = (call.arguments.get("words").and_then(Value::as_str))
             .map(str::trim)
@@ -4040,11 +4043,11 @@ impl Agents {
             false => "open_tab",
         }
         .into();
-        // The act it makes keeps its words, for each entry it logs, now or once the user answers
-        // what it asked. One refused before it's made takes them with its entry.
-        self.searching = Some(page::curly_within(&words, tools::SEARCH_SHOWN));
+        // The act it makes is the search's, for each entry it logs, now or once the user answers
+        // what it asked. One refused before it's made is the search's entry.
+        self.searching = true;
         self.dispatch(call, cx);
-        self.searching = None;
+        self.searching = false;
     }
 
     /// The `url` argument as the address bar takes it, or None once the call has its error.
@@ -4442,7 +4445,7 @@ impl Agents {
         }
         // A call's requests the user said no to are each listed, as each sent one is.
         let by = (act.connection, act.page());
-        self.searching = (!act.searched.is_empty()).then(|| act.searched.clone());
+        self.searching = act.searched;
         match act.requests.as_slice() {
             [] => self.note_page(&act.agent, by, act.action, site, why),
             requests => {
@@ -4503,8 +4506,6 @@ impl Agents {
             wait,
             ..
         } = act;
-        // A search's entry, whichever logs it below, is the search's.
-        let searched = (!searched.is_empty()).then_some(searched);
         // The user said yes to closing a page the agent didn't open without saving.
         if action == "discard_tab" {
             let site = site(&self.browser.tab(tab, cx).url);
@@ -4583,6 +4584,7 @@ impl Agents {
             opened_tabs: vec![],
             wait,
             entry,
+            searched,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -4651,7 +4653,7 @@ impl Agents {
             // A page's download comes from no call of the agent's.
             call: 0,
             action: "download",
-            searched: String::new(),
+            searched: false,
             strand: String::new(),
             // The question is about the file, wherever its tab is.
             tab: 0,
@@ -4871,6 +4873,7 @@ impl Agents {
             opened_tabs,
             wait,
             entry,
+            searched,
             ..
         }) = self.acting.remove(&request)
         else {
@@ -4999,6 +5002,7 @@ impl Agents {
                             opened_tabs,
                             wait: Some(wait),
                             entry,
+                            searched,
                         };
                         let after = LOOK_EVERY.min(until.saturating_duration_since(now));
                         return self.look_again(acting, after, cx);
@@ -5054,11 +5058,9 @@ impl Agents {
                 };
                 let reply = acting.reply.clone();
                 // A search's refusal is the search's, as its entry is.
-                let entry = acting.entry;
-                agents.searching = (agents.log.iter())
-                    .find(|each| each.id == entry && each.action == tools::SEARCHED)
-                    .map(|each| each.target.to_string());
+                agents.searching = acting.searched;
                 // And a strand's, as its entry is.
+                let entry = acting.entry;
                 let strand = (agents.log.iter())
                     .find(|each| each.id == entry)
                     .map_or_else(String::new, |each| each.strand.to_string());
@@ -5785,11 +5787,11 @@ impl Agents {
         refused: &str,
         (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
-        // A search's entry is the search's, with its words and never the engine's site (AP25).
-        let searched = self.searching.take();
-        let (action, site, target) = match &searched {
-            Some(words) => (tools::SEARCHED, "", words.as_str()),
-            None => (action, site, target),
+        // A search's entry is the search's, with neither its words nor the engine's site (Z46).
+        let searched = std::mem::take(&mut self.searching);
+        let (action, site, target) = match searched {
+            true => (tools::SEARCHED, "", ""),
+            false => (action, site, target),
         };
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
@@ -5798,20 +5800,35 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match (searched.is_some(), site.is_empty()) {
-                (true, _) => {
-                    let did = tools::Did {
-                        tool: action.into(),
-                        target: target.into(),
-                        ..Default::default()
-                    };
-                    tools::step_title(&did, tools::Tense::Done)
-                }
-                (false, true) => tools::describe(action).to_string(),
-                (false, false) => format!("{} · {site}", tools::describe(action)),
+            let doing = match site.is_empty() {
+                true => tools::describe(action).to_string(),
+                false => format!("{} · {site}", tools::describe(action)),
             };
             self.doing.insert(agent.into(), doing.into());
         }
+        let strand = self.strand_calling.clone().unwrap_or_default();
+        // A search done is its thread's, or strand's, one entry, which counts them, never their
+        // words (Z46): only a refused one has an entry of its own, for its reason.
+        if searched && refused.is_empty() && self.stepping.is_none() {
+            let counted = (self.log.iter_mut().rev()).find(|each| {
+                each.agent == agent
+                    && each.action == tools::SEARCHED
+                    && each.refused.is_empty()
+                    && each.strand == strand
+            });
+            if let Some(counted) = counted {
+                let count = counted.target.parse::<usize>().unwrap_or(1) + 1;
+                counted.target = count.to_string().into();
+                // Its id is this call's now, as a new entry's would be, for what its answer marks.
+                counted.id = entry_id();
+                self.logged = counted.id;
+                return;
+            }
+        }
+        let target = match searched && refused.is_empty() {
+            true => "1",
+            false => target,
+        };
         let entry = Activity {
             at: SystemTime::now(),
             agent: SharedString::from(agent.to_string()),
@@ -5828,7 +5845,7 @@ impl Agents {
             said: SharedString::from(said.to_string()),
             tier: self.entry_tier(agent, connection, tab).label().into(),
             notes: SharedString::default(),
-            strand: self.strand_calling.clone().unwrap_or_default().into(),
+            strand: strand.into(),
         };
         self.logged = entry.id;
         if self.stepping == Some((agent.into(), connection)) {
@@ -6218,7 +6235,7 @@ fn act_of(
         connection,
         call,
         action: "close_tab",
-        searched: String::new(),
+        searched: false,
         strand: String::new(),
         tab,
         url: String::new(),

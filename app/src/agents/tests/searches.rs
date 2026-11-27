@@ -1,7 +1,8 @@
 //! A thread's search, with the browser's `search` tool in place of its program's own: it opens
 //! the results of the user's search engine for the thread's profile in a tab of the thread's, or
 //! goes there in the tab it names. Its step holds its words whole, in memory alone, and the card
-//! never says one. Its activity row says its words, clipped, and never the engine (AP25).
+//! never says one. Its activity row, the thread's one, counts its searches and says neither their
+//! words nor the engine (Z46).
 
 use super::kept::Run;
 use super::*;
@@ -122,7 +123,7 @@ fn a_search_opens_the_engines_results_in_a_tab_of_the_threads(cx: &mut TestAppCo
         .map(|tab| (tab.1, tab.3));
     let results = "https://search.example/default?q=sleeper carriages Madrid";
     assert_eq!(opened, Some((space, results)));
-    // Its step has its words whole; its row has them quoted, and neither names the engine.
+    // Its step has its words whole; its row has none of them, and neither names the engine.
     let titles = titles(&run, &agent, cx);
     assert_eq!(titles, ["Searched the web for “sleeper carriages Madrid”"]);
     let made = entries(&run, &agent, cx);
@@ -131,13 +132,12 @@ fn a_search_opens_the_engines_results_in_a_tab_of_the_threads(cx: &mut TestAppCo
         .filter(|(_, held)| held.contains(SEARCHED))
         .collect();
     assert_eq!(searched.len(), 1, "{made:?}");
-    assert_eq!(searched[0].0, "Searched “sleeper carriages Madrid”");
+    assert_eq!(searched[0].0, "Searched the web");
     for (title, held) in &made {
-        assert!(
-            !held.contains("search.example"),
-            "the engine in {title}: {held}"
-        );
-        assert!(!title.contains("search.example"), "the engine in {title}");
+        for word in ["search.example", "sleeper", "Madrid"] {
+            assert!(!held.contains(word), "{word} in {title}: {held}");
+            assert!(!title.contains(word), "{word} in {title}");
+        }
     }
     // The card says none of it: no step and no word.
     let card = (run.agents).read_with(cx, |agents, cx| agents.cards(1, cx).remove(0));
@@ -170,7 +170,7 @@ fn a_search_with_a_tab_goes_there(cx: &mut TestAppContext) {
         .filter(|(_, held)| held.contains(SEARCHED))
         .map(|(title, _)| title)
         .collect();
-    assert_eq!(rows, ["Searched “buses”", "Searched “trains”"]);
+    assert_eq!(rows, ["Searched the web 2 times"]);
 }
 
 /// A thread in a second profile searches with that profile's engine, not the first one's.
@@ -191,28 +191,13 @@ fn a_search_uses_the_threads_profiles_engine(cx: &mut TestAppContext) {
     );
 }
 
-/// Its row clips the words to 32 characters, the "…" among them and the quotes not (TS6); its
-/// step keeps them whole up to a thought's cut.
+/// Its step keeps its words whole up to a thought's cut.
 #[gpui::test]
-fn a_searchs_row_clips_its_words_and_its_step_cuts_them_as_a_thoughts(cx: &mut TestAppContext) {
+fn a_searchs_step_cuts_its_words_as_a_thoughts(cx: &mut TestAppContext) {
     let run = Run::new("search-cut", cx);
     let agent = run.start(Cli::Claude, cx);
     let long = "night trains from Lisbon to Madrid on Saturday";
     search(&run, &agent, json!({ "words": long }), cx);
-    let made = entries(&run, &agent, cx);
-    let row = made
-        .iter()
-        .find(|(_, held)| held.contains(SEARCHED))
-        .unwrap();
-    let quoted = row
-        .0
-        .strip_prefix("Searched “")
-        .unwrap()
-        .strip_suffix("”")
-        .unwrap();
-    let kept: String = long.chars().take(tools::SEARCH_SHOWN - 1).collect();
-    assert_eq!(quoted, format!("{kept}…"));
-    assert_eq!(quoted.chars().count(), 32);
     assert_eq!(
         titles(&run, &agent, cx),
         [format!("Searched the web for “{long}”")]
@@ -265,10 +250,10 @@ fn an_outside_agent_has_no_search(cx: &mut TestAppContext) {
     assert!(tools::names("task-1").iter().any(|name| name == SEARCHED));
 }
 
-/// The thread's past row, as Library › Agents keeps it on disk, holds each search's clipped words,
-/// as its row says them, and never the engine.
+/// The thread's past row, as Library › Agents keeps it on disk, holds its searches' count and,
+/// in the activity entries it keeps, none of their words, nor the engine.
 #[gpui::test]
-fn the_past_row_holds_each_searchs_clipped_words(cx: &mut TestAppContext) {
+fn the_past_row_holds_the_searches_count_alone(cx: &mut TestAppContext) {
     let run = Run::new("search-past", cx);
     let agent = run.start(Cli::Claude, cx);
     search(
@@ -288,30 +273,22 @@ fn the_past_row_holds_each_searchs_clipped_words(cx: &mut TestAppContext) {
         .filter(|step| step.action == SEARCHED)
         .map(|step| (step.target, step.site))
         .collect();
-    let row = |words: &str| (format!("“{words}”"), String::new());
-    assert_eq!(
-        searched,
-        [row("sleeper carriages Madrid"), row("ferry to Tangier")],
-        "{file}"
-    );
+    assert_eq!(searched, [("2".to_string(), String::new())], "{file}");
+    let kept: Vec<String> = (file.lines())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|past| past["steps"].to_string())
+        .collect();
+    assert_eq!(kept.len(), 1, "{file}");
+    let words = "sleeper carriages Madrid ferry Tangier search.example";
+    for word in words.split(' ') {
+        assert!(
+            !kept[0].contains(word),
+            "{word} in the file's entries: {file}"
+        );
+    }
 }
 
-/// Words that fit in the row's 32 characters show whole; one more, and the row shows 31 and the
-/// "…" (TS6). The quotes count for neither.
-#[test]
-fn a_searchs_words_fit_in_32_characters_with_the_cut() {
-    let fits = "a".repeat(tools::SEARCH_SHOWN);
-    assert_eq!(
-        page::curly_within(&fits, tools::SEARCH_SHOWN),
-        format!("“{fits}”")
-    );
-    let over = "b".repeat(tools::SEARCH_SHOWN + 1);
-    let cut = format!("“{}…”", "b".repeat(tools::SEARCH_SHOWN - 1));
-    assert_eq!(page::curly_within(&over, tools::SEARCH_SHOWN), cut);
-    assert_eq!(page::curly_within("ferry", tools::SEARCH_SHOWN), "“ferry”");
-}
-
-/// The search's one entry: its words, no site, and why it was refused.
+/// The search's one entry: no words, no site, and why it was refused.
 fn searched_entry(run: &Run, agent: &str, cx: &mut TestAppContext) -> (String, String, String) {
     (run.agents).read_with(cx, |agents, _| {
         let entries: Vec<_> = agents.activity(agent).collect();
@@ -330,7 +307,7 @@ fn searched_entry(run: &Run, agent: &str, cx: &mut TestAppContext) -> (String, S
 }
 
 /// A search the user's Off limits list keeps from the engine's site is refused as an open there
-/// is, and its entry is still the search's, with its words and no site (AP25).
+/// is, and its entry is still the search's, with neither its words nor a site (Z46).
 #[gpui::test]
 fn a_search_kept_from_its_engine_is_the_searchs_entry(cx: &mut TestAppContext) {
     let run = Run::new("search-fenced", cx);
@@ -347,7 +324,7 @@ fn a_search_kept_from_its_engine_is_the_searchs_entry(cx: &mut TestAppContext) {
     );
     assert!(answer.try_recv().expect("refused at once").error);
     let (site, target, refused) = searched_entry(&run, &agent, cx);
-    assert_eq!((site.as_str(), target.as_str()), ("", "“trains”"));
+    assert_eq!((site.as_str(), target.as_str()), ("", ""));
     assert!(!refused.is_empty());
     assert!(
         run.browser.tabs.borrow().iter().all(|tab| tab.0 != 30),
@@ -371,7 +348,7 @@ fn a_search_its_access_refuses_is_the_searchs_entry(cx: &mut TestAppContext) {
     );
     assert!(answer.try_recv().expect("refused at once").error);
     let (site, target, refused) = searched_entry(&run, &agent, cx);
-    assert_eq!((site.as_str(), target.as_str()), ("", "“trains”"));
+    assert_eq!((site.as_str(), target.as_str()), ("", ""));
     assert!(!refused.is_empty());
     let titles = entries(&run, &agent, cx);
     assert!(
@@ -399,7 +376,7 @@ fn a_search_refused_while_it_waits_is_the_searchs_entry(cx: &mut TestAppContext)
     assert!(answer.try_recv().expect("the wait didn't answer").error);
     let last = (run.agents).read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
     assert_eq!(last.action.as_ref(), SEARCHED, "{last:?}");
-    assert_eq!((last.site.as_ref(), last.target.as_ref()), ("", "“buses”"));
+    assert_eq!((last.site.as_ref(), last.target.as_ref()), ("", ""));
     assert!(!last.refused.is_empty());
 }
 

@@ -923,9 +923,6 @@ pub const SEARCHED: &str = "search";
 /// a past thread's file may still hold it.
 const PROGRAM_SEARCHED: &str = "web_search";
 
-/// How many characters of a search's words its activity row shows, its "…" among them (TS6).
-pub const SEARCH_SHOWN: usize = 32;
-
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
 
@@ -1213,15 +1210,15 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
-        // A trace's step has its words whole; the activity log's entry has them clipped and quoted
-        // as its target (AP25), and names no engine.
+        // A trace's step has its words whole; the activity log's entry, a thread's, its count
+        // alone (Z46), and names no engine.
         SEARCHED => {
-            return match (tense, did.text.is_empty(), did.target.is_empty()) {
+            return match (tense, did.text.is_empty(), did.target.parse::<usize>()) {
                 (Tense::Failed, ..) => "Couldn't search".into(),
                 (Tense::Now, false, _) => format!("Searching the web for “{}”", did.text),
                 (_, false, _) => format!("Searched the web for “{}”", did.text),
-                (_, true, false) => format!("Searched {}", did.target),
-                (_, true, true) => "Searched the web".into(),
+                (_, true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
+                _ => "Searched the web".into(),
             };
         }
         PROGRAM_SEARCHED => return "Searched the web".into(),

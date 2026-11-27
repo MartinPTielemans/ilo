@@ -192,7 +192,7 @@ impl Past {
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
                 }
-                // A search's entry holds its words, clipped, which its row says (AP25).
+                // A search's entry holds its count alone, which its row says (Z46).
                 if step.action == crate::agents::tools::SEARCHED {
                     kept["target"] = json!(step.target);
                 }
