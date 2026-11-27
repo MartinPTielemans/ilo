@@ -118,12 +118,12 @@ mod naming;
 mod new_space;
 mod new_window;
 mod onboarding;
-mod own_shape;
 mod page_dialog;
 mod page_ends;
 mod page_menu;
 mod page_motion;
 mod pair;
+mod pane;
 mod panes;
 mod permission;
 mod portrait;
@@ -5265,9 +5265,9 @@ impl Shell {
         // sidebar has no line.
         let outlined = self.card_left() > 0.;
         let meets_sidebar = self.card_left() == self.width();
-        // A dark page of a colour of its own is told from a dark window by a hairline of the ink
-        // that reads on it, round the whole page, so down the sidebar's side too, as its tab's
-        // line has one round its own shape (own_shape.rs).
+        // A favourite's dark page of a colour of its own is told from a dark window by a hairline
+        // of the ink that reads on it, round the whole page, so down the sidebar's side too, as
+        // its tile has one round it.
         let own = self.page_fill(self.selected);
         let lit = own
             .map(|fill| self.palette.on_fill(fill))

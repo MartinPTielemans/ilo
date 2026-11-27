@@ -3035,6 +3035,21 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
+                    // PREVIEW_ICONS=<rrggbb>,… gives today's tabs, in turn, favicons of a disc in
+                    // those colours, for the open tab's light (#4398).
+                    if let Ok(icons) = states::var("PREVIEW_ICONS") {
+                        for (index, hex) in icons.split(',').enumerate() {
+                            let Ok(rgb) = u32::from_str_radix(hex, 16) else {
+                                continue;
+                            };
+                            let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.;
+                            let icon = Icon::Disc([channel(16), channel(8), channel(0)]);
+                            let favicon = icon.png().map(|png| {
+                                Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
+                            });
+                            shell.set_favicon(index as u64 + 1, favicon, cx);
+                        }
+                    }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
                     // note shows, offering what this system's does (#2468). =moved,
                     // moved-ad-blocking, typed or capturing shows the note the core gives on a press

@@ -469,9 +469,9 @@ fn the_window_draws_again_at_each_transparency_level(cx: &mut TestAppContext) {
     _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The shown tab's plate is the palette's with Developer Mode on as with it off, at every
-/// transparency level, and the outline that marks the mode lays no fill of its own. A plate firmer
-/// than the palette reckoned took its title under text's minimum over a bright window.
+/// With Developer Mode on, the shown tab's plate is the palette's, at every transparency level,
+/// and the outline that marks the mode lays no fill of its own. A plate firmer than the palette
+/// reckoned took its title under text's minimum over a bright window.
 #[gpui::test]
 fn developer_mode_leaves_the_shown_tabs_plate_as_it_is(cx: &mut TestAppContext) {
     use crate::shell::commands::Command;
@@ -520,7 +520,8 @@ fn developer_mode_leaves_the_shown_tabs_plate_as_it_is(cx: &mut TestAppContext) 
                 Some(palette.shown(0.)),
                 "{tone:?} {level:?}, in the mode"
             );
-            assert_eq!(off, on, "{tone:?} {level:?}, out of it");
+            // Out of it, the line is the open pane (pane.rs), which lays no plain plate.
+            assert_eq!(off, None, "{tone:?} {level:?}, out of it");
             let mut outline = developer_outline(&palette, PLATE_RADIUS);
             assert!(outline.style().background.is_none(), "{tone:?} {level:?}");
         }

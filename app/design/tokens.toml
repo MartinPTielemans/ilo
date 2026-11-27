@@ -459,6 +459,29 @@ window-margin = 40.0
 dark = 0.2
 light = 0.16
 
+# Where you are, the open tab's line, its split view's and the shown thread's card, is this pane
+# lifted out of the sidebar's glass (#4398), at the lifted level: [elevation]'s resting shadow and
+# rim. On a dark window its fill is brighter at its top than its foot, under a lit top edge; on a
+# light window it's the white Settings' selected section had. Under the pointer its fill is
+# `hovered` stronger.
+[selected.pane]
+dark-top = 0xffffff2e
+dark-bottom = 0xffffff1c
+dark-edge = 0xffffff29
+light-fill = 0xffffffd9
+hovered = 0.04
+# A faint light in the icon's main colour behind it: full at the icon's middle, gone `glow-reach`
+# past it, at `glow-dark` on a dark window and `glow-light` on a light one.
+glow-reach = 42.0
+glow-dark = 0.33
+glow-light = 0.2
+# The main colour is the most common hue of the icon's opaque pixels past `glow-saturation` and
+# `glow-value`, in twelve buckets, if at least `glow-share` of them are in it; an icon of no
+# colour, or of colours scattered too thin, gives no light.
+glow-saturation = 0.35
+glow-value = 0.25
+glow-share = 0.1
+
 # A group, Settings' or the sidebar's thread cards, is a plate, the address field's, never an
 # outline (#4401); the only line is a hairline between its rows.
 [group]

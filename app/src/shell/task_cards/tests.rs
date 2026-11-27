@@ -1694,19 +1694,17 @@ fn the_joined_cards_title_reads_on_its_stage() {
     }
 }
 
-/// The shown thread's card is a shape of its own in its stage's colour (spec-sidebar, "Thread,
-/// shown"): it takes the stage's fill, has no outline of its own, is inset at both sides and has
-/// four round corners, with a hairline of light round it on a dark stage and none on a light one.
+/// The shown thread's card is the open tab's pane (#4398): the pane of the window's look, with no
+/// light, since a thread has no icon of its own, and no outline of its own, inset at both sides.
 /// A card not shown keeps its state's outline, and a waiting one shown gives up its rim and has
 /// it back once another thread is shown.
 #[gpui::test]
-fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut TestAppContext) {
+fn the_shown_threads_card_is_the_open_tabs_pane(cx: &mut TestAppContext) {
     use super::card::Framed;
-    use crate::palette::Tone;
-    use crate::shell::own_shape::OWN_SHAPE;
+    use crate::shell::pane::PANES;
     use crate::theme::Appearance;
-    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RADIUS, RIM, RIM_WIDTH};
-    use crate::tokens::shell::{DIVIDER, PLATE_INSET};
+    use crate::tokens::shell::PLATE_INSET;
+    use crate::tokens::shell::task_card::{OUTLINE, OUTLINE_WIDTH, RIM, RIM_WIDTH};
     let two = vec![
         paged(2, Dot::Waiting, &[1020]),
         paged(1, Dot::Working, &[1010]),
@@ -1760,9 +1758,9 @@ fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut Te
             shell.run(Command::Appearance(appearance), "ui", cx)
         });
         cx.run_until_parked();
-        OWN_SHAPE.set(None);
+        PANES.take();
         draw(&shell, cx);
-        let own = OWN_SHAPE.take().expect("the card's own shape");
+        let panes = PANES.take();
         let (edge, plate, palette) = shell.read_with(cx, |shell, _| {
             (
                 shell.width(),
@@ -1776,22 +1774,12 @@ fn the_shown_threads_card_is_a_shape_of_its_own_in_its_stages_colour(cx: &mut Te
             edge - PLATE_INSET,
             "{appearance:?}: the shown card's right end"
         );
-        let stage = crate::shell::conversation::stage_fill(&palette);
-        assert_eq!(own.fill, gpui::Hsla::from(stage), "{appearance:?}");
-        assert_eq!(own.shape, plate, "{appearance:?}");
-        assert_eq!(
-            own.corners,
-            gpui::Corners::all(gpui::px(RADIUS)),
-            "{appearance:?}"
-        );
-        let on = palette.on_fill(stage);
-        let line = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER));
-        assert_eq!(own.outline, line, "{appearance:?}");
-        assert_eq!(
-            own.outline.is_some(),
-            appearance == Appearance::Dark,
-            "{appearance:?}"
-        );
+        // The pane laid where the card is.
+        let card = (panes.iter())
+            .find(|pane| pane.shape == plate)
+            .unwrap_or_else(|| panic!("{appearance:?}: no pane on the card in {panes:?}"));
+        assert_eq!(card.look.tone, palette.tone, "{appearance:?}");
+        assert_eq!(card.look.glow, None, "{appearance:?}");
     }
     show(&shell, "task-1", cx);
     assert_eq!(framed(&shell, "task-1", cx), Framed::Own);
