@@ -653,3 +653,35 @@ fn the_app_going_to_the_background_leaves_the_keyboard_where_it_was(cx: &mut Tes
         "the page's prompt waited for the search"
     );
 }
+
+/// A tab that waits on its user, for a permission, an HTTP sign-in or one of its page's dialogs,
+/// has the needs-you mark on its row until it's answered, shown or not (#4410).
+#[gpui::test]
+fn a_tab_that_waits_has_the_mark_until_answered(cx: &mut TestAppContext) {
+    use crate::shell::Question;
+    let (shell, cx, _) = window(cx);
+    let marked = |shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64| {
+        shell.read_with(cx, |shell, _| shell.waiting_mark(tab).is_some())
+    };
+    assert!(!marked(&shell, cx, 20));
+    let camera = Question {
+        site: "example.org".into(),
+        permissions: vec!["Use your camera".into()],
+    };
+    shell.update(cx, |shell, cx| shell.set_question(20, Some(camera), cx));
+    assert!(marked(&shell, cx, 20) && !marked(&shell, cx, 10));
+    shell.update(cx, |shell, cx| shell.set_question(20, None, cx));
+    assert!(!marked(&shell, cx, 20));
+    for kind in [DialogKind::Alert, DialogKind::SignIn] {
+        ask(&shell, cx, 20, Some(PageDialog { kind, ..prompt(5) }));
+        assert!(marked(&shell, cx, 20), "{kind:?}");
+        let reply = PageReply {
+            accept: true,
+            text: String::new(),
+            password: String::new(),
+            checked: false,
+        };
+        shell.update(cx, |shell, cx| shell.answer_page_dialog(20, 5, reply, cx));
+        assert!(!marked(&shell, cx, 20), "{kind:?}");
+    }
+}

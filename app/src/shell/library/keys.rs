@@ -1090,12 +1090,6 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));
         shell.update(cx, |shell, cx| shell.clear_archive(cx));
-        let (_, _, confirmed) = host
-            .confirming
-            .borrow_mut()
-            .take()
-            .expect("Clear Archive asked");
-        cx.update(|_, cx| confirmed(cx));
         cx.run_until_parked();
         assert_eq!(host.take_edits(), ["archive clear as 9001"]);
         assert_eq!(keyed(cx), (Role::TextInput, "Search history".into()));

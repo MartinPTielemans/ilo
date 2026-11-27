@@ -480,7 +480,7 @@ fn a_task_not_shown_is_told_by_its_state_as_its_notification_says_it(cx: &mut Te
     assert_eq!(told(&shell, cx), ["Flight to Lisbon · Needs you"]);
     send(&shell, vec![at(Dot::Working)], cx);
     send(&shell, vec![at(Dot::Done)], cx);
-    assert_eq!(told(&shell, cx), ["Flight to Lisbon · Done"]);
+    assert_eq!(told(&shell, cx), ["Flight to Lisbon · Replied"]);
 
     let session = |dot| Card {
         agent: "session-2".into(),

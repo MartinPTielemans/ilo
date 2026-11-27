@@ -7,7 +7,7 @@ use std::{collections::HashMap, rc::Rc};
 use gpui::{App, AppContext, Entity, TestAppContext};
 
 use crate::shell::{
-    Archived, Command, Folders, Shell, Split,
+    Archived, Command, Folders, Page, Shell, Split,
     recorder::Recorder,
     undo::{Prop, Value},
 };
@@ -874,7 +874,7 @@ fn a_change_of_orientation_is_its_own_step(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_private_window_keeps_no_split_to_undo(cx: &mut TestAppContext) {
+fn a_private_window_undoes_a_split(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
     shell.update(cx, |shell, cx| {
@@ -890,7 +890,33 @@ fn a_private_window_keeps_no_split_to_undo(cx: &mut TestAppContext) {
         shell.split_opened(12, cx);
     });
     assert_eq!(host.take_edits(), ["split 11 10 false"]);
-    assert_eq!(titles(&shell, cx), (None, None));
+    assert_eq!(titles(&shell, cx).0, Some("Split View"));
+}
+
+/// ⌘↩ takes a pinned tab back to its pinned URL at once, and ⌘Z to the page it was on (#4409).
+#[gpui::test]
+fn back_to_pinned_url_is_undone(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![10], vec![11], Folders::default(), Vec::new());
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://example.com/away".into(),
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+        shell.set_selected(10, cx);
+        shell.run(Command::BackToPinnedUrl, "ui", cx);
+    });
+    assert!(host.confirming.take().is_none());
+    assert!(host.take().contains(&"back to pinned url 10".to_string()));
+    assert_eq!(titles(&shell, cx).0, Some("Back to Pinned URL"));
+    assert!(undo(&shell, cx));
+    assert!(
+        host.take()
+            .contains(&"follow 10 https://example.com/away".to_string()),
+        "⌘Z didn't take the tab back to where it was"
+    );
+    assert!(redo(&shell, cx));
+    assert!(host.take().contains(&"back to pinned url 10".to_string()));
 }
 
 #[gpui::test]
@@ -1027,31 +1053,17 @@ fn clearing_and_deleting_a_space_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["delete space 2"]);
 }
 
-/// Deleting a Space with tabs asks first, in words that say its tabs go with it and name the ⌘Z
-/// that brings them back, as it does, since "close" would make the delete sound final.
+/// Deleting a Space with tabs goes at once, as an empty one does, since ⌘Z brings it all back,
+/// and its toast names the ⌘Z (#4409).
 #[gpui::test]
-fn the_delete_space_dialog_names_the_undo(cx: &mut TestAppContext) {
+fn delete_space_never_asks_and_its_toast_offers_the_undo(cx: &mut TestAppContext) {
     let (shell, host) = window(cx, vec![10], vec![11, 12], Folders::default(), Vec::new());
     shell.update(cx, |shell, cx| shell.delete_space(1, cx));
-    let (message, detail, confirmed) = host.confirming.take().expect("it didn't ask");
-    let key = crate::shell::keystroke_label("cmd-z");
-    assert_eq!(message, "Delete “One”?");
-    assert_eq!(
-        detail,
-        format!("Its 3 tabs go with it. {key} brings them back.")
-    );
-    cx.update(confirmed);
+    assert!(host.confirming.take().is_none(), "Delete Space asked first");
     assert_eq!(host.take_edits(), ["delete space 1"]);
+    assert_eq!(host.toasts.borrow().as_slice(), ["Space deleted! Use"]);
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["undo delete space 1"]);
-
-    let (shell, host) = plain(cx, vec![11]);
-    shell.update(cx, |shell, cx| shell.delete_space(1, cx));
-    let (_, detail, _) = host.confirming.take().expect("it didn't ask");
-    assert_eq!(
-        detail,
-        format!("Its tab goes with it. {key} brings it back.")
-    );
 }
 
 /// "Space deleted! Use ⌘Z to undo." goes with the ⌘Z it names, so it can't prompt a second one,
@@ -1278,15 +1290,37 @@ fn a_page_without_text_focus_gets_command_z_only_while_there_is_something_to_und
 }
 
 #[gpui::test]
-fn a_private_window_keeps_nothing_to_undo(cx: &mut TestAppContext) {
+fn a_private_window_undoes_its_close_and_clear(cx: &mut TestAppContext) {
+    // Kept in the window's memory alone (#4409): the history is the shell's, never written.
     let host = Rc::new(Recorder::default());
     let shell = cx.new(|cx| Shell::private_window(host.clone(), 9, "Private".into(), 1, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx)
+        shell.set_tabs(
+            9,
+            Vec::new(),
+            vec![10, 11, 12],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(10, cx);
     });
-    shell.update(cx, |shell, cx| shell.close_tab(10, false, cx));
-    assert_eq!(titles(&shell, cx), (None, None));
-    assert!(!undo(&shell, cx));
+    shell.update(cx, |shell, cx| shell.run(Command::Clear, "ui", cx));
+    assert_eq!(titles(&shell, cx).0, Some("Clear"));
+    host.take_edits();
+    assert!(
+        undo(&shell, cx),
+        "Clear in a private window couldn't be undone"
+    );
+    assert!(host.take_edits()[0].starts_with("undo clear"));
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    assert_eq!(titles(&shell, cx).0, Some("Close Tab"));
+    host.take_edits();
+    assert!(
+        undo(&shell, cx),
+        "⌘W in a private window couldn't be undone"
+    );
+    assert_eq!(host.take_edits(), ["reopen 11 as 1001"]);
 }
 
 /// With the UI focused, ⌘Z and ⇧⌘Z are the shell's own, and the Edit menu's Undo and Redo reach it

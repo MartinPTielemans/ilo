@@ -8197,19 +8197,17 @@ mod tasks {
             cx,
         );
         assert!(opening.try_recv().expect("refused at once").error);
+        // A refusal isn't stuck: the agent was told and goes on, so its card stays as it was,
+        // with no amber, and the header with it (#4410).
         let card = card_of(&agents, cx);
-        assert_eq!(
-            (card.status.as_ref(), card.dot),
-            ("Stopped at chase.com", Dot::Waiting)
-        );
+        assert_eq!(card.dot, Dot::Working, "a refusal lit the card");
         assert!(card.question.is_none(), "a refusal asked");
-        // One state, one word: the conversation's header follows the card.
         assert_eq!(
             agents
                 .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
                 .expect("its conversation")
                 .about,
-            format!("{PRODUCT} · Needs you"),
+            format!("{PRODUCT} · Working"),
             "the header and the card say different things at a refusal"
         );
         assert_eq!(shown(&agents, cx), None);
@@ -8313,6 +8311,47 @@ mod tasks {
         // Signed in since, it offers nothing more.
         set_found(&agents, Ready::SignedIn, cx);
         assert_eq!(card_of(&agents, cx).fix, None);
+    }
+
+    /// A thread whose assistant failed offers Retry, as one at its limit does, and Retry takes it
+    /// up again; a reply to one at its limit clears the limit, so ⌘T's ask says it no more
+    /// (#4419).
+    #[gpui::test]
+    fn a_failure_offers_retry_and_a_reply_clears_the_limit(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        let state = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone())
+        };
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let quit = Failure::Other("Claude quit.".into());
+        said(&agents, &agent, Out::Ended(Some(quit)), cx);
+        assert!(card_of(&agents, cx).retry, "a failure offers no Retry");
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Retry, cx)
+        });
+        assert_eq!(state(cx), State::Working, "Retry left it failed");
+
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+        said(
+            &agents,
+            &agent,
+            Out::Ended(Some(Failure::Limit(Some(at)))),
+            cx,
+        );
+        let resets = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.ask_agents()[0].resets.clone())
+        };
+        assert!(resets(cx).is_some());
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Try again", cx));
+        assert_eq!(state(cx), State::Working);
+        assert_eq!(resets(cx), None, "the reply left the limit");
     }
 
     #[gpui::test]
@@ -11148,6 +11187,17 @@ mod tasks {
             agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
         }
         assert_eq!(*browser.deleted.borrow(), vec![102]);
+    }
+
+    /// Threads never finish: a thread at rest is just at rest, so no word any place says reads
+    /// Done (#4412).
+    #[test]
+    fn no_word_reads_done() {
+        use crate::agents::task::Word;
+        for word in Word::ALL {
+            assert_ne!(word.after_name(), "Done", "{word:?}");
+            assert!(!word.alone("Claude").contains("Done"), "{word:?}");
+        }
     }
 
     /// Each state has one word, which a task's card, its conversation's line and its Archive row all
@@ -14214,6 +14264,29 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
+    }
+
+    /// A session that worked in 14 pages offers all 14 when it's done: none is dropped (#4412).
+    #[gpui::test]
+    fn a_session_keeps_every_page_it_worked_in(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let key = cards(&agents, cx)[0].agent.to_string();
+        let space = agents.read_with(cx, |agents, _| agents.task(&key).unwrap().space);
+        let pages: Vec<u64> = (40..54).collect();
+        let mut tabs = browser.tabs.borrow_mut();
+        tabs.extend((pages.iter()).map(|&tab| (tab, space, "Museum", "https://museum.example/")));
+        drop(tabs);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&key).unwrap();
+            task.session.as_mut().unwrap().tabs = pages.clone();
+            task.state = State::Working;
+        });
+        bye(&agents, cx);
+        let open: Vec<u64> = (card(&agents, &key, cx).open.iter())
+            .map(|(tab, _)| *tab)
+            .collect();
+        assert_eq!(open, pages);
     }
 
     /// The `ilo` command's connection closes after each command, which isn't its end: its card

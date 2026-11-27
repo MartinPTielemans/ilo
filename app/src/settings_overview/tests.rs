@@ -170,6 +170,20 @@ fn a_put_away_loose_end_stays_away() {
     let kept = std::fs::read_to_string(folder.join(PUT_AWAY_FILE)).unwrap();
     assert_eq!(kept, format!("{}\n", end.key()));
     assert!(PutAway::load(&folder).has(&end.key()));
+
+    // ⌘Z brings the last one back, and Show Hidden all of them, in the file too (#4409).
+    let other = LooseEnd::SignIn(Cli::Claude);
+    away.put_away(&other.key());
+    assert_eq!(away.bring_back_last(), Some(other.key()));
+    assert!(!away.has(&other.key()) && away.has(&end.key()));
+    assert!(away.any());
+    away.bring_back_all();
+    assert!(!away.any());
+    assert!(
+        !PutAway::load(&folder).has(&end.key()),
+        "the file still kept it"
+    );
+    assert_eq!(away.bring_back_last(), None);
     std::fs::remove_dir_all(&folder).ok();
 }
 

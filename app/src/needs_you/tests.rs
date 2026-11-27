@@ -14,6 +14,14 @@ struct Recorder {
     badges: RefCell<Vec<usize>>,
     notified: RefCell<Vec<(u64, String, String)>>,
     active: Cell<bool>,
+    /// The Space the key window shows, while one of the app's windows is key.
+    key: Cell<Option<u64>>,
+}
+
+/// The app in front with its key window on Space `space`, or behind another app with `None`.
+fn in_front(host: &Recorder, space: Option<u64>) {
+    host.active.set(space.is_some());
+    host.key.set(space);
 }
 
 impl Host for Recorder {
@@ -113,7 +121,7 @@ fn session(agent: &str, dot: Dot) -> Card {
 #[gpui::test]
 fn the_count_follows_the_tasks_that_wait_and_clears(cx: &mut TestAppContext) {
     let host = opened(cx);
-    host.active.set(true);
+    in_front(&host, Some(1));
     let working = card("task-1", "Claude", Dot::Working);
     follow_cards(std::slice::from_ref(&working), cx);
     assert!(
@@ -145,15 +153,41 @@ fn the_count_follows_the_tasks_that_wait_and_clears(cx: &mut TestAppContext) {
     assert_eq!(host.badges.take(), [1]);
 }
 
+/// A tab waiting on a permission, a sign-in or a dialog counts as a thread that waits does, in
+/// whichever window it is, until it's answered or closed (#4410).
+#[gpui::test]
+fn the_count_has_the_tabs_that_wait(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    in_front(&host, Some(1));
+    let tab_waits = |tab: u64, waits: bool, cx: &mut TestAppContext| {
+        cx.update(|cx| tab_waits(tab, waits, cx));
+    };
+    tab_waits(10, true, cx);
+    assert_eq!(host.badges.take(), [1]);
+    // Said again, as a second dialog comes on the same tab, it's still one.
+    tab_waits(10, true, cx);
+    assert!(host.badges.take().is_empty());
+    tab_waits(20, true, cx);
+    follow_cards(
+        &[waiting("task-1", "Claude", 7, "Sign in to github.com")],
+        cx,
+    );
+    assert_eq!(host.badges.take(), [2, 3]);
+    tab_waits(10, false, cx);
+    tab_waits(20, false, cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
+    assert_eq!(host.badges.take(), [2, 1, 0]);
+}
+
 #[gpui::test]
 fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut TestAppContext) {
     let host = opened(cx);
-    host.active.set(true);
+    in_front(&host, Some(1));
     let sign_in = waiting("task-1", "Claude", 7, "Sign in to github.com");
     follow_cards(std::slice::from_ref(&sign_in), cx);
     assert!(posted(&host).is_empty(), "ilo active, a notification came");
     // The same need, once ilo has gone to the background, posts nothing: it's never repeated.
-    host.active.set(false);
+    in_front(&host, None);
     follow_cards(std::slice::from_ref(&sign_in), cx);
     assert!(
         posted(&host).is_empty(),
@@ -174,8 +208,8 @@ fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut Tes
     follow_cards(&[sign_in.clone(), order.clone()], cx);
     assert!(posted(&host).is_empty(), "the same need posted again");
 
-    // Answered, then asked again, a task that has posted its need doesn't post another, so going
-    // back and forth can't ring the user; one that hadn't, does.
+    // Answered, then asked again, a standing chat that waits again posts again: each time it
+    // starts waiting is a notification (#4411).
     follow_cards(
         &[
             card("task-1", "Claude", Dot::Working),
@@ -185,16 +219,15 @@ fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut Tes
     );
     let again = waiting("task-2", "Codex", 9, "");
     follow_cards(std::slice::from_ref(&again), cx);
-    assert!(posted(&host).is_empty(), "a task posted its need twice");
-    follow_cards(&[again, sign_in], cx);
     assert_eq!(
         posted(&host),
-        [("Flight to Lisbon · Needs you".to_string(), String::new())]
+        [("Flight to Lisbon · Needs you".to_string(), String::new())],
+        "a thread's second wait posted nothing"
     );
 }
 
 #[gpui::test]
-fn a_task_that_finishes_posts_done_once(cx: &mut TestAppContext) {
+fn each_turn_that_ends_posts_replied(cx: &mut TestAppContext) {
     let host = opened(cx);
     // A task ilo first sees done, as one kept from a run before, posts nothing.
     follow_cards(&[card("task-1", "Claude", Dot::Done)], cx);
@@ -206,21 +239,81 @@ fn a_task_that_finishes_posts_done_once(cx: &mut TestAppContext) {
     follow_cards(std::slice::from_ref(&done), cx);
     assert_eq!(
         posted(&host),
-        [("Flight to Lisbon · Done".to_string(), String::new())]
+        [("Flight to Lisbon · Replied".to_string(), String::new())]
     );
+    // A thread never finishes: its next turn's end posts again (#4411).
     follow_cards(&[working], cx);
     follow_cards(&[done], cx);
-    assert!(posted(&host).is_empty(), "a task posted its finish twice");
-    // A task stopped or failed hasn't finished its work: it posts nothing.
+    assert_eq!(posted(&host).len(), 1, "a second turn's end posted nothing");
+    // The user stopped it, so there's nothing to tell them.
     follow_cards(&[card("task-3", "Codex", Dot::Working)], cx);
     follow_cards(&[card("task-3", "Codex", Dot::Ended)], cx);
     assert!(posted(&host).is_empty(), "a stopped task posted");
 }
 
+/// A thread that fails or reaches its plan's limit while the user is away posts, so one dying
+/// overnight isn't silent (#4411).
+#[gpui::test]
+fn a_fail_and_a_limit_post(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    let ended = |agent: &str, word| Card {
+        word,
+        ..card(agent, "Claude", Dot::Ended)
+    };
+    follow_cards(
+        &[
+            card("task-1", "Claude", Dot::Working),
+            card("task-2", "Claude", Dot::Working),
+        ],
+        cx,
+    );
+    follow_cards(
+        &[
+            ended("task-1", Word::Interrupted),
+            ended("task-2", Word::AtLimit),
+        ],
+        cx,
+    );
+    assert_eq!(
+        posted(&host),
+        [
+            ("Flight to Lisbon · Interrupted".to_string(), String::new()),
+            ("Flight to Lisbon · At limit".to_string(), String::new()),
+        ]
+    );
+}
+
+/// In front means the thread's own window is key: with the app active on another window, or on
+/// another Space, the wait posts; with its window key, it posts nothing, then or later (#4411).
+#[gpui::test]
+fn only_the_threads_key_window_keeps_it_quiet(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    // The cards' home is Space 1.
+    in_front(&host, Some(1));
+    follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
+    assert!(
+        posted(&host).is_empty(),
+        "its window key, a notification came"
+    );
+    in_front(&host, None);
+    follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
+    assert!(posted(&host).is_empty(), "a wait seen in front posted late");
+
+    in_front(&host, Some(2));
+    follow_cards(&[card("task-2", "Claude", Dot::Working)], cx);
+    follow_cards(&[card("task-2", "Claude", Dot::Waiting)], cx);
+    assert_eq!(
+        posted(&host).len(),
+        1,
+        "with another window key, the wait posted nothing"
+    );
+}
+
 #[gpui::test]
 fn always_posts_in_front_and_never_posts_nothing(cx: &mut TestAppContext) {
     let host = opened(cx);
-    host.active.set(true);
+    in_front(&host, Some(1));
     follow_as(
         &[card("task-1", "Claude", Dot::Waiting)],
         Notify::Always,
@@ -228,7 +321,7 @@ fn always_posts_in_front_and_never_posts_nothing(cx: &mut TestAppContext) {
     );
     assert_eq!(posted(&host).len(), 1, "Always, in front, posted nothing");
 
-    host.active.set(false);
+    in_front(&host, None);
     follow_as(&[card("task-2", "Codex", Dot::Working)], Notify::Never, cx);
     follow_as(&[card("task-2", "Codex", Dot::Waiting)], Notify::Never, cx);
     follow_as(&[card("task-2", "Codex", Dot::Done)], Notify::Never, cx);
@@ -245,7 +338,7 @@ fn a_session_is_named_by_its_agent_never_by_its_title(cx: &mut TestAppContext) {
         posted(&host),
         [
             ("Claude Code · Needs you".to_string(), String::new()),
-            ("Claude Code · Done".to_string(), String::new()),
+            ("Claude Code · Replied".to_string(), String::new()),
         ]
     );
 }
@@ -262,7 +355,7 @@ fn a_tasks_title_goes_on_one_line_and_capped(cx: &mut TestAppContext) {
     follow_cards(&[named(Dot::Done)], cx);
     let one_line = long.split_whitespace().collect::<Vec<_>>().join(" ");
     let capped: String = one_line.chars().take(TEXT_MOST - 1).collect();
-    let expected = format!("{capped}… · Done");
+    let expected = format!("{capped}… · Replied");
     assert_eq!(posted(&host), [(expected, String::new())]);
 }
 
@@ -287,10 +380,10 @@ fn a_task_gone_from_the_cards_is_forgotten(cx: &mut TestAppContext) {
     follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
     follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
     assert_eq!(posted(&host).len(), 1);
-    let told = |cx: &mut TestAppContext| cx.update(|cx| cx.global::<NeedsYou>().told.len());
-    assert_eq!(told(cx), 1);
+    let last = |cx: &mut TestAppContext| cx.update(|cx| cx.global::<NeedsYou>().last.len());
+    assert_eq!(last(cx), 1);
     follow_cards(&[card("task-2", "Codex", Dot::Working)], cx);
-    assert_eq!(told(cx), 0, "a task gone from the cards is still told");
+    assert_eq!(last(cx), 1, "a task gone from the cards is still followed");
 }
 
 #[gpui::test]

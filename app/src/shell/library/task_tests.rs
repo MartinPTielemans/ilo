@@ -355,7 +355,7 @@ fn a_private_window_keeps_no_archived_task(cx: &mut TestAppContext) {
     assert!(private.read_with(cx, |shell, _| shell.archived_tasks.is_empty()));
 }
 
-/// Clear Archive empties the tasks with the tabs, saying both, and one ⌘Z brings both back. The
+/// Clear Archive empties the tasks with the tabs at once, and one ⌘Z brings both back. The
 /// tasks stay in memory for it, as Delete from Archive leaves one.
 #[gpui::test]
 fn clear_archive_takes_the_tasks_with_the_tabs(cx: &mut TestAppContext) {
@@ -364,13 +364,11 @@ fn clear_archive_takes_the_tasks_with_the_tabs(cx: &mut TestAppContext) {
         shell.set_archived_tasks(vec![task(2, 2500.), task(1, 2000.)], cx)
     });
     shell.update(cx, |shell, cx| shell.clear_archive(cx));
-    let (message, detail, confirmed) = host.confirming.borrow_mut().take().expect("it didn't ask");
-    assert_eq!(message, "Clear the archive?");
+    // ⌘Z brings it back, so it never asks (#4409).
     assert!(
-        detail.starts_with("Its 2 tabs and 2 threads leave the archive. "),
-        "{detail}"
+        host.confirming.borrow_mut().take().is_none(),
+        "Clear Archive asked first"
     );
-    cx.update(|_, cx| confirmed(cx));
     cx.run_until_parked();
     assert_eq!(host.take_edits(), ["archive clear as 9001"]);
     let tasks = |host: &Recorder| -> Vec<String> {

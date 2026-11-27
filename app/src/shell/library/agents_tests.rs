@@ -108,14 +108,29 @@ fn agents_lists_the_profiles_past_tasks_for_30_days(cx: &mut TestAppContext) {
     );
 }
 
-/// A row's ✕ deletes it alone, and Clear the rest.
+/// A row's ✕ deletes it alone at once, which ⌘Z brings back, and Clear the rest, which can't come
+/// back, so it asks first (#4409).
 #[gpui::test]
 fn one_deletes_alone_and_clear_takes_them_all(cx: &mut TestAppContext) {
     let (shell, host, cx) = agents(cx);
     shell.update(cx, |shell, cx| shell.delete_past_task("2", cx));
+    assert!(host.confirming.take().is_none(), "a thread's ✕ asked first");
     assert_eq!(listed(&shell, cx), ["clear", "1"]);
     assert_eq!(file(&host), ["1"]);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Thread Deleted"]);
+    shell.update(cx, |shell, cx| shell.undo(cx));
+    assert_eq!(
+        listed(&shell, cx),
+        ["clear", "2", "1"],
+        "⌘Z didn't bring it back"
+    );
+    assert_eq!(file(&host), ["2", "1"]);
+
     shell.update(cx, |shell, cx| shell.clear_agent_history(cx));
+    assert_eq!(file(&host), ["2", "1"], "Clear went before it asked");
+    let (message, _, confirmed) = host.confirming.take().expect("Clear didn't ask");
+    assert_eq!(message, "Remove 2 threads?");
+    cx.update(|_, cx| confirmed(cx));
     assert!(listed(&shell, cx).is_empty());
     assert!(file(&host).is_empty());
 }

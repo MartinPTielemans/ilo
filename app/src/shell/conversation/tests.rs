@@ -496,9 +496,10 @@ fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
 }
 
 /// Esc steps back to the Space's tab and never stops the task, its pictures let go; a second click
-/// shows it again, pictured again, and ⌘W then closes the card, dismissing the task.
+/// shows it again, pictured again, and ⌘W then leaves it as Esc does: the thread keeps working
+/// and its card stays in the list (#4412). ⌘. alone stops it, from the UI and from a page.
 #[gpui::test]
-fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
+fn escape_and_command_w_leave_and_only_command_period_stops(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(1)), cx)
@@ -525,9 +526,40 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
         host.take().contains(&"task picture 30".to_string()),
         "pictured again"
     );
-    shell.update(cx, |shell, cx| shell.run(Command::CloseTab, "ui", cx));
-    assert!(host.take().contains(&"task task-1 Dismiss".to_string()));
-    shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent(), None));
+    for from in ["ui", "page"] {
+        shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(conversation(1)), cx)
+        });
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(Command::CloseTab, from, cx));
+        let lines = host.take();
+        assert!(
+            !lines.iter().any(|line| line.starts_with("task task-1")),
+            "⌘W from the {from} stopped or put away the thread: {lines:?}"
+        );
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.talk_agent(), None, "⌘W from the {from} didn't leave");
+            assert!(
+                shell.task_cards.iter().any(|card| card.agent == "task-1"),
+                "its card left the list"
+            );
+        });
+    }
+    // ⌘. stops it, with the reply field's keyboard and with a page's.
+    for page in [false, true] {
+        shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(conversation(1)), cx)
+        });
+        host.take();
+        let stopped = shell.update(cx, |shell, cx| match page {
+            true => shell.run_agent_page_key("cmd-.", cx),
+            false => shell.run_agent_key("cmd-.", cx),
+        });
+        assert!(stopped, "⌘. with the page focused: {page}");
+        assert!(host.take().contains(&"task task-1 Stop".to_string()));
+    }
 }
 
 /// A task's pages stand in a rail beside its conversation, one view with no switch: a tile's click

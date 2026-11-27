@@ -213,6 +213,12 @@ impl Shell {
     }
 }
 
+impl Shell {
+    pub(super) fn waiting_mark(&self, _tab: u64) -> Option<Div> {
+        None
+    }
+}
+
 /// How the logs name `trouble`.
 fn name(trouble: Trouble) -> String {
     match trouble {

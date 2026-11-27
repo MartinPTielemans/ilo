@@ -181,6 +181,8 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
         .collect();
 }
 
+pub fn tab_waits(_tab: u64, _waits: bool, _cx: &mut App) {}
+
 /// What the last `follow` found the task `agent` came to, to wait or to be done, and whether its
 /// notification was posted then. Nothing is told of it in the app beside a notification.
 pub fn came(agent: &str, cx: &App) -> Option<(Told, bool)> {

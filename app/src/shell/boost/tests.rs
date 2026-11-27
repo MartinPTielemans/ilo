@@ -1338,3 +1338,38 @@ fn arranges_motion_is_inside_the_cores_ranges() {
     assert!((0.05..=1.).contains(&ROW_RESPONSE), "land {ROW_RESPONSE}");
     assert!((0.2..=0.99).contains(&ROW_DAMPING), "land {ROW_DAMPING}");
 }
+
+/// Delete goes at once, its toast offering the Undo, and ⌘Z writes the Boost's file, its script and
+/// its switch back as they were (#4409).
+#[gpui::test]
+fn delete_boost_never_asks_and_is_undone(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
+    });
+    std::fs::write(folder.0.join("Boosts").join("example.com.js"), "// mine\n").unwrap();
+    let css = folder.boost("example.com").expect("no Boost made");
+    shell.update(cx, |shell, cx| shell.set_tab_boost_on(10, false, cx));
+    host.take();
+    shell.update(cx, |shell, cx| shell.delete_boost(1, "example.com", cx));
+    assert!(host.confirming.take().is_none(), "Delete Boost asked first");
+    assert_eq!(folder.boost("example.com"), None);
+    assert_eq!(folder.script("example.com"), None);
+    assert_eq!(host.undo_toasts.borrow().as_slice(), ["Boost Deleted"]);
+    shell.update(cx, |shell, cx| shell.undo(cx));
+    assert_eq!(
+        folder.boost("example.com"),
+        Some(css),
+        "⌘Z didn't write the file back"
+    );
+    assert_eq!(folder.script("example.com").as_deref(), Some("// mine\n"));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.boost_state(10)),
+        (true, Some(false)),
+        "it came back on, where it was off"
+    );
+    shell.update(cx, |shell, cx| shell.redo(cx));
+    assert_eq!(folder.boost("example.com"), None);
+}

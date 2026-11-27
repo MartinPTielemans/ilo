@@ -139,6 +139,16 @@ impl PutAway {
         self.keys.contains(key)
     }
 
+    pub fn bring_back_last(&mut self) -> Option<String> {
+        None
+    }
+
+    pub fn bring_back_all(&mut self) {}
+
+    pub fn any(&self) -> bool {
+        true
+    }
+
     /// Keeps `key` for good: the user's ✕ alone calls it.
     pub fn put_away(&mut self, key: &str) {
         if !self.keys.insert(key.into()) {
