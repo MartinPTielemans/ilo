@@ -1249,12 +1249,14 @@ impl TextInput {
     }
 
     /// ⇧↩ in a field of several lines: a newline where the caret is. While an input method
-    /// composes, the key is its own.
+    /// composes, the key is its own, and adds nothing here.
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
-        if self.multi_line.is_none() || self.marked_range.is_some() {
+        if self.multi_line.is_none() {
             return cx.propagate();
         }
-        self.replace_text_in_range(None, "\n", window, cx);
+        if self.marked_range.is_none() {
+            self.replace_text_in_range(None, "\n", window, cx);
+        }
     }
 
     fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
@@ -1490,6 +1492,15 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        // A field of one line takes no line break, such as a key's the owner left to it.
+        let one_line;
+        let new_text = match self.multi_line {
+            Some(_) => new_text,
+            None => {
+                one_line = new_text.replace(['\n', '\r'], "");
+                one_line.as_str()
+            }
+        };
 
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
