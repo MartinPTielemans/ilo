@@ -164,7 +164,7 @@ impl Agents {
     pub fn add_folder(&mut self, row: Row, picked: &Path, cx: &mut Context<Self>) -> bool {
         let never = Never::here(Some(self.tasks_dir()));
         let Some(folder) = files::grant(picked, &never) else {
-            // check.sh reads this line, which never names the folder.
+            // Never the folder's name or path.
             crate::log!("browser: agents folders refused one for {}", row_name(row));
             return false;
         };
@@ -191,7 +191,6 @@ impl Agents {
     /// The log's entry for a change of `row`, by the folder's name alone.
     fn note_folders(&mut self, action: &str, row: Row, name: &str) {
         let target = format!("{}: {name}", row_name(row));
-        // check.sh reads this line.
         crate::log!("browser: agents {action} to {}", row_name(row));
         let entry = Activity {
             at: SystemTime::now(),
