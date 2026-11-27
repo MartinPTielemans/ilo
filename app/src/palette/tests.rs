@@ -1,7 +1,7 @@
 use super::*;
 use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
-use crate::tokens::palette::{LIGHT_TINT, TINT};
+use crate::tokens::palette::{LIGHT_SPACE_TINT, LIGHT_TINT, SPACE_TINT, TINT};
 use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
@@ -35,15 +35,10 @@ fn hex(color: Rgba) -> u32 {
     theme::packed(color)
 }
 
-/// The window, finer than the palette checks it: the foot's glow at 17 strengths and the far one's
-/// at 5, each with each wherever the window's size makes them meet, over a black and a white
-/// backdrop.
+/// The window over a black and a white backdrop: the same everywhere on it, as a Space's tint is
+/// flat.
 fn fine_window(palette: &Palette) -> Vec<Rgba> {
-    let steps = 16;
-    (0..=steps)
-        .flat_map(|foot| (0..=4).map(move |far| (foot as f32 / steps as f32, far as f32 / 4.)))
-        .flat_map(|(foot, far)| palette.window_at(foot, far))
-        .collect()
+    palette.window().to_vec()
 }
 
 /// What fails: each of the chrome's components drawn as the shell draws it, with its alpha
@@ -205,9 +200,7 @@ fn failures_over(
         .fold(f32::MAX, f32::min);
     check("picker segment label", label, TEXT);
     // A Library card is its Space's window, drawn in its palette, split segments too.
-    let card: Vec<Rgba> = (0..=16)
-        .flat_map(|foot| palette.window_at(foot as f32 / 16., 0.))
-        .collect();
+    let card = palette.window().to_vec();
     check(
         "card split segment title",
         on(palette.text(0.78), &card),
@@ -631,7 +624,7 @@ fn a_light_window_is_white_over_the_material_with_ink() {
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Light);
     assert_eq!(
         (violet.tint, violet.layer_alpha),
-        (palette.tint, LIGHT_GRADIENT_ALPHA)
+        (palette.tint, LIGHT_SPACE_TINT)
     );
 }
 
@@ -640,43 +633,37 @@ fn a_light_window_is_white_over_the_material_with_ink() {
 /// the least step that lets it read.
 #[test]
 fn a_theme_only_fades_where_the_ink_needs_it() {
-    // check/window.sh's black Space: neutral, its own alpha, on the window without a theme.
+    // check/window.sh's black Space: the tint's own alpha, as any colour's, on the window without
+    // a theme.
     let none = Palette::of(None, Tone::Dark);
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
         (black.tint, black.underlay, black.layer_alpha),
-        (none.tint, none.underlay, NEUTRAL_GRADIENT_ALPHA)
+        (none.tint, none.underlay, SPACE_TINT)
     );
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Dark);
-    assert_eq!(
-        (violet.tint, violet.layer_alpha),
-        (none.tint, GRADIENT_ALPHA)
-    );
-    // The picker's palest swatch, too light for Paper at its own alpha over white.
+    assert_eq!((violet.tint, violet.layer_alpha), (none.tint, SPACE_TINT));
+    // The picker's palest swatch, which faded under the glow, lies at its own alpha: the tint is
+    // faint enough for Paper to read on it over white, the window's lightest (#4402).
     let pale = Theme::of_color(0xf0eae5);
     let palette = Palette::of(Some(&pale), Tone::Dark);
     let window = Window::of(&pale, Tone::Dark, START);
     assert_eq!(palette.tint, none.tint, "the pale theme shades the window");
-    assert!(
-        palette.layer_alpha < window.alpha,
-        "the pale theme isn't faded"
-    );
+    assert_eq!(palette.layer_alpha, window.alpha, "the pale theme is faded");
     let paper = rgb(PAPER);
-    let fails = window
-        .samples(palette.layer_alpha + window.alpha * SHADE_STEP)
-        .iter()
-        .any(|&at| {
-            contrast(paper, over(at, paper, GRAIN_SHIFT * pale.grain)) < TEXT + BETWEEN
-                || contrast(Tone::Dark.end(), at) < GLYPH + BETWEEN
-        });
-    assert!(fails, "a step less fade would have read");
+    let reads = window.samples(palette.layer_alpha).iter().all(|&at| {
+        contrast(paper, over(at, paper, GRAIN_SHIFT * pale.grain)) >= TEXT + BETWEEN
+            && contrast(Tone::Dark.end(), at) >= GLYPH + BETWEEN
+    });
+    assert!(reads, "Paper doesn't read on the pale tint");
 }
 
-/// A Space's colour changes only its glows: away from them, its window is the window without a
-/// theme, the same tint over the same material, in both looks and at every transparency level, so
-/// it's as see-through as the user's level says (#4090).
+/// A Space's colour only lies its tint over the window: under it, its window is the window without
+/// a theme, the same tint over the same material, in both looks and at every transparency level,
+/// so it's as see-through as the user's level says (#4090); and the tint is the main colour, flat,
+/// at the tint's alpha (#4402).
 #[test]
-fn a_themed_window_has_the_glass_of_one_without() {
+fn a_themed_window_is_the_glass_of_one_without_under_its_tint() {
     let themes = grid(
         &[0., 60., 120., 180., 240., 300.],
         &[0., 0.4, 1.],
@@ -695,9 +682,11 @@ fn a_themed_window_has_the_glass_of_one_without() {
                     "{level:?} {tone:?} {}",
                     theme.to_text()
                 );
+                let main = rgb(theme.main_color());
                 assert_eq!(
-                    palette.window_at(0., 0.),
-                    none.window_at(0., 0.),
+                    palette.window(),
+                    none.window()
+                        .map(|ground| over(ground, main, palette.layer_alpha)),
                     "{level:?} {tone:?} {}",
                     theme.to_text()
                 );
@@ -1560,7 +1549,7 @@ fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
 }
 
 /// What the palette reckons the window over black, grey 128 and white, which check/window.sh reads
-/// the sidebar against, is the window it draws at its darkest and lightest, glows and all: over
+/// the sidebar against, is the window it draws at its darkest and lightest, tint and all: over
 /// black on a black desktop, and over white with the most a desktop picture lifts it.
 #[test]
 fn the_window_reckoned_over_greys_is_the_one_drawn() {
@@ -1570,15 +1559,9 @@ fn the_window_reckoned_over_greys_is_the_one_drawn() {
         (Some(Theme::of_color(0x5a2a9a)), Tone::Light),
     ] {
         let palette = Palette::of(theme.as_ref(), tone);
-        for (foot, far) in [(0., 0.), (0.4, 0.), (1., 1.)] {
-            let [black, ..] = palette.window_over_greys(foot, far, 0.).map(hex);
-            let [.., white] = palette.window_over_greys(foot, far, 1.).map(hex);
-            assert_eq!(
-                [black, white],
-                palette.window_at(foot, far).map(hex),
-                "{tone:?} {foot} {far}"
-            );
-        }
+        let [black, ..] = palette.window_over_greys(0.).map(hex);
+        let [.., white] = palette.window_over_greys(1.).map(hex);
+        assert_eq!([black, white], palette.window().map(hex), "{tone:?}");
     }
 }
 
@@ -2011,7 +1994,7 @@ fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
     for level in Transparency::ALL {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
-        let lifted = palette.window_over_greys(0., 0., 1.);
+        let lifted = palette.window_over_greys(1.);
         let grounds = fine_window(&palette).into_iter().chain(lifted);
         for at in grounds {
             for hover in [0., 1.] {
@@ -2460,8 +2443,7 @@ fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
     let colours = [
         palette.tint,
         palette.underlay,
-        palette.glow,
-        palette.far_glow,
+        palette.space_tint,
         palette.shown.unwrap_or(BLACK),
         palette.ink,
         palette.accent,
@@ -2515,7 +2497,8 @@ fn dark_floats() -> String {
 /// the ink itself, as a label on a light accent, does it follow the ink. With no theme the accent,
 /// the selected section's glyph and the swatch are the text's ink since the greens went
 /// (spec-bar-composer.md, The greens still worn); nothing else of Dark's moved with them. Its
-/// greys and Paper went neutral since (#4401), which moved it once more.
+/// greys and Paper went neutral since (#4401), which moved it once more, and the Space's glows
+/// became one flat tint (#4402), which moved it again.
 #[test]
 fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
     let themes: Vec<Option<Theme>> = [
@@ -2540,7 +2523,7 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     assert_eq!(
-        pin, 3_868_558_831_731_239_023,
+        pin, 3_688_389_465_469_070_845,
         "a dark window's palette moved:\n{all}"
     );
 }
@@ -2658,12 +2641,56 @@ fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
     let page = rgba(crate::tokens::settings::form::LIGHT_OWN_PAGE);
     for glass in bar() {
         let palette = Palette::at(None, Tone::Light, glass);
-        let [_, white] = palette.window_at(0., 0.);
+        let [_, white] = palette.window();
         let ground = over(white, page, page.a);
         assert!(
             contrast(red, ground) >= TEXT,
             "on an own page at {glass}: {:.2}",
             contrast(red, ground)
         );
+    }
+}
+
+/// The main button (#4401), filled with the ink, keeps its label, the other look's ink, readable at
+/// rest, under the pointer and pressed, in both looks.
+#[test]
+fn the_main_buttons_label_reads_on_its_ink_in_every_state() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let label = palette.other_ink();
+        let (hovered, pressed) = ink_states(palette.ink, label);
+        for (state, fill) in [
+            ("rest", palette.ink),
+            ("hovered", hovered),
+            ("pressed", pressed),
+        ] {
+            assert!(
+                contrast(label, fill) >= 4.5,
+                "{tone:?} {state}: {:.2}",
+                contrast(label, fill)
+            );
+        }
+    }
+}
+
+/// Amber says a thread waits on the user (#4402), in its knot and its words, so it holds text's
+/// 4.5:1 on the sidebar's ground, as its text does, in both looks, all along the Transparency
+/// bar.
+#[test]
+fn a_waiting_threads_amber_reads_as_words_on_the_sidebar() {
+    for tone in [Tone::Dark, Tone::Light] {
+        for glass in bar() {
+            let palette = Palette::at(None, tone, glass);
+            let amber = palette.needs_you;
+            // The sidebar's own ground, where a card that isn't shown lies, as the text's floor
+            // samples it.
+            for ground in Window::of_none(tone, glass).samples(0.) {
+                assert!(
+                    contrast(amber, ground) >= TEXT,
+                    "{tone:?} at {glass}: {:.2} on {ground:?}",
+                    contrast(amber, ground)
+                );
+            }
+        }
     }
 }
