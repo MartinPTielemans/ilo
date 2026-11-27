@@ -168,6 +168,18 @@ fn every_claude_code_run_starts_in_its_box_and_keeps_its_conversation(cx: &mut T
     }
 }
 
+/// A run's box that rose says so in the dev log, which the checks wait for, and is no answer.
+#[gpui::test]
+fn a_box_that_rose_says_so_in_the_dev_log(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("risen", Given::default(), cx);
+    run.ran(1);
+    crate::heard::listen();
+    run.said(&agent, Out::Walled(Ok(())), cx);
+    let heard = crate::heard::take();
+    assert_eq!(heard, [format!("browser: task {agent} is boxed in")]);
+    assert_eq!(run.state(&agent, cx), State::Working);
+}
+
 /// A change of level is told to the run the task has, in a box that's the same at every level:
 /// no box is asked for again, and no run ends or starts.
 #[gpui::test]

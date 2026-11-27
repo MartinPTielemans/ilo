@@ -2527,9 +2527,10 @@ impl Agents {
         if under_way.is_some_and(|under_way| under_way != run) {
             return;
         }
-        // Its assistant is inside its box, which is no answer of the assistant's.
+        // Its assistant is inside its box, which is no answer of the assistant's. check.sh reads
+        // this line.
         if out == Out::Walled(Ok(())) {
-            return;
+            return log!("browser: task {agent} is boxed in");
         }
         // Whatever it said, it answered; a strand of it still unheard keeps its watch.
         if let Some(task) = self.task_mut(&agent) {
@@ -2641,8 +2642,8 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
-            // check.sh reads this line.
-            Out::Walled(Ok(())) => log!("browser: task {agent} is boxed in"),
+            // Said above.
+            Out::Walled(Ok(())) => {}
             // The start the user stopped: their stop ended its launcher, and is what the card says.
             Out::Walled(Err(_))
                 if self
