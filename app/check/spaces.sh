@@ -582,8 +582,8 @@ expect "^browser: settled space $first\$" "the first Space's page didn't settle 
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the side buttons out over the page"
 send move $page_point
-send move 3 300
-send move 3 306
+send move 0 300
+send move 0 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out for the side buttons"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen for the side buttons"
 set -- $swipe_point
@@ -1115,8 +1115,8 @@ done
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the … out over the page"
 send move $page_point
-send move 3 300
-send move 3 306
+send move 0 300
+send move 0 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 reveal_edit="207 117"

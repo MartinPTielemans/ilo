@@ -17,6 +17,8 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{Granted, LeavingLink, Removed, Stop, Walked, Wall};
+#[cfg(target_os = "macos")]
+use crate::agents::files::resolve::dataless;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Limits {
@@ -607,45 +609,6 @@ fn stat_of(fd: &OwnedFd) -> io::Result<libc::stat> {
     }
     // SAFETY: fstat succeeded, so it filled the answer.
     Ok(unsafe { stat.assume_init() })
-}
-
-/// While the walk runs, the Mac doesn't fetch a folder's contents that are only in the cloud just
-/// to list them: such a folder won't open then, and counts as unread. Unmeasured: no Mac run has
-/// walked one yet.
-#[cfg(target_os = "macos")]
-mod dataless {
-    use libc::c_int;
-
-    // From the SDK's sys/resource.h, which libc doesn't bind.
-    const MATERIALIZE_DATALESS_FILES: c_int = 3;
-    const THREAD: c_int = 1;
-    const OFF: c_int = 1;
-
-    unsafe extern "C" {
-        fn getiopolicy_np(iotype: c_int, scope: c_int) -> c_int;
-        fn setiopolicy_np(iotype: c_int, scope: c_int, policy: c_int) -> c_int;
-    }
-
-    /// The walking thread's policy as it was, put back as the walk ends.
-    pub(super) struct LeftInTheCloud(Option<c_int>);
-
-    pub(super) fn left_in_the_cloud() -> LeftInTheCloud {
-        // SAFETY: the calling thread's own policy.
-        let was = unsafe { getiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD) };
-        // SAFETY: as above.
-        let set =
-            was >= 0 && unsafe { setiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD, OFF) } == 0;
-        LeftInTheCloud(set.then_some(was))
-    }
-
-    impl Drop for LeftInTheCloud {
-        fn drop(&mut self) {
-            if let Some(was) = self.0 {
-                // SAFETY: the calling thread's own policy, as it read before the walk.
-                unsafe { setiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD, was) };
-            }
-        }
-    }
 }
 
 #[cfg(test)]

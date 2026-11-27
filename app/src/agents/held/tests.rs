@@ -170,6 +170,17 @@ impl World {
         if self.life != Life::Free {
             go("the user hands it back", &|w| _ = w.app(Event::HandBack));
         }
+        // The core reports a page only for a tab it holds.
+        if self.core_held && self.tab == Place::Agents {
+            go("the page moves on", &|w| {
+                let handed_off = w.life == Life::HandedOff;
+                w.app(Event::MovedOn);
+                assert!(
+                    !handed_off || (w.life == Life::Free && !w.core_held),
+                    "the page moved on and the hand-off didn't end"
+                );
+            });
+        }
         if self.life == Life::Asked {
             go("the user keeps it", &|w| _ = w.app(Event::Keep));
         }

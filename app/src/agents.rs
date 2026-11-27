@@ -22,7 +22,9 @@ pub mod command;
 pub mod fence;
 pub mod files;
 mod held;
+pub use held::HeldPage;
 mod helpers;
+pub mod install;
 pub mod kept;
 mod lines;
 pub mod notes;
@@ -215,6 +217,9 @@ pub struct Status {
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
 /// the core take the app, as one may tell the windows something before it returns.
 pub trait Browser {
+    /// Whether the computer opens links with the browser, where Claude Code's sign-in page opens
+    /// as a tab (FR19).
+    fn is_default_browser(&self) -> bool;
     /// The Space of the agent with the id `agent`, or 0 if it has none.
     fn agent_space(&self, agent: &str) -> u64;
     /// Makes the agent's Space, named as the agent, and returns it.
@@ -1064,6 +1069,15 @@ fn shut_line(field: &str) -> Option<&'static str> {
     }
 }
 
+/// What waits for a held tab to come back.
+enum Waiter {
+    /// The agent's call, which its answer ends.
+    Call(mpsc::Sender<ToolResult>),
+    /// One of the browser's own threads, whose hand_off returned at once: the answer is told to
+    /// it as a steer is (#4363).
+    Thread,
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -1080,7 +1094,7 @@ struct Held {
     back: Option<String>,
     /// The handoff's or ask_for_tab's call, which waits for the tab to come back, while its
     /// agent's session lasts.
-    reply: Option<mpsc::Sender<ToolResult>>,
+    reply: Option<Waiter>,
     /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
     timer: Option<Task<()>>,
     /// What it was handed over for: `Step::SignIn` where the browser handed it off for its page's
@@ -1264,10 +1278,8 @@ impl Agents {
             .flatten();
         self.tasks.last = (last.filter_map(|(profile, last)| {
             let tier = last.get("level").and_then(Value::as_str);
-            // Full access is never kept; a level this build doesn't know starts at the default.
-            let tier = tier
-                .and_then(tier::Tier::from_id)
-                .filter(|tier| *tier != tier::Tier::Full);
+            // A level this build doesn't know starts at the default.
+            let tier = tier.and_then(tier::Tier::from_id);
             let model = (last.get("model").and_then(Value::as_array)).and_then(|model| {
                 let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
                 Some((cli, model.get(1)?.as_str()?.to_string()))
@@ -1281,11 +1293,21 @@ impl Agents {
             Some((profile.clone(), last))
         }))
         .collect();
+        // A level this build doesn't know starts at the default.
+        self.tasks.others_start = (tasks.get("others_level").and_then(Value::as_str))
+            .and_then(tier::Tier::from_id)
+            .unwrap_or_default();
         let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        let installed = (tasks.get("installed").and_then(Value::as_array))
+            .into_iter()
+            .flatten();
+        self.tasks.sign_ins.installed = (installed.filter_map(Value::as_str))
+            .filter_map(runner::Cli::from_id)
+            .collect();
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
@@ -2557,6 +2579,15 @@ impl Agents {
                 let question = self.next_request;
                 self.next_request += 1;
                 let why = page::clip(why, 200);
+                // A thread of the browser's own goes on at once and is told when the tab is back;
+                // an outside client's call waits, as it can be told nothing between calls.
+                let wait = match is_task(&agent) {
+                    true => {
+                        _ = reply.send(ToolResult::text(handed_off_now(tab)));
+                        Waiter::Thread
+                    }
+                    false => Waiter::Call(reply),
+                };
                 let held = Held {
                     agent,
                     connection,
@@ -2564,7 +2595,7 @@ impl Agents {
                     why,
                     question,
                     back: None,
-                    reply: Some(reply),
+                    reply: Some(wait),
                     timer: None,
                     step: Step::HandOff,
                     taken: false,
@@ -2744,7 +2775,8 @@ impl Agents {
                 self.next_request += 1;
                 let held = self.held.get_mut(&tab).expect("held, as matched");
                 (held.question, held.back) = (question, Some(page::clip(why, 200)));
-                (held.connection, held.call, held.reply) = (connection, id, Some(reply));
+                (held.connection, held.call, held.reply) =
+                    (connection, id, Some(Waiter::Call(reply)));
                 self.carry(tab, held::Event::Ask { holder }, life, actions, cx);
             }
             "request" => {
@@ -3351,7 +3383,7 @@ impl Agents {
             why,
             question,
             back: None,
-            reply: Some(reply),
+            reply: Some(Waiter::Call(reply)),
             timer: None,
             step: Step::SignIn,
             taken: false,
@@ -3480,6 +3512,17 @@ impl Agents {
         cx.notify();
     }
 
+    /// The core read the held `tab`'s page as it or a frame of it loaded (bc_held_page), which it
+    /// does for a page committed after the hold. A hand-off ends by itself once the page has none
+    /// of the user's steps on it, so the next step of a sign-in keeps it the user's. The agent
+    /// hears what a Hand Back tells it and nothing of the page; the log (HB1) and its trace (HB2)
+    /// say the page moved on.
+    pub fn held_page(&mut self, tab: u64, page: HeldPage, cx: &mut Context<Self>) {
+        if !page.users_step() {
+            self.let_go(tab, held::Event::MovedOn, cx);
+        }
+    }
+
     /// Keeps why `agent`'s page `tab` left its Space, in place of any reason before, as the
     /// agent's own acts know why. Past GONE_KEPT, the lowest tab id, the oldest, goes.
     fn went(&mut self, tab: u64, agent: &str, gone: Gone) {
@@ -3600,11 +3643,14 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         use held::Actions as A;
-        let (agent, connection) = (self.held.get(&tab)).map_or((String::new(), 0), |held| {
-            (held.agent.clone(), held.connection)
-        });
+        let (agent, connection, call) = (self.held.get(&tab))
+            .map_or((String::new(), 0, 0), |held| {
+                (held.agent.clone(), held.connection, held.call)
+            });
         // Its task's conversation says so, while the hold's entry still names whose it is.
         self.held_lines(tab, event, life);
+        // What a thread of the browser's own is told, once the core lets go of the tab.
+        let mut told = None;
         if actions.has(A::ANSWER) || actions.has(A::DROP) {
             let held = self
                 .held
@@ -3620,7 +3666,14 @@ impl Agents {
                 if held.step == Step::SignIn {
                     answer.text = format!("{SIGNED_IN} {}", answer.text);
                 }
-                _ = reply.send(answer);
+                match reply {
+                    Waiter::Call(reply) => _ = reply.send(answer),
+                    // A thread the user stopped is told nothing more.
+                    Waiter::Thread if !matches!(event, held::Event::Stop { .. }) => {
+                        told = Some(answer.text)
+                    }
+                    Waiter::Thread => {}
+                }
             }
         }
         if life == held::Life::Free {
@@ -3638,6 +3691,13 @@ impl Agents {
         }
         if actions.has(A::HAND_BACK) {
             self.browser.hand_back(tab);
+        }
+        // Its trace says the step went on before the thread hears of it.
+        if event == held::Event::MovedOn && actions.has(A::ANSWER) {
+            self.trace_moved_on(&agent, (connection, call), tab, cx);
+        }
+        if let Some(text) = told {
+            self.tell_back(&agent, text, cx);
         }
         if actions.has(A::NOTE) {
             // check.sh reads the first two.
@@ -4237,7 +4297,7 @@ impl Agents {
             why,
             question,
             back: None,
-            reply: Some(reply),
+            reply: Some(Waiter::Call(reply)),
             timer: None,
             step: Step::Files { many },
             taken: false,
@@ -6006,7 +6066,11 @@ impl Agents {
             "models": models,
             "found": found,
             "last": last,
+            "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
+            "installed": (self.tasks.sign_ins.installed.iter())
+                .map(|cli| cli.id())
+                .collect::<Vec<_>>(),
         });
         let saved = json!({
             "threads": self.threads(),
@@ -6116,6 +6180,15 @@ fn off_limits_refused(why: &'static str) -> Refused {
     }
 }
 
+/// What a thread of the browser's own hears from hand_off at once: the tab is the user's until
+/// it's told otherwise (#4363).
+fn handed_off_now(tab: u64) -> String {
+    format!(
+        "Tab {tab} is the user's now, and calls on it are refused until they're done. You'll be \
+         told when it's back. Go on with what doesn't need it, or end your turn."
+    )
+}
+
 /// What a call of an agent's the user stopped answers.
 const STOPPED: &str = "The user stopped you. Don't carry on until they ask you to.";
 const NOT_HELD: &str = "The user doesn't have that tab from you, so there's nothing to ask for.";
@@ -6123,7 +6196,8 @@ const NOT_HELD: &str = "The user doesn't have that tab from you, so there's noth
 /// The answer to the call that waited on the held `tab`, as `event` ended its wait.
 fn answer_of(tab: u64, event: held::Event) -> ToolResult {
     match event {
-        held::Event::HandBack => ToolResult::text(format!(
+        // A page that moved on tells the agent what Hand Back does, and nothing of the page.
+        held::Event::HandBack | held::Event::MovedOn => ToolResult::text(format!(
             "The user handed tab {tab} back. Take a snapshot to see where it is now."
         )),
         held::Event::Keep => ToolResult::error(format!(
@@ -6158,6 +6232,13 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
 pub fn page_dialog(tab: u64, kind: Option<DialogKind>, message: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, message, cx));
+    }
+}
+
+/// The core read a held tab's page (bc_held_page).
+pub fn held_page(tab: u64, page: HeldPage, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, cx| agents.held_page(tab, page, cx));
     }
 }
 
