@@ -273,7 +273,8 @@ show_space() {
 }
 # Shows the Space named $1, whose id is $2, from the Space button's menu, which lists every Space by
 # name before New Space…. The button's mark slides once the rows have settled and the app then logs
-# it, so nothing that clicks or captures the button waits for less (#4400).
+# it, so nothing that clicks or captures the button waits for less (#4400). With $3 it doesn't
+# wait for that, for a click sent while the page still slides in.
 choose_space() {
   post click "$(space_button)"
   expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, \(.*, \)\{0,1\}$(cased 'New Space…')" \
@@ -284,7 +285,8 @@ choose_space() {
   # The menu shows the shortcut too, and a row chosen runs the one command.
   [ "$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: command ')" = 1 ] ||
     fail "$1 in the Space button's menu ran more than one command"
-  expect '^browser: space button settled$' "the Space button's mark didn't settle after showing $1"
+  [ -n "${3:-}" ] ||
+    expect '^browser: space button settled$' "the Space button's mark didn't settle after showing $1"
 }
 send click $page_point
 show_space "key 1 ctrl" select-space page "$first" "$a"
@@ -513,7 +515,7 @@ expect "^browser: dragged $c to space $second today\$" "a row let go in the next
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the drag to the next Space"
 expect "^browser: today $b\$" "⌘Z didn't take the dragged tab back: \"$(today)\""
-choose_space "$first_name" "$first"
+choose_space "$first_name" "$first" sliding
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
 # Sent while the Space's page still slides in, the click acts on the row that rests under it.
 send click "$(row 0)"
