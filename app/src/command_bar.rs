@@ -359,6 +359,9 @@ struct Ask {
     /// The files and the folder the user added on the plus, from the system's panel alone, for
     /// this thread's start alone: they go as the level does.
     picked: Picked,
+    /// A ↩ that came before the browser had learned which agents are ready, which runs once it
+    /// has (`learned`). It goes with the ask.
+    held: Option<futures::channel::oneshot::Sender<()>>,
 }
 
 /// What the composer opens with: the level and model it last started a thread with, by the
@@ -1450,7 +1453,7 @@ pub fn task_agents_changed(cx: &mut App) {
             if agents == bar.task_agents {
                 return;
             }
-            bar.task_agents = agents;
+            bar.learned(agents);
             if bar.ask.is_some() {
                 bar.log_agents();
                 bar.show_placeholder(cx);
@@ -2336,6 +2339,7 @@ impl CommandBar {
             model: last.model,
             effort: last.effort,
             picked,
+            held: None,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2432,12 +2436,12 @@ impl CommandBar {
         let (page, tier, effort, files) =
             (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
-        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
-            return;
-        };
         if asked.is_empty() {
             return;
         }
+        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
+            return self.hold_ask(by, window, cx);
+        };
         let id = agent.id.clone();
         // Settings' model unless the user picked one for this assistant, here or last time.
         let picked = ask_model_on(self.ask.as_ref(), &id);
@@ -2462,6 +2466,35 @@ impl CommandBar {
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
             .run_task_at_rest(&id, &asked, tier, model, effort, files, cx);
+    }
+
+    /// ↩ with no agent to start on, while the browser hasn't learned which are ready, as on the
+    /// first ask of a run: it runs once the browser has, unless the ask goes first. Nothing wakes
+    /// for it meanwhile: the look the ask started ends it.
+    fn hold_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
+        let unknown = (self.task_agents.as_ref()).is_some_and(|agents| !agents.known);
+        let Some(ask) = self.ask.as_mut().filter(|_| unknown) else {
+            return;
+        };
+        let (held, learned) = futures::channel::oneshot::channel();
+        ask.held = Some(held);
+        log!("browser: command bar holds ↩ until the agents are learned");
+        cx.spawn_in(window, async move |bar, cx| {
+            if learned.await.is_ok() {
+                _ = bar.update_in(cx, |bar, window, cx| bar.run_ask(by, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// The agents ⇥ asks changed to `agents`: once the browser has learned them, a held ↩ runs.
+    fn learned(&mut self, agents: Option<TaskAgents>) {
+        self.task_agents = agents;
+        if (self.task_agents.as_ref()).is_some_and(|agents| agents.known)
+            && let Some(held) = self.ask.as_mut().and_then(|ask| ask.held.take())
+        {
+            _ = held.send(());
+        }
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -4434,7 +4467,7 @@ impl CommandBar {
         if agents == self.task_agents {
             return false;
         }
-        self.task_agents = agents;
+        self.learned(agents);
         if self.ask.is_some() {
             self.log_agents();
             self.show_placeholder(cx);
