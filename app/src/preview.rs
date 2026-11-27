@@ -3416,7 +3416,8 @@ fn main() {
                 };
                 dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
             }
-            // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
+            // PREVIEW_ICON_PICKER=<glyph:name, emoji, or empty> shows the icon picker for a Space
+            // with that glyph or none, and for a tab with an emoji, as a Space's offers no emoji.
             if let Ok(icon) = states::var("PREVIEW_ICON_PICKER") {
                 let left = x as f32 + 40.;
                 let top = y as f32 + 120.;
@@ -3434,7 +3435,10 @@ fn main() {
                 .is_some()
                 {
                     let picked: icon_picker::Picked = Rc::new(|_, _| {});
-                    let subject = icon_picker::Subject::Space(1);
+                    let subject = match browser::space_icon::SpaceIcon::parse(&icon) {
+                        browser::space_icon::SpaceIcon::Emoji(_) => icon_picker::Subject::Tab(1),
+                        _ => icon_picker::Subject::Space(1),
+                    };
                     icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
                 }
             }
