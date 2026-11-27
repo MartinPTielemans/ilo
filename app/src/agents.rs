@@ -20,6 +20,7 @@ pub mod clients;
 mod codex;
 pub mod command;
 pub mod fence;
+mod file_calls;
 pub mod files;
 mod held;
 pub use held::HeldPage;
@@ -309,6 +310,13 @@ pub trait Browser {
     fn answer_download(&self, download: u64, keep: bool);
     /// Forgets the page's file `field`, closing its dialog if it's up (bc_file_field_drop).
     fn file_field_drop(&self, field: u64);
+    /// Puts the app's copies at `paths` into the page's file `field`, with no dialog
+    /// (bc_file_field_put): whether it took them, whose answer comes to `Agents::file_field_done`.
+    fn file_field_put(&self, field: u64, paths: &[std::path::PathBuf]) -> bool;
+    /// Has the engine read a PDF's `bytes`, its pages `first` (from 0) on, `count` of them, in a
+    /// sandboxed process of its own (bc_pdf_read): the read's id, or 0 for one it refused. Its
+    /// answer comes to `Agents::pdf_read_done`.
+    fn pdf_read(&self, bytes: &[u8], first: usize, count: usize) -> u64;
     /// Pins `tab` in its Space at the page it's at, or unpins it to the top of its Today tabs, as
     /// the user does (bc_tab_set_pinned).
     fn set_pinned(&self, tab: u64, pinned: bool, cx: &mut App);
@@ -440,6 +448,9 @@ pub struct ToolResult {
     pub error: bool,
     /// A picture, as a JPEG in base64.
     pub image: Option<String>,
+    /// Pictures for the model alone, as JPEGs in base64: a file's, which read_file looks at, never
+    /// its step's picture, as nothing of a file is kept.
+    pub pictures: Vec<String>,
     /// Of an error, the kind a task's card says it in, if any.
     pub kind: Option<tools::Kind>,
     /// The site's note the answer comes with (#4122). It's apart from `text`, which may hold a
@@ -458,6 +469,7 @@ impl ToolResult {
             text: tools::capped(text.into()),
             error: false,
             image: None,
+            pictures: Vec::new(),
             kind: None,
             notes: None,
             closed: false,
@@ -469,6 +481,7 @@ impl ToolResult {
             text: tools::capped(text.into()),
             error: true,
             image: None,
+            pictures: Vec::new(),
             kind: None,
             notes: None,
             closed: false,
@@ -488,6 +501,7 @@ impl ToolResult {
             text: String::new(),
             error: false,
             image: Some(jpeg),
+            pictures: Vec::new(),
             kind: None,
             notes: None,
             closed: false,
@@ -524,7 +538,7 @@ impl ToolResult {
         if !self.text.is_empty() || content.is_empty() && self.image.is_none() {
             content.push(part(self.text.clone()));
         }
-        if let Some(jpeg) = &self.image {
+        for jpeg in self.image.iter().chain(&self.pictures) {
             content.push(json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" }));
         }
         json!({ "content": content, "isError": self.error })
@@ -571,6 +585,9 @@ struct Act {
     started_in: u64,
     /// The file field it asks the user to choose a file for, for "upload".
     file: Option<FileField>,
+    /// The files of the thread's it puts in that field instead, as the assistant named them, for
+    /// "upload" with files.
+    give: Vec<String>,
     /// The HTTP requests it sends (request).
     requests: Vec<request::Request>,
     /// The text open_tab or navigate waits for in the page once it settles.
@@ -959,6 +976,12 @@ pub struct Agents {
     sending: HashMap<u64, Sending>,
     /// What waits on each saved read under way, by read.
     saved_reading: HashMap<u64, ReadDone>,
+    /// What waits on each PDF read_file read under way, by the core's read.
+    pdf_reading: HashMap<u64, file_calls::PdfDone>,
+    /// The uploads whose files wait on the core to go in, by field.
+    putting: HashMap<u64, file_calls::Putting>,
+    /// The uploads with files so far, which number each its own folder of copies.
+    uploads: u64,
     /// Each tab's refs, from its outlines.
     refs: HashMap<u64, page::Refs>,
     /// Each tab's latest outline, and the last one an agent had, which its next answer gives the
@@ -1211,6 +1234,9 @@ impl Agents {
             describing: HashMap::new(),
             sending: HashMap::new(),
             saved_reading: HashMap::new(),
+            pdf_reading: HashMap::new(),
+            putting: HashMap::new(),
+            uploads: 0,
             refs: HashMap::new(),
             outlines: HashMap::new(),
             had: HashMap::new(),
@@ -1246,6 +1272,14 @@ impl Agents {
 
     /// Takes what `saved` says, from the settings file, and starts the server if it's on.
     pub fn load(&mut self, saved: &str, cx: &mut Context<Self>) {
+        // The copies a run before gave pages went with their pages, whatever ended it.
+        #[cfg(unix)]
+        if self.tasks.dir.is_some() {
+            let uploads = self.tasks_dir().join("Uploads");
+            (cx.background_executor())
+                .spawn(async move { files::give::forget(&uploads) })
+                .detach();
+        }
         let saved: Value = serde_json::from_str(saved).unwrap_or_default();
         let agents = saved
             .get("agents")
@@ -2473,6 +2507,7 @@ impl Agents {
                     download: 0,
                     started_in: 0,
                     file: None,
+                    give: Vec::new(),
                     field: String::new(),
                     requests: Vec::new(),
                     wait,
@@ -2586,6 +2621,8 @@ impl Agents {
                 };
                 self.upload(&agent, connection, id, tab, &arguments, reply, cx);
             }
+            #[cfg(unix)]
+            "read_file" => self.read_file(&agent, connection, id, &arguments, reply, cx),
             "hand_off" => {
                 let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
                     return;
@@ -2880,6 +2917,7 @@ impl Agents {
                     download: 0,
                     started_in: 0,
                     file: None,
+                    give: Vec::new(),
                     requests,
                     wait: None,
                     did: None,
@@ -3962,6 +4000,7 @@ impl Agents {
             download: 0,
             started_in: 0,
             file: None,
+            give: Vec::new(),
             requests: Vec::new(),
             wait: None,
             did: None,
@@ -4314,6 +4353,17 @@ impl Agents {
             _ = reply.send(ToolResult::error("upload needs a ref."));
             return;
         };
+        #[cfg(unix)]
+        let give = match self.upload_files(agent, arguments) {
+            None => Vec::new(),
+            Some(Ok(files)) => files,
+            Some(Err(told)) => {
+                _ = reply.send(ToolResult::error(told));
+                return;
+            }
+        };
+        #[cfg(not(unix))]
+        let give = Vec::new();
         let Some(element) = self.refs.get(&tab).and_then(|refs| refs.get(name)) else {
             _ = reply.send(ToolResult::error(format!(
                 "There's no element {name} in tab {tab}. Use a ref from its latest outline."
@@ -4326,6 +4376,7 @@ impl Agents {
         self.next_request += 1;
         let mut act = act_of(agent, connection, call, tab, reply);
         (act.action, act.page, act.element) = ("upload", PageAction::FileField, node);
+        act.give = give;
         self.describing.insert(request, act);
         self.act_in_page(agent, tab, request, PageAction::FileField, node, "");
     }
@@ -4359,6 +4410,12 @@ impl Agents {
         let field: Value = serde_json::from_str(&text).unwrap_or_default();
         // The core writes ids as JSON doubles, which Chromium's writer gives a ".0".
         let id = field.get("field").and_then(Value::as_f64).unwrap_or(0.0) as u64;
+        // A thread's own files go in as its copies, with no card: the field stays the core's.
+        #[cfg(unix)]
+        if !act.give.is_empty() {
+            let many = field.get("many").and_then(Value::as_bool) == Some(true);
+            return self.put_files(act, id, many, cx);
+        }
         // The user picks the file with the page's own control, so the core's hold on it goes.
         self.browser.file_field_drop(id);
         let label = field.get("label").and_then(Value::as_str).unwrap_or("");
@@ -4890,6 +4947,7 @@ impl Agents {
             download: id,
             started_in: tab,
             file: None,
+            give: Vec::new(),
             requests: Vec::new(),
             wait: None,
             did: None,
@@ -6649,6 +6707,7 @@ fn act_of(
         download: 0,
         started_in: 0,
         file: None,
+        give: Vec::new(),
         requests: Vec::new(),
         wait: None,
         did: None,
@@ -6706,6 +6765,7 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
         text,
         error,
         image: None,
+        pictures: Vec::new(),
         kind: kind.filter(|_| error),
         notes: None,
         closed: false,

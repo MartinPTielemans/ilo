@@ -59,6 +59,12 @@ struct Made {
     requests: RefCell<Vec<(u64, u64, request::Request)>>,
     /// The saved reads sent: the profile, the read, the address, its size and its time.
     saved_reads: RefCell<Vec<(u64, u64, String, usize, i64)>>,
+    /// Each PDF read asked of the engine: its bytes, first page and count, by the read it got,
+    /// 900 on.
+    pdf_reads: RefCell<Vec<(u64, Vec<u8>, usize, usize)>>,
+    /// Each field a thread's copies were put in, with them, and whether the core refuses the next.
+    puts: RefCell<Vec<(u64, Vec<std::path::PathBuf>)>>,
+    refuses_put: std::cell::Cell<bool>,
     /// The split views, each its tabs left to right.
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
@@ -367,6 +373,21 @@ impl Browser for Made {
 
     fn file_field_drop(&self, field: u64) {
         self.dropped.borrow_mut().push(field);
+    }
+
+    fn file_field_put(&self, field: u64, paths: &[std::path::PathBuf]) -> bool {
+        if self.refuses_put.get() {
+            return false;
+        }
+        self.puts.borrow_mut().push((field, paths.to_vec()));
+        true
+    }
+
+    fn pdf_read(&self, bytes: &[u8], first: usize, count: usize) -> u64 {
+        let mut reads = self.pdf_reads.borrow_mut();
+        let read = 900 + reads.len() as u64;
+        reads.push((read, bytes.to_vec(), first, count));
+        read
     }
 
     fn answer_download(&self, download: u64, keep: bool) {
@@ -3964,8 +3985,9 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 /// acts on a page would otherwise run at Look only.
 #[test]
 fn every_tool_and_step_is_in_one_class() {
-    // Opens or reads a page, which every tier allows.
-    const READS: [&str; 14] = [
+    // Opens or reads a page, or reads a file, which every tier allows.
+    const READS: [&str; 15] = [
+        "read_file",
         "list_profiles",
         "list_tabs",
         "list_split",
@@ -8017,6 +8039,11 @@ mod tasks {
             };
             let pattern = format!("\"{pattern}");
             for name in pattern.split('"').skip(1).step_by(2) {
+                // The file tools are a Unix system's alone, as its arm is, until the path floor
+                // runs elsewhere.
+                if !cfg!(unix) && tools::FILE_TOOLS.contains(&name) {
+                    continue;
+                }
                 let listed = match pattern.contains("if is_task(") {
                     true => task.iter().any(|each| each == name),
                     false => task.iter().chain(&outside).any(|each| each == name),
@@ -15615,6 +15642,8 @@ fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
 }
 
 mod fenced;
+#[cfg(unix)]
+mod file_tools;
 #[cfg(unix)]
 pub(crate) mod handed;
 mod holds;

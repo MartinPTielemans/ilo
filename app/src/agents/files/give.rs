@@ -94,26 +94,33 @@ pub fn forget(into: &Path) {
     }
 }
 
-/// The path floor and the table on one file, as a read: its held handle and name, or why not.
+/// The path floor and the table on one file to send: Look only never sends one, then as a read.
 fn check(path: &Path, reach: &Reach) -> Result<(OwnedFd, std::ffi::OsString), Refused> {
     // Sending a file to a site is an act on a page, which Look only never takes.
     if reach.tier == Tier::Look {
         return Err(Refused::Needs(Tier::Work));
     }
+    open(path, reach)
+}
+
+/// The path floor and the table on one file, as a read, read_file's too: its held handle and
+/// name, or why not. Outside its folders at Work, which a read would ask about, it's refused as
+/// outside them until the ask exists (road B slice 5).
+pub fn open(path: &Path, reach: &Reach) -> Result<(OwnedFd, std::ffi::OsString), Refused> {
     let resolved = resolve::resolve(path, For::Read, reach.never_ids);
     // Where it is is judged before whether it's there, so a refusal never says whether a file
     // exists outside what the thread was given. A path that didn't resolve is judged as written.
     let (at, other_names) = match &resolved {
-        Ok(resolved) if resolved.never => (At::Never, false),
-        Ok(resolved) => (
-            reach
-                .never
-                .at(&resolved.real, reach.folders, reach.attached),
-            resolved
-                .target
-                .as_ref()
-                .is_some_and(|held| held.other_names),
-        ),
+        Ok(resolved) => {
+            let at = (reach.never).at(&resolved.real, reach.folders, reach.attached);
+            // ilo's copies of the attached files are in its own folder, which the walk passes.
+            let at = match resolved.never && at != At::Attached {
+                true => At::Never,
+                false => at,
+            };
+            let other_names = (resolved.target.as_ref()).is_some_and(|held| held.other_names);
+            (at, other_names && at != At::Never)
+        }
         Err(_) => (reach.never.at(path, reach.folders, reach.attached), false),
     };
     match decide(reach.tier, at, Op::Read, other_names) {

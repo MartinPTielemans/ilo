@@ -2465,7 +2465,7 @@ impl Agents {
             model: self.launch_model(thread, cli),
             effort: task.effort.clone(),
             instructions: tools::STRAND_INSTRUCTIONS.into(),
-            tools: tools::names(strand),
+            tools: tools::handed(strand, cli),
             wall,
             reads: (task.files.folder.iter())
                 .map(|folder| folder.root().to_path_buf())
@@ -2526,7 +2526,7 @@ impl Agents {
             model,
             effort,
             instructions: tools::task_instructions(task.tier),
-            tools: tools::names(agent),
+            tools: tools::handed(agent, cli),
             wall,
             // The files it starts with: a task whose wall was refused has none by now.
             reads: (task.files.folder.iter())
@@ -3095,6 +3095,10 @@ impl Agents {
         task.dismissed = true;
         task.deleted = false;
         task.left = Some(SystemTime::now());
+        // What a page was given of its files goes as it's closed: the pages they went to are
+        // its, or the user's now.
+        #[cfg(unix)]
+        super::files::give::forget(&super::files::tool::uploads(&self.tasks_dir(), agent));
         // check.sh reads this line.
         log!("browser: task {agent} dismissed");
         self.tasks.dismissed.retain(|each| each != agent);
@@ -3350,6 +3354,8 @@ impl Agents {
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
         _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
         _ = std::fs::remove_dir_all(dir.join(format!("{agent} files")));
+        #[cfg(unix)]
+        super::files::give::forget(&super::files::tool::uploads(&dir, agent));
     }
 
     /// A task's call, as a step of its trace from when it came, or an outside agent's, as a step
@@ -3593,6 +3599,23 @@ impl Agents {
     }
 
     /// The card whose trace `agent`'s `call` goes in: its task's, or the session it came in.
+    /// The step of `agent`'s file `call` under way names the file by what it resolved to, and
+    /// takes `line`, the table's, as its done or failed line.
+    pub(super) fn name_step(&mut self, agent: &str, call: u64, target: &str, line: String) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        let step =
+            (task.trace.iter_mut().rev()).find(|step| step.call == call && step.ended.is_none());
+        if let Some(step) = step {
+            step.did.target = target.into();
+            step.did.line = line;
+        }
+    }
+
     pub(super) fn tracer(&self, agent: &str, call: u64) -> Option<String> {
         let task = self.task(agent).or_else(|| self.session_of(agent, call))?;
         Some(task.agent.clone())

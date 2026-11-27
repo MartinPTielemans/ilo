@@ -19,14 +19,20 @@ namespace browser_core {
 // as stuck, so the read never waits on it for good.
 inline constexpr base::TimeDelta kPdfReadDeadline = base::Seconds(60);
 
+// Whether a read ended before its deadline, or the deadline passed first.
+enum class PdfReadTime { kInTime, kTimedOut };
+
 // One read in its reader (bc_pdf_read, #4367), apart so browser_core_unittests tests its ending
-// alone. It answers once: what the reader read, or kBroken with no pages as the reader's process
-// goes, a crash in it too, or as the deadline passes first. Its remote goes as it answers, which
-// ends the reader's process, and as it's destroyed, which then answers nothing.
+// alone. It answers once: in time with what the reader read, or kBroken with no pages as the
+// reader's process goes, a crash in it too; or timed out, kBroken with no pages, as the deadline
+// passes first. Its remote goes as it answers, which ends the reader's process, and as it's
+// destroyed, which then answers nothing.
 class PdfReadWait {
  public:
-  using Done = base::OnceCallback<
-      void(mojom::PdfReadResult result, int32_t page_count, std::vector<mojom::PdfPagePtr> pages)>;
+  using Done = base::OnceCallback<void(PdfReadTime time,
+                                       mojom::PdfReadResult result,
+                                       int32_t page_count,
+                                       std::vector<mojom::PdfPagePtr> pages)>;
 
   PdfReadWait(mojo::PendingRemote<mojom::PdfReader> reader,
               base::ReadOnlySharedMemoryRegion pdf,
@@ -38,10 +44,15 @@ class PdfReadWait {
   ~PdfReadWait();
 
  private:
-  void Answer(mojom::PdfReadResult result,
+  void Answer(PdfReadTime time,
+              mojom::PdfReadResult result,
               int32_t page_count,
               std::vector<mojom::PdfPagePtr> pages);
+  void Answered(mojom::PdfReadResult result,
+                int32_t page_count,
+                std::vector<mojom::PdfPagePtr> pages);
   void Broken();
+  void TimedOut();
 
   mojo::Remote<mojom::PdfReader> reader_;
   base::OneShotTimer deadline_;

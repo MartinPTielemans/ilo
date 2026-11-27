@@ -366,6 +366,23 @@ impl Browser for Core {
         unsafe { bc::bc_file_field_drop(field) };
     }
 
+    fn file_field_put(&self, field: u64, paths: &[std::path::PathBuf]) -> bool {
+        let paths: Option<Vec<CString>> = (paths.iter())
+            .map(|path| CString::new(path.to_str()?).ok())
+            .collect();
+        let Some(paths) = paths else { return false };
+        let pointers: Vec<*const std::ffi::c_char> =
+            paths.iter().map(|path| path.as_ptr()).collect();
+        unsafe { bc::bc_file_field_put(field, pointers.as_ptr(), pointers.len()) }
+    }
+
+    fn pdf_read(&self, bytes: &[u8], first: usize, count: usize) -> u64 {
+        let (Ok(first), Ok(count)) = (i32::try_from(first), i32::try_from(count)) else {
+            return 0;
+        };
+        unsafe { bc::bc_pdf_read(bytes.as_ptr(), bytes.len(), first, count) }
+    }
+
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
     }
@@ -606,6 +623,52 @@ pub unsafe extern "C" fn profile_read_done(
 ) {
     let answer = unsafe { agents::saved_read::Answer::from_core(&*answer) };
     update(move |agents, cx| agents.read_done(read, answer, cx));
+}
+
+/// The core's answer to a PDF read (bc_pdf_read): its pages are copied, then the read is
+/// dropped, so the core keeps nothing of it once the Agents have it.
+pub unsafe extern "C" fn pdf_read_done(
+    _: *mut std::ffi::c_void,
+    read: u64,
+    result: std::ffi::c_int,
+    page_count: std::ffi::c_int,
+    pages_read: std::ffi::c_int,
+) {
+    let pages = (0..pages_read.max(0))
+        .map(|index| {
+            let length = unsafe { bc::bc_pdf_page_text(read, index, std::ptr::null_mut(), 0) };
+            let mut text = vec![0u8; length + 1];
+            let length =
+                unsafe { bc::bc_pdf_page_text(read, index, text.as_mut_ptr().cast(), text.len()) };
+            text.truncate(length);
+            let size = unsafe { bc::bc_pdf_page_picture(read, index, std::ptr::null_mut(), 0) };
+            let picture = (size > 0).then(|| {
+                let mut jpeg = vec![0u8; size];
+                let size =
+                    unsafe { bc::bc_pdf_page_picture(read, index, jpeg.as_mut_ptr(), jpeg.len()) };
+                jpeg.truncate(size);
+                jpeg
+            });
+            (String::from_utf8_lossy(&text).into_owned(), picture)
+        })
+        .collect();
+    unsafe { bc::bc_pdf_drop(read) };
+    let pdf = agents::files::read::Pdf {
+        result,
+        page_count: page_count.max(0) as usize,
+        pages,
+    };
+    update(move |agents, cx| agents.pdf_read_done(read, pdf, cx));
+}
+
+/// What came of a thread's files put into a page's field (bc_file_field_put), for its upload.
+pub unsafe extern "C" fn file_field_done(
+    _: *mut std::ffi::c_void,
+    field: u64,
+    result: std::ffi::c_int,
+    count: std::ffi::c_int,
+) {
+    update(move |agents, cx| agents.file_field_done(field, result, count.max(0) as usize, cx));
 }
 
 /// The tabs `copy` copies of `space`, as bc_space_today does.

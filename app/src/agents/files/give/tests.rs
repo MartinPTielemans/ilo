@@ -350,3 +350,31 @@ fn an_uploads_lines_are_the_tables() {
         assert!(!not(&one, why).contains('/'));
     }
 }
+
+/// ilo keeps its copies of a thread's attached files in its own folder, which is on the never
+/// list: they're still given as attached, and nothing else there is.
+#[test]
+fn attached_copies_in_ilos_own_folder_are_given() {
+    let home = Home::new("own-folder");
+    let copies = home.at("home/profile/Tasks/thread files");
+    std::fs::create_dir_all(&copies).unwrap();
+    std::fs::write(copies.join("scan.png"), "a scan").unwrap();
+    std::fs::write(home.at("home/profile/Cookies"), "cookies").unwrap();
+    let never_ids = NeverIds::of(&home.never.by_identity());
+    let reach = Reach {
+        tier: Tier::Work,
+        folders: &[],
+        attached: Some(&copies),
+        never: &home.never,
+        never_ids: &never_ids,
+    };
+    let given = give(&[copies.join("scan.png")], false, &reach, &home.uploads()).unwrap();
+    assert_eq!(std::fs::read_to_string(&given[0]).unwrap(), "a scan");
+    let cookies = give(
+        &[home.at("home/profile/Cookies")],
+        false,
+        &reach,
+        &home.uploads(),
+    );
+    assert_eq!(cookies, refused(0, Refused::Never));
+}

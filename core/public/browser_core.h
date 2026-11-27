@@ -2311,11 +2311,12 @@ BC_EXPORT bool bc_file_field_put(bc_id field, const char* const* paths, size_t c
 #define BC_PDF_READ 0
 // It needs a password, which nothing asks for.
 #define BC_PDF_LOCKED 1
-// PDFium can't open it, the process reading it stopped, as a crash there stops it, or it wasn't
-// read within 60 seconds, which ends that process.
+// PDFium can't open it, or the process reading it stopped, as a crash there stops it.
 #define BC_PDF_BROKEN 2
 // bc_pdf_drop came before the answer.
 #define BC_PDF_CLOSED 3
+// It wasn't read within 60 seconds, which ends the process reading it.
+#define BC_PDF_TIMEOUT 4
 
 // The most pages one bc_pdf_read reads.
 #define BC_PDF_MOST_PAGES 30

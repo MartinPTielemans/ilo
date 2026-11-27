@@ -57,7 +57,10 @@ fn every_tool_and_step_is_answered_or_refused_on_a_page_in_use() {
             .count();
         assert_eq!(on, 1, "{name} is on {on} of the lists");
     }
-    for name in (IN_USE_ANSWERS.iter().chain(&REFUSED)).chain(&THREADS_REFUSED) {
+    // The file tools are a Unix system's alone until the path floor runs elsewhere.
+    let here = |name: &&&str| cfg!(unix) || !tools::FILE_TOOLS.contains(*name);
+    let lists = (IN_USE_ANSWERS.iter().chain(&REFUSED)).chain(&THREADS_REFUSED);
+    for name in lists.filter(here) {
         assert!(every.iter().any(|each| each == name), "{name} is no tool");
     }
 }

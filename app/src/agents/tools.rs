@@ -250,8 +250,12 @@ pub fn list(agent: &str) -> Value {
                 if super::strand_parent(agent).is_some() {
                     tools.retain(|tool| !THE_THREADS_OWN.iter().any(|own| tool["name"] == *own));
                 }
-                // Only the product's own threads, their strands among them, say why a step.
+                // Only the product's own threads, their strands among them, say why a step,
                 noted(tools);
+                // and put their own files in a page's field.
+                if cfg!(unix) {
+                    upload_files(tools);
+                }
                 // A thread is told when its tab is back, so its hand_off doesn't wait (#4363).
                 let hand_off = tools.iter_mut().find(|tool| tool["name"] == "hand_off");
                 if let Some(hand_off) = hand_off {
@@ -363,11 +367,65 @@ fn title_tool() -> Value {
     })
 }
 
+/// The tools that reach the user's files, which only a thread Claude runs is handed
+/// (`handed`).
+pub const FILE_TOOLS: [&str; 1] = ["read_file"];
+
+/// The tool names a thread's assistant is handed at launch: a Codex thread none of the file
+/// tools until its deny-root profile lands, as its own tools read the whole disk. The list
+/// tools/list gives is the kind's (`has`), and the call is refused at dispatch too.
+pub fn handed(agent: &str, cli: super::runner::Cli) -> Vec<String> {
+    let mut names = names(agent);
+    if cli == super::runner::Cli::Codex {
+        names.retain(|name| !FILE_TOOLS.contains(&name.as_str()));
+    }
+    names
+}
+
+/// read_file, a thread's alone (#4367).
+fn read_file_tool() -> Value {
+    json!({
+        "name": "read_file",
+        "title": "Read a file",
+        "description": format!("Read one of the user's files: a text file's numbered lines, a PDF's pages as text with a picture of each page that has almost no text, as a scan, or a PNG, JPEG, GIF or WebP picture to look at. A relative path is taken from the task's first folder. Each read is checked against the task's folders and access, and some places are never read. A PDF gives at most {} pages a read, from pages; a text file {} lines from offset. The answer says where to read on.", super::files::read::MOST_PAGES, super::files::read::LINES),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "The file's path, full or from the task's first folder." },
+                "offset": { "type": "integer", "minimum": 1, "description": "A text file's first line to read, from 1." },
+                "limit": { "type": "integer", "minimum": 1, "description": format!("How many lines of a text file to read, {} at most.", super::files::read::LINES) },
+                "pages": { "type": "string", "description": format!("A PDF's pages to read, as \"31-60\" or \"5\", {} at most. The first {} if not given.", super::files::read::MOST_PAGES, super::files::read::MOST_PAGES) },
+            },
+            "required": ["path"],
+        },
+        "annotations": { "readOnlyHint": true, "openWorldHint": false },
+    })
+}
+
+/// upload's `files`, in a thread's schema alone (#4368).
+fn upload_files(tools: &mut [Value]) {
+    let files = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Files of the user's to put in the field yourself, by path, full or from the task's first folder, rather than handing the tab to the user: each is checked as read_file checks it, and none goes in unless all may. More than one only for a field that takes several. Leave it out to have the user choose.",
+    });
+    let upload = tools
+        .iter_mut()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("upload"));
+    if let Some(properties) = upload
+        .and_then(|tool| tool.pointer_mut("/inputSchema/properties"))
+        .and_then(Value::as_object_mut)
+    {
+        properties.insert("files".into(), files);
+    }
+}
+
 /// A task's own tools: its title, a question for the user, finishing, and a search with the user's
 /// search engine, which a thread has in place of its program's own.
 fn task_tools() -> Vec<Value> {
     let own = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
-    vec![
+    let files = cfg!(unix).then(read_file_tool);
+    files.into_iter().chain([
         title_tool(),
         search_tool(),
         strand_tool(),
@@ -421,7 +479,8 @@ fn task_tools() -> Vec<Value> {
             },
             "annotations": own,
         }),
-    ]
+    ])
+    .collect()
 }
 
 /// A search for words with the user's search engine: an open_tab, or a navigate with a tab, to its
@@ -1053,6 +1112,9 @@ pub struct Did {
     /// The assistant's own short reason for the step (`take_note`), made plain, or empty. Only the
     /// trace draws it: never a log, the activity file, a card or the kept list.
     pub says: String,
+    /// A file step's line once it's done or failed, the words table's, which the app sets as it
+    /// knows what the file resolved to: its title then, whatever its tool says. Else empty.
+    pub line: String,
 }
 
 /// The tool that searches the web with the user's search engine, a thread's in place of its
@@ -1218,6 +1280,9 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     // A tab of the user's that went to a thread or came back: its one sentence too.
     if let Some(handed) = super::task::handed::entry(&did.tool, &did.site) {
         return handed;
+    }
+    if !did.line.is_empty() && tense != Tense::Now {
+        return did.line.clone();
     }
     let site = |none: &str| match did.site.is_empty() {
         true => none.to_string(),
@@ -1398,6 +1463,16 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't add",
             format!("a file to {}", site("a page")),
         ),
+        // Named once it's resolved, by the name it resolved to (FL12), never the path asked.
+        "read_file" => (
+            "Reading",
+            "Read",
+            "Couldn't read",
+            match did.target.is_empty() {
+                true => "a file".to_string(),
+                false => super::files::words::quoted(&did.target),
+            },
+        ),
         "ask_for_tab" => {
             let tab = site("a tab");
             return match tense {
@@ -1479,7 +1554,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "list_profiles" => "icons/users.svg",
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
-        "upload" => "icons/file.svg",
+        "upload" | "read_file" => "icons/file.svg",
         // Three dots, as the log draws a thought (spec-thread-stage.md).
         "thought" => "icons/ellipsis.svg",
         SEARCHED | PROGRAM_SEARCHED => "icons/search.svg",
@@ -1621,6 +1696,7 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "upload" => "Added a file to a page",
+        "read_file" => "Read a file",
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",
