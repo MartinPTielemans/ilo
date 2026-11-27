@@ -573,7 +573,7 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
 
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
-/// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
+/// off-limits, yours, tab-back, signed-in, raised, notes or you-stopped; or of a task that has ended (#4105):
 /// ended, picked-up, gone, not-kept or codex-ended; or of one a run of the browser before left,
 /// brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
 /// (#4102): helpers, helper, helpers-limit or helpers-ended; or of one with files whose assistant
@@ -638,6 +638,17 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             done(0, before),
             line(100, stopped(Why::Fenced, "seatmap.example", 1)),
         ],
+        // The user stopped it: its log ends with how far it got (Z17), and nothing is under way.
+        "you-stopped" => {
+            talk.about = format!("{} · Stopped", talk.name).into();
+            talk.stoppable = false;
+            talk.on = None;
+            // A thread ilo runs has its line settled from the start: no Hand Back under it.
+            vec![
+                done(0, before),
+                ilo(100, IloKind::YouStopped { pages: 1 }, true),
+            ]
+        }
         "yours" => {
             talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
             talk.on = None;
