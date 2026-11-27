@@ -110,7 +110,7 @@ void Left(bc_id tab) {
   }
 }
 
-bool Return(bc_id tab) {
+bool Return(bc_id tab, bool follows) {
   const Mark* kept = Of(tab);
   Space* in = Space::Holding(tab);
   if (!kept || !in || !in->agent()) {
@@ -137,7 +137,7 @@ bool Return(bc_id tab) {
   if (in->IsPinned(tab)) {
     in->Unpin(tab);
   }
-  Window::MoveToSpace(tab, mark.home);
+  Window::MoveToSpace(tab, mark.home, /*to_agent=*/false, follows);
   if (Space::Holding(tab) != home) {
     return false;
   }

@@ -70,11 +70,13 @@
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
+#include "browser_core/page_log.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
+#include "browser_core/pdf_reads.h"
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
@@ -130,6 +132,8 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/size_f.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
@@ -749,6 +753,13 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   return browser_core::AgentCloseTab(tab, discard);
 }
 
+int bc_agent_archive_tab(const char* agent, bc_id tab, bool discard) {
+  if (!agent) {
+    return BC_AGENT_CLOSE_REFUSED;
+  }
+  return browser_core::AgentArchiveTab(agent, tab, discard);
+}
+
 bool bc_tab_take_back(bc_id tab) {
   // Theirs by their own press, which a tab they hold already isn't made: a hold made for them, as
   // at a handoff, stays what it is until they hand the tab back.
@@ -789,6 +800,8 @@ browser_core::handed_give_rule::Tab GiveFacts(bc_id tab,
       .stands_in = browser_core::handed::KeepsATile(tab),
       .web_page = page && !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
                   (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
+      .system_page =
+          page && page->system_page() && page->system_page()->url().SchemeIsHTTPOrHTTPS(),
       .camera = captures.camera,
       .microphone = captures.microphone,
       .screen = captures.screen,
@@ -850,6 +863,15 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  // A page in the system's engine goes on in Chromium's, at the page it was on, as no agent's Space
+  // shows the system's. Moved first, so its load is the agent's page's, which waits for the user's
+  // session from the system's store (system_engine.h). Its history there stays behind, as it does
+  // when the user turns the site off.
+  if (browser_core::Tab* given = contents ? browser_core::Tab::FromWebContents(contents) : nullptr;
+      given && given->system_page()) {
+    const GURL url = given->system_page()->url();
+    given->UseChromium(url);
+  }
   // A card's video ends with the give, and only with one that happened, and a Picture in Picture
   // window closes with it: a page in an agent's Space has neither (agent_space_rule.h).
   browser_core::EndCardVideo(tab);
@@ -859,9 +881,9 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));
   browser_core::CloseTabDialogs(browser_core::Tab::FromId(tab));
-  // No window shows it any more, and it had the size of the user's window: an agent's page's own
-  // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
-  // the user, it takes the size of the window that shows it.
+  // No window shows it any more, and it had the size of the pane it was in: the size a watch gives
+  // it from here, as each of the agent's has. Back with the user, it takes the frame of the window
+  // that shows it.
   browser_core::Window::GiveAgentPageItsSize(browser_core::Tab::FromId(tab));
   // One the user took back from an agent before is the agent's now.
   browser_core::HandBack(tab);
@@ -922,6 +944,44 @@ bool bc_file_field_choose(bc_id field, bc_id window) {
 
 void bc_file_field_drop(bc_id field) {
   browser_core::AgentFileField::Drop(field);
+}
+
+bool bc_file_field_put(bc_id field, const char* const* paths, size_t count) {
+  if (!paths && count) {
+    return false;
+  }
+  std::vector<std::string> files;
+  for (size_t i = 0; i < count; ++i) {
+    if (!paths[i] || !*paths[i]) {
+      return false;
+    }
+    files.emplace_back(paths[i]);
+  }
+  return browser_core::AgentFileField::Put(field, std::move(files));
+}
+
+bc_id bc_pdf_read(const uint8_t* bytes, size_t size, int first, int count) {
+  if (!bytes || !size) {
+    return 0;
+  }
+  // SAFETY: the app gives |size| bytes at |bytes|, as the header says.
+  return browser_core::StartPdfRead(UNSAFE_BUFFERS(base::span<const uint8_t>(bytes, size)), first, count);
+}
+
+size_t bc_pdf_page_text(bc_id read, int index, char* text, size_t capacity) {
+  return CopyString(std::string(browser_core::PdfPageText(read, index)), text, capacity);
+}
+
+size_t bc_pdf_page_picture(bc_id read, int index, uint8_t* jpeg, size_t capacity) {
+  const base::span<const uint8_t> picture = browser_core::PdfPagePicture(read, index);
+  if (jpeg) {
+    std::copy_n(picture.begin(), std::min(capacity, picture.size()), jpeg);
+  }
+  return picture.size();
+}
+
+void bc_pdf_drop(bc_id read) {
+  browser_core::DropPdfRead(read);
 }
 
 bc_id bc_agent_open_tab(const char* agent, const char* url) {
@@ -992,6 +1052,21 @@ size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
   std::ranges::copy(space->today(), std::back_inserter(listed));
   std::copy_n(listed.begin(), std::min(capacity, listed.size()), tabs);
   return listed.size();
+}
+
+size_t bc_agent_page_log(const char* agent,
+                         bc_id tab,
+                         bool* developer_mode,
+                         char* log,
+                         size_t capacity) {
+  if (developer_mode) {
+    *developer_mode = false;
+  }
+  if (!agent || !*agent) {
+    return CopyString(std::string(), log, capacity);
+  }
+  return CopyString(browser_core::PageLog::For(agent, tab, developer_mode).value_or(std::string()),
+                    log, capacity);
 }
 
 void bc_agent_page(const char* agent,
@@ -1183,6 +1258,13 @@ size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t capacity) {
   return CopyString(
       base::UTF16ToUTF8(browser_core::DefaultEngine(browser_core::ProfileOrLoad(profile))),
       keyword, capacity);
+}
+
+size_t bc_profile_search_url(bc_id profile_id, const char* text, char* url, size_t capacity) {
+  Profile* profile = browser_core::ProfileOrLoad(profile_id);
+  const GURL search =
+      profile && text ? browser_core::SearchUrl(profile, std::u16string(), text) : GURL();
+  return search.is_valid() ? CopyString(search.spec(), url, capacity) : 0;
 }
 
 bool bc_profile_set_search_engine(bc_id profile, const char* keyword) {
@@ -1720,6 +1802,12 @@ bc_id bc_window_space_tab(bc_id window_id, bc_id space) {
 void bc_window_set_page_frame(bc_id window_id, bc_rect frame, double corner_radius) {
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
     window->SetPageFrame(ToRect(frame), corner_radius);
+  }
+}
+
+void bc_window_set_agent_page_size(bc_id window_id, double width, double height) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetAgentPageSize(gfx::ToRoundedSize(gfx::SizeF(width, height)));
   }
 }
 
@@ -2776,6 +2864,20 @@ void bc_ad_blocking_turn_on_site(bc_id profile_id, const char* site) {
 void bc_tab_set_developer_mode(bc_id id, bool on) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     browser_core::developer_mode::Set(tab->profile(), tab->Url(), on);
+  }
+}
+size_t bc_developer_mode_sites(bc_id profile_id, char* sites, size_t capacity) {
+  std::string lines;
+  if (Profile* profile = LoadedProfile(profile_id)) {
+    for (const std::string& site : browser_core::developer_mode::Sites(profile)) {
+      lines += (lines.empty() ? "" : "\n") + site;
+    }
+  }
+  return CopyString(lines, sites, capacity);
+}
+void bc_developer_mode_turn_off_site(bc_id profile_id, const char* site) {
+  if (Profile* profile = LoadedProfile(profile_id); profile && site) {
+    browser_core::developer_mode::TurnOff(profile, site);
   }
 }
 

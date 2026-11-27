@@ -250,6 +250,36 @@ bool AgentFileField::Choose(bc_id id, bc_id window) {
 }
 
 // static
+bool AgentFileField::Put(bc_id id, std::vector<std::string> files) {
+  auto found = Fields().find(id);
+  if (found == Fields().end() || found->second->asked_) {
+    return false;
+  }
+  AgentFileField& field = *found->second;
+  content::RenderFrameHost* frame = field.document_.AsRenderFrameHostIfValid();
+  FileFieldPutNow now;
+  now.same_document =
+      frame && frame->GetDevToolsFrameToken().ToString() == field.place_.frame;
+  now.origin = frame ? frame->GetLastCommittedOrigin().Serialize() : std::string();
+  now.agents = IsAgents(field.tab_, field.agent_);
+  now.held = IsHeld(field.tab_);
+  now.many = field.many_;
+  if (!MayPutFiles(field.place_, now, files.size())) {
+    LOG(ERROR) << "browser: file field " << id << " put refused";
+    return false;
+  }
+  field.asked_ = true;
+  LOG(ERROR) << "browser: file field " << id << " put " << files.size();
+  // As the user's are, after the same check for a folder, which never goes in.
+  std::vector<std::string> checked = files;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(&AnyFolder, std::move(checked)),
+      base::BindOnce(&AgentFileField::Checked, id, std::move(files)));
+  return true;
+}
+
+// static
 void AgentFileField::Drop(bc_id id) {
   End(id, BC_FILE_FIELD_CLOSED, 0);
 }

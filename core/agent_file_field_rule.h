@@ -84,6 +84,24 @@ struct FileFieldNow {
 // nowhere.
 bool FilesLand(const FileFieldPlace& shown, const FileFieldNow& now, size_t count);
 
+// The field as the app asks to put |count| files of its own into it (bc_file_field_put).
+struct FileFieldPutNow {
+  // Whether the frame still has the document it had as the field was described, and the frame's
+  // origin now; whether the tab is still in the Space of the agent the field was for, and the user
+  // holds it; and whether the field takes several files.
+  bool same_document = false;
+  std::string origin;
+  bool agents = false;
+  bool held = false;
+  bool many = false;
+};
+
+// Whether the app's |count| files may start into the field described at |shown|: some, one unless
+// it takes several, in the same document, from the same origin, one with a site, in a tab still
+// that agent's that the user doesn't hold. Any miss refuses the call itself, with no answer, as
+// nothing has begun; FilesLand checks the node again as they go in.
+bool MayPutFiles(const FileFieldPlace& shown, const FileFieldPutNow& now, size_t count);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AGENT_FILE_FIELD_RULE_H_

@@ -161,5 +161,51 @@ TEST(AgentFileFieldRuleTest, NoFilesAreNoPick) {
   EXPECT_FALSE(FilesLand(Shown(), Unchanged(), 0));
 }
 
+// The app's own files for a field it described, nothing changed since.
+FileFieldPutNow Puttable() {
+  FileFieldPutNow now;
+  now.same_document = true;
+  now.origin = Shown().origin;
+  now.agents = true;
+  now.held = false;
+  return now;
+}
+
+// The app's files start into the field only as it was described: the call is refused, before
+// anything begins, for a frame now on another origin or document, a tab the user holds or that
+// left the agent's Space, or a count the field doesn't take.
+TEST(AgentFileFieldRuleTest, TheAppsFilesGoOnlyIntoTheFieldAsDescribed) {
+  EXPECT_TRUE(MayPutFiles(Shown(), Puttable(), 1));
+
+  FileFieldPutNow elsewhere = Puttable();
+  elsewhere.origin = "https://other.example";
+  EXPECT_FALSE(MayPutFiles(Shown(), elsewhere, 1));
+
+  FileFieldPutNow navigated = Puttable();
+  navigated.same_document = false;
+  EXPECT_FALSE(MayPutFiles(Shown(), navigated, 1));
+
+  FileFieldPutNow held = Puttable();
+  held.held = true;
+  EXPECT_FALSE(MayPutFiles(Shown(), held, 1));
+
+  FileFieldPutNow left = Puttable();
+  left.agents = false;
+  EXPECT_FALSE(MayPutFiles(Shown(), left, 1));
+
+  EXPECT_FALSE(MayPutFiles(Shown(), Puttable(), 0));
+  EXPECT_FALSE(MayPutFiles(Shown(), Puttable(), 2));
+  FileFieldPutNow many = Puttable();
+  many.many = true;
+  EXPECT_TRUE(MayPutFiles(Shown(), many, 2));
+}
+
+// A frame with no site never matches, even its own opaque origin.
+TEST(AgentFileFieldRuleTest, TheAppsFilesNeverGoIntoAFrameWithNoSite) {
+  FileFieldPutNow opaque = Puttable();
+  opaque.origin = "null";
+  EXPECT_FALSE(MayPutFiles({"F00D", "null"}, opaque, 1));
+}
+
 }  // namespace
 }  // namespace browser_core

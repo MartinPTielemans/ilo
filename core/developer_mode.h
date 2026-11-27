@@ -1,6 +1,9 @@
 #ifndef BROWSER_CORE_DEVELOPER_MODE_H_
 #define BROWSER_CORE_DEVELOPER_MODE_H_
 
+#include <string>
+#include <vector>
+
 #include "url/gurl.h"
 
 class Profile;
@@ -25,6 +28,13 @@ bool Switchable(Profile* profile, const GURL& url);
 // Turns it on or off for |url|'s site in |profile|, if Switchable, and reports every tab of the
 // profile at the site.
 void Set(Profile* profile, const GURL& url, bool on);
+
+// The sites |profile| has it on for, as system_engine::SiteOf gives them: localhost and 127.0.0.1
+// first while they're on by themselves, then those the user turned on, in alphabetical order
+// (#4377).
+std::vector<std::string> Sites(Profile* profile);
+// Turns it off for |site|, one of Sites, as Set does.
+void TurnOff(Profile* profile, const std::string& site);
 
 }  // namespace browser_core::developer_mode
 

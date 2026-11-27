@@ -110,4 +110,10 @@ bool FilesLand(const FileFieldPlace& shown, const FileFieldNow& now, size_t coun
          (count == 1 || FileFieldTakesMany(now.facts));
 }
 
+bool MayPutFiles(const FileFieldPlace& shown, const FileFieldPutNow& now, size_t count) {
+  return count > 0 && (count == 1 || now.many) && now.same_document &&
+         now.origin == shown.origin && !FileFieldPlaceRefusal({shown.frame, now.origin}) &&
+         now.agents && !now.held;
+}
+
 }  // namespace browser_core

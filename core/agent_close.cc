@@ -12,6 +12,7 @@
 #include "base/timer/timer.h"
 #include "browser_core/agent_close_rule.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -163,6 +164,45 @@ int AgentCloseTab(bc_id tab, bool discard) {
   // Cancels a navigation it has under way, as a user's close does.
   contents->DispatchBeforeUnload(/*auto_cancel=*/true);
   return BC_AGENT_CLOSE_PENDING;
+}
+
+int AgentArchiveTab(const std::string& agent, bc_id tab, bool discard) {
+  const Tab* closing = Tab::Get(tab);
+  const handed::Mark* mark = handed::Of(tab);
+  const AgentArchive archive{
+      .handed = closing && mark && Space::AgentMayAct(agent, tab),
+      .held = IsHeld(tab),
+      .pinned = mark && (mark->pin || mark->tile),
+      .asks = closing && closing->AsksBeforeLeaving(),
+      .discard = discard,
+  };
+  switch (archive.What()) {
+    case AgentArchive::Does::kRefused:
+      return BC_AGENT_CLOSE_REFUSED;
+    case AgentArchive::Does::kPinned:
+      return BC_AGENT_CLOSE_PINNED;
+    case AgentArchive::Does::kAsks:
+      return BC_AGENT_CLOSE_ASKS;
+    case AgentArchive::Does::kArchives:
+      break;
+  }
+  // No window goes with it, so none the user looks at shows another Space for it. Where it can't
+  // go back, as when the Space it left is gone, it stays handed, for the app to give back.
+  const bool returned = handed::Return(tab, /*follows=*/false);
+  // As the user's close, into the archive from their Space (KeepClosed), but without its
+  // handlers, which would ask with the dialog.
+  if (returned) {
+    Window::CloseTab(tab, /*discard=*/true);
+  }
+  switch (AgentArchive::After(returned, returned && !Tab::FromId(tab))) {
+    case AgentArchive::Came::kStaysHanded:
+      return BC_AGENT_CLOSE_REFUSED;
+    // Not a refusal: the tab moved, and the agent's log says so.
+    case AgentArchive::Came::kReturned:
+      return BC_AGENT_CLOSE_RETURNED;
+    case AgentArchive::Came::kArchived:
+      return BC_AGENT_CLOSED;
+  }
 }
 
 }  // namespace browser_core

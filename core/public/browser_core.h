@@ -1737,6 +1737,10 @@ typedef struct bc_host {
   // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
   // reaches no log line, no page and no agent's answer.
   const char* product;
+  // How |read| (bc_pdf_read) ended, from a task of its own, once a read: a BC_PDF_ |result|, and
+  // with BC_PDF_READ the document's |page_count| and how many of the pages asked for it read,
+  // |pages_read|, fewer than asked past the document's end. Else both 0.
+  void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2044,12 +2048,15 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
-// Its page asked to stay, as one with unsaved changes does: only ever agent_close_answered's
-// answer, as the page's own.
+// Its page asked to stay, as one with unsaved changes does: agent_close_answered's answer, as the
+// page's own, or bc_agent_archive_tab's return, for a page that may hold some.
 #define BC_AGENT_CLOSE_ASKS 3
 // The core is asking the page, which answers later through agent_close_answered: only ever
 // bc_agent_close_tab's return, never an answer.
 #define BC_AGENT_CLOSE_PENDING 4
+// The tab went back to the place it left but stays open, as one between windows does: the user's
+// again, and nothing archived. Only ever bc_agent_archive_tab's return, never an answer.
+#define BC_AGENT_CLOSE_RETURNED 5
 
 // Closes |tab|, in the Space of the agent with the id |agent|, for the agent, never with a dialog:
 // as the "Leave site?" dialog shows the tab, it would take the user's focus. A page with no
@@ -2063,6 +2070,20 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
 // it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
+// Archives |tab|, which the user handed the agent with the id |agent| (bc_tab_give_to_agent), for
+// the agent, never with a dialog and never moving what a window shows but for the tab: it goes
+// back to the place it left, as bc_tab_return_from_agent puts it, with no window going with it,
+// and closes there as bc_tab_close closes a Today tab, into the archive, but without its handlers.
+// Its page is never asked: one with a beforeunload handler may hold unsaved changes, and then it
+// stays handed, untouched, and the call returns BC_AGENT_CLOSE_ASKS, unless |discard| loses what
+// it holds. A tab that goes back pinned or onto a favorite's tile stays handed too, with
+// BC_AGENT_CLOSE_PINNED. Returns BC_AGENT_CLOSED once it's gone, BC_AGENT_CLOSE_RETURNED for one
+// that went back but stays, as between windows, and is the user's, else BC_AGENT_CLOSE_REFUSED: for
+// a tab not handed to |agent| or one the user holds, it stays as it is; one that can't go back, as
+// when the Space it left is gone, stays handed. Never PENDING. Agent code calls it from Work on
+// pages up, and only from Full access with |discard|, as losing what the user wrote is the agent's
+// discard.
+BC_EXPORT int bc_agent_archive_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
 // pinned tabs top to bottom without their folders, then its Today tabs, and returns how many it
@@ -2070,6 +2091,25 @@ BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
 // user's or another agent's, are ever listed. Agent code calls it for an agent's list of tabs,
 // never bc_space_pinned or bc_space_today.
 BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity);
+
+// What the page in |tab| reported since it loaded, for the agent with the id |agent| that owns the
+// tab (#4377), as UTF-8 JSON copied into |log| as bc_space_name does: {"developer_mode",
+// "requests", and "console", "dropped"}. Each failed request, one that ended in a network error
+// (its name in "error", a blocked one included) or with a status of 400 or more, gives its method,
+// its address without the query or fragment, and its status. Only while the page is in Developer
+// Mode (bc_tab_set_developer_mode, the user's), "console" holds every console message, and each
+// request gives its whole address and, as far as it was heard, its request and response headers
+// without Cookie, Authorization, Proxy-Authorization or Set-Cookie and its response's body; then
+// |developer_mode| is true. The core keeps a log only for a tab in an agent's Space, from the time
+// it comes there, and drops it as it leaves; it keeps at most 200 requests and 500 messages, the
+// oldest dropped first and counted in "dropped", a message cut at 8 KB and a body at 64 KB, and
+// 1 MB in all. Empty, with |developer_mode| false, for a tab the agent doesn't own, one in a
+// private window, or one whose page isn't http(s): never another tab's. Agent code calls it.
+BC_EXPORT size_t bc_agent_page_log(const char* agent,
+                                   bc_id tab,
+                                   bool* developer_mode,
+                                   char* log,
+                                   size_t capacity);
 
 // What bc_agent_page does in a tab. Each but SCREENSHOT then answers with the page's accessibility
 // tree. An action on an element first waits until it's on screen, holds still for two frames and,
@@ -2211,6 +2251,57 @@ BC_EXPORT bool bc_file_field_choose(bc_id field, bc_id window);
 // bc_file_field_choose hadn't been answered. A tab that closes, or whose agent's session ends,
 // drops its fields itself.
 BC_EXPORT void bc_file_field_drop(bc_id field);
+
+// The app puts the |count| files at |paths| (UTF-8), its own copies of files a thread of its own
+// was given, into |field|, from BC_AGENT_PAGE_FILE_FIELD's answer, as DevTools'
+// DOM.setFileInputFiles puts them, with no dialog. The app has checked them against its rules for
+// files first: the core takes them as the app's, and a folder among them puts none. Only into the
+// same node, in the same document of the same frame, from the same origin, in a tab still in the
+// Space of the agent whose field it was, that the user doesn't hold, as bc_file_field_choose puts
+// the user's, and more than one only into a field that takes several. Then file_field_done, once,
+// from a task of its own: BC_FILE_FIELD_PUT with |count|, or BC_FILE_FIELD_LEFT if the field left
+// before the files went in, or BC_FILE_FIELD_NONE for a folder. Returns false, with no answer, for
+// a field it doesn't know or one already chosen or put for, for no files or several into a field
+// that takes one, and for a field whose frame has another document or origin by then, whose tab
+// left that agent's Space, or that the user holds. The app's: agents get none, and no name or path
+// of a file is logged.
+BC_EXPORT bool bc_file_field_put(bc_id field, const char* const* paths, size_t count);
+
+// What came of bc_pdf_read (pdf_read_done).
+// Its pages are read: bc_pdf_page_text and bc_pdf_page_picture give them.
+#define BC_PDF_READ 0
+// It needs a password, which nothing asks for.
+#define BC_PDF_LOCKED 1
+// PDFium can't open it, the process reading it stopped, as a crash there stops it, or it wasn't
+// read within 60 seconds, which ends that process.
+#define BC_PDF_BROKEN 2
+// bc_pdf_drop came before the answer.
+#define BC_PDF_CLOSED 3
+
+// The most pages one bc_pdf_read reads.
+#define BC_PDF_MOST_PAGES 30
+
+// Reads |size| bytes of a PDF the app read from a file it holds, its pages |first| (from 0) to
+// |first| + |count| - 1, by the engine's PDFium in a sandboxed utility process of its own, never
+// the browser's, and answers once with pdf_read_done, from a task of its own. A page's text is
+// PDFium's, and a page with under 16 characters but spaces, as a scan with no text layer, gets a
+// picture too. The bytes are copied before it returns, and nothing is sent anywhere. Returns the
+// read's id, or 0 for no bytes or over 256 MB, a |first| under 0, or a |count| under 1 or over
+// BC_PDF_MOST_PAGES. The app's: agents get none, and no byte of it is logged.
+BC_EXPORT bc_id bc_pdf_read(const uint8_t* bytes, size_t size, int first, int count);
+
+// The text of |read|'s |index|th page, from 0 within the read, UTF-8, copied as bc_space_name
+// copies it. Empty before its answer or for an index past what it read.
+BC_EXPORT size_t bc_pdf_page_text(bc_id read, int index, char* text, size_t capacity);
+
+// The picture of |read|'s |index|th page as JPEG, at most 1568 px on its long side, for a page
+// with under 16 characters but spaces; none, 0, for one with text. Copies up to |capacity| bytes
+// into |jpeg| and returns the picture's whole length.
+BC_EXPORT size_t bc_pdf_page_picture(bc_id read, int index, uint8_t* jpeg, size_t capacity);
+
+// Forgets |read| and what it answered, ending its process if it's still reading. One unanswered
+// answers BC_PDF_CLOSED.
+BC_EXPORT void bc_pdf_drop(bc_id read);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
@@ -2392,6 +2483,10 @@ BC_EXPORT size_t bc_profile_search_engines(bc_id profile, char* engines, size_t 
 // Copies the keyword of the profile's default search engine, which the command bar searches with in
 // its Spaces, into |keyword| as bc_space_name does.
 BC_EXPORT size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t capacity);
+// As bc_search_url with no keyword, the URL of a search for |text| with the profile's default
+// search engine, for a profile no window may show, as a task's hidden Space's. Returns 0 if it has
+// none.
+BC_EXPORT size_t bc_profile_search_url(bc_id profile, const char* text, char* url, size_t capacity);
 // Makes the engine of |keyword|, one of bc_profile_search_engines, the profile's default, and
 // returns whether it did.
 BC_EXPORT bool bc_profile_set_search_engine(bc_id profile, const char* keyword);
@@ -2774,6 +2869,11 @@ BC_EXPORT bc_id bc_window_space_tab(bc_id window, bc_id space);
 // edges as the window resizes. A split view's pages share it, 10 apart, each as wide as the others
 // side by side, or as tall stacked.
 BC_EXPORT void bc_window_set_page_frame(bc_id window, bc_rect frame, double corner_radius);
+
+// The size the window gives a thread's page it watches, in points. The core makes each agent's page
+// at the front window's, or with none open the last one's, so watching it lays nothing out again;
+// until the app sets it, the window's page frame's size.
+BC_EXPORT void bc_window_set_agent_page_size(bc_id window, double width, double height);
 
 // The colour of the ring inside the edge of the focused page of a split view, 0xRRGGBB.
 BC_EXPORT void bc_window_set_focus_color(bc_id window, uint32_t color);
@@ -3726,6 +3826,15 @@ BC_EXPORT void bc_ad_blocking_turn_on_site(bc_id profile, const char* site);
 // bc_tab_site_controls is watching one. The user's: agents get none, as
 // it's how the user sees their tabs.
 BC_EXPORT void bc_tab_set_developer_mode(bc_id tab, bool on);
+// Copies the sites the profile has Developer Mode on for into |sites| as bc_space_name does, one a
+// line: localhost and 127.0.0.1 first while they're on by themselves, then those the user turned
+// on, in alphabetical order, each a registrable domain or a host alone. Empty for a profile that
+// isn't loaded. The user's: agents get none (#4377).
+BC_EXPORT size_t bc_developer_mode_sites(bc_id profile, char* sites, size_t capacity);
+// Turns Developer Mode off for |site|, one of bc_developer_mode_sites, in the profile, as
+// bc_tab_set_developer_mode does for a tab there: then tab_state_changed for each of the profile's
+// tabs at the site, and an agent's page_log there holds no more than outside it. The user's.
+BC_EXPORT void bc_developer_mode_turn_off_site(bc_id profile, const char* site);
 
 // Boosts (docs/ux-spec.md › Boosts). Gives |site|, a host without "www." such as
 // "news.ycombinator.com", |css| in |profile|, which its pages and frames there take as they

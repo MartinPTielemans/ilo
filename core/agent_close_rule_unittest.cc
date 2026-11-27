@@ -6,6 +6,32 @@ namespace browser_core {
 namespace {
 
 using Answer = AgentCloseAsk::Answer;
+using Does = AgentArchive::Does;
+
+// A handed tab whose page may hold unsaved changes stays handed, its page never asked, so no
+// "Leave site?" shows and nothing moves: only discard archives it.
+TEST(AgentArchiveRuleTest, APageThatMayAskStaysHandedUnlessDiscarded) {
+  EXPECT_EQ((AgentArchive{.handed = true, .asks = true}).What(), Does::kAsks);
+  EXPECT_EQ((AgentArchive{.handed = true, .asks = true, .discard = true}).What(), Does::kArchives);
+  EXPECT_EQ((AgentArchive{.handed = true}).What(), Does::kArchives);
+}
+
+// Only a tab the user handed this agent, and doesn't hold, is its to archive, and a pinned one or
+// a favorite only the user closes, whatever discard says.
+TEST(AgentArchiveRuleTest, OnlyAHandedTabTheUserDoesntHold) {
+  EXPECT_EQ((AgentArchive{.discard = true}).What(), Does::kRefused);
+  EXPECT_EQ((AgentArchive{.handed = true, .held = true, .discard = true}).What(), Does::kRefused);
+  EXPECT_EQ((AgentArchive{.handed = true, .pinned = true, .discard = true}).What(), Does::kPinned);
+}
+
+// A tab that went back but didn't close is the user's, never answered as refused, as the agent's
+// log would then say nothing moved; one that couldn't go back is still handed.
+TEST(AgentArchiveRuleTest, ATabThatWentBackButStaysIsReturnedNotRefused) {
+  using Came = AgentArchive::Came;
+  EXPECT_EQ(AgentArchive::After(/*returned=*/true, /*gone=*/false), Came::kReturned);
+  EXPECT_EQ(AgentArchive::After(/*returned=*/true, /*gone=*/true), Came::kArchived);
+  EXPECT_EQ(AgentArchive::After(/*returned=*/false, /*gone=*/false), Came::kStaysHanded);
+}
 
 // A page whose handler doesn't ask is closed by Chromium after its unload handlers: the agent hears
 // once the tab is gone, not as the page agrees.

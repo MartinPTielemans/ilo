@@ -140,12 +140,6 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
   }
   switch (shown) {
     case TileRule::Shown::kNew:
-      // A page the user took over had their size, and once it's the agent's again it has its own
-      // before the tile shows it: one resize, as it's handed back, and none while it's a tile.
-      if (!IsHeld(tab)) {
-        Window::GiveAgentPageItsSize(contents);
-      }
-      [[fallthrough]];
     case TileRule::Shown::kFramed:
     case TileRule::Shown::kMoved:
       // Held before the page becomes visible in the tile, which is when Chrome shows the dialog.
