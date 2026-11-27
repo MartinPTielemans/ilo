@@ -3645,6 +3645,8 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
   }
+  // An agent's page in a field holds the agent's next act only while its window is key.
+  Tab::InFieldsMayChange();
   ReportActiveBrowser();
 }
 

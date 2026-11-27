@@ -17,6 +17,7 @@
 #include "base/timer/timer.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/link_preview_rule.h"
+#include "browser_core/page_in_field_rule.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
@@ -74,6 +75,9 @@ class Tab : public content::WebContentsObserver,
   static content::WebContents* FromId(bc_id id);
   // Every tab, with its page or without.
   static std::vector<Tab*> All();
+  // A window's key state or a tab's Space changed: each tab whose page has the keyboard tells the
+  // app again whether it's in a field (#4462).
+  static void InFieldsMayChange();
   // Whether |id| has its page loaded, which it hasn't without one, nor once unloaded in place by
   // Chrome, nor while opened behind and not yet shown.
   static bool Loaded(bc_id id);
@@ -334,6 +338,8 @@ class Tab : public content::WebContentsObserver,
   void ObserveHelpers();
   // Tells the app the tab closed, as its page did or as Close closes it.
   void ReportClosed();
+  // Tells the app whether an agent's page has the user's keyboard in a field, if that changed.
+  void UpdateInField();
   // Finds the favicon the profile has for |url|, for a tab whose page hasn't loaded, as Chrome's
   // favicon driver finds one only for a page that has committed.
   void FindFavicon(const GURL& url);
@@ -366,6 +372,8 @@ class Tab : public content::WebContentsObserver,
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
   void OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) override;
+  void OnWebContentsLostFocus(content::RenderWidgetHost* render_widget_host) override;
+  void OnFocusChangedInPage(const content::FocusedNodeDetails& details) override;
   void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
   void BeforeUnloadFired(bool proceed) override;
   void WebContentsDestroyed() override;
@@ -481,6 +489,11 @@ class Tab : public content::WebContentsObserver,
   void ShowSystemPageIcon(const uint8_t* png, size_t size);
 
   const bc_id id_;
+  // Whether the page's focused element takes text, and whether the page has its window's keyboard,
+  // for tab_page_in_field.
+  bool page_editable_ = false;
+  bool page_focused_ = false;
+  PageInField in_field_;
   base::WeakPtr<Profile> profile_;
   // While it waits for its profile (Restore): that profile's directory, and the id of the
   // sessionStorage the last launch saved it with, which the profile recreates once it's here.

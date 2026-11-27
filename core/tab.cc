@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -76,6 +77,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
+#include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -208,8 +210,16 @@ class TabLink : public content::WebContentsUserData<TabLink> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(TabLink);
 
+// The tabs whose page has its window's keyboard, at most one a window: the ones a window's key
+// change or a Space change can put in a field or take out of one.
+std::set<bc_id>& PageFocused() {
+  static base::NoDestructor<std::set<bc_id>> tabs;
+  return *tabs;
+}
+
 // Forgets |id|, and deletes its tab once the caller, which may be the tab, has returned.
 void Forget(bc_id id) {
+  PageFocused().erase(id);
   auto it = Tabs().find(id);
   if (it == Tabs().end()) {
     return;
@@ -321,6 +331,19 @@ std::vector<Tab*> Tab::All() {
     all.push_back(tab.get());
   }
   return all;
+}
+
+void PageInFieldsSpacesChanged() {
+  Tab::InFieldsMayChange();
+}
+
+// static
+void Tab::InFieldsMayChange() {
+  for (bc_id id : std::set<bc_id>(PageFocused())) {
+    if (Tab* tab = Get(id)) {
+      tab->UpdateInField();
+    }
+  }
 }
 
 // static
@@ -842,6 +865,9 @@ void Tab::Close() {
 }
 
 void Tab::ReportClosed() {
+  if (const std::optional<bool> said = in_field_.Closed(); said && Host().tab_page_in_field) {
+    Host().tab_page_in_field(Host().context, id_, *said);
+  }
   Window::OnTabClosing(id_);
   if (Host().tab_closed) {
     Host().tab_closed(Host().context, id_);
@@ -1939,6 +1965,33 @@ void Tab::OnVisibilityChanged(content::Visibility visibility) {
 
 void Tab::OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) {
   dialog_keys::PageFocused(web_contents());
+  page_focused_ = true;
+  PageFocused().insert(id_);
+  UpdateInField();
+}
+
+void Tab::OnWebContentsLostFocus(content::RenderWidgetHost* render_widget_host) {
+  page_focused_ = false;
+  PageFocused().erase(id_);
+  UpdateInField();
+}
+
+void Tab::OnFocusChangedInPage(const content::FocusedNodeDetails& details) {
+  page_editable_ = details.editable_level != content::EditableLevel::kNotEditable;
+  UpdateInField();
+}
+
+void Tab::UpdateInField() {
+  // Asked of an agent's tab alone, so focus moving in the user's own pages costs a lookup.
+  const Space* space = Space::Holding(id_);
+  const Window* window = Window::Holding(id_);
+  const std::optional<bool> said = in_field_.Update({.agents = space && space->agent(),
+                                                     .editable = page_editable_,
+                                                     .focused = page_focused_,
+                                                     .key = window && window->active()});
+  if (said && Host().tab_page_in_field) {
+    Host().tab_page_in_field(Host().context, id_, *said);
+  }
 }
 
 // The page's renderer went away, crashed, killed or ended on purpose. check.sh waits for this line,
