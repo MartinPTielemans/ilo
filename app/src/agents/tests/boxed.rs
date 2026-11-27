@@ -13,7 +13,7 @@ use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::boxed::{LEFT_RUNNING_LOGGED, PutUp, ended_left_logged};
-use crate::agents::task::ilo::{IloKind, IloLine, LeftOut};
+use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, NotGiven};
 use crate::agents::task::{Line, State};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::leftovers::{SweepFailed, Swept};
@@ -354,6 +354,7 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
             run.ran(1);
             let line = IloKind::StartedWithout {
                 folder: NAME.into(),
+                why: NotGiven::Gone,
             };
             (agent, Some(line))
         }),
@@ -534,6 +535,67 @@ fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppCon
         "Started at Work on pages · 1 file · files left out"
     );
     assert_eq!(logged(&run, &agent, cx), [started]);
+}
+
+/// A folder the user picked that ilo doesn't give isn't given, and the task starts in its box
+/// without it, its line saying why by the folder's name (X6): one that no longer resolves to
+/// itself, moved, renamed or gone, and one ilo never gives, its own tasks' folder among them.
+#[gpui::test]
+fn a_folder_ilo_doesnt_give_starts_the_task_without_it_and_says_why(cx: &mut TestAppContext) {
+    use crate::agents::files::Picked;
+    use crate::agents::task::Start;
+    type Folder = fn(&Run, &mut TestAppContext) -> Granted;
+    let cases: [(&str, Folder, NotGiven); 2] = [
+        (
+            "gone",
+            |_, _| Granted::named_for_test("Kept elsewhere"),
+            NotGiven::Gone,
+        ),
+        (
+            "never",
+            |run, cx| {
+                let tasks = (run.agents).read_with(cx, |agents, _| agents.tasks_dir());
+                let folder = tasks.join("Kept elsewhere");
+                std::fs::create_dir_all(&folder).unwrap();
+                Granted::at_for_test(folder.canonicalize().unwrap())
+            },
+            NotGiven::Never,
+        ),
+    ];
+    for (name, folder, why) in cases {
+        let (run, boxes) = (Run::new(name, cx), Boxes::default());
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files_available = true;
+            agents.tasks.box_available = Some(Ok(()));
+            agents.tasks.wall = Some(boxes.maker());
+        });
+        let start = Start {
+            tier: Tier::default(),
+            model: None,
+            effort: None,
+            pages: Vec::new(),
+            files: Picked {
+                files: Vec::new(),
+                folder: Some(folder(&run, cx)),
+            },
+        };
+        let agent = (run.agents)
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, ASKED, None, 1, start, cx)
+            })
+            .expect("started");
+        let (args, _) = run.ran(1);
+        assert!(boxed(&args), "{name}: {args:?}");
+        let given = (run.agents).read_with(cx, |agents, _| {
+            agents.task(&agent).map(|task| task.files.folder.is_some())
+        });
+        assert_eq!(given, Some(false), "{name}");
+        let line = IloKind::StartedWithout {
+            folder: "Kept elsewhere".into(),
+            why,
+        };
+        assert_eq!(lines(&run, &agent, cx), [line], "{name}");
+    }
 }
 
 /// The sweep after `at`, a run of `agent`'s, answers.

@@ -2116,12 +2116,14 @@ impl Agents {
         let never = Never::here(Some(self.tasks_dir()));
         let refuses = |folder: &super::wall::Granted| {
             let root = folder.root();
-            files::resolved(root).as_deref() != Some(root) || never_grantable(root, &never)
+            match () {
+                _ if files::resolved(root).as_deref() != Some(root) => Some(ilo::NotGiven::Gone),
+                _ if never_grantable(root, &never) => Some(ilo::NotGiven::Never),
+                _ => None,
+            }
         };
-        let refused = match &picked.folder {
-            Some(folder) if refuses(folder) => picked.folder.take(),
-            _ => None,
-        };
+        let why = picked.folder.as_ref().and_then(refuses);
+        let refused = why.and_then(|_| picked.folder.take());
         let names = Names::of(&Picked {
             folder: refused.clone().or(picked.folder.clone()),
             files: picked.files.clone(),
@@ -2131,12 +2133,12 @@ impl Agents {
         {
             task.files.folder = picked.folder.clone();
             task.names = names;
-            if let Some(folder) = &refused {
+            if let (Some(folder), Some(why)) = (&refused, why) {
                 let files = Given {
                     folder: Some(folder.clone()),
                     attached: None,
                 };
-                self.place_in(agent, super::lines::Happened::NotGiven { files });
+                self.place_in(agent, super::lines::Happened::NotGiven { files, why });
             }
         }
         let with = StartedWith {

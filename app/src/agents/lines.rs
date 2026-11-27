@@ -10,7 +10,7 @@ use gpui::{App, Context, SharedString};
 
 use super::files::{Given, Names};
 use super::held;
-use super::task::ilo::{IloKind, IloLine, LeftOut};
+use super::task::ilo::{IloKind, IloLine, LeftOut, NotGiven};
 use super::task::{Mark, Task};
 use super::tier::{self, Tier};
 use super::{Agents, site};
@@ -75,9 +75,9 @@ pub enum Happened {
     /// ilo couldn't copy the files the user attached, so the task started without them. `files`
     /// is where the copies were to be.
     NotCopied { files: Given },
-    /// The folder the user picked, `files`, wasn't given, as it no longer resolved to itself or
-    /// is one ilo never gives, so the task started without it (X6).
-    NotGiven { files: Given },
+    /// The folder the user picked, `files`, wasn't given, for `why`, so the task started without
+    /// it (X6).
+    NotGiven { files: Given, why: NotGiven },
     /// A later sweep ended what a run of the task's had left running (wall/leftovers.rs).
     EndedLeft,
     /// The user stopped the task, which held `pages` pages then.
@@ -262,8 +262,8 @@ impl Agents {
                     Some(left) => IloKind::NotCopied { left },
                     None => continue,
                 },
-                Happened::NotGiven { files } => match shown(&task.names, files).folder {
-                    Some(folder) => IloKind::StartedWithout { folder },
+                Happened::NotGiven { files, why } => match shown(&task.names, files).folder {
+                    Some(folder) => IloKind::StartedWithout { folder, why: *why },
                     None => continue,
                 },
                 Happened::EndedLeft => IloKind::EndedLeft,

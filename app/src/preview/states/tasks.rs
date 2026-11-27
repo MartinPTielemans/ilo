@@ -707,6 +707,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                     100,
                     IloKind::StartedWithout {
                         folder: "Lisbon trip".into(),
+                        why: browser::agents::task::ilo::NotGiven::Gone,
                     },
                 ),
                 done(0, before),

@@ -87,9 +87,8 @@ pub enum IloKind {
     /// ilo ended the task's run before its first answer, as its assistant started with a tool
     /// that isn't ilo's own (AP17). It's what happened, so it needs nothing of the user.
     NotOurTools,
-    /// The task started without the folder the user picked, which ilo couldn't give it: it no
-    /// longer resolved to itself, or it's one ilo never gives (X6).
-    StartedWithout { folder: SharedString },
+    /// The task started without the folder the user picked, for `why` (X6).
+    StartedWithout { folder: SharedString, why: NotGiven },
     /// ilo later ended what the assistant had left running.
     EndedLeft,
     /// The user revoked the task's folder; it goes on without it (J2).
@@ -121,6 +120,15 @@ pub enum IloKind {
     /// A line of a thread a run before left, as its kept log stored it (kept/log.rs): its words
     /// alone, which the app wrote, drawn as words: no button, link, ring or count.
     Kept { words: SharedString },
+}
+
+/// Why ilo didn't give a task the folder the user picked, at its start (X6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotGiven {
+    /// It no longer resolves to itself: it was moved, renamed or is gone.
+    Gone,
+    /// It's one ilo never gives.
+    Never,
 }
 
 /// What a task went on without, or couldn't be started again without, by the name the app shows

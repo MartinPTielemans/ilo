@@ -4,7 +4,9 @@
 
 use crate::agents::kept;
 use crate::agents::task::Live;
-use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, LeftOut, SignedInWith};
+use crate::agents::task::ilo::{
+    HelpersLimit as Limit, IloButton, IloKind, LeftOut, NotGiven, SignedInWith,
+};
 use crate::agents::tier::{self, Tier, Why};
 use crate::product::PRODUCT;
 
@@ -119,7 +121,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             None,
         ),
         // What the user gave that the task didn't get (#4101). Each names it, and `tail` ends it.
-        IloKind::StartedWithout { folder } => (
+        IloKind::StartedWithout { folder, .. } => (
             "started this thread without".into(),
             Some(folder.to_string()),
         ),
@@ -197,7 +199,7 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
         (Some(name), None) => with_name(kind, &own, name).0,
         (None, _) => own,
     };
-    words.extend(tail(kind, agent));
+    words.extend(tail(kind));
     let why = match kind {
         IloKind::SignedIn { .. } => None,
         _ => body(kind, name.as_deref().unwrap_or_default()),
@@ -210,13 +212,16 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
 }
 
 /// What a line says after its name, to its sentence's end, if anything.
-pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
+pub fn tail(kind: &IloKind) -> Option<String> {
     match kind {
-        // TODO-WORDS: X6 as written, whose reason is a box that couldn't be put up, where the one
-        // case left is a folder ilo couldn't give; a revised X6 is asked for.
-        IloKind::StartedWithout { .. } => {
-            Some(format!(": {PRODUCT} couldn't limit {agent} to that folder"))
-        }
+        IloKind::StartedWithout {
+            why: NotGiven::Gone,
+            ..
+        } => Some(format!(": {PRODUCT} couldn't find it")),
+        IloKind::StartedWithout {
+            why: NotGiven::Never,
+            ..
+        } => Some(format!(": {PRODUCT} keeps it from threads")),
         IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),

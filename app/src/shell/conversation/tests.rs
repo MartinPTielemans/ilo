@@ -13,7 +13,7 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::Status;
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, NotGiven};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1778,21 +1778,29 @@ fn a_line_of_what_a_task_went_without_says_what_ilo_did_and_why(_: &mut TestAppC
         let (own, name) = head(kind, "Claude");
         let own = format!("{PRODUCT} {own}");
         let Some(name) = name else {
-            assert_eq!(tail(kind, "Claude"), None);
+            assert_eq!(tail(kind), None);
             return (own, String::new());
         };
         let (mut said, at) = with_name(kind, &own, &name);
         let quoted = said[at].to_string();
-        said.extend(tail(kind, "Claude"));
+        said.extend(tail(kind));
         (said, quoted)
     };
     let cases = [
         (
             IloKind::StartedWithout {
                 folder: "Trip".into(),
+                why: NotGiven::Gone,
             },
-            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
-             that folder",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't find it",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::StartedWithout {
+                folder: "Trip".into(),
+                why: NotGiven::Never,
+            },
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} keeps it from threads",
             "\u{201c}Trip\u{201d}",
         ),
         (
@@ -1893,6 +1901,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
             folder: "Trip".into(),
+            why: NotGiven::Gone,
+        },
+        IloKind::StartedWithout {
+            folder: "Trip".into(),
+            why: NotGiven::Never,
         },
         IloKind::EndedLeft,
         IloKind::Revoked {
