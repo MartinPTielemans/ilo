@@ -1349,7 +1349,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 _ => "Searched the web".into(),
             };
         }
-        MOVED_ON => return format!("Went on when {} moved past your step", site(NO_SITE)),
+        MOVED_ON => return format!("Took {} back when the page moved on", site(NO_SITE)),
         PROGRAM_SEARCHED => return "Searched the web".into(),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {

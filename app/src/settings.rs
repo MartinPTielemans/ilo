@@ -66,7 +66,7 @@ use browser::tokens::settings::{
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
-    WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
+    WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_GLYPH, WINDOWS_CLOSE_HOVERED,
 };
 use browser::tokens::text;
 
@@ -1389,7 +1389,7 @@ fn windows_close_button(base: Rgba, at: gpui::Canvas<()>, a11y: bool) -> AnyElem
                 .path("icons/window-windows-close.svg")
                 .size(px(WINDOWS_BUTTON_GLYPH))
                 .text_color(base.opacity(SECTION_TEXT))
-                .group_hover("close", |style| style.text_color(gpui::white())),
+                .group_hover("close", |style| style.text_color(rgb(WINDOWS_CLOSE_GLYPH))),
         )
         .child(at)
         .into_any_element()

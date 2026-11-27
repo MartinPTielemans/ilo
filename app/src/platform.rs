@@ -341,9 +341,7 @@ unsafe extern "C" {
     pub fn host_add_first_run(first_run_view: *mut c_void);
     pub fn host_set_first_run_frame(width: f64, height: f64, radius: f64);
     #[cfg(target_os = "macos")]
-    pub fn host_grow_first_run() -> bool;
-    #[cfg(target_os = "macos")]
-    pub fn host_set_first_run_reveal(window: f64, glass: f64);
+    pub fn host_grow_first_run(reveal: f64) -> bool;
     pub fn host_show_first_run();
     pub fn host_close_first_run();
     pub fn host_close_other_window() -> bool;

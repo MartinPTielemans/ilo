@@ -24,9 +24,17 @@ fn profile(name: &str) -> PathBuf {
 /// with `status`.
 #[cfg(unix)]
 fn stand_in(dir: &Path, status: i32) -> PathBuf {
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.ran\"\nexit {status}\n");
+    let program = script_in(dir, &script);
+    std::fs::remove_file(ran(&program)).unwrap();
+    program
+}
+
+/// A stand-in for the assistant in `dir` that runs `script`, once it can be run.
+#[cfg(unix)]
+fn script_in(dir: &Path, script: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let program = dir.join("claude");
-    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.ran\"\nexit {status}\n");
     std::fs::write(&program, script).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Another test's thread that forked while the script was open for writing holds it until its
@@ -42,7 +50,6 @@ fn stand_in(dir: &Path, status: i32) -> PathBuf {
             }
         }
     }
-    std::fs::remove_file(ran(&program)).unwrap();
     program
 }
 
@@ -443,4 +450,95 @@ fn a_row_carries_the_places_its_runs_left_by_name_alone() {
     assert_eq!(again.came_clean("fedcba9876543210"), None);
     assert_eq!(again.came_clean(PLACE), Some(None));
     assert_eq!(again.came_clean(PLACE), None);
+}
+
+/// Many kept at once go a few at a time, never more (#4446): each is removed once, each success
+/// counts once, and each failure stays held and stuck, for a later try.
+#[test]
+fn many_are_removed_a_few_at_a_time_and_a_failure_stays_stuck() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const MANY: usize = 60;
+    let mut kept = Kept::default();
+    let ids: Vec<Id> = (0..MANY).map(|_| Id::new()).collect();
+    for (at, id) in ids.iter().enumerate() {
+        kept.hold(
+            &format!("task-{at}"),
+            Cli::Claude,
+            id.clone(),
+            "Default",
+            STARTED,
+        );
+    }
+    // Every seventh can't be removed.
+    let fails = |id: &Id| ids.iter().position(|each| each == id).unwrap() % 7 == 0;
+    let failing = ids.iter().filter(|id| fails(id)).count();
+    let removing = kept.removing(|_| true);
+    assert_eq!(removing.len(), MANY);
+    let (now, most, asked) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
+    let removed = remove_each(removing, AT_ONCE, |(id, _)| {
+        let running = now.fetch_add(1, Ordering::SeqCst) + 1;
+        most.fetch_max(running, Ordering::SeqCst);
+        asked.fetch_add(1, Ordering::SeqCst);
+        // Long enough for the others to start meanwhile, as an assistant's run is.
+        std::thread::sleep(Duration::from_millis(5));
+        now.fetch_sub(1, Ordering::SeqCst);
+        !fails(id)
+    });
+    let most = most.load(Ordering::SeqCst);
+    assert!(most <= AT_ONCE, "{most} at once");
+    assert!(most > 1, "one at a time");
+    assert_eq!(asked.load(Ordering::SeqCst), MANY, "each is asked once");
+    // Each comes back once, with what came of it.
+    let mut back: Vec<&Id> = removed.iter().map(|((id, _), _)| id).collect();
+    back.sort_by_key(|id| id.as_str().to_string());
+    back.dedup();
+    assert_eq!(back.len(), MANY);
+    for ((id, _), removed) in &removed {
+        assert_eq!(*removed, !fails(id));
+        kept.removed(id, *removed);
+    }
+    let succeeded = removed.iter().filter(|(_, removed)| *removed).count();
+    assert_eq!(succeeded, MANY - failing);
+    assert_eq!((kept.count(), kept.stuck()), (failing, failing));
+    // A later try takes the stuck ones alone.
+    let again: Vec<Id> = kept
+        .removing(|_| true)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(again.len(), failing);
+    assert!(again.iter().all(fails));
+}
+
+/// Fewer to remove than run at once start no more runs than there are; none starts none.
+#[test]
+fn a_few_or_none_to_remove_run_as_they_are() {
+    assert_eq!(remove_each(Vec::<u8>::new(), AT_ONCE, |_| true), []);
+    let mut removed = remove_each(vec![1, 2], AT_ONCE, |each| *each == 1);
+    removed.sort();
+    assert_eq!(removed, [(1, true), (2, false)]);
+}
+
+/// The assistant's own runs remove each of many, a few at once, each folder alone.
+#[cfg(unix)]
+#[test]
+fn many_removals_each_ask_the_assistant() {
+    let dir = profile("many");
+    let root = dir.join(FOLDER);
+    // Each run marks, beside it, the folder it was asked for; its run here to start marks none.
+    let program = script_in(&dir, "#!/bin/sh\n[ -z \"$2\" ] || : > \"$2.purged\"\n");
+    let ids: Vec<Id> = (0..12).map(|_| Id::new()).collect();
+    for id in &ids {
+        std::fs::create_dir_all(folder(&root, id)).unwrap();
+    }
+    let removed = remove_each(ids.clone(), AT_ONCE, |id| remove(&program, None, &root, id));
+    assert!(removed.iter().all(|(_, removed)| *removed));
+    for id in &ids {
+        assert!(!folder(&root, id).exists());
+        assert!(PathBuf::from(format!("{}.purged", folder(&root, id).display())).exists());
+    }
 }

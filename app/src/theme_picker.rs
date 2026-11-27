@@ -1798,7 +1798,11 @@ impl Render for ThemePicker {
                     .bg(rgb(colors[index]))
                     .border(px(ring))
                     .border_color(rgb(WHITE))
-                    .shadow(drop_shadow(HANDLE_SHADOW, 3., 10.))
+                    .shadow(drop_shadow(
+                        HANDLE_SHADOW,
+                        HANDLE_SHADOW_Y,
+                        HANDLE_SHADOW_BLUR,
+                    ))
             });
         let count = colors.len();
         let chip = (count > 0).then(|| {
@@ -2106,7 +2110,7 @@ impl Render for ThemePicker {
                 .size(px(THUMB))
                 .rounded_full()
                 .bg(rgb(WHITE))
-                .shadow(drop_shadow(THUMB_SHADOW, 2., 6.));
+                .shadow(drop_shadow(THUMB_SHADOW, THUMB_SHADOW_Y, THUMB_SHADOW_BLUR));
             let entity = cx.weak_entity();
             let stepper = move |by: f32, cx: &mut App| {
                 entity

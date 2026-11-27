@@ -56,7 +56,7 @@ elif "-p" in args and "--mcp-config" in args:
     # A thread's turn: its first message, then a question to the user through the browser's
     # server, as the config names it, which holds the thread waiting until its input closes.
     with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as file:
-        server = next(iter(json.load(file)["mcpServers"].values()))
+        name, server = next(iter(json.load(file)["mcpServers"].items()))
     sys.stdin.readline()
     bridge = subprocess.Popen([server["command"], *server.get("args", [])],
                               env={**os.environ, **server.get("env", {})},
@@ -70,8 +70,10 @@ elif "-p" in args and "--mcp-config" in args:
         if json.loads(line).get("id") == 1:
             break
     send({"method": "notifications/initialized"})
+    # Its output names the tool as Claude does, by the server: the app ends a run that calls one
+    # by another name.
     say({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ask-1",
-         "name": "ask", "input": {}}]}})
+         "name": "mcp__" + name + "__ask", "input": {}}]}})
     send({"id": 2, "method": "tools/call",
           "params": {"name": "ask", "arguments": {"question": "Which seat?"}}})
     for line in sys.stdin:
@@ -132,6 +134,8 @@ threads_ask() {
   # A launch looks for no CLI: the ask's first showing in a run does (Agents::task_ask_shown).
   await "^browser: task agent claude is SignedIn at $home/bin/claude\$" ||
     fail "the ask didn't find the stand-in signed in: $(grep '^browser: task agent claude ' "$log")"
+  # The bar hears of it a turn after the look logs it, and a ↩ before then has nothing to run on.
+  expect '^browser: command bar agents: Claude$' "the bar didn't list the stand-in it found"
   send key return
   expect '^browser: command bar runs a task on claude$' "↩ didn't run the thread on the stand-in"
   expect_late '^browser: task task-[0-9]* on claude asked from space ' "the thread didn't start"

@@ -2474,7 +2474,7 @@ fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppCo
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "the input row, before it shows"
     );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
@@ -2504,22 +2504,22 @@ fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppCo
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "after the taller panel"
     );
     bar.edit(url, None);
-    assert_eq!(bar.last_show(), (Level::Modal, Some(height(0))));
+    assert_eq!(bar.last_show(), (Level::Popover, Some(height(0))));
     bar.edit(url, Some(field));
     assert_eq!(
         bar.last_show(),
-        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        (BAR_LEVEL, Some(FIELD_INPUT)),
         "after the centred one"
     );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
 }
 
 /// Over the URL field the panel is a row tall, and its shadow can't be seen a row below it. The
-/// centred bar's modal shadow, 24 down at a 64 blur, reached twice that, and over a light page
+/// modal level's shadow, 24 down at a 64 blur, reached twice that, and over a light page
 /// read as a blank grey bar under the panel (#1306).
 #[gpui::test]
 fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppContext) {
@@ -2535,8 +2535,8 @@ fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppC
     bar.edit("https://example.com/", None);
     assert_eq!(
         bar.last_show().0,
-        Level::Modal,
-        "the centred bar keeps its modal shadow"
+        Level::Popover,
+        "the centred bar floats as menus do (#4402)"
     );
 }
 
@@ -3691,6 +3691,41 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
+    /// Whether the switch shows at the input's end and on Thread, and what the field says empty.
+    fn switch(&mut self) -> Option<(bool, String)> {
+        let placeholder = self.placeholder();
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.shows_switch().then(|| bar.ask.is_some())
+            })
+            .unwrap()
+            .map(|thread| (thread, placeholder))
+    }
+
+    fn placeholder(&mut self) -> String {
+        self.window
+            .read_with(&self.cx.cx, |bar, cx| {
+                bar.input.read(cx).placeholder().to_string()
+            })
+            .unwrap()
+    }
+
+    /// A click on the switch's key chip, the last thing at the input's end, with the window as
+    /// wide as the host makes it.
+    fn click_switch(&mut self) {
+        (self.cx).simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
+        let point = at(WIDTH - HINT_END - 4., HEIGHT / 2.);
+        (self.cx).simulate_click(point, Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// Whether the bar lists only the commands.
+    fn commands_only(&mut self) -> bool {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| bar.commands.is_some())
+            .unwrap()
+    }
+
     fn chip_and_hint(&mut self) -> (Option<String>, bool, bool) {
         self.window
             .update(&mut self.cx.cx, |bar, _, cx| {
@@ -4140,6 +4175,85 @@ fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
     );
 }
 
+/// ⌘T's bar shows Search | Thread at its end wherever an assistant is ready, plated on the half
+/// it's in. ⇥ with nothing typed opens the composer, which says so in its field, and ⇥ again goes
+/// back to search; with words, ⇥ takes them to the composer and back. A click on the switch does
+/// what ⇥ does (#4393).
+#[gpui::test]
+fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    assert_eq!(
+        bar.switch(),
+        Some((false, "Search, or start a thread".into()))
+    );
+    assert!(
+        !bar.threads().contains(&true),
+        "an empty bar offered New Thread"
+    );
+
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (true, String::new()));
+    assert_eq!(
+        bar.switch(),
+        Some((true, "Ask claude to do something".into()))
+    );
+    assert_eq!(bar.calls(), ["asking true"]);
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (false, String::new()));
+    assert_eq!(
+        bar.switch(),
+        Some((false, "Search, or start a thread".into()))
+    );
+
+    bar.type_text("book a table");
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (true, "book a table".into()));
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (false, "book a table".into()));
+
+    bar.click_switch();
+    assert_eq!(
+        bar.composer(),
+        (true, "book a table".into()),
+        "the click didn't"
+    );
+    bar.click_switch();
+    assert_eq!(
+        bar.composer(),
+        (false, "book a table".into()),
+        "the click back didn't"
+    );
+    assert!(bar.is_open(), "a click on the switch closed the bar");
+}
+
+/// With no assistant ready ⌘T's bar shows no switch and says E1; ⇥ in it, empty or with words,
+/// opens the composer on setting one up, as with words before (#4393). With threads off ⇥ in the
+/// empty field lists the commands, as Arc's does.
+#[gpui::test]
+fn with_no_assistant_ready_the_new_tab_bar_shows_no_switch(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[], None);
+    bar.host.agents.borrow_mut().as_mut().unwrap().signed_out =
+        vec![("codex".into(), "Codex".into())];
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(bar.switch(), None);
+    assert_eq!(bar.placeholder(), "Search or enter address");
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (true, String::new()));
+    assert_eq!(bar.choices().1, SIGN_IN, "⇥ didn't offer setting one up");
+    assert_eq!(bar.switch(), None, "the composer showed the switch");
+    assert_eq!(bar.placeholder(), "Ask an assistant to do something");
+
+    let mut off = Bar::new(cx);
+    assert_eq!(off.switch(), None, "threads off showed the switch");
+    off.keys("tab");
+    assert_eq!(off.composer(), (false, String::new()));
+    assert!(
+        off.commands_only(),
+        "⇥ with threads off didn't list the commands"
+    );
+}
+
 /// Words typed put New Thread second, under the page or search ↩ takes, which ↩ on the first row
 /// goes to, never starting a thread. ⇥, ↩ on New Thread and a click on it each grow the bar into
 /// the composer with the words kept, and ⇥ or a click on Back to Search goes back with them.
@@ -4382,6 +4496,66 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     assert_eq!(bar.choices().1, "codex's default");
     bar.keys("enter");
     assert!(bar.calls().contains(&"task codex book a table".to_string()));
+}
+
+/// ↩ pressed before the browser has learned which agents are ready isn't lost: the thread starts
+/// on the first ready one as soon as the browser learns it, as if ↩ came then.
+#[gpui::test]
+fn enter_before_the_agents_are_learned_starts_the_thread_once_they_are(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    let started = |bar: &Bar| (bar.calls().iter()).any(|call| call.starts_with("task "));
+    assert!(!started(&bar), "a thread started with no agent learned");
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(
+        bar.calls().contains(&"task claude pick a seat".to_string()),
+        "the ↩ was lost: {:?}",
+        bar.calls()
+    );
+}
+
+/// A held ↩ goes with the ask: one left before the agents are learned starts nothing, and nor
+/// does one whose look finds none ready.
+#[gpui::test]
+fn a_held_enter_goes_with_the_ask(cx: &mut TestAppContext) {
+    let started = |bar: &Bar| (bar.calls().iter()).any(|call| call.starts_with("task "));
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    bar.keys("escape");
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(!started(&bar), "a left ask started: {:?}", bar.calls());
+
+    let mut bar = Bar::with_agents(cx, &[], None);
+    *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
+    bar.edit("", None);
+    bar.type_text("pick a seat");
+    bar.keys("tab");
+    bar.keys("enter");
+    *bar.host.agents.borrow_mut() = agents(&[]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(
+        !started(&bar),
+        "none ready, yet one started: {:?}",
+        bar.calls()
+    );
+    // An agent signed in later starts nothing on the ↩ that found none.
+    *bar.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert!(!started(&bar), "a spent ↩ started later: {:?}", bar.calls());
 }
 
 /// A Little ilo window's Spaces menu is the compact bar where it was asked for, listing its Spaces
@@ -4926,8 +5100,20 @@ impl Resting {
 
     /// As `new`, with Claude found.
     fn with_claude(cx: &mut TestAppContext) -> Self {
-        let rest = Self::new(cx);
-        *rest.host.agents.borrow_mut() = agents(&[("claude", None)]);
+        Self::with_agents(cx, &[("claude", None)])
+    }
+
+    /// As `new`, with `listed` found.
+    fn with_agents(cx: &mut TestAppContext, listed: &[(&str, Option<&str>)]) -> Self {
+        let mut rest = Self::new(cx);
+        *rest.host.agents.borrow_mut() = agents(listed);
+        // As the browser sends a window what it learned of the assistants.
+        (rest.window)
+            .update(&mut rest.cx, |rest, _, cx| {
+                rest.bar.update(cx, |bar, cx| bar.agents_changed(cx))
+            })
+            .unwrap();
+        rest.cx.run_until_parked();
         rest
     }
 
@@ -4995,6 +5181,26 @@ impl Resting {
                     .collect()
             })
             .unwrap()
+    }
+
+    /// Whether the switch shows at the field's end and on Thread, and what the field says empty.
+    fn switch(&mut self) -> Option<(bool, String)> {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                let bar = rest.bar.read(cx);
+                let placeholder = bar.input.read(cx).placeholder().to_string();
+                (bar.shows_switch()).then(|| (bar.ask.is_some(), placeholder))
+            })
+            .unwrap()
+    }
+
+    /// A click on the switch's key chip, the last thing at the field's end, under the 20 pt the
+    /// page draws above the bar.
+    fn click_switch(&mut self) {
+        let width = (self.cx).update(|window, _| f32::from(window.viewport_size().width));
+        let point = gpui::point(px(width - REST_RIGHT - 4.), px(20. + REST_HEIGHT / 2.));
+        (self.cx).simulate_click(point, Modifiers::none());
+        self.cx.run_until_parked();
     }
 
     /// Whether the bar is the composer, and what its field holds.
@@ -5165,8 +5371,9 @@ fn the_composer_at_rest_starts_the_thread_with_its_effort(cx: &mut TestAppContex
     assert_eq!(rest.host.calls.take(), ["task claude next", "at rest"]);
 }
 
-/// A Space's first frame reads nothing for its field: the bar resting there asks the core and the
-/// host nothing until it's typed in, and never sizes, shows, hides or dismisses a window.
+/// A Space's first frame reads nothing for its field but what the browser knows of the assistants,
+/// in memory: the bar resting there asks the core and the host nothing until it's typed in, and
+/// never sizes, shows, hides or dismisses a window.
 #[gpui::test]
 fn a_resting_bar_asks_nothing_until_typed_in(cx: &mut TestAppContext) {
     let mut rest = Resting::new(cx);
@@ -5210,6 +5417,50 @@ fn tab_grows_a_resting_bar_into_the_composer_and_back_keeps_the_words(cx: &mut T
         calls.iter().all(|call| call == "look for agents"),
         "a resting composer asked its host for more than the assistants: {calls:?}"
     );
+}
+
+/// At rest the bar shows Search | Thread from its first frame where an assistant is ready, with Z2
+/// in its field. ⇥ with nothing typed grows it into the composer, whose field says so, and ⇥ again
+/// takes it back; a click on the switch does what ⇥ does, with words or none. With no assistant
+/// ready there's no switch, the field says E1, and ⇥ grows it into the composer's setup (#4393).
+#[gpui::test]
+fn tab_and_the_switch_go_between_search_and_thread_at_rest(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    assert_eq!(
+        rest.switch(),
+        Some((false, "Search, or start a thread".into()))
+    );
+    rest.keys("tab");
+    assert_eq!(rest.composer(), (true, String::new()));
+    assert_eq!(
+        rest.switch(),
+        Some((true, "Ask claude to do something".into()))
+    );
+    rest.keys("tab");
+    assert_eq!(rest.composer(), (false, String::new()));
+    rest.click_switch();
+    assert_eq!(rest.composer(), (true, String::new()), "the click didn't");
+    rest.click_switch();
+    assert_eq!(
+        rest.composer(),
+        (false, String::new()),
+        "the click back didn't"
+    );
+    rest.type_text("book a table");
+    rest.click_switch();
+    assert_eq!(rest.composer(), (true, "book a table".into()));
+    rest.click_switch();
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    assert_eq!(
+        rest.switch(),
+        Some((false, "Search, or start a thread".into()))
+    );
+
+    let mut none = Resting::with_agents(cx, &[]);
+    assert_eq!(none.switch(), None);
+    none.keys("tab");
+    assert_eq!(none.composer(), (true, String::new()));
+    assert_eq!(none.switch(), None, "the composer showed the switch");
 }
 
 /// In a resting composer what's typed is the thread's, which nothing is suggested for, and ↩ starts

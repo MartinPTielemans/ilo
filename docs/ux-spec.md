@@ -38,6 +38,7 @@ Layers, bottom to top. There is no grain: 1.50.1 measures 0.05–0.09 levels of 
 - Dark composite: `out = 0.18·tint_y + 0.82·0.6·blur`. Light: `out = 0.27·tint_y + 0.73·(0.8·255 + 0.2·blur)`. Here `tint_y` runs down the gradient.
 - When the window is inactive, AppKit swaps the blur for an opaque fill tinted by the wallpaper. Reduce Transparency and Increase Contrast do the same. Dia adds no fallback of its own. Compare captures only in the same key state.
 - With no Space colour set, the gradient uses the system accent colour and follows its changes (Dia).
+- Ours (#4402): no gradient and no glow. A Space's colour is its main colour, flat over the whole window at `space-tint` (0.04 dark, 0.03 light), a faint tint of the glass, so the chrome's one look keeps colour for what the user put there. The theme picker stays as it is, and a theme's other colours stay stored, unused (the owner, 27 Nov: "Space colour: a faint tint of the sidebar's glass with no gradients. The theme picker stays for now.").
 - Fitted Space colour (Dia's pink): P3 (177.6, 91.1, 106.8), which is #B25B6B in P3 and ≈ #BF556A in sRGB (HSL 349°, 0.36, 0.53). The other colours are unmeasured.
 
 Material output measured over solid backdrops: black, sRGB grey levels 20 and 60, and white. Ports without AppKit materials approximate these (sRGB, active state):
