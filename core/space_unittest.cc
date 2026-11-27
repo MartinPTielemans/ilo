@@ -34,6 +34,7 @@ void SessionChanged() {}
 void ScheduleAutoArchive() {}
 
 void BoostSpacesChanged() {}
+void PageLogsSpacesChanged() {}
 void BoostSpaceGone(bc_id) {}
 
 // The favorites every Space shows, as the test sets them.
