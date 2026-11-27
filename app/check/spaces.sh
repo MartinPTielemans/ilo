@@ -1650,8 +1650,17 @@ expect '^browser: today $' "⌘Z brought back the tab ⇧⌘T had reopened: Toda
 expect '^browser: space button settled$' "the Space button's mark didn't settle after ⌘Z brought the Space back"
 # Each window keeps its own ⌘Z: with a Space deleted in this window and the archive cleared in a
 # second one, the second window's ⌘Z brings back the archive and not the Space, and this one's the
-# Space and not the archive.
-open_from_bar "http://localhost:$port/two.html"
+# Space and not the archive. The Space ⌘Z brought back is empty, so it rests on ⌘T's bar drawn in
+# place, and ⌘T gives that bar the keyboard rather than opening another over it (774d98f07, #4140).
+resting_key t "brought-back Space"
+expect '^browser: command new-tab via ui$' "⌘T in the brought-back Space didn't reach the UI"
+send type "http://localhost:$port/two.html"
+send key return
+expect '^browser: today [0-9][0-9]*$' "the tab for two.html didn't open in the brought-back Space"
+tab=$(today)
+expect "^browser: selected $tab\$" "the brought-back Space's tab for two.html wasn't shown"
+expect "^browser: loaded $tab http://localhost:$port/two.html\$" \
+  "two.html didn't load in the brought-back Space's tab"
 send key w cmd
 expect '^browser: today $' "⌘W didn't take the tab out of Today: Today is \"$(today)\""
 expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab"
