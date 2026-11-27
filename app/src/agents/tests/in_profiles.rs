@@ -203,6 +203,27 @@ fn a_picked_open_uses_the_hosts_pick_then_the_window_rule(cx: &mut TestAppContex
         logged_in(&agents, cx).unwrap().why,
         "your current window's profile"
     );
+
+    // The window's profile is off for the app: the first it may use, and the log says that, not
+    // the window's (PR3b).
+    agents.update(cx, |agents, cx| {
+        agents.set_profile_allowed("claude-code", "Profile 3", false, cx)
+    });
+    let answer = open(&agents, "https://example.net/", None, cx);
+    let (offered, request) = last_pick(&browser);
+    assert_eq!(offered, [1, 2]);
+    picked(&agents, request, 0, cx);
+    let answer = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(!answer.error, "{}", answer.text);
+    assert!(
+        answer.text.contains("(profile: \"Work\")"),
+        "{}",
+        answer.text
+    );
+    assert_eq!(
+        logged_in(&agents, cx).unwrap().why,
+        "the first profile it may use"
+    );
 }
 
 #[gpui::test]

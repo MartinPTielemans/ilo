@@ -37,8 +37,10 @@ pub const THREADS_MAY_USE: &str = "Profiles threads may use";
 pub enum Why {
     /// The profile's history visited the site last (the core's pick).
     History,
-    /// The user's window's, or with the agent unable to use that one, the first it may.
+    /// The user's window's (a thread's: its own Space's).
     Window,
+    /// The window's profile is off for the agent, so the first it may use (PR3b).
+    First,
     /// The agent named it.
     Asked,
 }
@@ -299,11 +301,12 @@ impl Agents {
                 let risk = self.opening(&mut act, &host);
                 return self.check(act, host, risk, cx);
             }
-            let profile = (allowed.iter())
-                .find(|profile| Some(&profile.folder) == folder.as_ref())
-                .unwrap_or(&allowed[0])
-                .clone();
-            return self.chosen(act, host, profile, Why::Window, cx);
+            let (profile, why) =
+                match (allowed.iter()).find(|profile| Some(&profile.folder) == folder.as_ref()) {
+                    Some(own) => (own.clone(), Why::Window),
+                    None => (allowed[0].clone(), Why::First),
+                };
+            return self.chosen(act, host, profile, why, cx);
         }
         if !self.several_profiles() {
             let profile = allowed[0].clone();
@@ -311,8 +314,8 @@ impl Agents {
         }
         // An Off limits site is refused whatever the profile, so no profile's history is read for it.
         if self.fence_of(&host).is_some() {
-            let profile = self.window_profile(&allowed);
-            return self.chosen(act, host, profile, Why::Window, cx);
+            let (profile, why) = self.window_profile(&allowed);
+            return self.chosen(act, host, profile, why, cx);
         }
         let request = self.next_request;
         self.next_request += 1;
@@ -335,19 +338,21 @@ impl Agents {
             .find(|each| profile != 0 && each.id == profile);
         let (profile, why) = match picked {
             Some(picked) => (picked.clone(), Why::History),
-            None => (self.window_profile(&allowed), Why::Window),
+            None => self.window_profile(&allowed),
         };
         self.chosen(act, host, profile, why, cx)
     }
 
     /// The user's window's profile, unless it's private or one the agent can't use: then the first
-    /// it may use.
-    fn window_profile(&self, allowed: &[Profile]) -> Profile {
+    /// it may use, and the log says so.
+    fn window_profile(&self, allowed: &[Profile]) -> (Profile, Why) {
         let front = self.browser.front_space();
         let folder =
             (!self.browser.private_space(front)).then(|| self.browser.space_profile(front));
-        let window = (allowed.iter()).find(|each| Some(&each.folder) == folder.as_ref());
-        window.unwrap_or(&allowed[0]).clone()
+        match (allowed.iter()).find(|each| Some(&each.folder) == folder.as_ref()) {
+            Some(window) => (window.clone(), Why::Window),
+            None => (allowed[0].clone(), Why::First),
+        }
     }
 
     /// The open goes to `profile` for `why`, once it's checked as any open is.
@@ -438,6 +443,7 @@ impl Agents {
         match why {
             Why::History => "where you last used it".into(),
             Why::Window => "your current window's profile".into(),
+            Why::First => "the first profile it may use".into(),
             Why::Asked if is_task(agent) => "as the thread asked".into(),
             Why::Asked if self.nameless(agent) => "as the app asked".into(),
             Why::Asked => format!("as {} asked", self.agent_name(agent)),
