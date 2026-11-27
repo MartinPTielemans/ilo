@@ -2972,13 +2972,16 @@ bc_id Window::ReopenClosedTab() {
     tabs.push_back(
         {.id = row.id, .at = row.archived, .profile = row.profile, .by_user = row.reopens});
   }
+  // Windows only for an app that opens them, or one would stand in front of the tabs.
   std::vector<closed_rule::Closed> windows;
   for (const ClosedWindow& window : ClosedWindows()) {
-    windows.push_back({.id = window.id,
-                       .window = true,
-                       .at = window.closed,
-                       .profile = window.profile,
-                       .by_user = true});
+    if (Host().window_reopen) {
+      windows.push_back({.id = window.id,
+                         .window = true,
+                         .at = window.closed,
+                         .profile = window.profile,
+                         .by_user = true});
+    }
   }
   const std::vector<closed_rule::Closed> list = closed_rule::Merged(tabs, windows);
   const std::optional<size_t> next = closed_rule::Next(list, shown->profile());
