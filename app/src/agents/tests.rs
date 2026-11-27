@@ -7281,6 +7281,9 @@ mod tasks {
             "Claude's levels, none picked"
         );
         let first = run(cx);
+        // Read before the next message ends this run, which could be before its script wrote.
+        let args = runs_args(&program, 1);
+        assert!(!args[0].contains("--effort"), "the first run: {}", args[0]);
         said(&agents, &agent, Out::Ended(None), cx);
         pick(Some("high"), cx);
         assert_eq!(effort(cx), Some((levels, Some("high"))));
@@ -7292,7 +7295,6 @@ mod tasks {
             "the next message starts a run at the level picked"
         );
         let args = runs_args(&program, 2);
-        assert!(!args[0].contains("--effort"), "the first run: {}", args[0]);
         assert!(
             args[1].contains("--effort high"),
             "the second run: {}",
