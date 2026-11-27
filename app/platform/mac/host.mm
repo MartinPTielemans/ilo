@@ -2213,6 +2213,22 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                             return event;
                                           }];
   }
+  // On macOS 14 the find bar sat 5 points low in full screen when placed at the last resize alone,
+  // so the bars that hang from the window's top are placed again once it's in or out (#4470).
+  for (NSNotificationName name in
+       @[ NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification ]) {
+    [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                    object:window
+                                                     queue:nil
+                                                usingBlock:^(NSNotification*) {
+                                                  if (browser->find_bar_shown) {
+                                                    PlaceFindBar(browser);
+                                                  }
+                                                  if (browser->offer_shown) {
+                                                    PlaceOffer(browser);
+                                                  }
+                                                }];
+  }
   // A window resizes from its top left corner as often as its bottom right, and AppKit moves a
   // child window only with its parent's bottom left.
   [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidResizeNotification
