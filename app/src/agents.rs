@@ -67,15 +67,19 @@ use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
 
-/// The name the clients list the server by: the product's, a dev build's apart.
+/// The name the clients list the server by: the command's, the product's but in the rework's
+/// copy (build.rs), a dev build's apart.
 pub fn server_name() -> String {
-    listed_as(PRODUCT)
+    listed_as(env!("COMMAND_NAME"))
 }
 
 /// The name the clients listed the server by before it took the product's, which Connect Again
-/// takes out of a client's config.
+/// takes out of a client's config. The rework's copy never had another.
 pub fn old_server_name() -> String {
-    listed_as(env!("APP_NAME"))
+    match cfg!(feature = "rework") {
+        true => server_name(),
+        false => listed_as(env!("APP_NAME")),
+    }
 }
 
 fn listed_as(name: &str) -> String {

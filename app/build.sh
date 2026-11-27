@@ -4,6 +4,10 @@
 # copy for daily use instead, which tools/install.sh installs: the user's profile, the real
 # Keychain and the product's bundle id, on the Release engine. `build.sh updates` makes the updates
 # and nightly runs' copy of a built app, with an updater and a feed on this computer (below).
+# `build.sh rework` builds the owner's daily copy of the rework on the Mac, which
+# tools/install.sh --rework installs beside the daily app: a prod build under branding/rework's
+# name and id, so its profile folder and Keychain items are its own, with no updater, which would
+# replace it with a release, and no claim on the owner's links.
 # APP_TRACK=nightly builds a nightly, which About names so and whose switch starts on.
 set -e
 cd "$(dirname "$0")"
@@ -171,7 +175,9 @@ engine_changes
 engine_out=$(dirname "$(cd .deps/Chromium.app && pwd -P)")
 id=dev.browser.app
 features=
-if [ "${1:-}" = prod ]; then
+name=$(cat branding/name)
+rework=
+if [ "${1:-}" = prod ] || [ "${1:-}" = rework ]; then
   # The dev engine stops the browser on a failed DCHECK, where Release goes on.
   if [ -e "$engine_out/libchrome_dll.dylib" ]; then
     echo "A prod build needs the Release engine: ./setup.sh" >&2
@@ -182,10 +188,23 @@ if [ "${1:-}" = prod ]; then
   # A release build updates itself with Sparkle, which setup.sh fetches, when it has the key the
   # updates are signed with: the public half of the owner's (tools/appcast.sh), in the branding a
   # fork replaces. A fork that empties branding/update-key builds a copy with no updater.
-  if [ -z "${UPDATE_PUBLIC_KEY:-}" ] && [ -f branding/update-key ]; then
-    UPDATE_PUBLIC_KEY=$(tr -d '[:space:]' < branding/update-key)
+  if [ "$1" = rework ]; then
+    rework=1
+    id=$(cat branding/rework/id)
+    name=$(cat branding/rework/name)
+    features="--features rework"
+    unset UPDATE_PUBLIC_KEY
+    if [ "$id" = "$(cat branding/id)" ] || [ "$name" = "$(cat branding/name)" ] ||
+      [ "$name" = "$(cat branding/product)" ]; then
+      echo "branding/rework names the daily app's id or name, or the product's." >&2
+      exit 1
+    fi
+  else
+    if [ -z "${UPDATE_PUBLIC_KEY:-}" ] && [ -f branding/update-key ]; then
+      UPDATE_PUBLIC_KEY=$(tr -d '[:space:]' < branding/update-key)
+    fi
+    [ -z "${UPDATE_PUBLIC_KEY:-}" ] || check_update_key
   fi
-  [ -z "${UPDATE_PUBLIC_KEY:-}" ] || check_update_key
 fi
 # The version the user sees is the crate's. Sparkle orders updates by the build number, the count
 # of commits, which only grows on main; a shallow clone's count would be wrong.
@@ -225,12 +244,13 @@ fi
 plist=$app/Contents/Info.plist
 plutil -replace CFBundleExecutable -string Browser "$plist"
 plutil -replace CFBundleIdentifier -string "$id" "$plist"
-# The name the user sees, the product's (branding/product): the menu bar's title, and what the
-# Window menu and Mission Control call the window. Finder, the Dock and ⌘-Tab name the app by its
-# file, though, so this one shows as Browser there. Its icon, its folder below and its files keep
+# The name the user sees: the product's (branding/product), shown in the menu bar's title and by
+# the Window menu and Mission Control; the rework copy shows its own (branding/rework/name), so
+# it never reads as the woven that ships. Finder, the Dock and ⌘-Tab name the app by its file,
+# though, so this one shows as Browser there. The icon, the folder below and the files keep
 # branding/name (icon.sh compiles the icon).
-shown=$(cat branding/product)
-name=$(cat branding/name)
+icon=$(cat branding/name)
+if [ -n "$rework" ]; then shown=$name; else shown=$(cat branding/product); fi
 plutil -replace CFBundleName -string "$shown" "$plist"
 plutil -replace CFBundleDisplayName -string "$shown" "$plist"
 # The prod profile's folder, ~/Library/Application Support/<name> (profile_dir in src/lib.rs, from
@@ -252,9 +272,9 @@ cp platform/mac/ilo.sdef "$app/Contents/Resources/"
 plutil -replace NSAppleScriptEnabled -bool YES "$plist"
 plutil -replace OSAScriptingDefinition -string ilo.sdef "$plist"
 rm "$app/Contents/Resources/app.icns"
-cp branding/Assets.car "branding/$name.icns" "$app/Contents/Resources/"
-plutil -replace CFBundleIconFile -string "$name" "$plist"
-plutil -replace CFBundleIconName -string "$name" "$plist"
+cp branding/Assets.car "branding/$icon.icns" "$app/Contents/Resources/"
+plutil -replace CFBundleIconFile -string "$icon" "$plist"
+plutil -replace CFBundleIconName -string "$icon" "$plist"
 # The licences: ilo's, NOTICE, and the Rust crates in the binary.
 # shellcheck disable=SC2086
 ../tools/licences.sh "$app/Contents/Resources" Cargo.toml "$(rustc -vV | sed -n 's/^host: //p')" $features
@@ -278,9 +298,9 @@ for helper in "$framework"/Helpers/*" Helper ("*"Alerts).app"; do
     plutil -create binary1 "$strings"
   done
   rm -f "$helper/Contents/Resources/app.icns"
-  cp branding/Assets.car "branding/$name.icns" "$helper/Contents/Resources/"
-  plutil -replace CFBundleIconFile -string "$name" "$helper_plist"
-  plutil -replace CFBundleIconName -string "$name" "$helper_plist"
+  cp branding/Assets.car "branding/$icon.icns" "$helper/Contents/Resources/"
+  plutil -replace CFBundleIconFile -string "$icon" "$helper_plist"
+  plutil -replace CFBundleIconName -string "$icon" "$helper_plist"
 done
 # Each helper is signed again, ad hoc, keeping the entitlements, flags and runtime the engine gave
 # it: an alert helper's signature seals the Info.plist rewritten above, and the engine's leaves the
@@ -313,8 +333,9 @@ with open(sys.argv[1], "wb") as f:
     plistlib.dump(info, f)
 EOF
 # A dev build offers none of it: every lane's build registers with the system too, and none may
-# show in its list of browsers or catch the owner's links.
-if [ -z "$features" ]; then
+# show in its list of browsers or catch the owner's links. Nor does the rework's copy, which sits
+# beside the daily app.
+if [ -z "$features" ] || [ -n "$rework" ]; then
   plutil -remove CFBundleURLTypes "$plist"
   plutil -remove CFBundleDocumentTypes "$plist"
 fi
