@@ -10,7 +10,7 @@ use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip};
 use crate::agents::Step;
 use crate::agents::task::Wait;
-use crate::agents::task::Word;
+use crate::agents::task::{FINDING_KEPT, Message, Who, Word, finding};
 use crate::agents::tier::{Tier, Why};
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
@@ -474,6 +474,46 @@ fn a_cards_look_is_its_tasks_state_alone() {
     };
     assert_eq!(Form::of(&retry, true), Form::Unseen);
     assert_eq!(Form::of(&retry, false), Form::Rest);
+}
+
+/// A done task's finding is the first paragraph of its last answer as plain text: a link is its
+/// words, formatting and line breaks go, a right-to-left override is written out as the title's
+/// is (#3690), and it's kept to FINDING_KEPT characters.
+#[test]
+fn the_finding_is_plain_and_capped() {
+    let said = |who: Who, text: &str| Message {
+        who,
+        text: text.to_string().into(),
+        at: Instant::now(),
+    };
+    let answer = "## Booked\n\n**Taberna** for [two at 20:00](https://taberna.example/booking), \
+                  by the `window`.\nSee <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
+                  The second paragraph isn't shown.";
+    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
+    assert_eq!(found.as_ref(), "Booked");
+    let answer = "**Taberna** for [two at 20:00](https://taberna.example/booking), by the \
+                  `window`.\n- See <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
+                  The second paragraph isn't shown.";
+    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
+    assert_eq!(
+        found.as_ref(),
+        "Taberna for two at 20:00, by the window. See https://taberna.example/menu.\\u{202E}fdp.exe"
+    );
+    assert!(!found.contains('\u{202E}') && !found.contains('\n'));
+    // The last answer, not a question or the user's reply after it.
+    let messages = [
+        said(Who::Result, "The first."),
+        said(Who::User, "And the second?"),
+        said(Who::Agent, "The second."),
+        said(Who::Asked, "Which one?"),
+    ];
+    assert_eq!(finding(&messages).as_ref(), "The second.");
+    // None, with no answer.
+    assert!(finding(&[said(Who::User, "Book it")]).is_empty());
+    let long = "word ".repeat(100);
+    let found = finding(&[said(Who::Result, &long)]);
+    assert_eq!(found.chars().count(), FINDING_KEPT + 1);
+    assert!(found.ends_with('…'));
 }
 
 /// A thread that finished out of sight is one line with the dot, as one at work is, and a screen

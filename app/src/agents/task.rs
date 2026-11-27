@@ -60,6 +60,9 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of a done task's last answer its kept card keeps, the line a thread brought back
+/// after a quit reads back (`keep_card`).
+pub const FINDING_KEPT: usize = 160;
 /// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
@@ -4545,6 +4548,90 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
         Some(at) => format!("Limit resets at {at}"),
         None => format!("{name} hit its usage limit"),
     }
+}
+
+/// A done task's finding: the first paragraph of the agent's last answer, as plain text on one
+/// line, with no link, formatting or line break, kept to FINDING_KEPT characters and written out as
+/// its title is (#3690), so nothing in it can pose as ilo's words or turn the text around. It is
+/// the agent's words: kept in its card's folder only, never logged.
+pub fn finding(messages: &[Message]) -> SharedString {
+    let Some(answer) = last_answer(messages) else {
+        return SharedString::default();
+    };
+    let paragraph: Vec<&str> = (answer.lines())
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("```"))
+        .map(|line| {
+            let line = line.trim_start_matches(['#', '>']).trim_start();
+            let unlisted = (line.split_once(". "))
+                .filter(|(number, _)| {
+                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(|(_, rest)| rest);
+            match unlisted {
+                Some(rest) => rest,
+                None => (["- ", "* ", "+ "].iter())
+                    .find_map(|mark| line.strip_prefix(mark))
+                    .unwrap_or(line),
+            }
+        })
+        .collect();
+    let plain = plain_text(&paragraph.join(" "));
+    let kept = page::clip(&plain, FINDING_KEPT);
+    super::request::escaped(&kept, false).0.into()
+}
+
+/// The agent's last answer, trimmed, if it gave one.
+fn last_answer(messages: &[Message]) -> Option<&str> {
+    (messages.iter().rev())
+        .filter(|message| matches!(message.who, Who::Agent | Who::Result))
+        .map(|message| message.text.trim())
+        .find(|text| !text.is_empty())
+}
+
+/// Markdown's inline marks taken out of `text`: a link or an image is its words, a bare link in
+/// angle brackets its address, and emphasis, code and strikethrough marks go. Runs of white space
+/// are one space.
+fn plain_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let opens = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
+        let link = opens.and_then(|inside| {
+            let (words, after) = inside.split_once("](")?;
+            let (_, after) = after.split_once(')')?;
+            (!words.contains(']')).then_some((words, after))
+        });
+        if let Some((words, after)) = link {
+            plain.push_str(words);
+            rest = after;
+            continue;
+        }
+        let autolink = (rest.strip_prefix('<'))
+            .and_then(|inside| inside.split_once('>'))
+            .filter(|(address, _)| {
+                address.contains("://") && !address.contains(char::is_whitespace)
+            });
+        if let Some((address, after)) = autolink {
+            plain.push_str(address);
+            rest = after;
+            continue;
+        }
+        if let Some(after) = ["**", "__", "~~"]
+            .iter()
+            .find_map(|mark| rest.strip_prefix(mark))
+        {
+            rest = after;
+            continue;
+        }
+        if !matches!(c, '*' | '`') {
+            plain.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A result's first words for its card's line: its first line of text, or its state's word alone
