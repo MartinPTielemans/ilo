@@ -148,7 +148,7 @@ impl gpui::Render for AccountPage {
         );
         let column = settings_column::column(
             &Default::default(),
-            Section::SyncImport,
+            Section::Account,
             dark,
             Rc::default(),
             gpui::IntoElement::into_any_element(field),
@@ -165,7 +165,7 @@ impl gpui::Render for AccountPage {
             heading: look.heading,
         };
         let card = self.card.draw(
-            Section::SyncImport.name(),
+            Section::Account.name(),
             div().child(self.account.clone()),
             dark,
             colors,

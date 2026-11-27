@@ -1,5 +1,5 @@
 //! Settings' sidebar (spec-settings.md › The sidebar): its pages down the window's glass in the
-//! owner's three groups, the one shown on its plate, and the version row and Chromium's settings at
+//! owner's four groups (#4092's spec), the one shown on its plate, and the version row and Chromium's settings at
 //! its foot. The Settings window draws it beside the plane its page shows on.
 
 use std::rc::Rc;
@@ -46,25 +46,88 @@ pub fn window_options(bounds: Bounds<Pixels>, title: SharedString) -> WindowOpti
 #[cfg(test)]
 mod tests;
 
-/// A page of Settings, as the owner drew the sidebar (spec-settings.md › The sidebar).
+/// A page of Settings, as the owner drew the sidebar (spec-settings.md › The sidebar, #4092).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     /// Above the groups: what still needs doing, then how each page is set (S1).
     Overview,
     General,
     Window,
+    /// Sync, and until General takes it, Import.
+    Account,
+    /// Privacy and ad blocking.
     Privacy,
     Passwords,
-    SyncImport,
     Shortcuts,
-    Threads,
+    /// Threads and their access, joined.
+    Agents,
     Models,
-    Access,
+    Skills,
     OtherApps,
     TabsAndSpaces,
     Links,
+    LittleWindow,
+    ArchivedThreads,
     /// The version row at the sidebar's foot.
     About,
+}
+
+/// One of the pages Settings built before #4092 regrouped them, as it still builds them: each
+/// section's page joins its parts, and the search finds a part's rows in the section that holds
+/// it, so a row moved here is found where it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Overview,
+    General,
+    Features,
+    Appearance,
+    Sync,
+    Import,
+    Privacy,
+    AdBlocking,
+    Passwords,
+    Shortcuts,
+    Threads,
+    Access,
+    Models,
+    SiteNotes,
+    OtherApps,
+    Tabs,
+    Profiles,
+    Links,
+    LittleWindow,
+    Kept,
+    About,
+}
+
+impl Part {
+    /// The section whose page holds it.
+    pub fn section(self) -> Section {
+        (Section::all())
+            .find(|section| section.parts().contains(&self))
+            .expect("every part is on a page")
+    }
+
+    /// The heading it goes under on a page it doesn't start, unless it starts with its own.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Part::Features => "Features",
+            Part::Import => "Import",
+            Part::AdBlocking => "Ad Blocking",
+            Part::Access => "Access",
+            Part::Profiles => "Profiles",
+            _ => "",
+        }
+    }
+
+    /// Whether the search reads its rows. The user's own things, their profiles, logins, rules
+    /// and account, are found where they're listed, and Overview only points at the pages.
+    pub fn searched(self) -> bool {
+        !matches!(
+            self,
+            Part::Overview | Part::Sync | Part::Passwords | Part::Profiles | Part::Links
+        )
+    }
 }
 
 impl Section {
@@ -82,22 +145,27 @@ impl Section {
     }
 
     /// The sidebar's groups, in its order, as the owner drew them.
-    pub const GROUPS: [&'static [Section]; 3] = [
+    pub const GROUPS: [&'static [Section]; 4] = [
         &[
             Section::General,
             Section::Window,
+            Section::Account,
             Section::Privacy,
             Section::Passwords,
-            Section::SyncImport,
             Section::Shortcuts,
         ],
         &[
-            Section::Threads,
+            Section::Agents,
             Section::Models,
-            Section::Access,
+            Section::Skills,
             Section::OtherApps,
         ],
-        &[Section::TabsAndSpaces, Section::Links],
+        &[
+            Section::TabsAndSpaces,
+            Section::Links,
+            Section::LittleWindow,
+        ],
+        &[Section::ArchivedThreads],
     ];
 
     /// The rows above the groups, under the search.
@@ -108,7 +176,7 @@ impl Section {
     pub const OPENS: Section = Section::Overview;
 
     /// The heading over each of `GROUPS`, in its order.
-    pub const LABELS: [&'static str; 3] = ["Personal", "Agents", "Features"];
+    pub const LABELS: [&'static str; 4] = ["Personal", "Agents", "Features", "Archived"];
 
     /// Every page, in the sidebar's order: its groups', then About's at the foot.
     pub fn all() -> impl Iterator<Item = Section> {
@@ -117,22 +185,47 @@ impl Section {
             .chain([Section::About])
     }
 
+    /// The parts its page joins, in their order: the first's sentence is the page's, and each
+    /// after it goes under its heading.
+    pub fn parts(self) -> &'static [Part] {
+        match self {
+            Section::Overview => &[Part::Overview],
+            Section::General => &[Part::General, Part::Features],
+            Section::Window => &[Part::Appearance],
+            Section::Account => &[Part::Sync, Part::Import],
+            Section::Privacy => &[Part::Privacy, Part::AdBlocking],
+            Section::Passwords => &[Part::Passwords],
+            Section::Shortcuts => &[Part::Shortcuts],
+            Section::Agents => &[Part::Threads, Part::Access],
+            Section::Models => &[Part::Models],
+            Section::Skills => &[Part::SiteNotes],
+            Section::OtherApps => &[Part::OtherApps],
+            Section::TabsAndSpaces => &[Part::Tabs, Part::Profiles],
+            Section::Links => &[Part::Links],
+            Section::LittleWindow => &[Part::LittleWindow],
+            Section::ArchivedThreads => &[Part::Kept],
+            Section::About => &[Part::About],
+        }
+    }
+
     /// Its name, the page's title, and what the logs and check.sh call it.
     pub fn name(self) -> &'static str {
         match self {
             Section::Overview => "Overview",
             Section::General => "General",
             Section::Window => "Window",
-            Section::Privacy => "Privacy",
+            Section::Account => "Account",
+            Section::Privacy => "Security & Privacy",
             Section::Passwords => "Passwords",
-            Section::SyncImport => "Sync & Import",
             Section::Shortcuts => "Shortcuts",
-            Section::Threads => "Threads",
+            Section::Agents => "Agents",
             Section::Models => "Models",
-            Section::Access => "Access",
+            Section::Skills => "Skills",
             Section::OtherApps => "Other apps",
             Section::TabsAndSpaces => "Tabs & Spaces",
             Section::Links => "Links",
+            Section::LittleWindow => "Little Window",
+            Section::ArchivedThreads => "Archived threads",
             Section::About => "About",
         }
     }
@@ -142,16 +235,18 @@ impl Section {
             Section::Overview => "icons/settings-overview.svg",
             Section::General => "icons/settings-general.svg",
             Section::Window => "icons/settings-window.svg",
+            Section::Account => "icons/settings-sync.svg",
             Section::Privacy => "icons/settings-privacy.svg",
             Section::Passwords => "icons/settings-passwords.svg",
-            Section::SyncImport => "icons/settings-sync.svg",
             Section::Shortcuts => "icons/settings-shortcuts.svg",
-            Section::Threads => "icons/settings-threads.svg",
+            Section::Agents => "icons/settings-threads.svg",
             Section::Models => "icons/settings-models.svg",
-            Section::Access => "icons/settings-access.svg",
+            Section::Skills => "icons/book-open.svg",
             Section::OtherApps => "icons/settings-apps.svg",
             Section::TabsAndSpaces => "icons/settings-tabs.svg",
             Section::Links => "icons/settings-links.svg",
+            Section::LittleWindow => "icons/app-window.svg",
+            Section::ArchivedThreads => "icons/archive.svg",
             Section::About => "icons/info.svg",
         }
     }

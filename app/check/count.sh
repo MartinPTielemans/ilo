@@ -123,9 +123,9 @@ privacy() {
   send menu Settings…
   settings_on_general "Settings… didn't show Settings"
   settings_drew General
-  send clickkey $(drawn "toolbar Privacy")
-  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
-  settings_drew Privacy
+  send clickkey $(drawn "toolbar Security & Privacy")
+  expect '^browser: settings tab Security & Privacy$' "a click on Security & Privacy didn't show its section"
+  settings_drew "Security & Privacy"
   ../tools/window-screenshot.sh "$pid" "$out/$1" || fail "no window to capture"
 }
 # The count the endpoint got $1th, which has to be flagged first $2, weekly $3 and monthly $4, and

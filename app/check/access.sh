@@ -255,9 +255,9 @@ else
       rule_read=read
     fi
     sync="$out/access-settings-sync.txt"
-    send clickkey $(drawn "toolbar Sync & Import")
-    expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
-    settings_drew 'Sync & Import'
+    send clickkey $(drawn "toolbar Account")
+    expect '^browser: settings tab Account$' "a click on Account didn't show its tab"
+    settings_drew Account
     await '^browser: settings sync \(sign-in\|sign-out\|cancel\) at ' ||
       fail "Sync drew none of Sign In, Sign Out and Cancel"
     if grep -q '^browser: settings sync sign-in at ' "$log"; then
@@ -270,8 +270,8 @@ else
       grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
     fi
     import="$out/access-settings-import.txt"
-    # Import is on Sync & Import too, under Sync's rows, and draws its list as the page shows.
-    expect '^browser: import drawn list$' "Settings › Sync & Import didn't draw the import's list"
+    # Import is on Account too, under Sync's rows, and draws its list as the page shows.
+    expect '^browser: import drawn list$' "Settings › Account didn't draw the import's list"
     read_tree '"Import a Bookmarks File…"' > "$import"
     for name in "Import a Bookmarks File…" "Import a Passwords File…"; do
       grep -q " $button \"$name\"" "$import" || fail "the import's $name isn't a button: $import"

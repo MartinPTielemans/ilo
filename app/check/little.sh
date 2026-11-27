@@ -817,17 +817,17 @@ if [ "$active" = 1 ]; then
 else
   echo "skip: the unused Little ilo window. Browser wasn't the active app."
 fi
-# Little ilo off in Settings › General (#1636): ⌥⌘N opens nothing, and ⌥⌘-click on a link opens
+# Little ilo off in Settings › Little Window (#1636): ⌥⌘N opens nothing, and ⌥⌘-click on a link opens
 # it behind, as ⌘-click does. On again after.
 send window 1
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
-  send clickkey $(drawn "toolbar General")
-  settings_drew General
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' Little Window$'; then
+  send clickkey $(drawn "toolbar Little Window")
+  settings_drew "Little Window"
 fi
-in_sight "switch little windows" '^browser: settings drew General$' ||
+in_sight "switch little windows" '^browser: settings drew Little Window$' ||
   fail "Settings didn't draw Little ilo's switch"
 send clickkey $at
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off"
@@ -911,9 +911,9 @@ done
 ! sed -n "/^browser: drive $off_from: /,\$p" "$log" | grep -q '^browser: little window opened ' ||
   fail "with Little ilo off, ⌥⌘N or ⌥⌘-click opened a Little ilo window"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General again"
-settings_drew General
-in_sight "switch little windows" '^browser: settings drew General$' ||
+expect '^browser: settings shown Little Window$' "Settings… didn't show Little Window again"
+settings_drew "Little Window"
+in_sight "switch little windows" '^browser: settings drew Little Window$' ||
   fail "Settings didn't draw Little ilo's switch"
 send clickkey $at
 expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"

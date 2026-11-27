@@ -93,7 +93,7 @@ fn plate_y(section: Section, height: f32) -> f32 {
     unreachable!()
 }
 
-/// The drawn pages run down the sidebar in the owner's three groups, About's at the foot, and a
+/// The drawn pages run down the sidebar in the owner's four groups, About's at the foot, and a
 /// click on each shows it.
 #[gpui::test]
 fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
@@ -105,16 +105,18 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
             "Overview",
             "General",
             "Window",
-            "Privacy",
+            "Account",
+            "Security & Privacy",
             "Passwords",
-            "Sync & Import",
             "Shortcuts",
-            "Threads",
+            "Agents",
             "Models",
-            "Access",
+            "Skills",
             "Other apps",
             "Tabs & Spaces",
             "Links",
+            "Little Window",
+            "Archived threads",
             "About"
         ]
     );
@@ -250,7 +252,7 @@ fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
         .find(|(_, node)| node.role() == Role::Button && node.label() == Some("Chromium settings"));
     assert!(chromium.is_some(), "no Chromium settings button");
     let privacy = (tree.nodes.iter())
-        .find(|(_, node)| node.role() == Role::Tab && node.label() == Some("Privacy"))
+        .find(|(_, node)| node.role() == Role::Tab && node.label() == Some("Security & Privacy"))
         .map(|(id, _)| *id)
         .expect("no Privacy tab");
     cx.simulate_a11y_action(privacy, Action::Click);
@@ -396,8 +398,8 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    // The search field, five controls and Chromium settings, then the fourteen pages.
-    assert_eq!(stops.len(), 21, "{names:?}");
+    // The search field, five controls and Chromium settings, then the sixteen pages.
+    assert_eq!(stops.len(), 23, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
@@ -526,7 +528,7 @@ fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) 
     assert_eq!(shown(cx), Section::About, "↓ left the list at its end");
     cx.simulate_keystrokes("up up");
     press("enter", cx);
-    assert_eq!(shown(cx), Section::TabsAndSpaces);
+    assert_eq!(shown(cx), Section::LittleWindow);
     // ⇥ from the list goes on to the field, where typing searches.
     for _ in 0..3 {
         cx.simulate_keystrokes("down");
@@ -755,7 +757,7 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     let (offset, _) = scroll(cx);
     assert!(
         offset <= 1. - most,
-        "↑ to Links left it under the foot: {offset} of {most}"
+        "↑ to Archived threads left it under the foot: {offset} of {most}"
     );
     for _ in 2..Section::all().count() {
         cx.simulate_keystrokes("up");
@@ -767,11 +769,86 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
 }
 
 /// The owner's groups, each under its heading, and no page of appearance settings: what it held
-/// is on Window (spec-settings.md › The sidebar).
+/// is on Window (spec-settings.md › The sidebar, #4092).
 #[test]
 fn the_pages_are_in_the_owners_groups() {
-    assert_eq!(Section::LABELS, ["Personal", "Agents", "Features"]);
+    assert_eq!(
+        Section::LABELS,
+        ["Personal", "Agents", "Features", "Archived"]
+    );
     assert_eq!(Section::GROUPS[0][..2], [Section::General, Section::Window]);
     assert_eq!(Section::all().last(), Some(Section::About));
     assert!(Section::all().all(|page| page.name() != "Appearance"));
+}
+
+/// Every page Settings built before the regroup is on exactly one section's page, and each
+/// section's page starts with a part of its own.
+#[test]
+fn each_part_is_on_one_page() {
+    let parts: Vec<Part> = Section::all()
+        .flat_map(|section| section.parts().iter().copied())
+        .collect();
+    for part in &parts {
+        let on = parts.iter().filter(|each| *each == part).count();
+        assert_eq!(on, 1, "{part:?} is on {on} pages");
+        assert!(part.section().parts().contains(part));
+    }
+    for section in Section::all() {
+        assert!(
+            !section.parts().is_empty(),
+            "{} has no rows",
+            section.name()
+        );
+    }
+    // Threads and Access joined; the kept list, site notes and Little Window have pages of their
+    // own; Sync is Account and Privacy is Security & Privacy (#4092 › Sidebar).
+    assert_eq!(Part::Threads.section(), Section::Agents);
+    assert_eq!(Part::Access.section(), Section::Agents);
+    assert_eq!(Part::Kept.section(), Section::ArchivedThreads);
+    assert_eq!(Part::SiteNotes.section(), Section::Skills);
+    assert_eq!(Part::LittleWindow.section(), Section::LittleWindow);
+    assert_eq!(Part::Sync.section(), Section::Account);
+    assert_eq!(Part::AdBlocking.section(), Section::Privacy);
+}
+
+/// The search finds a moved row on the page it moved to: it reads each part's rows in the section
+/// that holds it, as Settings' search does.
+#[test]
+fn the_search_finds_moved_rows_where_they_moved() {
+    use crate::settings_search::{Entry, find, sections};
+    let row = |part: Part, name: &str| Entry {
+        section: part.section(),
+        group: None,
+        under: None,
+        name: name.to_string().into(),
+        line: None,
+        keys: None,
+    };
+    let entries = [
+        row(Part::General, "Default browser"),
+        row(Part::LittleWindow, "Little Window"),
+        row(Part::Features, "Peek"),
+        row(Part::Threads, "Let your assistant use woven"),
+        row(Part::Kept, "Remove All"),
+        row(Part::Access, "Work on pages"),
+        row(Part::SiteNotes, "Site notes"),
+        row(Part::AdBlocking, "Block ads and trackers"),
+        row(Part::Import, "Import from Arc"),
+    ];
+    let found_in = |typed: &str| {
+        let found: Vec<&Entry> = find(typed, &entries)
+            .iter()
+            .map(|&at| &entries[at])
+            .collect();
+        sections(&found)
+    };
+    assert_eq!(found_in("little window"), [Section::LittleWindow]);
+    assert_eq!(found_in("small window"), [Section::LittleWindow]);
+    assert_eq!(found_in("let your assistant"), [Section::Agents]);
+    assert_eq!(found_in("work on pages"), [Section::Agents]);
+    assert_eq!(found_in("remove all"), [Section::ArchivedThreads]);
+    assert_eq!(found_in("site notes"), [Section::Skills]);
+    assert_eq!(found_in("ad blocker"), [Section::Privacy]);
+    assert_eq!(found_in("import"), [Section::Account]);
+    assert_eq!(found_in("peek"), [Section::General]);
 }

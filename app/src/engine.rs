@@ -2128,12 +2128,12 @@ impl Browser for Engine {
     }
 
     fn off_limits(&self, cx: &mut App) {
-        let section = browser::settings_column::Section::Access;
+        let section = browser::settings_column::Section::Agents;
         settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
     }
 
     fn agent_access(&self, cx: &mut App) {
-        let section = browser::settings_column::Section::Access;
+        let section = browser::settings_column::Section::Agents;
         settings::show_row(section, browser::agents::tier::ACCESS.into(), cx);
     }
 

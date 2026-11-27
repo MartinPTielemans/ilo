@@ -94,19 +94,19 @@ fn each_tile_says_what_its_settings_hold() {
     assert!(at(Section::Window)[1].contains("110%"));
     assert!(at(Section::TabsAndSpaces)[1].contains("1 profile,"));
     assert!(at(Section::TabsAndSpaces)[1].contains("3 Spaces"));
-    assert!(at(Section::Threads)[0].contains("Work on pages"));
+    assert!(at(Section::Agents)[0].contains("Work on pages"));
     assert!(at(Section::Passwords)[1].contains("1 login in Personal"));
-    assert!(at(Section::SyncImport)[1].contains("2 devices"));
+    assert!(at(Section::Account)[1].contains("2 devices"));
     let sections: Vec<Section> = lines.iter().map(|(section, _)| *section).collect();
     assert_eq!(
         sections,
         [
             Section::Window,
             Section::TabsAndSpaces,
-            Section::Threads,
+            Section::Agents,
             Section::Privacy,
             Section::Passwords,
-            Section::SyncImport
+            Section::Account
         ]
     );
 }
@@ -140,7 +140,7 @@ fn devices_only_while_signed_in() {
     };
     let sync = tiles(&facts)
         .into_iter()
-        .find(|tile| tile.section == Section::SyncImport)
+        .find(|tile| tile.section == Section::Account)
         .unwrap();
     assert!(sync.lines.is_empty());
 }
@@ -274,9 +274,7 @@ fn the_sync_tile_says_whether_an_account_is_signed_in(cx: &mut TestAppContext) {
     };
     let sync = |facts: &Facts| {
         let tiles = tiles(facts);
-        let tile = tiles
-            .iter()
-            .find(|tile| tile.section == Section::SyncImport);
+        let tile = tiles.iter().find(|tile| tile.section == Section::Account);
         tile.unwrap().lines.clone()
     };
     assert_eq!(sync(&out), [NOT_SIGNED_IN]);

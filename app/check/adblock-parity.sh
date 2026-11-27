@@ -182,11 +182,11 @@ if [ "$engine" = off ]; then
   # script loads.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
-  send clickkey $(drawn "toolbar Privacy")
-  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
-  settings_drew Privacy
+  send clickkey $(drawn "toolbar Security & Privacy")
+  expect '^browser: settings tab Security & Privacy$' "a click on Security & Privacy didn't show its section"
+  settings_drew "Security & Privacy"
   # Ad Blocking is under Privacy's own rows: in_sight scrolls it up, from this show's frame.
-  in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+  in_sight "switch ad blocking" '^browser: settings drew Security & Privacy$' ||
     fail "Settings didn't draw Block ads and trackers' switch"
   send clickkey $at
   expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"

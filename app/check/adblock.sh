@@ -225,14 +225,14 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 settings_on_general "Settings… didn't show Settings"
 settings_drew General
-send clickkey $(drawn "toolbar Privacy")
-expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
-settings_drew Privacy
+send clickkey $(drawn "toolbar Security & Privacy")
+expect '^browser: settings tab Security & Privacy$' "a click on Security & Privacy didn't show its section"
+settings_drew "Security & Privacy"
 expect '^browser: settings ad blocking off on 127\.0\.0\.1$' \
   "Settings didn't list the site ad blocking is off on, alone"
 expect '^browser: settings turn on 127\.0\.0\.1 at ' "Settings didn't draw the site's Turn On"
 # Ad Blocking is under Privacy's own rows: in_sight scrolls it up, from this show's frame.
-in_sight "turn on 127.0.0.1" '^browser: settings drew Privacy$' ||
+in_sight "turn on 127.0.0.1" '^browser: settings drew Security & Privacy$' ||
   fail "Settings didn't draw the site's Turn On"
 turn_on=$at
 ../tools/window-screenshot.sh "$pid" "$out/adblock-off-sites.png" all || fail "no window to capture"
@@ -247,9 +247,9 @@ reload_until "$blocked" "turned on again in Settings' list, the page didn't bloc
 # Off everywhere in Settings, whose Ad Blocking, under Privacy where it opens again, leads with
 # Block ads and trackers.
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
-settings_drew Privacy
-in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+expect '^browser: settings shown Security & Privacy$' "Settings… didn't show Security & Privacy again"
+settings_drew "Security & Privacy"
+in_sight "switch ad blocking" '^browser: settings drew Security & Privacy$' ||
   fail "Settings didn't draw Block ads and trackers' switch"
 send clickkey $at
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
@@ -266,9 +266,9 @@ none_since "${controls}Ad blocking" || fail "turned off in Settings, the Site Co
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
-settings_drew Privacy
-in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+expect '^browser: settings shown Security & Privacy$' "Settings… didn't show Security & Privacy a third time"
+settings_drew "Security & Privacy"
+in_sight "switch ad blocking" '^browser: settings drew Security & Privacy$' ||
   fail "Settings didn't draw Block ads and trackers' switch"
 send clickkey $at
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
@@ -283,9 +283,9 @@ go_from_bar "${filtered#http://}"
 expect "^browser: loaded $tab $filtered\$" "the tab didn't load the filtered page"
 expect "^browser: title $tab filtered element shown\$" "the filtered page's element didn't show first"
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy for My filters"
-settings_drew Privacy
-in_sight "filter field" '^browser: settings drew Privacy$' || fail "Settings didn't draw My filters' field"
+expect '^browser: settings shown Security & Privacy$' "Settings… didn't show Security & Privacy for My filters"
+settings_drew "Security & Privacy"
+in_sight "filter field" '^browser: settings drew Security & Privacy$' || fail "Settings didn't draw My filters' field"
 send clickkey $at
 # Text gets into a field only from the frame that draws it with the keyboard, after the press, and
 # the driver's insert waits for nothing: one sent before that frame was lost (#2847).
@@ -303,9 +303,9 @@ send click $page_point
 report="filtered element "
 reload_until "filtered element hidden" "My filters' rule didn't hide the page's element"
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy to remove the rule"
-settings_drew Privacy
-in_sight "remove filter 2" '^browser: settings drew Privacy$' || fail "Settings didn't draw the rule's Remove"
+expect '^browser: settings shown Security & Privacy$' "Settings… didn't show Security & Privacy to remove the rule"
+settings_drew "Security & Privacy"
+in_sight "remove filter 2" '^browser: settings drew Security & Privacy$' || fail "Settings didn't draw the rule's Remove"
 send clickkey $at
 expect '^browser: ad block filter removed 127\.0\.0\.1##\.check-filtered$' \
   "My filters' Remove didn't remove the rule"
@@ -321,8 +321,8 @@ expect "^browser: loaded $tab $listed\$" "the tab didn't load the listed page"
 expect "^browser: title $tab listed script loaded\$" \
   "with the annoyance list off, the listed page's script didn't load"
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy for its lists"
-settings_drew Privacy
+expect '^browser: settings shown Security & Privacy$' "Settings… didn't show Security & Privacy for its lists"
+settings_drew "Security & Privacy"
 send clickkey $(drawn "search")
 expect '^browser: field Search has the keyboard$' \
   "a click on Settings' search didn't give it the keyboard in a frame drawn"
@@ -524,14 +524,14 @@ for engine in native ublock; do
   send menu Settings…
   expect '^browser: settings shown ' "the way back, $engine: Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar Privacy")
-  expect '^browser: settings tab Privacy$' "the way back: a click on Privacy didn't show it"
-  settings_drew Privacy
+  send clickkey $(drawn "toolbar Security & Privacy")
+  expect '^browser: settings tab Security & Privacy$' "the way back: a click on Security & Privacy didn't show it"
+  settings_drew "Security & Privacy"
   none_since '^browser: settings ad blocker restart at ' ||
     fail "the way back: the row offered a restart before a choice"
   # The row before a choice, its line saying what going back means, in each tone.
   [ "$engine" = ublock ] || way_back_captures before
-  in_sight "switch ad blocker" '^browser: settings drew Privacy$' ||
+  in_sight "switch ad blocker" '^browser: settings drew Security & Privacy$' ||
     fail "the way back: Settings didn't draw Block with uBlock Origin's switch"
   send clickkey $at
   if [ "$engine" = native ]; then

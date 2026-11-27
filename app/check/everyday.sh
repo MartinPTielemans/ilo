@@ -77,14 +77,14 @@ everyday_key r
 expect "^browser: title [0-9]* ratio $before\$" "back at 100% the page isn't at its zoom before"
 
 # Notifications' question off: the page's request is denied without asking.
-everyday_section Privacy
+everyday_section "Security & Privacy"
 click_in_sight "switch notification prompts"
 expect '^browser: notification prompts off$' "a click didn't turn notification prompts off"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-privacy.png" || fail "no window to capture"
 everyday_key n
 expect '^browser: title [0-9]* notifications denied$' \
   "with the question off, the page's request wasn't denied: $(grep 'notifications' "$log" | tail -1)"
-everyday_section Privacy
+everyday_section "Security & Privacy"
 click_in_sight "switch notification prompts"
 expect '^browser: notification prompts on$' "a click didn't turn notification prompts on again"
 

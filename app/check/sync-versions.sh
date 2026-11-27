@@ -104,7 +104,7 @@ sign_in first
 await '^browser: account FirstDevice None$' ||
   fail "signing in didn't make A the account's first device"
 settings_keyboard
-at=$(drawn "sync copy") || fail "Settings › Sync & Import didn't draw Copy with the words"
+at=$(drawn "sync copy") || fail "Settings › Account didn't draw Copy with the words"
 send clickkey $at
 words=
 for _ in $(seq 30); do
@@ -113,7 +113,7 @@ for _ in $(seq 30); do
   sleep 0.1
 done
 [ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
-at=$(drawn "sync done") || fail "Settings › Sync & Import didn't draw Done with the words"
+at=$(drawn "sync done") || fail "Settings › Account didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
 
@@ -128,7 +128,7 @@ sign_in
 sign_in_release=
 await '^browser: account NeedsSecret None$' || fail "B, signed in, didn't need the account's secret"
 settings_keyboard
-at=$(drawn "sync use-words") || fail "B's Settings › Sync & Import didn't offer the words"
+at=$(drawn "sync use-words") || fail "B's Settings › Account didn't offer the words"
 send clickkey $at
 send type $words
 send key return

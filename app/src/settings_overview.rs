@@ -233,7 +233,7 @@ pub fn tiles(facts: &Facts) -> [Tile; 6] {
             ],
         ),
         tile(
-            Section::Threads,
+            Section::Agents,
             "Agents",
             "icons/sparkles.svg",
             [
@@ -262,9 +262,9 @@ pub fn tiles(facts: &Facts) -> [Tile; 6] {
             ],
         ),
         tile(
-            Section::SyncImport,
+            Section::Account,
             "Sync",
-            Section::SyncImport.glyph(),
+            Section::Account.glyph(),
             [
                 line(facts.signed_in, "Signed in").or(line(facts.signed_out, NOT_SIGNED_IN)),
                 (facts.devices.filter(|_| facts.signed_in)).map(|devices| {

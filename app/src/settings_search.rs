@@ -81,7 +81,11 @@ pub fn also(name: &str) -> &'static [&'static str] {
     match name {
         "Peek" => &["link preview"],
         "Mini Player" => &["picture in picture", "pip"],
-        concat!("Little ", env!("APP_NAME")) => &["little arc", "small window"],
+        "Little Window" => &[
+            "little arc",
+            "small window",
+            concat!("little ", env!("APP_NAME")),
+        ],
         "Block ads and trackers" => &["ad blocker", "content blocker"],
         "Relay calls" => &["webrtc", "ip leak"],
         "Reopen your windows and tabs" => &["restore session"],

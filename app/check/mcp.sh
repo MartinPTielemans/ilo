@@ -3859,9 +3859,9 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   grep -q '^browser: settings revoke ' "$log" &&
     fail "Settings › Other apps listed an answer kept for good to revoke: $(grep '^browser: settings revoke ' "$log" | tail -1)"
   # Off limits is Access'.
-  send clickkey $(drawn "toolbar Access")
-  expect '^browser: settings tab Access$' "a click on Access didn't show its section"
-  settings_drew Access
+  send clickkey $(drawn "toolbar Agents")
+  expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  settings_drew Agents
   # Off limits (#3724): Add Site… opens a field with the keyboard, where Return adds the site
   # typed, which the list then shows with its Remove, and Remove takes it off.
   fence_add() {
@@ -4384,10 +4384,10 @@ STOP
   settings_drew
   # Threads, unless Settings came back on it.
   if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Threads$'; then
-    send clickkey $(drawn "toolbar Threads")
-    expect '^browser: settings tab Threads$' "a click on Threads didn't show its section"
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
   fi
-  settings_drew Threads
+  settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
   click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn threads off"

@@ -95,10 +95,10 @@ relay_switch() {
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Privacy$'; then
     settings_drew
-    send clickkey $(drawn "toolbar Privacy")
-    expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+    send clickkey $(drawn "toolbar Security & Privacy")
+    expect '^browser: settings tab Security & Privacy$' "a click on Security & Privacy didn't show its section"
   fi
-  settings_drew Privacy
+  settings_drew "Security & Privacy"
   click_in_sight "switch relay calls"
   expect "^browser: relay calls $1\$" "a click on Relay calls' switch didn't turn it $1"
   [ "$1" = off ] ||

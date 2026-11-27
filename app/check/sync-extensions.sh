@@ -66,10 +66,9 @@ await 'browser: sync service active$' || fail "A's sync didn't become active"
 await '^browser: account syncs settings true extensions true$' ||
   fail "A, signed in, didn't start syncing its settings and extensions"
 ../tools/window-screenshot.sh "$pid" "$out/sync-extensions-a.png" || fail "no window to capture"
-send clickkey $(drawn "toolbar General")
-expect '^browser: settings tab General$' "a click on General didn't show A's tab"
-# Little ilo is under General's own rows: in_sight scrolls it up, from the tab's frames.
-in_sight "switch little windows" '^browser: settings tab General$' ||
+send clickkey $(drawn "toolbar Little Window")
+expect '^browser: settings tab Little Window$' "a click on Little Window didn't show A's tab"
+in_sight "switch little windows" '^browser: settings tab Little Window$' ||
   fail "Settings didn't draw Little ilo's switch on A"
 send clickkey $at
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off on A"

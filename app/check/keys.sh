@@ -771,11 +771,11 @@ send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
 # Settings › Threads' first switch, the product's own threads (#1636, #4260): on, ⇥ in ⌘T makes
 # what's typed a task; off, it doesn't. It goes off again after.
-send clickkey $(drawn "toolbar Threads")
-settings_drew Threads
+send clickkey $(drawn "toolbar Agents")
+settings_drew Agents
 # The search above drew this switch among its rows, far down the card, and a section's "drew"
 # line comes before its frame's places: only a place drawn since Threads drew is its own.
-click_in_sight "switch agents" clickkey '^browser: settings drew Threads$'
+click_in_sight "switch agents" clickkey '^browser: settings drew Agents$'
 expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
 send key w cmd
@@ -788,8 +788,8 @@ expect '^browser: command bar asks an agent$' "⇥ didn't make a task with threa
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
 send menu Settings…
-expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
-settings_drew Threads
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
 click_in_sight "switch agents"
 expect '^browser: agents off$' "a click on Let agents use the browser didn't turn threads off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
@@ -803,8 +803,8 @@ none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with 
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
-expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
-settings_drew Threads
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
 click_in_sight "shortcut new-tab"

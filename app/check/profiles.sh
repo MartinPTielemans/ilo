@@ -700,9 +700,9 @@ for _ in $(seq 300); do
 done
 [ ! -e "$spare_picks" ] || fail "the deleted profile left its command bar picks: $spare_picks"
 # The first profile's Clear… in Privacy opens Clear browsing data in its Space, leaving Settings.
-send clickkey $(drawn "toolbar Privacy")
-expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
-settings_drew Privacy
+send clickkey $(drawn "toolbar Security & Privacy")
+expect '^browser: settings tab Security & Privacy$' "a click on Security & Privacy didn't show its section"
+settings_drew "Security & Privacy"
 click_in_sight "clear $default"
 expect "^browser: clear browsing data of profile $default in space $first\$" \
   "the first profile's Clear… didn't open Clear browsing data in its Space"

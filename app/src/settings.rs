@@ -41,7 +41,7 @@ use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card, Paging};
-use browser::settings_column::{self, Section};
+use browser::settings_column::{self, Part, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
@@ -764,7 +764,7 @@ pub fn show_about(cx: &mut App) {
 
 /// Shows the Settings window on Sync & Import.
 pub fn show_import(cx: &mut App) {
-    show_on(Section::SyncImport, cx);
+    show_on(Section::Account, cx);
 }
 
 fn show_on(section: Section, cx: &mut App) {
@@ -859,7 +859,7 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::Models {
                 models_shown(cx);
             }
-            if settings.section == Section::SyncImport {
+            if settings.section == Section::Account {
                 settings
                     .account
                     .update(cx, |account, cx| account.read_activity(cx));
@@ -1450,7 +1450,7 @@ impl Settings {
         self.shown = true;
         // Each section opens at its top.
         self.card.reset();
-        if section == Section::SyncImport {
+        if section == Section::Account {
             self.show_import(cx);
         }
         if section == Section::OtherApps {
@@ -1459,7 +1459,7 @@ impl Settings {
         if section == Section::Models {
             models_shown(cx);
         }
-        if section == Section::SyncImport {
+        if section == Section::Account {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
         }
@@ -2339,12 +2339,13 @@ impl Settings {
         )
     }
 
-    fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// Little Window's page: its switch, and its own settings while it's on, as they were at the
+    /// top of Features.
+    fn little_window(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
-        let mac = cfg!(target_os = "macos");
-        let (little_keys, little_click, peek_click) = match mac {
-            true => ("⌥⌘N", "⌥⌘-click", "⇧-click"),
-            false => ("Ctrl+Alt+N", "Ctrl+Alt-click", "Shift-click"),
+        let (little_keys, little_click) = match cfg!(target_os = "macos") {
+            true => ("⌥⌘N", "⌥⌘-click"),
+            false => ("Ctrl+Alt+N", "Ctrl+Alt-click"),
         };
         let little_on = unsafe { bc::bc_little_windows() };
         let little_switch = self.toggle(
@@ -2410,6 +2411,15 @@ impl Settings {
             .chain(little_on.then_some(little_archive))
             .chain(little_on.then_some(sign_in_close))
             .collect();
+        Page::new(Section::LittleWindow, "", vec![Block::Rows(little)])
+    }
+
+    fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let look = &self.look;
+        let peek_click = match cfg!(target_os = "macos") {
+            true => "⇧-click",
+            false => "Shift-click",
+        };
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
             "link previews",
@@ -2544,7 +2554,7 @@ impl Settings {
             Some(boosts_line.into()),
             vec![boosts],
         );
-        let mut blocks = vec![Block::Rows(little), Block::Rows(vec![peek])];
+        let mut blocks = vec![Block::Rows(vec![peek])];
         // Not before this build's core can ask a site, where the switch would turn nothing off.
         if browser::recent::REACHED {
             blocks.push(Block::Rows(vec![recent]));
@@ -3869,7 +3879,12 @@ impl Settings {
     /// and each agent's permissions and what it did in this run, newest first.
     /// Agents' pages, Threads, Models, Access and Other apps, in that order: what was one page of
     /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
-    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
+    fn agents(
+        &self,
+        agents: &Entity<Agents>,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> [(Part, Page); 6] {
         let look = &self.look;
         let on = agents.read(cx).threads();
         // The inside switch: the user's own assistant, for threads. Other apps have theirs.
@@ -3899,8 +3914,12 @@ impl Settings {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(keeps).chain(kept);
-        let mut threads = vec![Block::Rows(rows.collect())];
+        let mut threads = vec![Block::Rows(vec![master])];
+        let kept: Vec<Row> = keeps.into_iter().chain(kept).collect();
+        let kept = match kept.is_empty() {
+            true => Vec::new(),
+            false => vec![Block::Rows(kept)],
+        };
         // Where a new thread starts, while threads are on, as the drawing has it under the switch.
         if on {
             threads.extend(self.new_thread(agents, cx));
@@ -3942,7 +3961,7 @@ impl Settings {
         }
         access.extend(self.fenced_sites(agents, cx));
         access.extend(self.sensitive_sites(agents, cx));
-        access.extend(self.site_notes(agents, accent, cx));
+        let notes = self.site_notes(agents, accent, cx);
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -4042,17 +4061,25 @@ impl Settings {
             )));
         }
         [
-            Page::new(Section::Threads, "", threads),
-            Page::new(
-                Section::Models,
-                Section::Models.lede().unwrap_or_default(),
-                models,
+            (Part::Threads, Page::new(Section::Agents, "", threads)),
+            (Part::Kept, Page::new(Section::ArchivedThreads, "", kept)),
+            (
+                Part::Models,
+                Page::new(
+                    Section::Models,
+                    Section::Models.lede().unwrap_or_default(),
+                    models,
+                ),
             ),
-            Page::new(Section::Access, agents::tier::NEVER_GETS, access),
-            Page::new(
-                Section::OtherApps,
-                Section::OtherApps.lede().unwrap_or_default(),
-                blocks,
+            (Part::Access, Page::new(Section::Agents, "", access)),
+            (Part::SiteNotes, Page::new(Section::Skills, "", notes)),
+            (
+                Part::OtherApps,
+                Page::new(
+                    Section::OtherApps,
+                    Section::OtherApps.lede().unwrap_or_default(),
+                    blocks,
+                ),
             ),
         ]
     }
@@ -4117,9 +4144,11 @@ impl Settings {
             .div
         });
         let heading: SharedString = ACCESS.into();
+        // Its page's sentence while Access had a page, under its levels now that it shares one.
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+            Block::Under(foot(look, agents::tier::NEVER_GETS)),
         ]
     }
 
@@ -5229,7 +5258,7 @@ impl Settings {
             true => "",
             false => "Bring your things from another browser, or take your Spaces with you.",
         };
-        Page::new(Section::SyncImport, lede, blocks)
+        Page::new(Section::Account, lede, blocks)
     }
 
     /// About: the app's name as the page's heading, its version and its engine's, where its
@@ -6412,18 +6441,22 @@ impl Render for Settings {
     }
 }
 
-/// `first`, with each of `rest`'s blocks after its own, on `first`'s page: today's pages that the
-/// owner's drawing puts on another's, until each part has its drawn place. A page that starts with
-/// rows of its own goes under its old `name`, so where it starts reads.
-fn joined<const N: usize>(first: Page, rest: [(&'static str, Page); N]) -> Page {
-    let mut page = first;
-    for (name, other) in rest {
+/// `section`'s page from its parts' (`Section::parts`): the first's, with each after it under its
+/// heading unless it starts with its own, as today's pages sit on the pages the owner drew.
+fn joined(section: Section, parts: Vec<(Part, Page)>) -> Page {
+    let mut parts = parts.into_iter();
+    let mut page = match parts.next() {
+        Some((_, page)) => page,
+        None => return Page::new(section, "", Vec::new()),
+    };
+    page.section = section;
+    for (part, other) in parts {
         let headed = matches!(
             other.blocks.first(),
             Some(Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..))
         );
-        if !headed {
-            page.blocks.push(Block::Heading(name.into()));
+        if !headed && !part.heading().is_empty() {
+            page.blocks.push(Block::Heading(part.heading().into()));
         }
         page.blocks.extend(other.blocks);
     }
@@ -6439,57 +6472,72 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Page {
-        match section {
-            Section::Overview => self.overview(cx),
-            Section::General => {
-                let profiles = profiles();
-                let general = self.general(&profiles, accent, cx);
-                joined(
-                    general,
-                    [("Features", self.features(&profiles, accent, cx))],
-                )
-            }
-            Section::Window => self.appearance_page(cx),
-            Section::Privacy => {
-                let privacy = self.privacy(&profiles(), accent, cx);
-                let off_sites = off_sites();
-                self.log_off_sites(&off_sites);
-                let ad_blocking = self.ad_blocking(&off_sites, accent, cx);
-                joined(privacy, [("Ad Blocking", ad_blocking)])
-            }
-            Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::SyncImport => {
-                let sync = Page::new(
-                    Section::SyncImport,
+        if section == Section::TabsAndSpaces {
+            self.focus_field(&profiles(), window, cx);
+        }
+        let parts = self.parts(section.parts(), accent, cx);
+        joined(section, parts)
+    }
+
+    /// Each of `parts`' pages, as it was built before #4092 joined them, in their order. The
+    /// agents' parts come of one reading of the agents, and none while they aren't running.
+    fn parts(&mut self, parts: &[Part], accent: Rgba, cx: &mut Context<Self>) -> Vec<(Part, Page)> {
+        let profiles = profiles();
+        let agent_parts = [
+            Part::Threads,
+            Part::Kept,
+            Part::Models,
+            Part::Access,
+            Part::SiteNotes,
+            Part::OtherApps,
+        ];
+        let mut agents: Vec<(Part, Page)> =
+            match parts.iter().any(|part| agent_parts.contains(part)) {
+                true => (agents::global(cx))
+                    .map(|agents| self.agents(&agents, accent, cx).into())
+                    .unwrap_or_default(),
+                false => Vec::new(),
+            };
+        let mut pages = Vec::new();
+        for &part in parts {
+            let page = match part {
+                Part::Overview => self.overview(cx),
+                Part::General => self.general(&profiles, accent, cx),
+                Part::Features => self.features(&profiles, accent, cx),
+                Part::Appearance => self.appearance_page(cx),
+                Part::Sync => Page::new(
+                    Section::Account,
                     "Sync Spaces, bookmarks, passwords and open tabs across your devices, \
                      encrypted with a key only they hold.",
                     vec![Block::View(self.account.clone().into_any_element())],
-                );
-                joined(sync, [("Import", self.import_export(cx))])
-            }
-            Section::Shortcuts => self.shortcuts(accent, cx),
-            Section::Threads | Section::Models | Section::Access | Section::OtherApps => {
-                match agents::global(cx) {
-                    Some(agents) => {
-                        let pages = self.agents(&agents, accent, cx);
-                        let at = pages.iter().position(|page| page.section == section);
-                        pages
-                            .into_iter()
-                            .nth(at.unwrap_or(0))
-                            .unwrap_or_else(|| Page::new(section, "", Vec::new()))
-                    }
-                    None => Page::new(section, "", Vec::new()),
+                ),
+                Part::Import => self.import_export(cx),
+                Part::Privacy => self.privacy(&profiles, accent, cx),
+                Part::AdBlocking => {
+                    let off_sites = off_sites();
+                    self.log_off_sites(&off_sites);
+                    self.ad_blocking(&off_sites, accent, cx)
                 }
-            }
-            Section::TabsAndSpaces => {
-                let profiles = profiles();
-                self.focus_field(&profiles, window, cx);
-                let tabs = self.tabs_and_sidebar(&profiles, accent, cx);
-                joined(tabs, [("Profiles", self.profiles(&profiles, cx))])
-            }
-            Section::Links => self.links(accent, cx),
-            Section::About => self.about(accent, cx),
+                Part::Passwords => self.passwords(&profiles, accent, cx),
+                Part::Shortcuts => self.shortcuts(accent, cx),
+                Part::Tabs => self.tabs_and_sidebar(&profiles, accent, cx),
+                Part::Profiles => self.profiles(&profiles, cx),
+                Part::Links => self.links(accent, cx),
+                Part::LittleWindow => self.little_window(accent, cx),
+                Part::About => self.about(accent, cx),
+                Part::Threads
+                | Part::Kept
+                | Part::Models
+                | Part::Access
+                | Part::SiteNotes
+                | Part::OtherApps => match agents.iter().position(|(each, _)| *each == part) {
+                    Some(at) => agents.remove(at).1,
+                    None => Page::new(part.section(), "", Vec::new()),
+                },
+            };
+            pages.push((part, page));
         }
+        pages
     }
 
     /// What `typed` finds, in place of the section's page, and the sections it's in. It reads the
@@ -6522,25 +6570,15 @@ impl Settings {
         Vec<Option<gpui::Div>>,
         Vec<(Section, gpui::Div)>,
     ) {
-        let profiles = profiles();
-        let mut pages = vec![
-            self.general(&profiles, accent, cx),
-            self.appearance_page(cx),
-            self.tabs_and_sidebar(&profiles, accent, cx),
-            self.features(&profiles, accent, cx),
-        ];
-        if let Some(agents) = agents::global(cx) {
-            pages.extend(self.agents(&agents, accent, cx));
-        }
-        pages.push(self.shortcuts(accent, cx));
-        pages.push(self.privacy(&profiles, accent, cx));
-        pages.push(self.ad_blocking(&off_sites(), accent, cx));
-        pages.push(self.import_export(cx));
-        pages.push(self.about(accent, cx));
-        // In the column's order, as the results run.
-        pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
+        // In the column's order, as the results run, each part's rows in the section that holds it.
+        let parts: Vec<Part> = (Section::all())
+            .flat_map(|section| section.parts().iter().copied())
+            .filter(|part| part.searched())
+            .collect();
+        let pages = self.parts(&parts, accent, cx);
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
-        for page in pages {
+        for (part, mut page) in pages {
+            page.section = part.section();
             // The heading over the groups that follow it, which the search reads too.
             let mut group = None;
             for block in page.blocks {
@@ -6678,7 +6716,7 @@ impl Settings {
         if window.focused(cx).is_some() {
             return;
         }
-        let import = (self.section == Section::SyncImport)
+        let import = (self.section == Section::Account)
             .then(|| {
                 self.import
                     .as_ref()

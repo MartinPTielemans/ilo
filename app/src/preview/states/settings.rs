@@ -140,8 +140,8 @@ impl gpui::Render for PicturesPage {
             Pictures::Assistants { .. } | Pictures::Models | Pictures::Install { .. } => {
                 Section::Models
             }
-            Pictures::SiteNotes { .. } => Section::Access,
-            Pictures::Threads { .. } => Section::Threads,
+            Pictures::SiteNotes { .. } => Section::Skills,
+            Pictures::Threads { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
