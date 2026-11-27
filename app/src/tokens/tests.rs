@@ -604,10 +604,13 @@ fn type_is_on_the_scale() {
             super::shell::trouble::WORDS_SIZE,
         ),
         (
-            "site_controls::HEADING_SIZE",
-            super::site_controls::HEADING_SIZE,
+            "site_controls::LABEL_SIZE",
+            super::site_controls::LABEL_SIZE,
         ),
-        ("site_controls::LINK_SIZE", super::site_controls::LINK_SIZE),
+        (
+            "site_controls::CONNECTION_SIZE",
+            super::site_controls::CONNECTION_SIZE,
+        ),
         ("site_controls::NAME_SIZE", super::site_controls::NAME_SIZE),
         ("toast::TEXT_SIZE", super::toast::TEXT_SIZE),
         ("tooltip::TEXT_SIZE", super::tooltip::TEXT_SIZE),
