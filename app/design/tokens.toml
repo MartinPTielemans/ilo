@@ -3167,19 +3167,20 @@ chip-end = 6.0
 # A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
 # corners and fill to a row's hover plate.
 ghost-radius = 6.0
-# The thread's stage (spec-thread-stage.md): its pages run down a rail at the page area's right,
-# `rail-edge` from its top, foot and right, beside the conversation's column, tiles `rail-gap`
-# apart. Where the area is narrower than `rail-breakpoint`, the column at its width and the rail
-# with the column's inset each side no longer both fit, and the rail goes; the pages fall to one
+# The thread's stage (spec-thread-stage.md): its pages run down a rail `rail-width` wide at the page
+# area's right, `rail-edge` from its top, foot and right, beside the conversation's column, tiles
+# `rail-gap` apart (#4396: the rail as wide as the reference's, measured). Where the area is
+# narrower than `rail-breakpoint`, the column at its least ([shell.conversation] `column-least`)
+# with its inset each side and the rail at its edge no longer all fit, and the rail goes; the pages fall to one
 # row of tiles under the head, scrolling sideways, so each stays a click away. A tile is a head
 # (the page's icon, its title, and its state at the right) over its live picture, cut at
 # `tile-picture`; on a plate with an inner line. The page the assistant is on has the stronger
 # line and the ring before its word, in the text's ink. Light's plate and line are the ink at the drawing's strength (light-values.md),
 # Proposed.
-rail-width = 280.0
+rail-width = 300.0
 rail-gap = 8.0
 rail-edge = 8.0
-rail-breakpoint = 848.0
+rail-breakpoint = 876.0
 rail-head = 32.0
 rail-head-x = 10.0
 rail-head-gap = 7.0
@@ -3213,6 +3214,11 @@ content = 0.15
 # A group grows to its content, its pages' rows as it opens, or folds to nothing as it goes, and
 # fades as it comes and goes.
 height = 0.28
+# The thread's first page brings the rail in from the right over `rail` and its last page closing
+# takes it out, on the sidebar's ease-out cubic, as the column slides to the middle of the room
+# left of it. Proposed: the sidebar's show time until the lead has a recording of the reference's
+# (#4396). A resize, full screen or coming back from a page moves nothing.
+rail = 0.1
 fade = 0.2
 # A new status rolls in from under the old, which goes up; a new title crossfades.
 roll = 0.2
@@ -3352,7 +3358,12 @@ turn = 1.4
 # which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
 # page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
 # field at its foot is as tall as the URL field's row, and the lines meet a clean edge above it.
-column = 520.0
+# The column, its header, lines and reply field, is `column` at most, the reference's as measured
+# (#4396), and keeps it beside the pages' rail wherever it fits, in the middle of the room left of
+# the rail; narrower, it keeps `inset` each side, and beside the rail it's never under
+# `column-least`, where the rail goes ([shell.task] `rail-breakpoint`).
+column = 832.0
+column-least = 520.0
 inset = 24.0
 top = 30.0
 # The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
