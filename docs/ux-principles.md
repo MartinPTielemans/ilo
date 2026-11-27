@@ -50,7 +50,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 
 - **Seen.** Deleting a Space asks first, then archives its tabs instead of destroying them, and a toast offers ⌘Z. Clear asks nothing, and ⌘Z brings the tabs back. A closed Today tab goes to the archive. Cancel on a new Space deletes it and goes back to the Space it was made from.
 - **Reading.** Confirmations train people to click through. Undo lets them act fast and recover.
-- **Applies.** A destructive action gets an undo first, an edit on the window's one ⌘Z history (ux-spec › Undo, everywhere). It asks as well only when a lot goes at once, and offers the undo anyway. One no undo can bring back, such as deleting a profile with its cookies and logins or removing an extension with its data, asks every time (ours).
+- **Applies.** A destructive action gets an undo instead of a question, an edit on the window's one ⌘Z history (ux-spec › Undo, everywhere), and it never asks, however much goes at once: Arc's Delete Space asks, ours doesn't (the owner, 2026-11-27). A private window keeps its history too, in memory alone. Only what no undo can bring back asks, every time: Clear History, deleting a profile with its cookies and logins, removing an extension with its data, and removing threads' kept conversations (Library › Threads' Clear, Settings › Threads' Remove All). Quitting ends every window's history.
 
 ## Teach the keys where they're used
 

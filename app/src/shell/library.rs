@@ -42,6 +42,9 @@ use crate::{
 
 #[cfg(test)]
 use crate::tokens::shell::library::LIBRARY_WIDTH;
+/// The second line of Threads' Clear, which asks as Settings › Threads' Remove does (L5).
+const CONVERSATION_REMOVED: &str = "The conversation is removed from this computer.";
+const CONVERSATIONS_REMOVED: &str = "Their conversations are removed from this computer.";
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
 pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
@@ -1255,7 +1258,7 @@ impl Shell {
 
     /// Lists the archived tabs, downloads or media the search finds, under their headings. With
     /// `changed` false, only if the search did.
-    fn filter(&mut self, changed: bool, cx: &mut Context<Self>) {
+    pub(super) fn filter(&mut self, changed: bool, cx: &mut Context<Self>) {
         if self.section == Section::Agents && self.library.is_some() {
             self.read_agent_history();
         }
@@ -1774,43 +1777,12 @@ impl Shell {
         );
     }
 
-    /// Empties the archive, its tabs and the tasks it lists, once the user says so.
+    /// Empties the archive, its tabs and the threads it lists, at once: one ⌘Z brings them all
+    /// back, so it never asks (#4409).
     pub(super) fn clear_archive(&mut self, cx: &mut Context<Self>) {
-        let (tabs, tasks) = (self.archive.len(), self.archived_tasks.len());
-        if tabs + tasks == 0 {
-            return;
+        if self.archive.len() + self.archived_tasks.len() > 0 {
+            self.empty_archive(cx);
         }
-        let shell = cx.weak_entity();
-        self.browser.confirm(
-            "Clear the archive?".into(),
-            {
-                let undo = keystroke_label("cmd-z");
-                let some = |count: usize, what: &str| match count {
-                    1 => format!("1 {what}"),
-                    _ => format!("{count} {what}s"),
-                };
-                match (tabs, tasks) {
-                    (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
-                    (0, 1) => format!("Its thread leaves the archive. {undo} brings it back."),
-                    (_, 0) => {
-                        format!("Its {tabs} tabs leave the archive. {undo} brings them back.")
-                    }
-                    (0, _) => {
-                        format!("Its {tasks} threads leave the archive. {undo} brings them back.")
-                    }
-                    _ => format!(
-                        "Its {} and {} leave the archive. {undo} brings them back.",
-                        some(tabs, "tab"),
-                        some(tasks, "thread")
-                    ),
-                }
-            },
-            "Clear Archive",
-            Box::new(move |cx| {
-                shell.update(cx, |shell, cx| shell.empty_archive(cx)).ok();
-            }),
-            cx,
-        );
     }
 
     /// The empty Boards list's way to make its first Board (#3575): New Board, as its key and the
@@ -2971,27 +2943,54 @@ impl Shell {
             .collect();
     }
 
-    /// Delete on a past task: it goes from Library › Agents and its file.
+    /// A past thread's ✕: it goes from Library › Threads and its file at once, and ⌘Z writes it
+    /// back, so it never asks (#4409).
     pub(super) fn delete_past_task(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(profile) = self.learning_profile() else {
             return;
         };
         log!("browser: agents history delete {id}");
-        let entries = crate::agent_history::read(&self.browser.agent_history(profile));
-        let entries = crate::agent_history::deleted(entries, id);
+        let text = self.browser.agent_history(profile);
+        let entries = crate::agent_history::deleted(crate::agent_history::read(&text), id);
         self.browser
             .set_agent_history(profile, &crate::agent_history::write(&entries));
         self.filter(true, cx);
+        self.keep(
+            What::DELETE_THREAD,
+            Some(Edit::ThreadHistory { profile, text }),
+            cx,
+        );
     }
 
-    /// Agents' Clear: the profile's past tasks all go.
+    /// Threads' Clear: the profile's past threads all go, which nothing brings back, so it asks
+    /// first.
     pub(super) fn clear_agent_history(&mut self, cx: &mut Context<Self>) {
         let Some(profile) = self.learning_profile() else {
             return;
         };
-        log!("browser: agents history cleared");
-        self.browser.set_agent_history(profile, "");
-        self.filter(true, cx);
+        let count = crate::agent_history::read(&self.browser.agent_history(profile)).len();
+        if count == 0 {
+            return;
+        }
+        let (message, detail) = match count {
+            1 => ("Remove 1 thread?".to_string(), CONVERSATION_REMOVED),
+            _ => (format!("Remove {count} threads?"), CONVERSATIONS_REMOVED),
+        };
+        let shell = cx.weak_entity();
+        self.browser.confirm(
+            message,
+            detail.into(),
+            "Remove",
+            Box::new(move |cx| {
+                let clear = |shell: &mut Shell, cx: &mut Context<Shell>| {
+                    log!("browser: agents history cleared");
+                    shell.browser.set_agent_history(profile, "");
+                    shell.filter(true, cx);
+                };
+                shell.update(cx, clear).ok();
+            }),
+            cx,
+        );
     }
 
     /// A past task's row: its title over its agent, when it ended and what it did, as its receipt
@@ -3582,27 +3581,28 @@ impl Shell {
         }
     }
 
-    /// Delete…: the Boost's file goes, once the user says so.
+    /// Delete…: the Boost's files go at once, and ⌘Z writes them back, so it never asks (#4409).
     pub(super) fn delete_boost(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
-        let shell = cx.weak_entity();
-        let site = site.to_owned();
-        self.browser.confirm(
-            format!("Delete the Boost for {site}?"),
-            "Its file goes from the Boosts folder, and the site shows as it made itself.".into(),
-            "Delete",
-            Box::new(move |cx| {
-                shell
-                    .update(cx, |shell, cx| {
-                        // check.sh reads this line.
-                        log!("browser: boost {site} deleted");
-                        let changes = crate::boosts::with(|boosts| boosts.delete(profile, &site));
-                        shell.browser.show_boosts(changes, cx);
-                        shell.list_boosts(cx);
-                    })
-                    .ok();
-            }),
-            cx,
-        );
+        let edit =
+            (self.take_boost(profile, site, cx)).map(|gone| Edit::RestoreBoost { profile, gone });
+        self.keep(What::DELETE_BOOST, edit, cx);
+    }
+
+    /// Deletes `site`'s Boost, and gives its files as they were, if it had any.
+    pub(super) fn take_boost(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::boosts::Gone> {
+        // check.sh reads this line.
+        log!("browser: boost {site} deleted");
+        let (gone, changes) = crate::boosts::with(|boosts| {
+            (boosts.gone(profile, site), boosts.delete(profile, site))
+        });
+        self.browser.show_boosts(changes, cx);
+        self.list_boosts(cx);
+        gone
     }
 
     /// Agents' Clear, at the end of a line over its list.

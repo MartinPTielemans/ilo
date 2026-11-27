@@ -1412,16 +1412,25 @@ fn hide(cx: &mut App) {
 }
 
 impl Settings {
-    /// ⌘Z: on Links, the last rule its trash took comes back. The other sections' changes show
-    /// as they're made and are made back the same way.
+    /// ⌘Z: on Links, the last rule its trash took comes back, and on Overview the last loose end
+    /// its ✕ put away (#4409). The other sections' changes show as they're made and are made back
+    /// the same way.
     fn undo(&mut self, cx: &mut Context<Self>) {
-        let links = (self.links.as_ref()).filter(|_| self.section == Section::Links);
-        let undone = links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
-        let what = if undone {
-            "brought a rule back"
-        } else {
-            "had nothing"
+        let what = match self.section {
+            Section::Links => {
+                let links = self.links.as_ref();
+                let undone =
+                    links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
+                undone.then_some("brought a rule back")
+            }
+            Section::Overview => {
+                let back = (self.put_away.as_mut()).and_then(|put_away| put_away.bring_back_last());
+                cx.notify();
+                back.map(|_| "brought a loose end back")
+            }
+            _ => None,
         };
+        let what = what.unwrap_or("had nothing");
         // check.sh reads this line.
         log!("browser: settings undo {what}");
     }

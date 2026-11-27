@@ -1642,10 +1642,10 @@ impl Shell {
                     if event.modifiers().secondary(cx) {
                         log!("browser: command back-to-pinned-url-keeping-page via sidebar");
                         shell.browser.duplicate(tab, cx);
-                        return shell.browser.back_to_pinned_url(tab, cx);
+                        return shell.back_to_pinned_url(vec![tab], cx);
                     }
                     log!("browser: command back-to-pinned-url via sidebar");
-                    shell.browser.back_to_pinned_url(tab, cx);
+                    shell.back_to_pinned_url(vec![tab], cx);
                     shell.show_row(tab, cx)
                 }))
             })

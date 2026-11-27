@@ -619,9 +619,7 @@ impl Shell {
         // The first click showed it.
         if event.click_count == 2 {
             log!("browser: command back-to-pinned-url via favorite");
-            return self
-                .browser
-                .back_to_pinned_url(self.favorite_focused(tab), cx);
+            return self.back_to_pinned_url(vec![self.favorite_focused(tab)], cx);
         }
         self.press_tile(tab, event.position)
     }

@@ -5,6 +5,7 @@
 use super::*;
 use browser::settings_overview::{
     self as overview, ELSEWHERE, Facts, LEFT_FROM_SETUP, LOOSE_ENDS, LooseEnd, MAKE_DEFAULT,
+    SHOW_DISMISSED,
 };
 use browser::tokens::settings::overview::NOTICE;
 
@@ -18,6 +19,7 @@ impl Settings {
             Some(agents) => overview::loose_ends(agents.read(cx), put_away),
             None => Vec::new(),
         };
+        let dismissed = put_away.any();
         let look = &self.look;
         let mut blocks = Vec::new();
         let default = self.default_browser.read(cx);
@@ -89,6 +91,27 @@ impl Settings {
                 .into_any_element();
             blocks.push(Block::Scoped(LOOSE_ENDS.into(), left));
             blocks.push(Block::Group(group(look, rows)));
+        }
+        // The way back for every loose end its ✕ put away, as ⌘Z is for the last (#4409).
+        if dismissed {
+            let show =
+                browser::settings_rows::button(look, "overview-show-dismissed", SHOW_DISMISSED)
+                    .when(self.a11y, |show| named_button(show, SHOW_DISMISSED))
+                    .tab_index(0)
+                    .focus_from_keys_only()
+                    .focus_visible(ring(look.ink))
+                    .child(self.drawn("overview show dismissed".into()))
+                    .on_click(cx.listener(|settings: &mut Self, _, _, cx| {
+                        // check.sh reads this line.
+                        log!("browser: loose ends brought back");
+                        if let Some(put_away) = &mut settings.put_away {
+                            put_away.bring_back_all();
+                        }
+                        cx.notify();
+                    }));
+            blocks.push(Block::View(
+                div().flex().justify_end().child(show).into_any_element(),
+            ));
         }
         let facts = self.overview_facts(cx);
         let cards = (overview::tiles(&facts).into_iter()).map(|tile| {

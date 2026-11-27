@@ -112,12 +112,17 @@ pub fn loose_ends(agents: &Agents, put_away: &PutAway) -> Vec<LooseEnd> {
         .collect()
 }
 
+/// Overview's button that brings back every loose end put away (TR3).
+pub const SHOW_DISMISSED: &str = "Show Dismissed";
+
 /// The loose ends the user put away, kept as one key a line in `PUT_AWAY_FILE` in the profile's
 /// folder, which nothing else reads and nothing syncs.
 #[derive(Debug, Default)]
 pub struct PutAway {
     path: Option<PathBuf>,
     keys: BTreeSet<String>,
+    /// Those put away in this run, in order, for ⌘Z to bring back the last first (#4409).
+    order: Vec<String>,
 }
 
 impl PutAway {
@@ -132,6 +137,7 @@ impl PutAway {
         PutAway {
             path: Some(path),
             keys,
+            order: Vec::new(),
         }
     }
 
@@ -139,26 +145,55 @@ impl PutAway {
         self.keys.contains(key)
     }
 
+    /// ⌘Z on Overview: the loose end put away last in this run lists again. Its key, if any.
     pub fn bring_back_last(&mut self) -> Option<String> {
-        None
+        let key = self.order.pop()?;
+        self.keys.remove(&key);
+        self.save();
+        Some(key)
     }
 
-    pub fn bring_back_all(&mut self) {}
+    /// Show Dismissed: every loose end put away lists again, from this run or before.
+    pub fn bring_back_all(&mut self) {
+        self.keys.clear();
+        self.order.clear();
+        self.save();
+    }
 
+    /// Whether any is put away, which Show Dismissed brings back.
     pub fn any(&self) -> bool {
-        true
+        !self.keys.is_empty()
     }
 
-    /// Keeps `key` for good: the user's ✕ alone calls it.
+    /// Keeps `key` until ⌘Z or Show Dismissed brings it back: the user's ✕ alone calls it.
     pub fn put_away(&mut self, key: &str) {
         if !self.keys.insert(key.into()) {
             return;
         }
-        if let Some(path) = &self.path {
-            let text: String = self.keys.iter().map(|key| format!("{key}\n")).collect();
-            if let Err(error) = std::fs::write(path, text) {
-                crate::log!("browser: loose ends not kept: {error}");
-            }
+        self.order.push(key.into());
+        self.save();
+    }
+
+    /// Writes the keys to the file, which goes with the last of them.
+    fn save(&self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let saved = match self.keys.is_empty() {
+            true => std::fs::remove_file(path).or_else(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(error),
+            }),
+            false => std::fs::write(
+                path,
+                self.keys
+                    .iter()
+                    .map(|key| format!("{key}\n"))
+                    .collect::<String>(),
+            ),
+        };
+        if let Err(error) = saved {
+            crate::log!("browser: loose ends not kept: {error}");
         }
     }
 }

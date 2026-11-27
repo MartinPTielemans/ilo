@@ -136,6 +136,22 @@ impl Summary {
     }
 }
 
+/// A deleted Boost's files as they were, kept in the window's memory for its Undo (#4409).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gone {
+    site: String,
+    css: Option<String>,
+    arrangement: Option<String>,
+    script: Option<String>,
+    off: bool,
+}
+
+impl Gone {
+    pub fn site(&self) -> &str {
+        &self.site
+    }
+}
+
 /// A site's CSS or arrangement as the core should show it now: empty to show none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
@@ -531,6 +547,45 @@ impl Boosts {
             crate::log!("couldn't delete the Boost script for {site}: {error}");
         }
         if kept.off.remove(site) {
+            kept.save_off();
+        }
+        self.changes(profile)
+    }
+
+    /// What deleting `site`'s Boost takes, for its Undo to write back; none if it has nothing.
+    pub fn gone(&self, profile: u64, site: &str) -> Option<Gone> {
+        let kept = self.profiles.get(&profile)?;
+        let gone = Gone {
+            site: site.to_owned(),
+            css: kept.sites.get(site).cloned(),
+            arrangement: (kept.arranged.get(site).cloned()).filter(|bytes| !bytes.is_empty()),
+            script: std::fs::read_to_string(kept.script_path(site)).ok(),
+            off: kept.off.contains(site),
+        };
+        (gone.css.is_some() || gone.arrangement.is_some() || gone.script.is_some()).then_some(gone)
+    }
+
+    /// Writes a deleted Boost back as `gone` keeps it, on or off as it was.
+    pub fn restore(&mut self, profile: u64, gone: &Gone) -> Vec<Change> {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        let site = gone.site.as_str();
+        if let Some(css) = &gone.css
+            && !kept.write(site, css)
+        {
+            return Vec::new();
+        }
+        if let Some(bytes) = &gone.arrangement {
+            kept.write_arrangement(site, bytes);
+        }
+        if let Some(script) = &gone.script
+            && let Err(error) = std::fs::create_dir_all(kept.boosts())
+                .and_then(|_| std::fs::write(kept.script_path(site), script))
+        {
+            crate::log!("couldn't write the Boost script for {site} back: {error}");
+        }
+        if gone.off && kept.off.insert(site.to_owned()) {
             kept.save_off();
         }
         self.changes(profile)

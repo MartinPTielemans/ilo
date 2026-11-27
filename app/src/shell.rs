@@ -4206,34 +4206,12 @@ impl Shell {
         }
     }
 
-    /// Deletes the Space, asking first if it has tabs, which go with it: its Today tabs to the
-    /// archive, its pinned tabs with the Space, and ⌘Z brings them all back.
+    /// Deletes the Space at once, with its tabs: its Today tabs to the archive, its pinned tabs with
+    /// the Space. ⌘Z brings them all back, so it never asks (#4409).
     fn delete_space(&mut self, space: u64, cx: &mut Context<Self>) {
-        let Some(found) = self.spaces.iter().find(|each| each.id == space) else {
-            return;
-        };
-        let tabs = found.pinned.len() + found.today.len();
-        if tabs == 0 {
+        if self.spaces.iter().any(|each| each.id == space) {
             self.delete_space_now(space, cx);
-            return;
         }
-        let shell = cx.weak_entity();
-        let undo = keystroke_label("cmd-z");
-        self.browser.confirm(
-            format!("Delete “{}”?", found.name),
-            if tabs == 1 {
-                format!("Its tab goes with it. {undo} brings it back.")
-            } else {
-                format!("Its {tabs} tabs go with it. {undo} brings them back.")
-            },
-            "Delete",
-            Box::new(move |cx| {
-                shell
-                    .update(cx, |shell, cx| shell.delete_space_now(space, cx))
-                    .ok();
-            }),
-            cx,
-        );
     }
 
     /// Deletes the Space, for ⌘Z to bring back, and says so in the toast (Arc).

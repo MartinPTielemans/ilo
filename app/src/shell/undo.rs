@@ -82,6 +82,11 @@ impl What {
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const DELETE_BOARD: What = What::said("Delete Board", "Board Deleted");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
+    pub const DELETE_BOOST: What = What::said("Delete Boost", "Boost Deleted");
+    /// Library › Threads' ✕ on a thread kept from before.
+    pub const DELETE_THREAD: What = What::said("Delete Thread", "Thread Deleted");
+    /// The tab going back to its pinned URL under the pointer is what it did, so there's no toast.
+    pub const BACK_TO_PINNED_URL: What = What::quiet("Back to Pinned URL");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
     /// the list under the pointer is what it did, so there's no toast.
     pub const REMOVE_FROM_HISTORY: What = What::quiet("Remove from History");
@@ -339,6 +344,26 @@ pub(super) enum Edit {
         profile: u64,
         id: String,
     },
+    /// Writes back the Boost Delete took from `profile`, its files as they were.
+    RestoreBoost {
+        profile: u64,
+        gone: crate::boosts::Gone,
+    },
+    DeleteBoost {
+        profile: u64,
+        site: String,
+    },
+    /// Takes the pinned tab back to the page it was on before Back to Pinned URL.
+    Follow {
+        tab: u64,
+        url: String,
+    },
+    BackToPinnedUrl(u64),
+    /// Gives `profile` the threads' history `text` back, as it was before a thread's ✕.
+    ThreadHistory {
+        profile: u64,
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -440,7 +465,11 @@ impl Edit {
             | Edit::DeleteTask(_) => {}
             Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_) => {}
             Edit::RestoreBoard { tabs, .. } => tabs.iter_mut().for_each(|tab| tab.rekey(from, to)),
-            Edit::DeleteBoard { .. } => {}
+            Edit::DeleteBoard { .. }
+            | Edit::RestoreBoost { .. }
+            | Edit::DeleteBoost { .. }
+            | Edit::ThreadHistory { .. } => {}
+            Edit::Follow { tab, .. } | Edit::BackToPinnedUrl(tab) => id(tab),
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -484,6 +513,35 @@ impl Edit {
     /// Does the step, and returns the one that undoes it.
     pub(super) fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
+            Edit::RestoreBoost { profile, gone } => {
+                let changes = crate::boosts::with(|boosts| boosts.restore(profile, &gone));
+                shell.browser.show_boosts(changes, cx);
+                shell.list_boosts(cx);
+                let site = gone.site().to_owned();
+                Some(Edit::DeleteBoost { profile, site })
+            }
+            Edit::DeleteBoost { profile, site } => shell
+                .take_boost(profile, &site, cx)
+                .map(|gone| Edit::RestoreBoost { profile, gone }),
+            Edit::Follow { tab, url } => {
+                if !shell.has_tab(tab) {
+                    return None;
+                }
+                shell.browser.follow(tab, &url, cx);
+                Some(Edit::BackToPinnedUrl(tab))
+            }
+            Edit::BackToPinnedUrl(tab) => {
+                if !shell.has_tab(tab) {
+                    return None;
+                }
+                shell.take_back_to_pinned_url(tab, cx)
+            }
+            Edit::ThreadHistory { profile, text } => {
+                let was = shell.browser.agent_history(profile);
+                shell.browser.set_agent_history(profile, &text);
+                shell.filter(true, cx);
+                Some(Edit::ThreadHistory { profile, text: was })
+            }
             Edit::RestoreTask(agent) => {
                 shell
                     .browser
@@ -822,11 +880,11 @@ fn id_of(id: &mut u64, from: u64, to: u64) {
 }
 
 impl Shell {
-    /// Remembers `edit`, which undoes what the user just did, as `what`. Not in a private window,
-    /// which keeps nothing. What was undone before is gone, as in every app. If `what` takes
+    /// Remembers `edit`, which undoes what the user just did, as `what`. Not in a Blank Window,
+    /// which keeps nothing; a private window keeps it as any does, in its memory alone (#4409). What was undone before is gone, as in every app. If `what` takes
     /// something out of sight without a trace, the toast offers the Undo.
     pub(super) fn keep(&mut self, what: What, edit: Option<Edit>, cx: &mut Context<Self>) {
-        let Some(edit) = edit.filter(|_| !self.one_space()) else {
+        let Some(edit) = edit.filter(|_| !self.blank) else {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
@@ -877,7 +935,7 @@ impl Shell {
     /// Undoes the last step, or redoes it unless `undoing`; with `removals`, only while the next is
     /// a removal from history.
     fn step(&mut self, undoing: bool, removals: bool, cx: &mut Context<Self>) -> bool {
-        if self.one_space() {
+        if self.blank {
             return false;
         }
         let removal = |stack: &[Entry]| {
@@ -963,7 +1021,7 @@ impl Shell {
     /// The user closed the link preview over `closed.over`, which ⌘Z and ⇧⌘T open again, unless
     /// Redo closed it (`undone`), as the history has it already.
     pub fn preview_closed(&mut self, closed: Closed, undone: bool, cx: &mut Context<Self>) {
-        if self.one_space() {
+        if self.blank {
             return;
         }
         self.closed_preview = Some(closed.clone());
@@ -1057,7 +1115,7 @@ impl Shell {
         {
             self.browser.close(tab, false, cx);
             self.closed_preview = None;
-            self.closed_pinned = (!self.one_space()).then(|| join.clone());
+            self.closed_pinned = (!self.blank).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
         // The core closes a split's panes in their order, so they reopen last first.
@@ -1120,7 +1178,7 @@ impl Shell {
         };
         self.unpin_and_close(tab, cx);
         self.keep(What::REMOVE_TAB, Some(back.clone()), cx);
-        self.closed_pinned = (!self.one_space()).then_some(back);
+        self.closed_pinned = (!self.blank).then_some(back);
     }
 
     /// The core has no call that removes a pinned tab, so it's the two the other way takes: Unpin,
@@ -1527,6 +1585,28 @@ impl Shell {
             id: Some(id),
         });
         self.keep(What::DELETE_ARCHIVED, edit, cx);
+    }
+
+    /// Back to Pinned URL, or Reset for each of the Space's pinned tabs: each goes back to its
+    /// pinned URL at once, and one ⌘Z takes them to the pages they were on (#4409).
+    pub(super) fn back_to_pinned_url(&mut self, tabs: Vec<u64>, cx: &mut Context<Self>) {
+        let mut back: Vec<Edit> = (tabs.into_iter())
+            .filter_map(|tab| self.take_back_to_pinned_url(tab, cx))
+            .collect();
+        let edit = match back.len() {
+            0 | 1 => back.pop(),
+            _ => Some(Edit::Many(back)),
+        };
+        self.keep(What::BACK_TO_PINNED_URL, edit, cx);
+    }
+
+    /// Takes `tab` back to its pinned URL, and gives the step that takes it to the page it was
+    /// on, which follow can reach only on the web.
+    fn take_back_to_pinned_url(&mut self, tab: u64, cx: &mut Context<Self>) -> Option<Edit> {
+        let url = self.page(tab).url.to_string();
+        self.browser.back_to_pinned_url(tab, cx);
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        web.then_some(Edit::Follow { tab, url })
     }
 
     /// Empties the archive: its tabs, and the tasks it lists, which leave it as Delete from Archive

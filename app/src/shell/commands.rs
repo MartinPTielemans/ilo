@@ -1613,13 +1613,8 @@ impl Shell {
             Command::BackToPinnedUrl if self.agent_bar().is_some() => {
                 return self.agent_bar_primary(cx);
             }
-            Command::BackToPinnedUrl => return self.browser.back_to_pinned_url(self.selected, cx),
-            Command::ResetSpaceTabs => {
-                for tab in self.tabs_to_reset() {
-                    self.browser.back_to_pinned_url(tab, cx);
-                }
-                return;
-            }
+            Command::BackToPinnedUrl => return self.back_to_pinned_url(vec![self.selected], cx),
+            Command::ResetSpaceTabs => return self.back_to_pinned_url(self.tabs_to_reset(), cx),
             Command::ToggleMute => return self.toggle_mute(self.selected, cx),
             Command::MuteAll(muted) => return self.mute_all(muted, cx),
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),

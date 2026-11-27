@@ -925,7 +925,7 @@ impl Shell {
                 MenuEntry::new("Back to Favorite URL", page.away_from_pinned_url)
                     .shortcut(Command::BackToPinnedUrl, keys),
                 "back-to-pinned-url",
-                Box::new(move |shell, cx| shell.browser.back_to_pinned_url(tab, cx)),
+                Box::new(move |shell, cx| shell.back_to_pinned_url(vec![tab], cx)),
             ),
             replace_pinned_url(
                 tab,
@@ -1226,7 +1226,7 @@ impl Shell {
                 MenuEntry::new("Back to Pinned URL", page.away_from_pinned_url)
                     .shortcut(Command::BackToPinnedUrl, keys),
                 "back-to-pinned-url",
-                Box::new(move |shell, cx| shell.browser.back_to_pinned_url(tab, cx)),
+                Box::new(move |shell, cx| shell.back_to_pinned_url(vec![tab], cx)),
             ),
         ];
         // Arc's Pinned URL › Replace Pinned URL with Current and Edit….
@@ -1668,7 +1668,7 @@ impl Shell {
         items.push((
             key(back, Command::BackToPinnedUrl),
             "back-to-pinned-url",
-            Box::new(move |shell, cx| shell.browser.back_to_pinned_url(pane, cx)),
+            Box::new(move |shell, cx| shell.back_to_pinned_url(vec![pane], cx)),
         ));
         let pinned_url = items.len();
         items.push((
