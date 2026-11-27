@@ -58,6 +58,13 @@ pub struct MakerMark {
     pub dark: u32,
 }
 
+impl MakerMark {
+    /// Its ink in the light look or the dark.
+    pub fn ink(self, light: bool) -> gpui::Rgba {
+        gpui::rgba(if light { self.light } else { self.dark })
+    }
+}
+
 /// An item in a menu the host shows. A line between items has no title.
 #[derive(Clone)]
 pub struct MenuEntry {

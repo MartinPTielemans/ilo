@@ -174,11 +174,11 @@ pub struct Conversation {
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
-    /// The model it runs on, as the composer's model trigger reads it, with its assistant's mark:
+    /// The model it runs on, as the composer's model trigger reads it, after its maker's mark:
     /// the model's own name, its default's while it runs on that (Z54); then the same as the panel
     /// beside a page draws it; and whether its program takes another for the next message, so the
     /// trigger opens its menu. None for an outside agent's session.
-    pub model: Option<(&'static str, SharedString, SharedString, bool)>,
+    pub model: Option<(Option<MakerMark>, SharedString, SharedString, bool)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -1431,7 +1431,12 @@ impl Agents {
                     true => model_name(cli, &self.task_listing(cli), "").into(),
                     false => task.model.clone(),
                 };
-                (cli.glyph(), word.clone(), word, cli.switches_model())
+                (
+                    Maker::of(cli).mark(),
+                    word.clone(),
+                    word,
+                    cli.switches_model(),
+                )
             }),
         })
     }

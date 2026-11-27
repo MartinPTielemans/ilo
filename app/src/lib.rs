@@ -258,6 +258,7 @@ pub mod logging;
 pub mod menu;
 pub mod menu_bar_items;
 pub mod mini_bar;
+pub mod model_menu;
 pub mod motion;
 pub mod needs_you;
 pub mod notes;

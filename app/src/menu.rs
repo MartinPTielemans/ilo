@@ -2077,17 +2077,12 @@ impl ContextMenu {
         // A maker's mark in its own ink whatever the row's state, as its maker gives it, centred
         // on the icons' column with its clear space spilling past it.
         let mark = entry.mark.map(|mark| {
-            let ink = if shown.look.light {
-                mark.light
-            } else {
-                mark.dark
-            };
             svg()
                 .path(mark.path)
                 .size(px(mark.size))
                 .m(px((ICON - mark.size) / 2.))
                 .flex_none()
-                .text_color(rgba(ink))
+                .text_color(mark.ink(shown.look.light))
         });
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(

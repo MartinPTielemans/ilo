@@ -1819,6 +1819,7 @@ impl TalkView {
     fn inks(&self, look: &Look) -> choices::Inks {
         let palette = look.palette;
         choices::Inks {
+            light: palette.tone == Tone::Light,
             text: palette.text(TITLE),
             dim: palette.gray(SECONDARY),
             plate: palette.plate(BAR_CHIP),
@@ -3131,7 +3132,7 @@ impl TalkView {
                     at: self.model_drawn.clone(),
                     click,
                 };
-                (Some(mark), said, word, trigger)
+                (mark, said, word, trigger)
             });
         // Where the model's own word gives way, never under its first word's width.
         let model_least = match (&model, form.row.model_word) {
