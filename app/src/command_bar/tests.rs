@@ -3740,8 +3740,8 @@ impl Bar {
     }
 }
 
-/// ⇥ after typing makes it a thread's: the page the user is on goes with it as a chip, the rows
-/// give way to the composer's choices, which open at the level every thread starts at and on
+/// ⇥ after typing makes it a thread's, the page the user is on never with it (owner, 27 Nov:
+/// "never take the tab"): the rows give way to the composer's choices, which open at the level every thread starts at and on
 /// Settings' assistant and model, and ↩ closes the bar, then starts the thread with them. Nothing
 /// about tasks runs as the bar opens or takes keys: the host is asked only what it last learned.
 #[gpui::test]
@@ -3754,7 +3754,8 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     bar.keys("tab");
     assert_eq!(
         bar.chip_and_hint(),
-        (Some("Lisbon guide".into()), true, false)
+        (None, true, false),
+        "Ask took the page"
     );
     assert_eq!(bar.plates().0, 0, "the composer lists rows");
     assert_eq!(
@@ -3769,7 +3770,7 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     bar.keys("enter");
     assert_eq!(
         bar.calls(),
-        ["task claude flight here next friday under 150 on https://lisbon.example/guide"]
+        ["task claude flight here next friday under 150"]
     );
     assert!(!bar.is_open());
 }
@@ -4055,16 +4056,19 @@ fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     );
 }
 
-/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and ⌫ at the start takes the
-/// page's chip off before it leaves. Esc closes the composer as it closes the bar.
+/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and so does ⌫ at the start: the
+/// page shown never went with it. Esc closes the composer as it closes the bar.
 #[gpui::test]
 fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     let page = Some(("https://lisbon.example/guide", ""));
     let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
     bar.type_text("book it");
     bar.keys("tab");
-    // A page without a title is named by its site.
-    assert_eq!(bar.chip_and_hint().0.as_deref(), Some("lisbon.example"));
+    assert_eq!(
+        bar.chip_and_hint(),
+        (None, true, false),
+        "Ask took the page"
+    );
     bar.calls();
     bar.keys("shift-tab");
     assert_eq!(bar.chip_and_hint(), (None, false, true));
@@ -4074,16 +4078,13 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     bar.keys("tab");
     bar.keys("home backspace");
     assert_eq!(
-        bar.chip_and_hint(),
-        (None, true, false),
-        "⌫ didn't take the chip off first"
+        bar.chip_and_hint().1,
+        false,
+        "⌫ at the start didn't leave the ask"
     );
-    bar.keys("backspace");
-    assert_eq!(bar.chip_and_hint().1, false);
     assert_eq!(bar.input().0, "book it");
-    // Run without the page: nothing goes with the task.
-    bar.keys("tab");
-    bar.keys("home backspace enter");
+    // Nothing of the page goes with the task.
+    bar.keys("tab enter");
     assert!(bar.calls().contains(&"task claude book it".to_string()));
 
     let mut bar = Bar::with_agents(cx, &[("claude", None)], page);

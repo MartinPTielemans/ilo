@@ -195,7 +195,7 @@ impl Shell {
                 }
                 // The knot at rest: a thread in the Archive isn't at work.
                 Recent::Thread { title, .. } => (
-                    knot(FAVICON_DRAWN, &palette, None).into_any_element(),
+                    knot(FAVICON_DRAWN, &palette, None, None).into_any_element(),
                     title.clone(),
                     String::new(),
                 ),

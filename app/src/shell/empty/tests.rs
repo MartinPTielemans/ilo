@@ -521,6 +521,8 @@ fn resting_with_recents(
         shell.set_archived_tasks(vec![left(1, 1, 200.)], cx);
     });
     key_window(cx);
+    // The recents draw from the page's second frame, which a test delivers itself.
+    cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     assert!(field_focused(&shell, cx), "the field hasn't the keyboard");
     (shell, cx, host)
@@ -550,9 +552,10 @@ fn down_moves_into_the_recents_and_return_opens_the_row(cx: &mut TestAppContext)
         "↓ didn't move into the recents"
     );
     cx.simulate_keystrokes("enter");
+    let calls = host.take();
     assert!(
-        host.take().contains(&"restore archived 5".to_string()),
-        "↩ didn't reopen the first row's tab"
+        calls.contains(&"restore archived 5".to_string()),
+        "↩ didn't reopen the first row's tab: {calls:?}"
     );
     cx.simulate_keystrokes("down enter");
     assert!(

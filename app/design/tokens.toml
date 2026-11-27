@@ -2195,13 +2195,13 @@ light-rim = 0.09
 # A chip's menu hangs 4 under it, its names under the chip's word, 8 in (the names-only drawing).
 chip-inset = 8.0
 menu-drop = 4.0
-# The recents: one plate the bar's width, 12 under it, ink 0.04 at radius 14 in a rim of white
-# 0.09, of up to five rows 36 tall with a hairline between. A row is 14 in at each end: its
+# The recents: one plate the bar's width, 12 under it, ink 0.04 at the panel radius in a rim of
+# white 0.09, of up to five rows 36 tall with a hairline between. A row is 14 in at each end: its
 # favicon or the knot, 10 to the title, the site 8 after it and the time at its end, both in the
 # bar's dim. The row the keys are on is on the flat plate (#4401); one under the pointer on 0.05.
 recents = 5
 recents-gap = 12.0
-recents-radius = 14.0
+recents-radius = 16.0
 recents-fill = 0.04
 recents-rim = 0xffff_ff17
 recent-height = 36.0
