@@ -689,7 +689,6 @@ const ONE_LOOK: &[&str] = &[
     "dialog.rs",
     "shell/conversation.rs",
     "shell/themes.rs",
-    "glow.rs",
     "theme_picker.rs",
 ];
 

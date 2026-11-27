@@ -5811,16 +5811,7 @@ impl Shell {
                         spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
                         inset: true,
                     }])
-                    .bg(self.palette.underlay)
-                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
-                        self.foot_glow(
-                            space,
-                            self.width(),
-                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
-                            REVEAL_RADIUS,
-                        )
-                        .opacity(weight)
-                    }))
+                    .bg(self.window_fill())
                     .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)

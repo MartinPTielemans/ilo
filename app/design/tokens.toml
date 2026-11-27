@@ -1016,7 +1016,7 @@ sheet = 20.0
 ink = 0x161618
 paper = 0xf2f2f3
 # The window is the HUD window's material, behind the window, under black at `tint` on a dark
-# window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
+# window and white at `light-tint` on a light one, then the Space's tint (#4087). How see-through
 # it is is the user's, in three levels: Less, Standard (`tint`) and More. 0.44 is the dark scale's
 # floor, where Paper at 0.6 still holds 3:1, so there's no level under it and none between.
 tint-less = 0.64
@@ -1076,33 +1076,19 @@ stand-in = 0x303030
 # at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
 # HUD window's under those settings.
 material-solid = 0x333332
-# A Space's colour is to be a faint tint of the sidebar's glass, a few percent of it, flat: no
-# gradient, drawing nothing of its own, and never on a mark (#4401, #4400). The glow below goes
-# when the sidebar takes it (#4402).
+# A Space's colour is a faint tint of the sidebar's glass: its main colour at `space-tint` over
+# the whole window (`light-space-tint` on a light one), at the intensity a theme starts with and in
+# proportion to the picker's Intensity. It is flat, with no gradient and no glow, draws nothing of
+# its own and is never on a mark (#4401, #4400, #4402). The picker stays for now: a theme's other
+# colours stay stored and unused.
 space-tint = 0.04
 light-space-tint = 0.03
-# The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
-# ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
-# main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
-# way out; and a faint one `far-glow-width` by `far-glow-height` on the top right, the second
-# colour (or the main one) at `far-glow`, gone by `far-glow-fade`. The alphas are at the intensity
-# a theme starts with; a neutral theme's, under this HSL saturation, is a third as strong.
-gradient-alpha = 0.36
-neutral-gradient-alpha = 0.12
-neutral = 0.1
-glow-width = 560.0
-glow-height = 460.0
-glow-fade = 0.72
-far-glow-width = 380.0
-far-glow-height = 260.0
-far-glow = 0.1
-far-glow-fade = 0.7
 # What floats over the window: the command bar, a menu and the theme picker's panel, and a
 # dialog.
 overlay-dark = 0x1d1d1d
 dialog-dark = 0x272727
 # The light window: the same material under white, at each level (#4087), and its stand-in, as
-# the dark one's. The glow is a little fainter on it (#4089).
+# the dark one's.
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
@@ -1131,8 +1117,6 @@ light-overlay-fill-more = 0.62
 light-dialog-fill-less = 0.87
 light-dialog-fill = 0.77
 light-dialog-fill-more = 0.55
-light-gradient-alpha = 0.32
-light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as
 # the dark dialog is a step lighter than the dark overlay (ours). Every grey of the chrome is
 # neutral, the warm blacks and creams gone (#4401): each grey at its warm one's luminance, so
@@ -2334,7 +2318,7 @@ title-height = 36.0
 # The Spaces section (Arc 1.170 cap, one Space, and rec, three): a card per Space starts 28 after
 # the column, 240 wide, 24 apart and as tall as the window less 48 above and below, with Arc's
 # blue + 33 after the last, 30 across and halfway down, and the Library ends 37 after it, so it's
-# 216 + 264 a Space wide. The card is the Space's gradient at radius 16, with its list drawn as
+# 216 + 264 a Space wide. The card is the Space's tint at radius 16, with its list drawn as
 # the sidebar draws it, under its name's field. Arc's card has no search field over it.
 spaces-left = 28.0
 spaces-inset = 48.0
