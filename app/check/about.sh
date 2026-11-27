@@ -1,7 +1,7 @@
 # check.sh runs this at 420.
 # About ilo shows Settings on its About tab, and the Open of each of its Licence, Notices and
 # Libraries rows opens the file the build carries for it (tools/licences.sh) in a tab, which loads.
-# Off the Mac, where no menu bar holds ilo's menu, the footer's menu control before the + opens it
+# Off the Mac, where no menu bar holds ilo's menu, the footer's menu control before the Space button opens it
 # (#3148): escape closes it, and down and return in it run Settings…, which shows Settings.
 # Sync & Import, which fits its card, doesn't scroll under a scroll.
 # It names the engine's Chromium version wherever the engine carries one: the Mac's framework
