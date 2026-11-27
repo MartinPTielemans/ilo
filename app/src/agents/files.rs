@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use super::tier::Tier;
 use super::wall::Granted;
 
+#[cfg(unix)]
+pub mod give;
 pub mod read;
 #[cfg(unix)]
 pub mod resolve;
