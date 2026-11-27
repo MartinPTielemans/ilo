@@ -2188,9 +2188,7 @@ static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
   }
   browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
-  if (browser->sidebar_right) {
-    PlaceTitlebarSide(browser);
-  }
+  PlaceTitlebarSide(browser);
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -5300,13 +5298,17 @@ void host_show_window_buttons(void* ui_view, bool shown) {
 // puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
 // for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
 // class answers it for each window, and the rest of the window keeps its direction: the title,
-// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+// which is hidden, and the Window menu and Mission Control, which read the title, not this. A
+// window with its sidebar on the left answers left to right under an Arabic or Hebrew system too:
+// its buttons sit in the sidebar's header row, and the core reads the direction as the sidebar's
+// side, for the strip at its edge (core/platform/mac/window_views.mm).
 static char kSidebarRight;
 static IMP g_titlebar_direction;
 
 static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
-  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
-    return NSUserInterfaceLayoutDirectionRightToLeft;
+  if (NSNumber* right = objc_getAssociatedObject(self, &kSidebarRight)) {
+    return right.boolValue ? NSUserInterfaceLayoutDirectionRightToLeft
+                           : NSUserInterfaceLayoutDirectionLeftToRight;
   }
   return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
 }
@@ -5335,8 +5337,13 @@ static void PlaceTitlebarSide(Browser* browser) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
+  const NSUserInterfaceLayoutDirection was = window.windowTitlebarLayoutDirection;
+  objc_setAssociatedObject(window, &kSidebarRight, @(browser->sidebar_right),
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Only a change moves the buttons, so a window on the system's own side costs nothing more.
+  if (window.windowTitlebarLayoutDirection == was) {
+    return;
+  }
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
   // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
