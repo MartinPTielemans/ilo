@@ -17,6 +17,7 @@ use crate::palette::{BUTTON_PLATE, FIELD_PLATE, INK, PAPER, TEXT_PRIMARY, TEXT_S
 use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY, TEXT_TERTIARY};
+use crate::tokens::selected::plate;
 use crate::tokens::settings::form;
 use crate::tokens::settings::{MIN_HEIGHT, MIN_WIDTH, SEARCH_DIMMED};
 use crate::tokens::shell::ICON_INK;
@@ -200,10 +201,7 @@ impl Ink {
             icon: at(ICON_INK),
             field: at(FIELD_PLATE),
             button: at(BUTTON_PLATE),
-            shown: match dark {
-                true => rgba(form::SHOWN),
-                false => at(form::LIGHT_SHOWN),
-            },
+            shown: at(if dark { plate::DARK } else { plate::LIGHT }),
         }
     }
 }

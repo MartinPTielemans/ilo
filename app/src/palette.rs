@@ -23,6 +23,7 @@ use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
 use crate::tokens::icon_picker::{
     HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
+use crate::tokens::palette::LIGHT_PLATE_GRAY;
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INK_HOVER_MIX, INK_PRESSED_MIX, INTENSITY_FLOOR,
@@ -44,11 +45,10 @@ use crate::tokens::palette::{
 };
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, OVERLAY_DARK, PAPER};
-use crate::tokens::palette::{LIGHT_PLATE_GRAY, LIGHT_STATE_SELECTED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
-pub use crate::tokens::palette::{
-    STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
-};
+pub use crate::tokens::palette::{STATE_HOVERED, STATE_PRESSED, STATE_SELECTED_HOVERED};
+pub use crate::tokens::selected::plate::DARK as STATE_SELECTED;
+use crate::tokens::selected::plate::LIGHT as LIGHT_STATE_SELECTED;
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
 use crate::tokens::shell::{DROP, LIGHT_UNPAINTED, UNPAINTED};
@@ -1102,18 +1102,6 @@ impl Palette {
             Some(_) => darker(self.accent, ACCENT_PRESSED).into(),
             None => ink_states(self.accent, self.accent_label).1.into(),
         }
-    }
-
-    /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
-    /// the colour nearest `main` at its hue that reads on the bar, as the accent does, with Ink or
-    /// Paper on it.
-    pub fn site_accent(&self, main: Rgba) -> (Rgba, Rgba) {
-        let passes = |c: Rgba| {
-            contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
-                && contrast(c, self.overlay) >= GLYPH
-        };
-        let fill = nearest(main, passes).unwrap_or(self.accent);
-        (fill, label_on(fill))
     }
 
     /// Behind selected text in a field: the accent, faint. Without a theme the accent is the
