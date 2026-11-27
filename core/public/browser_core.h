@@ -1035,6 +1035,28 @@ typedef struct bc_arrange_state bc_arrange_state;
 typedef struct bc_arrange_element bc_arrange_element;
 typedef struct bc_point_element bc_point_element;
 
+// The words that say a page asks the user to prove they're human, lowercase, each ending in a
+// newline. An element's own name holding one, in any case, such as a frame's title, is a
+// CAPTCHA's: the agent's outline and bc_held_page's captcha read this list alone.
+#define BC_CAPTCHA_WORDS "captcha\nnot a robot\nverify you are human\nsecurity challenge\n"
+
+// What a held tab's page has that's the user's to do, for the app to end a hand-off once the page
+// has moved past the sign-in (held_page). No text, value or address of the page's, and never an
+// agent's to see.
+typedef struct bc_held_page {
+  // The page, one more for each page the tab commits after the hold began, from 1, so the app can
+  // tell a new page from one it was told of.
+  uint64_t document;
+  // A password field the user can reach, in the forms the password manager saw rendered or
+  // autofill parsed.
+  bool password;
+  // A field autofill parsed as autocomplete="one-time-code".
+  bool one_time_code;
+  // An element whose own name, not its text, holds one of BC_CAPTCHA_WORDS, such as a frame titled
+  // "reCAPTCHA".
+  bool captcha;
+} bc_held_page;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -1741,6 +1763,17 @@ typedef struct bc_host {
   // with BC_PDF_READ the document's |page_count| and how many of the pages asked for it read,
   // |pages_read|, fewer than asked past the document's end. Else both 0.
   void (*pdf_read_done)(void* context, bc_id read, int result, int page_count, int pages_read);
+  // bc_profile_pick_for_site's answer for |request|, once a call: |profile| and BC_PICK_HISTORY,
+  // or 0 and 0 when none of the profiles had visited the site or a profile's history ended before
+  // it answered. The user's alone: an agent's answer names the profile it opened in and never why.
+  void (*profile_picked)(void* context, uint64_t request, bc_id profile, int why);
+  // What a held tab's page has now (bc_held_page), from a task of its own: once each page the tab
+  // commits after the hold began has loaded and the password manager saw its forms rendered, then
+  // once more each time a later form or frame of that page turns one of its facts true. Held
+  // tabs only, never the page the hold began on, and nothing while the tab isn't held. A page the
+  // password manager sees nothing of, one not over http or https or an empty one, isn't reported.
+  // Last, so the slots before it keep their places.
+  void (*held_page)(void* context, bc_id tab, const bc_held_page* page);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1978,12 +2011,16 @@ BC_EXPORT void bc_space_move(bc_id space, bc_id after);
 // bc_window_undo_delete_space brings it back the agent's.
 
 // Makes an empty Space named |name| for the agent with the id |agent| and the name |agent_name|,
-// UTF-8, as its client gives them, in the profile the core started with, after the others.
-// bc_space_set_profile puts it in another. The user's actions never call this: New Space makes the
-// user's. Returns 0, making none, if |agent| or |agent_name| is empty. Then spaces_changed.
+// UTF-8, as its client gives them, in |profile|, or with 0 in the profile the core started with,
+// after the others. It is in |profile| from the start, which loads first if it hasn't; until it
+// has, bc_agent_open_tab there opens nothing. An agent has one Space a profile (#4376): if it has
+// one in |profile|, that one is returned and none is made. The user's actions never call this: New
+// Space makes the user's. Returns 0, making none, if |agent| or |agent_name| is empty or |profile|
+// isn't one of bc_profiles. Then spaces_changed.
 BC_EXPORT bc_id bc_space_create_for_agent(const char* name,
                                           const char* agent,
-                                          const char* agent_name);
+                                          const char* agent_name,
+                                          bc_id profile);
 
 // Copies the id of the agent the Space belongs to into |agent| as bc_space_name does, or nothing,
 // an empty string, for the user's own. It's the one the agent's client gave, stable across its
@@ -2026,12 +2063,14 @@ BC_EXPORT bool bc_agent_release_tab(const char* agent, bc_id tab);
 // how many it had. Agent code calls it.
 BC_EXPORT size_t bc_agent_disconnected(const char* agent);
 
-// Opens a tab loading the http(s) |url| at the top of the Today tabs of the Space of the agent with
-// the id |agent|, without showing it: no window shows another Space or tab, and no page takes the
-// keyboard, because of it. Returns 0, opening none, for any other URL, an agent without a Space or
-// with no window open. The agent's session in the tab starts, as bc_agent_may_act's does, and
-// tab_opened tells of the tab, then spaces_changed. Agent code calls it.
-BC_EXPORT bc_id bc_agent_open_tab(const char* agent, const char* url);
+// Opens a tab loading the http(s) |url| at the top of the Today tabs of the Space in |profile| of
+// the agent with the id |agent|, or with 0 of its Space made last, without showing it: no window
+// shows another Space or tab, and no page takes the keyboard, because of it. Returns 0, opening
+// none, for any other URL, an agent without a Space there, one whose profile hasn't loaded yet, a
+// |profile| that isn't one of bc_profiles, or with no window open. The agent's session in the tab
+// starts, as bc_agent_may_act's does, and tab_opened tells of the tab, then spaces_changed. Agent
+// code calls it.
+BC_EXPORT bc_id bc_agent_open_tab(const char* agent, bc_id profile, const char* url);
 
 // Loads the http(s) |url| in |tab| as bc_tab_follow does, if it's in the Space of the agent with
 // the id |agent|, and returns whether it does: never another URL. Agent code calls it after
@@ -2526,6 +2565,24 @@ BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* page
 // loaded.
 BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
                                        const char* text, size_t max);
+
+// Why bc_profile_pick_for_site picked the profile it did: the one whose history visited the site
+// last.
+#define BC_PICK_HISTORY 1
+
+// Picks the profile for an agent's tab at |url| among the |count| |profiles| the user lets it use
+// (#4376): the one whose history visited the URL's host, its site as bc_url_site names it, or the
+// site's www host last, the first given on a tie. History is read on its own thread, off the UI
+// thread, by the history's own index of addresses, so a pick costs the same however long the
+// history is, and only in profiles that have loaded: none is loaded to look, and a private
+// session's is never read. Then profile_picked with |request|, once, whatever comes of each
+// profile's read: the profile and BC_PICK_HISTORY, or 0 and 0 when none of them has the site, for
+// the app's own choice. Nothing of the history is answered but which profile won. Agent code calls
+// it, and the agent's answer names the profile and never why.
+BC_EXPORT void bc_profile_pick_for_site(const bc_id* profiles,
+                                        size_t count,
+                                        const char* url,
+                                        uint64_t request);
 
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,

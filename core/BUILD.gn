@@ -590,6 +590,21 @@ source_set("agent_page_area") {
   ]
 }
 
+# The strips at a window's sides a page leaves to the UI, apart so browser_core_unittests tests the
+# rule alone.
+source_set("page_edge_strips") {
+  sources = [
+    "page_edge_strips.cc",
+    "page_edge_strips.h",
+  ]
+
+  # Its header's geometry is its callers' too, and the geometry's headers need base's.
+  public_deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
+}
+
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
 source_set("mini_player_place") {
   sources = [
@@ -701,6 +716,19 @@ source_set("agent_close_rule") {
   ]
 }
 
+# What a held tab's page has that's the user's to do, apart so browser_core_unittests tests the rule
+# alone (#4361).
+source_set("held_page_rule") {
+  sources = [
+    "held_page_rule.cc",
+    "held_page_rule.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/accessibility",
+  ]
+}
+
 # PDFium's own headers include each other from its root, which its public config doesn't add, so
 # Chromium's //pdf adds it as this does.
 config("pdfium_includes") {
@@ -764,6 +792,8 @@ source_set("agent_space_rule") {
     "agent_space_rule.cc",
     "agent_space_rule.h",
   ]
+  # Its header holds a base::OnceCallback.
+  public_deps = [ "//base" ]
 }
 
 # Which permissions a page in an agent's Space is refused, what its activity entry carries and
@@ -1033,6 +1063,8 @@ source_set("browser_core") {
     "handed_back.h",
     "held_keys.cc",
     "held_keys.h",
+    "held_page.cc",
+    "held_page.h",
     "hooks.h",
     "history_deletions.cc",
     "history_deletions.h",
@@ -1189,8 +1221,10 @@ source_set("browser_core") {
     ":idle_check",
     ":agent_page_area",
     ":mini_player_place",
+    ":page_edge_strips",
     ":other_tabs",
     ":agent_close_rule",
+    ":held_page_rule",
     ":tab_background",
     ":agent_file_field_rule",
     ":agent_permission_rule",
@@ -1556,6 +1590,7 @@ test("browser_core_unittests") {
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_close_rule_unittest.cc",
+    "held_page_rule_unittest.cc",
     "tab_background_unittest.cc",
     "agent_file_field_rule_unittest.cc",
     "pdf_read_unittest.cc",
@@ -1582,6 +1617,7 @@ test("browser_core_unittests") {
     "link_card_rule_unittest.cc",
     "agent_page_area_unittest.cc",
     "mini_player_place_unittest.cc",
+    "page_edge_strips_unittest.cc",
     "share_snapshot_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
@@ -1647,6 +1683,7 @@ test("browser_core_unittests") {
     ":board_store",
     ":ax_text",
     ":agent_close_rule",
+    ":held_page_rule",
     ":tab_background",
     ":agent_file_field_rule",
     ":pdf_read",
@@ -1668,6 +1705,7 @@ test("browser_core_unittests") {
     ":idle_check",
     ":agent_page_area",
     ":mini_player_place",
+    ":page_edge_strips",
     ":other_tabs",
     ":popup_hold",
     ":protected_move_rule",

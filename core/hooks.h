@@ -54,6 +54,10 @@ class WebContents;
 struct MediaStreamRequest;
 }
 
+namespace autofill {
+class FormData;
+}
+
 namespace extensions {
 class InstallPromptData;
 }
@@ -330,6 +334,12 @@ extern bool (*g_browser_core_no_passwords)(content::WebContents* contents);
 // chrome/browser/ui/autofill/chrome_autofill_client.cc: whether |contents|'s page is to show none
 // of autofill's suggestions: addresses, cards, passwords and passkeys.
 extern bool (*g_browser_core_no_autofill)(content::WebContents* contents);
+
+// components/password_manager/content/browser/content_password_manager_driver.cc: |frame| loaded,
+// and the password manager is handed |forms|, those of its forms it sees rendered, possibly none.
+// The core reads a held tab's page from them (//browser_core/held_page.h).
+extern void (*g_browser_core_password_forms_rendered)(content::RenderFrameHost* frame,
+                                                      const std::vector<autofill::FormData>& forms);
 
 // chrome/browser/webauthn/chrome_authenticator_request_delegate.cc: whether Chrome is to cancel
 // the passkey request of |contents|'s page, which |asks| the user in Chrome's dialog, once it

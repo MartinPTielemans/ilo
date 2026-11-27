@@ -84,6 +84,9 @@ pub enum IloKind {
     /// allows. `tab` is the page the task stood on, or 0 with none. The count its line says is
     /// the app's own.
     Helpers { tab: u64, limit: HelpersLimit },
+    /// ilo ended the task's run before its first answer, as its assistant started with a tool
+    /// that isn't ilo's own (AP17). It's what happened, so it needs nothing of the user.
+    NotOurTools,
     /// The task started, or went on, without files the user gave it, as ilo couldn't limit its
     /// assistant to them (#4101).
     StartedWithout { left: LeftOut },
@@ -246,7 +249,8 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         // runs is settled from the start.
         IloKind::YouStopped { .. } => vec![IloButton::PagesBack],
         // What happened, which no press undoes: the files are given again at a task's start.
-        IloKind::StartedWithout { .. }
+        IloKind::NotOurTools
+        | IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }
         | IloKind::NotRestarted { .. }
@@ -290,7 +294,8 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } | IloKind::YouStopped { .. } => None,
-        IloKind::StartedWithout { .. }
+        IloKind::NotOurTools
+        | IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }
         | IloKind::NotRestarted { .. }

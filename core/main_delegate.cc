@@ -48,6 +48,7 @@
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/focus_leaving.h"
+#include "browser_core/held_page.h"
 #include "browser_core/hooks.h"
 #include "browser_core/host.h"
 #include "browser_core/install_question.h"
@@ -832,6 +833,7 @@ void Install(const bc_host& host) {
     return IsAgentTab(contents) || sync::InSignInWindow(contents);
   };
   g_browser_core_no_autofill = &IsAgentTab;
+  g_browser_core_password_forms_rendered = &held_page::FormsRendered;
   g_browser_core_no_permission = &NoPermission;
   g_browser_core_permission_refused = &PermissionRefused;
   g_browser_core_takes_permission_request = &TakesPermissionRequest;

@@ -10,6 +10,10 @@ use crate::agents::tier::IN_USE_TOLD;
 /// changes what it does.
 const REFUSED: [&str; 6] = ["navigate", "click", "type", "select", "press_key", "upload"];
 
+/// A thread's own tools a page in use refuses below Full access, as it does any tool not placed:
+/// a search given the tab takes the page to its results, and a strand works in the tab it's given.
+const THREADS_REFUSED: [&str; 2] = [tools::SEARCHED, tools::STRAND];
+
 /// What a call of `tool` on tab 20 says.
 fn said(tool: &str) -> Value {
     match tool {
@@ -37,8 +41,8 @@ fn asked(browser: &Made) -> (usize, usize) {
 }
 
 /// Every tool an agent from outside or a thread is offered, and every step a run takes, is on
-/// exactly one of the two lists, and neither list names anything else: a new one fails here until
-/// it's placed, and is refused on a page in use until then.
+/// exactly one list, answered or refused, and no list names anything else: a new one fails here
+/// until it's placed, and is refused on a page in use until then.
 #[test]
 fn every_tool_and_step_is_answered_or_refused_on_a_page_in_use() {
     let mut every: Vec<String> = ["claude-code", "task-1"]
@@ -47,15 +51,16 @@ fn every_tool_and_step_is_answered_or_refused_on_a_page_in_use() {
         .collect();
     every.extend(tools::STEPS.map(String::from));
     for name in &every {
-        let on = [&IN_USE_ANSWERS[..], &REFUSED[..]]
+        let on = [&IN_USE_ANSWERS[..], &REFUSED[..], &THREADS_REFUSED[..]]
             .iter()
             .filter(|list| list.contains(&name.as_str()))
             .count();
-        assert_eq!(on, 1, "{name} is on {on} of the two lists");
+        assert_eq!(on, 1, "{name} is on {on} of the lists");
     }
     // The file tools are a Unix system's alone until the path floor runs elsewhere.
     let here = |name: &&&str| cfg!(unix) || !tools::FILE_TOOLS.contains(*name);
-    for name in IN_USE_ANSWERS.iter().chain(&REFUSED).filter(here) {
+    let lists = (IN_USE_ANSWERS.iter().chain(&REFUSED)).chain(&THREADS_REFUSED);
+    for name in lists.filter(here) {
         assert!(every.iter().any(|each| each == name), "{name} is no tool");
     }
 }

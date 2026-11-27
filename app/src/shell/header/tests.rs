@@ -153,7 +153,7 @@ fn site_controls_open_at_the_corner_with_the_sidebar_hidden(cx: &mut TestAppCont
         shell.sidebar_hidden = true;
         shell.run(Command::SiteControls, "ui", cx);
     });
-    let corner = point(px(16.), px(8.));
+    let corner = point(px(8.), px(8.));
     assert_eq!(host.site_controls.take(), [(1, Place::Corner(corner))]);
 }
 

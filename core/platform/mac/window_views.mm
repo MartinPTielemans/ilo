@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/page_edge_strips.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
 #include "content/public/browser/page_tile_mac.h"
@@ -77,11 +78,19 @@
 @property(strong, nonatomic) NSHashTable<NSView*>* awaited;
 // How many switches have kept pages, so the limit on keeping them ends only the last one's.
 @property(nonatomic) NSUInteger holds;
+// Lets the leaving pages go at the window's next frame once the pages shown have drawn, and what
+// runs then (letLeavingGoAtNextFrame:).
+@property(strong, nonatomic) CADisplayLink* leavingGoes API_AVAILABLE(macos(14.0));
+@property(copy, nonatomic) void (^leavingGone)(void);
 // What the panes are drawn at, about the centre of their frames (ScalePages); 0 is 1.
 @property(nonatomic) double pageScale;
+// Whether the window is a Little ilo one, which has no edge strips (SetLittle).
+@property(nonatomic) BOOL little;
 - (void)layOutPage;
 - (void)scalePages;
 - (void)letLeavingGo;
+- (void)letLeavingGoAtNextFrame:(void (^)(void))gone;
+- (void)keepLeaving;
 @end
 
 @implementation BrowserCoreWindowView
@@ -93,15 +102,32 @@
 @synthesize leaving = _leaving;
 @synthesize awaited = _awaited;
 @synthesize holds = _holds;
+@synthesize leavingGoes = _leavingGoes;
+@synthesize leavingGone = _leavingGone;
 @synthesize pageScale = _pageScale;
+@synthesize little = _little;
 
 - (BOOL)isFlipped {
   return YES;
 }
 
 // Through the pages a switch is leaving, as if they had gone: they only stand in for the pages it
-// shows until those draw.
+// shows until those draw. The strip along the sidebar's side is the UI's, over a page that reaches
+// it too, in full screen as well (page_edge_strips.h). The app lays each browser window's title bar
+// out on its sidebar's side, right to left for one on the right and left to right otherwise, under
+// an Arabic or Hebrew system too (host.mm's PlaceTitlebarSide), which the core reads as the
+// sidebar's side; a Little ilo window has no strip, as macOS resizes the window itself.
 - (NSView*)hitTest:(NSPoint)point {
+  NSPoint local = [self convertPoint:point fromView:self.superview];
+  const browser_core::EdgeSides sides = browser_core::SidebarEdge(
+      self.little,
+      self.window.windowTitlebarLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft);
+  if (self.uiView && [self mouse:local inRect:self.bounds] &&
+      browser_core::InPageEdgeStrip(local.x, NSWidth(self.bounds), browser_core::kPageEdgeStrip,
+                                    sides)) {
+    NSView* ui = [self.uiView hitTest:local];
+    return ui ? ui : self.uiView;
+  }
   NSView* hit = [super hitTest:point];
   if (!hit || self.leaving.count == 0) {
     return hit;
@@ -113,7 +139,6 @@
   if (!leaving) {
     return hit;
   }
-  NSPoint local = [self convertPoint:point fromView:self.superview];
   for (NSView* subview in [self.subviews reverseObjectEnumerator]) {
     if (![self.leaving containsObject:subview]) {
       if (NSView* under = [subview hitTest:local]) {
@@ -125,12 +150,49 @@
 }
 
 - (void)letLeavingGo {
+  [self keepLeaving];
   for (NSView* page in self.leaving.allObjects) {
     if (page.superview == self) {
       [page removeFromSuperview];
     }
   }
   [self.leaving removeAllObjects];
+}
+
+// Lets the leaving pages go at the window's next frame, then runs |gone|. On the Mac a page's frame
+// counts as presented once the GPU process has committed it, before the window server shows it, so
+// letting go then showed the page under them with only its background for a frame (#4353). Every
+// presentation answer the core can ask for, Chrome's tab-switch timing's included, comes at that
+// commit, so the next frame is the first at which the page is known to be on screen.
+- (void)letLeavingGoAtNextFrame:(void (^)(void))gone {
+  [self keepLeaving];
+  if (@available(macOS 14, *)) {
+    self.leavingGone = gone;
+    self.leavingGoes = [self displayLinkWithTarget:self selector:@selector(nextFrame:)];
+    [self.leavingGoes addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    return;
+  }
+  [self letLeavingGo];
+  gone();
+}
+
+- (void)nextFrame:(CADisplayLink*)link API_AVAILABLE(macos(14.0)) {
+  void (^gone)(void) = self.leavingGone;
+  const bool any = self.leaving.count > 0;
+  [self letLeavingGo];
+  if (gone && any) {
+    gone();
+  }
+}
+
+// Stops a release letLeavingGoAtNextFrame: asked for. The display link holds this view until then;
+// a window closed meanwhile stops it, and the limit on keeping pages lets them go.
+- (void)keepLeaving {
+  if (@available(macOS 14, *)) {
+    [self.leavingGoes invalidate];
+    self.leavingGoes = nil;
+  }
+  self.leavingGone = nil;
 }
 
 // After AppKit's pass rather than by autoresizing, which would resize the page twice: resizing the
@@ -331,6 +393,9 @@ void HoldLeaving(BrowserCoreWindowView* view,
   const base::TimeTicks since = base::TimeTicks::Now();
   // check.sh's switch-frames run reads these lines.
   fprintf(stderr, "browser: switch keeps the page it left\n");
+  // An earlier switch's pages, drawn and waiting for the next frame, stay over these until they
+  // draw too.
+  [view keepLeaving];
   __weak BrowserCoreWindowView* weak_view = view;
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
@@ -345,9 +410,10 @@ void HoldLeaving(BrowserCoreWindowView* view,
         [shown_in.awaited removeObject:drawn];
       }
       if (shown_in.awaited.count == 0 && shown_in.leaving.count > 0) {
-        fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
-                (base::TimeTicks::Now() - since).InMillisecondsF());
-        [shown_in letLeavingGo];
+        [shown_in letLeavingGoAtNextFrame:^{
+          fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
+                  (base::TimeTicks::Now() - since).InMillisecondsF());
+        }];
       }
     }));
   }
@@ -382,6 +448,10 @@ void AddWindowViews(views::Widget* widget, void* ui_view) {
   // Without this, the content view's hit test and accessibility would skip the page and the UI
   // (engine/patches/ours/chromium-core-embedded-view.patch).
   content.embeddedView = view;
+}
+
+void SetLittle(views::Widget* widget, bool little) {
+  WindowView(widget).little = little;
 }
 
 void ShowPages(views::Widget* widget,

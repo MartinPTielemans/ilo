@@ -940,6 +940,9 @@ impl AssetSource for Assets {
         if let Some(drawn) = crate::product::drawn_mark(path) {
             return Ok(Some(Cow::Owned(drawn.into_bytes())));
         }
+        if let Some(gapped) = crate::product::gapped_mark(path) {
+            return Ok(Some(Cow::Owned(gapped.into_bytes())));
+        }
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)

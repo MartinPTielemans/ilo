@@ -1,0 +1,40 @@
+Hands the core the forms the password manager sees rendered in a frame, as the frame loads, for it
+to read what a held tab's page has that's the user's to do (//browser_core/hooks.h,
+//browser_core/held_page.h): the app ends an agent's hand-off once its page has moved past the
+sign-in. The renderer's password agent sends them after every load, an empty list for a page with
+no sign-in form, which Chrome reads as a sign-in that succeeded; the core reads the same step. It
+changes nothing the password manager does.
+
+--- a/components/password_manager/content/browser/content_password_manager_driver.cc
++++ b/components/password_manager/content/browser/content_password_manager_driver.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "components/password_manager/content/browser/content_password_manager_driver.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <utility>
+ 
+@@ -45,6 +46,12 @@
+ 
+ using autofill::mojom::FocusedFieldType;
+ 
++// browser_core: a held tab's page tells the core what it has once its forms
++// rendered (//browser_core/hooks.h).
++void (*g_browser_core_password_forms_rendered)(
++    content::RenderFrameHost* frame,
++    const std::vector<autofill::FormData>& forms) = nullptr;
++
+ namespace password_manager {
+ 
+ namespace {
+@@ -550,6 +557,9 @@
+   for (auto& form : forms)
+     SetFrameAndFormMetaData(render_frame_host_, form);
+ 
++  if (g_browser_core_password_forms_rendered) {
++    g_browser_core_password_forms_rendered(render_frame_host_, forms);
++  }
+   GetPasswordManager()->OnPasswordFormsRendered(this, forms);
+ }
+ 

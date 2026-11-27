@@ -26,6 +26,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
+#include "browser_core/page_edge_strips.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
 #include "browser_core/tab.h"
@@ -493,6 +494,10 @@ struct Slot {
   std::unique_ptr<PaneKeyboard> keyboard;
   raw_ptr<aura::Window> page = nullptr;
   raw_ptr<aura::Window> devtools = nullptr;
+  // The page and DevTools whose windows the edge strips last answered for, so a layout that only
+  // moves them walks none of their windows again.
+  raw_ptr<aura::Window> strips_page = nullptr;
+  raw_ptr<aura::Window> strips_devtools = nullptr;
   // From each edge of the window's content to the slot's, kept as the window resizes.
   gfx::Insets insets;
   // With DevTools docked, where the page goes in the slot, from its top-left.
@@ -517,6 +522,68 @@ gfx::Insets InsetsOf(const gfx::Rect& frame, const gfx::Size& window) {
   return gfx::Insets::TLBR(frame.y(), frame.x(), window.height() - frame.bottom(),
                            window.width() - frame.right());
 }
+
+// Hands the pointer in the strips along a browser window's sides (page_edge_strips.h), from a page
+// reaching them to the UI's holder under the pane, in full screen too: over a page, the UI would
+// not hear the hidden sidebar's edge. Answers for the pane's window and the windows content makes
+// in it on this thread, as content's own answers its hit test itself
+// (LegacyRenderWidgetHostHWND::OnNCHitTest), and Windows passes HTTRANSPARENT on to the window
+// under it on the same thread.
+class EdgeStrips : public ui::HWNDMessageFilter {
+ public:
+  EdgeStrips() = default;
+  EdgeStrips(const EdgeStrips&) = delete;
+  EdgeStrips& operator=(const EdgeStrips&) = delete;
+  ~EdgeStrips() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+
+  // Answers for |pane| and the windows in it on this thread, from now, and for each window content
+  // makes in them after, which tell the window holding them as they appear (WM_PARENTNOTIFY). A
+  // window's filters are a set, so a window already answered for stays as it is.
+  void Watch(HWND pane) {
+    Add(pane);
+    EnumChildWindows(pane, &EdgeStrips::Each, reinterpret_cast<LPARAM>(this));
+  }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param,
+                     LRESULT* result) override {
+    if (message == WM_PARENTNOTIFY && LOWORD(w_param) == WM_CREATE) {
+      // Never an answer: the window still takes the message, and its parent hears it in turn.
+      Add(reinterpret_cast<HWND>(l_param));
+      return false;
+    }
+    if (message != WM_NCHITTEST) {
+      return false;
+    }
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    if (!root) {
+      return false;
+    }
+    POINT at{static_cast<short>(LOWORD(l_param)), static_cast<short>(HIWORD(l_param))};
+    ScreenToClient(root, &at);
+    RECT client{};
+    GetClientRect(root, &client);
+    const double strip =
+        kPageEdgeStrip * GetDpiForWindow(root) / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    if (InPageEdgeStrip(at.x, client.right, strip, EdgeSides::kBoth)) {
+      *result = HTTRANSPARENT;
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  static BOOL CALLBACK Each(HWND child, LPARAM strips) {
+    reinterpret_cast<EdgeStrips*>(strips)->Add(child);
+    return TRUE;
+  }
+
+  void Add(HWND window) {
+    if (window && GetWindowThreadProcessId(window, nullptr) == GetCurrentThreadId()) {
+      ui::HWNDSubclass::AddFilterToTarget(window, this);
+    }
+  }
+};
 
 class WindowViews : public views::WidgetObserver,
                     public aura::WindowObserver,
@@ -674,6 +741,8 @@ class WindowViews : public views::WidgetObserver,
     Detach(holder, slot.devtools, staying);
     slot.page = nullptr;
     slot.devtools = nullptr;
+    slot.strips_page = nullptr;
+    slot.strips_devtools = nullptr;
     if (slot.widget) {
       slot.widget->Hide();
     }
@@ -766,6 +835,14 @@ class WindowViews : public views::WidgetObserver,
     HWND hwnd = views::HWNDForWidget(slot.widget.get());
     SetWindowPos(hwnd, HWND_TOP, pixels.x(), pixels.y(), pixels.width(), pixels.height(),
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    // Here, as the page content made its window for is in the slot by now, once for each page the
+    // slot takes: a window content moves in from another slot tells no one, but one it makes joins
+    // as it appears, and one already answered for keeps its answer wherever it goes.
+    if (slot.strips_page != slot.page || slot.strips_devtools != slot.devtools) {
+      edge_strips_.Watch(hwnd);
+      slot.strips_page = slot.page;
+      slot.strips_devtools = slot.devtools;
+    }
     // The pages fill the slot in its own DIPs, which Windows' Text size makes fewer than the app's
     // points: in those the page ran past the window by the text scale (#3621).
     const float to_page = scale / PageScale(slot);
@@ -882,6 +959,12 @@ class WindowViews : public views::WidgetObserver,
       }
       if (slot.devtools == window) {
         slot.devtools = nullptr;
+      }
+      if (slot.strips_page == window) {
+        slot.strips_page = nullptr;
+      }
+      if (slot.strips_devtools == window) {
+        slot.strips_devtools = nullptr;
       }
     };
     std::ranges::for_each(panes_, forget);
@@ -1022,6 +1105,7 @@ class WindowViews : public views::WidgetObserver,
   Slot preview_;
   // How its page is drawn for the card's motion (DrawPreview).
   Drawn preview_drawn_;
+  EdgeStrips edge_strips_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -1079,6 +1163,8 @@ views::NativeWidget* NewNativeWidget(views::Widget* widget, base::RepeatingClosu
   // Chrome or the app (bc_window_toggle_full_screen) asks, each through Window::LeaveFullScreen.
   return new views::DesktopNativeWidgetAura(widget);
 }
+
+void SetLittle(views::Widget*, bool) {}
 
 void AddWindowViews(views::Widget* widget, void* ui_view) {
   HWND ui = static_cast<HWND>(ui_view);
