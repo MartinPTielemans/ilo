@@ -95,7 +95,8 @@ at=$(drawn "sync sign-in") || fail "Settings › Sync & Import didn't draw Sign 
 # which now offers Google.
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In didn't start signing in"
-await "^browser: sync request GET $server_url/.well-known/openid-configuration\$" ||
+# The core's sync lines come through LOG(ERROR), after Chromium's [pid:tid:…] prefix.
+await "^\(\[[^]]*\] \)*browser: sync request GET $server_url/.well-known/openid-configuration\$" ||
   fail "Sign In didn't read the server's discovery"
 await 'browser: sync sign-in loaded /authorize$' ||
   fail "the sign-in window didn't load the server's page"
@@ -154,7 +155,7 @@ send clickkey $(drawn_after "sync done" "$on")
   fail "the server linked more than the one Google account"
 
 # Settings lists the Google sign-in once, and Remove…, asked first, unlinks it.
-await "^browser: sync request GET $server_url/api/identities\$" ||
+await "^\(\[[^]]*\] \)*browser: sync request GET $server_url/api/identities\$" ||
   fail "signed in, Settings didn't ask which sign-ins the account has"
 at=$(drawn_after "sync remove-google" "$on") ||
   fail "Settings didn't show the account's Google sign-in"
@@ -167,7 +168,7 @@ if [ "$(uname)" = Linux ]; then
   expect '^browser: dialog confirm at ' "Remove's question didn't say where its button is"
   send clickkey $(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)
   expect '^browser: dialog confirmed$' "a click on Remove didn't remove the Google sign-in"
-  await "^browser: sync request DELETE $server_url/api/identities/google\$" ||
+  await "^\(\[[^]]*\] \)*browser: sync request DELETE $server_url/api/identities/google\$" ||
     fail "Remove didn't ask the server to unlink Google"
   for _ in $(seq 50); do
     [ "$(stored "SELECT count(*) FROM identities")" = 0 ] && break
