@@ -364,8 +364,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         // Its assistant's program missing, the card's fix is its row's Install and Sign In (#4100).
         Some("not-installed") => {
             cards[0].status = "Claude isn't installed.".into();
-            cards[0].fuller = false;
-            cards[0].lead = 0;
             cards[0].dot = Dot::Ended;
             cards[0].word = Word::Interrupted;
             cards[0].fix = Some((
