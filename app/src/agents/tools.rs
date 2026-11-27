@@ -106,6 +106,9 @@ pub const BINDING_AT_FULL: &str = "Never pay, place an order, book, send a messa
      what they said: the item, its size or options, and the total with shipping within any limit \
      they gave. When it doesn't, don't place it: call ask with the difference.";
 
+/// hand_off as a thread of the browser's own has it: it returns at once (#4363).
+const TASK_HAND_OFF: &str = "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this returns at once: you're told when they hand the tab back. Until then the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.";
+
 /// What a task's CLI is told at `tier`: `TASK_INSTRUCTIONS`, with Full access's own words for the
 /// steps that bind the user there.
 pub fn task_instructions(tier: super::tier::Tier) -> String {
@@ -154,6 +157,11 @@ pub fn list(agent: &str) -> Value {
             true => {
                 // Only the product's own threads, a helper's calls among them, say why a step.
                 noted(tools);
+                // A thread is told when its tab is back, so its hand_off doesn't wait (#4363).
+                let hand_off = tools.iter_mut().find(|tool| tool["name"] == "hand_off");
+                if let Some(hand_off) = hand_off {
+                    hand_off["description"] = TASK_HAND_OFF.into();
+                }
                 tools.extend(task_tools())
             }
             // A task's pages live in the task, in a Space the user doesn't see, so only an agent

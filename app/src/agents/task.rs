@@ -3388,6 +3388,17 @@ impl Agents {
         self.wait_for_answer(key, cx);
     }
 
+    /// Tells the thread `key` that a tab it handed off is back, or why it isn't, as a steer
+    /// arrives (#4363): now while it works or once its turn ended, which takes it up again, and
+    /// else with the user's next turn.
+    pub(super) fn tell_back(&mut self, key: &str, text: String, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
+        let now = matches!(task.state, State::Working | State::Done { .. });
+        self.tell_task(key, text, now, cx);
+    }
+
     /// The session of `agent`'s whose call `call` is under way.
     pub(super) fn session_of(&self, agent: &str, call: u64) -> Option<&Task> {
         (self.tasks.tasks.iter()).find(|task| {

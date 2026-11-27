@@ -1019,6 +1019,15 @@ fn shut_line(field: &str) -> Option<&'static str> {
     }
 }
 
+/// What waits for a held tab to come back.
+enum Waiter {
+    /// The agent's call, which its answer ends.
+    Call(mpsc::Sender<ToolResult>),
+    /// One of the browser's own threads, whose hand_off returned at once: the answer is told to
+    /// it as a steer is (#4363).
+    Thread,
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -1035,7 +1044,7 @@ struct Held {
     back: Option<String>,
     /// The handoff's or ask_for_tab's call, which waits for the tab to come back, while its
     /// agent's session lasts.
-    reply: Option<mpsc::Sender<ToolResult>>,
+    reply: Option<Waiter>,
     /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
     timer: Option<Task<()>>,
     /// Whether the browser handed the tab off for its page's sign-in, which the agent's call
@@ -2468,6 +2477,15 @@ impl Agents {
                 let question = self.next_request;
                 self.next_request += 1;
                 let why = page::clip(why, 200);
+                // A thread of the browser's own goes on at once and is told when the tab is back;
+                // an outside client's call waits, as it can be told nothing between calls.
+                let wait = match is_task(&agent) {
+                    true => {
+                        _ = reply.send(ToolResult::text(handed_off_now(tab)));
+                        Waiter::Thread
+                    }
+                    false => Waiter::Call(reply),
+                };
                 let held = Held {
                     agent,
                     connection,
@@ -2475,7 +2493,7 @@ impl Agents {
                     why,
                     question,
                     back: None,
-                    reply: Some(reply),
+                    reply: Some(wait),
                     timer: None,
                     sign_in: false,
                     taken: false,
@@ -2655,7 +2673,8 @@ impl Agents {
                 self.next_request += 1;
                 let held = self.held.get_mut(&tab).expect("held, as matched");
                 (held.question, held.back) = (question, Some(page::clip(why, 200)));
-                (held.connection, held.call, held.reply) = (connection, id, Some(reply));
+                (held.connection, held.call, held.reply) =
+                    (connection, id, Some(Waiter::Call(reply)));
                 self.carry(tab, held::Event::Ask { holder }, life, actions, cx);
             }
             "request" => {
@@ -3252,7 +3271,7 @@ impl Agents {
             why,
             question,
             back: None,
-            reply: Some(reply),
+            reply: Some(Waiter::Call(reply)),
             timer: None,
             sign_in: true,
             taken: false,
@@ -3512,6 +3531,8 @@ impl Agents {
         });
         // Its task's conversation says so, while the hold's entry still names whose it is.
         self.held_lines(tab, event, life);
+        // What a thread of the browser's own is told, once the core lets go of the tab.
+        let mut told = None;
         if actions.has(A::ANSWER) || actions.has(A::DROP) {
             let held = self
                 .held
@@ -3527,7 +3548,14 @@ impl Agents {
                 if held.sign_in {
                     answer.text = format!("{SIGNED_IN} {}", answer.text);
                 }
-                _ = reply.send(answer);
+                match reply {
+                    Waiter::Call(reply) => _ = reply.send(answer),
+                    // A thread the user stopped is told nothing more.
+                    Waiter::Thread if !matches!(event, held::Event::Stop { .. }) => {
+                        told = Some(answer.text)
+                    }
+                    Waiter::Thread => {}
+                }
             }
         }
         if life == held::Life::Free {
@@ -3545,6 +3573,9 @@ impl Agents {
         }
         if actions.has(A::HAND_BACK) {
             self.browser.hand_back(tab);
+        }
+        if let Some(text) = told {
+            self.tell_back(&agent, text, cx);
         }
         if actions.has(A::NOTE) {
             // check.sh reads the first two.
@@ -4087,7 +4118,7 @@ impl Agents {
             why,
             question,
             back: None,
-            reply: Some(reply),
+            reply: Some(Waiter::Call(reply)),
             timer: None,
             sign_in: false,
             taken: false,
@@ -5906,6 +5937,15 @@ fn off_limits_refused(why: &'static str) -> Refused {
         kind: (why == NOT_WEB_PAGE).then_some(tools::Kind::NotWebPage),
         ..Refused::new(why)
     }
+}
+
+/// What a thread of the browser's own hears from hand_off at once: the tab is the user's until
+/// it's told otherwise (#4363).
+fn handed_off_now(tab: u64) -> String {
+    format!(
+        "Tab {tab} is the user's now, and calls on it are refused until they're done. You'll be \
+         told when it's back. Go on with what doesn't need it, or end your turn."
+    )
 }
 
 /// What a call of an agent's the user stopped answers.

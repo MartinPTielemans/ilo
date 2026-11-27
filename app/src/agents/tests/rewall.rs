@@ -143,7 +143,7 @@ fn logged(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
 }
 
 /// The messages the stand-in's run `to` was sent, once it has `count` of them.
-fn sent(run: &Run, to: usize, count: usize) -> Vec<String> {
+pub(super) fn sent(run: &Run, to: usize, count: usize) -> Vec<String> {
     let path = beside(&run.program, &format!("in.{to}"));
     for _ in 0..500 {
         let text = std::fs::read_to_string(&path).unwrap_or_default();

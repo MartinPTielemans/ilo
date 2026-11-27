@@ -8670,18 +8670,18 @@ mod tasks {
         }
     }
 
-    /// Once the user hands the page back the wait is over, and the next step moves as any does.
+    /// A thread's hand-off returns at once (#4363), so nothing waits: while the user has page 31,
+    /// the thread's next step, on another page, moves as any does. Its being told when the page is
+    /// back is lines.rs's, with a run to tell.
     #[gpui::test]
-    fn the_next_step_moves_again_after_the_hand_back(cx: &mut TestAppContext) {
+    fn the_next_step_moves_at_once_after_a_hand_off(cx: &mut TestAppContext) {
         for refused in [false, true] {
             let (agents, _browser, agent) = at_work_past(refused, cx);
             let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
             let handed = begun(&agents, &agent, "hand_off", reason, cx);
+            assert!(!handed.try_recv().expect("the hand-off waited").error);
             assert_eq!(moving(&agents, &agent, cx), [""; 0]);
-            agents.update(cx, |agents, cx| agents.hand_back(31, cx));
-            cx.run_until_parked();
-            assert!(!handed.recv().unwrap().error);
-            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 31 }), cx);
+            let _looks = begun(&agents, &agent, "snapshot", json!({ "tab": 30 }), cx);
             assert_eq!(
                 moving(&agents, &agent, cx),
                 ["snapshot"],
@@ -14861,6 +14861,23 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
     );
     assert!(tools::names("claude-code").contains(&"sort_tabs_by_site".to_string()));
     assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
+}
+
+/// A thread of the browser's own is told its hand_off returns at once, as it's told when the tab
+/// is back; an outside client's waits, as nothing reaches it between calls (#4363).
+#[test]
+fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
+    let description = |agent: &str| {
+        let tools = tools::list(agent);
+        let tools = tools.as_array().unwrap();
+        let hand_off = tools
+            .iter()
+            .find(|tool| tool["name"] == "hand_off")
+            .unwrap();
+        hand_off["description"].as_str().unwrap().to_string()
+    };
+    assert!(description("task-1").contains("this returns at once"));
+    assert!(description("claude-code").contains("this waits until"));
 }
 
 mod fenced;

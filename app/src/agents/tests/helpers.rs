@@ -688,7 +688,8 @@ fn a_helpers_step_under_way_keeps_moving_while_the_tasks_own_waits_on_the_user(
     (run.agents).update(cx, |agents, cx| {
         agents.task_action(&agent, TaskAction::TakeOver(first), cx)
     });
-    assert!(handed.try_recv().is_err(), "the hand-off was answered");
+    // The thread's hand-off returned at once (#4363); the tab is still the user's.
+    assert!(!handed.try_recv().expect("the hand-off waited").error);
 
     let talk = run.talk(&agent, cx);
     assert_eq!(talk.live, crate::agents::task::Live::Handed);
