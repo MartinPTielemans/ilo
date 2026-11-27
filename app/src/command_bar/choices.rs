@@ -320,7 +320,8 @@ pub fn row(row: Row) -> gpui::Div {
         .child(round)
 }
 
-/// The round button in `form`: Start or Send, or Stop's square, told where it's drawn by `at`.
+/// The round button in `form`: Start or Send, or Stop, an icon button (#4402), bare with its
+/// square in the text's ink and a plate under the pointer, told where it's drawn by `at`.
 pub fn round_button(
     form: Form,
     inks: Inks,
@@ -329,8 +330,9 @@ pub fn round_button(
     at: Option<Box<dyn Fn(Bounds<Pixels>) + 'static>>,
 ) -> Stateful<Div> {
     let (fill, ink) = match round {
-        Round::Go { ready: true } | Round::Stop => (inks.primary, inks.on_primary),
+        Round::Go { ready: true } => (inks.primary, inks.on_primary),
         Round::Go { ready: false } => (inks.plate, inks.dim),
+        Round::Stop => (gpui::transparent_black(), inks.text),
     };
     let face = match round {
         Round::Stop => div()
@@ -351,6 +353,9 @@ pub fn round_button(
         .justify_center()
         .rounded_full()
         .bg(fill)
+        .when(round == Round::Stop, |stop| {
+            stop.hover(move |stop| stop.bg(ink.opacity(crate::tokens::button::ICON_HOVERED)))
+        })
         .on_click(go)
         .child(face)
         .when_some(at, |round, told| {
