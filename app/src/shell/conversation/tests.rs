@@ -1557,7 +1557,15 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         site: "tickets.example".into(),
         with: SignedInWith::Saved("ana@example.com".into()),
     };
-    assert_eq!(said(&signed_in), "signed in to tickets.example");
+    assert_eq!(
+        said(&signed_in),
+        "filled and sent the sign-in form on tickets.example"
+    );
+    // Its second line is a label: the login it filled, with no full stop (N5).
+    assert_eq!(
+        super::words::body(&signed_in, "tickets.example").as_deref(),
+        Some("With your saved login, ana@example.com")
+    );
     let order = IloKind::Stopped {
         tab: 30,
         at: "Place order".into(),
@@ -1903,7 +1911,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
     const VERBS: [&str; 10] = [
-        "stopped", "signed", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
+        "stopped", "filled", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
         "revoked",
     ];
     let every = [

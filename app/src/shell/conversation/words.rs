@@ -138,7 +138,11 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         } => ("handed this step on".into(), Some(site.to_string())),
         IloKind::Yours { .. } => ("handed this step to you".into(), None),
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
-        IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
+        // ilo knows the form went, not that the site let the user in (N5, B6 struck).
+        IloKind::SignedIn { site, .. } => (
+            "filled and sent the sign-in form on".into(),
+            Some(site.to_string()),
+        ),
         IloKind::TierChanged { to, .. } => {
             (format!("· You set this thread to {}", to.label()), None)
         }
@@ -374,8 +378,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
     match kind {
         IloKind::Stopped { why, tier, .. } => Some(tier::why_line(*why, *tier, at)),
         IloKind::SignedIn { with, .. } => Some(match with {
-            SignedInWith::Saved(account) => format!("With your saved login, {account}."),
-            SignedInWith::Extension(name) => format!("With {name}."),
+            // Labels, so no full stop (N5).
+            SignedInWith::Saved(account) => format!("With your saved login, {account}"),
+            SignedInWith::Extension(name) => format!("With {name}"),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::YouStopped { .. } => None,
