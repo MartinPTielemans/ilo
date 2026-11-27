@@ -1925,6 +1925,14 @@ library-open-plate = 0.2
 light-library-open-plate = 0.16
 library-open-glyph = 1.0
 plus-plate = 0.1
+# The Space button at the foot's right (#4400), where the + was: the Space's mark at the glyph's
+# size and a chevron after it, on the +'s plate under the pointer and while its menu is up. Its
+# menu hangs from it, right edges together. A Space with no glyph shows its first letter,
+# uppercased, at this share of the glyph's box, here and in the menu's rows (Proposed).
+space-button-pad = 6.0
+space-button-gap = 3.0
+space-button-chevron = 10.0
+space-letter = 0.75
 # A Space's dot is 7 across and the dots are 10 apart. A Space with an icon keeps the pitch it
 # had: the redesign draws dots alone.
 space-pitch = 17.0

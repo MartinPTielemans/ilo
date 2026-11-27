@@ -5318,9 +5318,8 @@ impl Shell {
             .children(self.recent_download_rows(cx))
             .children((!self.blank).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
-            .children((!self.one_space()).then(|| self.plus_button(cx)))
+            .children(self.space_button(cx))
             .children(self.menu_control.then(|| self.menu_button(cx)))
-            .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))
     }

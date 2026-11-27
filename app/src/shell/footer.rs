@@ -15,7 +15,10 @@ use super::{
     space_order::{Along, DraggedSpace},
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
-use crate::tokens::shell::{FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, PLUS_PLATE};
+use crate::tokens::shell::{
+    FOOT_GLYPH, FOOT_PLATE, FOOT_PLATE_RADIUS, ICON_INK, LIBRARY_BUTTON, PLUS_PLATE,
+    SPACE_BUTTON_CHEVRON, SPACE_BUTTON_GAP, SPACE_BUTTON_PAD,
+};
 use crate::tooltip::{Anchor, Tip};
 
 /// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
@@ -304,6 +307,56 @@ impl Shell {
             )
     }
 
+    /// The Space button at the foot's right (#4400): the Space shown's mark and a chevron, whose
+    /// menu lists every Space and what the + made. It wears the +'s plate under the pointer and
+    /// while its menu is up.
+    pub(super) fn space_button(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let space = self.spaces.iter().find(|space| space.id == self.space)?;
+        let ink = self.palette.glyph(ICON_INK);
+        Some(
+            div()
+                .id(SPACE_BUTTON)
+                .when(self.a11y, |button| {
+                    button
+                        .button_named(space.name.clone())
+                        .pressed_by_mouse_down(true, false)
+                })
+                .absolute()
+                .right(px(plus_right()))
+                .bottom(px((FOOTER_HEIGHT - FOOT_PLATE) / 2.))
+                .w(px(space_button_width()))
+                .h(px(FOOT_PLATE))
+                .px(px(SPACE_BUTTON_PAD))
+                .flex()
+                .items_center()
+                .gap(px(SPACE_BUTTON_GAP))
+                .rounded(px(FOOT_PLATE_RADIUS))
+                .block_mouse_except_scroll()
+                .when(self.plus_lit(), |button| {
+                    button.bg(self.palette.plate(PLUS_PLATE))
+                })
+                .hover(|style| style.bg(self.palette.plate(PLUS_PLATE)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, window, cx| shell.space_switcher(window, cx)),
+                )
+                .child(self.button_frame(SPACE_BUTTON))
+                .child(crate::space_icon::mark(
+                    &space.icon,
+                    &space.name,
+                    FOOT_GLYPH,
+                    ink.into(),
+                ))
+                .child(
+                    svg()
+                        .path("icons/chevrons-up-down.svg")
+                        .size(px(SPACE_BUTTON_CHEVRON))
+                        .flex_none()
+                        .text_color(ink),
+                ),
+        )
+    }
+
     /// Off the Mac, the control before the + that opens ilo's menu, which the Mac's menu bar holds
     /// (#3148). It keeps its plate while its menu is up, as the name row keeps its fill.
     pub(super) fn menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -316,7 +369,7 @@ impl Shell {
                 button.aria_active_descendant()
             })
             .absolute()
-            .right(px(PLUS_INSET + NAV_PITCH))
+            .left(px(super::library::LIBRARY_BACK_INSET + LIBRARY_BUTTON))
             .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
             .size(px(NAV_SIZE))
             .flex()
@@ -358,6 +411,14 @@ impl Shell {
         });
         self.hover_tip(tip, cx);
     }
+}
+
+/// The Space button's key among the buttons' frames, and its id.
+pub(super) const SPACE_BUTTON: &str = "space-button";
+
+/// How wide the Space button is: its mark and chevron and the room round them.
+pub(super) fn space_button_width() -> f32 {
+    2. * SPACE_BUTTON_PAD + FOOT_GLYPH + SPACE_BUTTON_GAP + SPACE_BUTTON_CHEVRON
 }
 
 /// The menu control's key among the buttons' frames, and its id.

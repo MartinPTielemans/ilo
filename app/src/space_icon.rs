@@ -97,6 +97,39 @@ impl<'a> SpaceIcon<'a> {
     }
 }
 
+/// The first letter of a Space's `name`, uppercased, which marks a Space with no glyph, or with
+/// an emoji, which marks are no longer drawn as (#4400). What the Space keeps is left as it is.
+pub fn letter(name: &str) -> String {
+    (name.trim().chars().next())
+        .map(|first| first.to_uppercase().collect())
+        .unwrap_or_default()
+}
+
+/// A Space's mark, drawn `size` across in `ink`: its glyph, else its name's first letter in the
+/// UI font. Every place that marks a Space draws it so (#4400).
+pub fn mark(icon: &str, name: &str, size: f32, ink: gpui::Hsla) -> gpui::AnyElement {
+    use gpui::{FontWeight, IntoElement, ParentElement, Styled, div, px, svg};
+    match SpaceIcon::parse(icon).glyph_path() {
+        Some(path) => svg()
+            .path(path)
+            .size(px(size))
+            .flex_none()
+            .text_color(ink)
+            .into_any_element(),
+        None => div()
+            .size(px(size))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(size * crate::tokens::shell::SPACE_LETTER))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(ink)
+            .child(letter(name))
+            .into_any_element(),
+    }
+}
+
 /// Whether a Space's or a tab's `icon`, as the core keeps it, is one the sidebar draws: the one
 /// test the picker's trash, Remove Icon and the name's place go by, so none offers to remove what
 /// isn't there. A glyph this build doesn't know draws the dot, so it counts as none.

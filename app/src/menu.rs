@@ -475,7 +475,7 @@ fn panel_width(
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
-    let icons = items.iter().any(|&at| entries[at].icon.is_some());
+    let icons = (items.iter()).any(|&at| entries[at].icon.is_some() || entries[at].mark.is_some());
     let lead = lead + if icons { ICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
     let out = items.iter().any(|&at| entries[at].out);
@@ -513,6 +513,16 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
 /// be at any pick, so its title never moves under the pointer.
 fn marked(entry: &MenuEntry) -> bool {
     entry.checked || entry.stays.is_some()
+}
+
+/// How wide the menu of `entries` is, without its submenus, as `lay_out` makes its panel in
+/// `window`'s text, for a menu that hangs from a control by its right edge.
+pub(crate) fn root_width(entries: &[MenuEntry], window: &Window) -> f32 {
+    let items: Vec<usize> = (0..entries.len())
+        .filter(|&at| entries[at].parent.is_none() && !entries[at].alternate)
+        .collect();
+    let checks = items.iter().any(|&at| marked(&entries[at]));
+    panel_width(entries, &items, checks, &measure(window))
 }
 
 /// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
@@ -2063,13 +2073,31 @@ impl ContextMenu {
                 .text_color(secondary)
                 .into_any_element(),
         });
-        let icon = entry.icon.map(|icon| {
-            svg()
-                .path(icon)
-                .size(px(ICON))
-                .flex_none()
-                .text_color(secondary)
-        });
+        // A Space with no glyph of its own shows its first letter in the glyph's box.
+        let icon = match (entry.icon, &entry.mark) {
+            (Some(icon), _) => Some(
+                svg()
+                    .path(icon)
+                    .size(px(ICON))
+                    .flex_none()
+                    .text_color(secondary)
+                    .into_any_element(),
+            ),
+            (None, Some(mark)) => Some(
+                div()
+                    .size(px(ICON))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(ICON * crate::tokens::shell::SPACE_LETTER))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(secondary)
+                    .child(mark.clone())
+                    .into_any_element(),
+            ),
+            (None, None) => None,
+        };
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(
                 svg()

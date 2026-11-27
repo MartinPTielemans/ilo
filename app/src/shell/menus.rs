@@ -91,6 +91,8 @@ pub struct MenuEntry {
     pub stays: Option<crate::menu::Stays>,
     /// The icon before its title, as the add menu's rows have.
     pub icon: Option<&'static str>,
+    /// The letter in the icon's place, for a Space with no glyph of its own.
+    pub mark: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -130,6 +132,7 @@ impl MenuEntry {
             out: false,
             stays: None,
             icon: None,
+            mark: None,
         }
     }
 
@@ -1870,6 +1873,67 @@ impl Shell {
             }),
             cx,
         );
+        self.plus_menu = self.menu_open;
+        cx.notify();
+    }
+
+    /// The Space button's menu (#4400): every Space, the one shown checked, with its mark and its
+    /// ⌃ number, then after a line what the + made. It hangs from the button, right edges
+    /// together, above it.
+    pub(super) fn space_switcher(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(frame) = (self.button_frames.borrow())
+            .get(super::footer::SPACE_BUTTON)
+            .copied()
+        else {
+            return;
+        };
+        let keys = user_keys(cx);
+        let mut items: Vec<(MenuEntry, MenuAction)> = Vec::new();
+        let spaces = (self.spaces.iter()).filter(|space| space.agent.is_empty());
+        for (index, space) in spaces.enumerate() {
+            let id = space.id;
+            let mut entry = MenuEntry::named(space.name.clone(), true).checked(id == self.space);
+            match crate::space_icon::SpaceIcon::parse(&space.icon).glyph_path() {
+                Some(path) => entry.icon = Some(path),
+                None => entry.mark = Some(crate::space_icon::letter(&space.name).into()),
+            }
+            if index < 9 {
+                entry = entry.shortcut(Command::SelectSpace(index), keys);
+            }
+            items.push((entry, Box::new(move |shell, cx| shell.show_space(id, cx))));
+        }
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        let mut made = vec![
+            ("New Space…", Command::NewSpace),
+            ("New Folder…", Command::NewFolder),
+            ("New Split View", Command::AddSplit),
+            ("New Board", Command::NewBoard),
+        ];
+        if self.new_note {
+            made.push(("New Note", Command::NewNote));
+        }
+        self.read_boosts_of(self.field_tab(), cx);
+        if let Some(title) = self.boost_entry(self.field_tab()) {
+            let command = match title {
+                "Edit Boost…" => Command::EditBoost,
+                _ => Command::NewBoost,
+            };
+            made.push((title, command));
+        }
+        let split = self.selected != 0 && self.panes(self.selected).len() < MAX_PANES;
+        for (title, command) in made {
+            let enabled = command != Command::AddSplit || split;
+            let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "footer", cx));
+            items.push((MenuEntry::new(title, enabled), action));
+        }
+        let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
+        let width = crate::menu::root_width(&entries, window);
+        let foot = frame.top() - gpui::px(crate::menu::FROM_CONTROL);
+        let at = gpui::point(
+            frame.right() - gpui::px(width),
+            foot - gpui::px(crate::menu::height(&entries)),
+        );
+        self.show_menu(items, at, None, cx);
         self.plus_menu = self.menu_open;
         cx.notify();
     }
