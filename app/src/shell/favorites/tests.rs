@@ -668,10 +668,11 @@ fn a_shown_tile_in_developer_mode_takes_its_icons_look_and_not_its_pages_colour(
     });
 }
 
-/// A tab's row in Developer Mode keeps the plain plate under the mode's outline, and takes its
-/// page's colour in the plate's place with the mode off, as its tile does.
+/// A tab's row in Developer Mode keeps the plain plate under the mode's outline. With the mode off
+/// it's the pane, the open tab's look (#4398), with no outline and no page colour: only a
+/// favourite's tile takes its page's colour.
 #[gpui::test]
-fn a_shown_row_in_developer_mode_keeps_the_plain_plate_and_not_its_pages_colour(
+fn a_shown_row_keeps_the_plain_plate_in_developer_mode_and_is_the_pane_without_it(
     cx: &mut TestAppContext,
 ) {
     let (shell, cx) = with_coloured_pages(cx);
@@ -682,10 +683,16 @@ fn a_shown_row_in_developer_mode_keeps_the_plain_plate_and_not_its_pages_colour(
     assert!(within(bounds, row), "{bounds:?} isn't in {row:?}");
     shell.read_with(cx, |shell, _| {
         assert_eq!(shell.page_fill(10), None);
+        assert!(!shell.pane_shows(), "Developer Mode's row showed the pane");
         assert_eq!(plate, Some(shell.palette.shown(0.)));
     });
     let (outline, plate) = shown_at_a_local_page(&shell, cx, 10, false);
     assert_eq!((outline, plate), (None, None));
-    let own = shell.read_with(cx, |shell, _| shell.page_fill(10));
-    assert_eq!(own.map(|own| hex(own.into())), Some(PAGE));
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.page_fill(10), None);
+        assert!(
+            shell.pane_shows(),
+            "the row with the mode off isn't the pane"
+        );
+    });
 }
