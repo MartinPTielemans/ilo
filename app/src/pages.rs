@@ -147,22 +147,33 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
         arrangement_misfits: None,
         arrangement_off: None,
         recent: None,
+        sensitive: None,
     };
     update_app(|cx| {
         // The app keeps the Boosts, so its window says what the core can't.
         let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
-        let ((boostable, boost), (misfits, off), recent) =
-            shell.map_or(((false, None), (None, None), None), |shell| {
+        let ((boostable, boost), (misfits, off), recent, private) =
+            shell.map_or(((false, None), (None, None), None, true), |shell| {
                 let shell = shell.read(cx);
                 let recent = shell.recent_switch(tab, cx);
-                (shell.boost_state(tab), shell.arrangement_note(tab), recent)
+                let private = shell.private();
+                (
+                    shell.boost_state(tab),
+                    shell.arrangement_note(tab),
+                    recent,
+                    private,
+                )
             });
+        // The Agents keep the marks, so the window says what the core can't (#4369).
+        let agents = browser::agents::global(cx).filter(|_| !private);
+        let sensitive = agents.and_then(|agents| agents.read(cx).tab_sensitive(tab, cx));
         let site = site_controls::Site {
             boostable,
             boost,
             arrangement_misfits: misfits.map(Into::into),
             arrangement_off: off.map(Into::into),
             recent,
+            sensitive,
             ..site
         };
         site_controls::changed(tab, site, cx)

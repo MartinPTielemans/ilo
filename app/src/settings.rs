@@ -3934,6 +3934,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.sensitive_sites(agents, cx));
         access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
@@ -4237,6 +4238,55 @@ impl Settings {
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
             Block::Under(under),
+        ]
+    }
+
+    /// Sensitive sites (#4369): each profile's, its profile named with two or more, each with
+    /// Remove, the way out of a mark the user or a sign-in made, and what the list does. A later
+    /// sign-in with a bank or government ID marks a removed site again.
+    fn sensitive_sites(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::sensitive;
+        let look = &self.look;
+        let profiles = crate::ids(bc::bc_profiles);
+        let several = profiles.len() > 1;
+        let model = agents.read(cx);
+        let marked: Vec<(String, String, Option<SharedString>)> = (profiles.into_iter())
+            .flat_map(|profile| {
+                let folder = crate::agents_core::profile_folder(profile);
+                let name = several.then(|| crate::name(bc::bc_profile_name, profile));
+                (model.sensitive_sites(&folder).into_iter())
+                    .map(move |site| (folder.clone(), site, name.clone()))
+            })
+            .collect();
+        let mut rows: Vec<gpui::Div> = (marked.into_iter().enumerate())
+            .map(|(index, (folder, site, name))| {
+                let (agents, gone) = (agents.clone(), site.clone());
+                // The words table's SS8.
+                let remove = self
+                    .button(("agent-sensitive-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("unmark {site}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| {
+                            agents.mark_sensitive(&folder, &gone, false, cx)
+                        })
+                    });
+                let text = sensitive::row(&site, name.as_deref());
+                line_row(look, text, None, vec![remove.into_any_element()])
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(line_row(
+                look,
+                sensitive::NONE,
+                Some(sensitive::NONE_LINE.into()),
+                Vec::new(),
+            ));
+        }
+        vec![
+            Block::Heading(sensitive::HEADING.into()),
+            Block::Group(group(look, rows)),
+            Block::Under(div().child(foot(look, sensitive::FOOT))),
         ]
     }
 

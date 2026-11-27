@@ -828,6 +828,14 @@ fn stops(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Stop> {
     agents.read_with(cx, |agents, _| agents.stops(&key))
 }
 
+/// The user's bank, chase.com, marked sensitive in "Default", so an agent's use there is refused
+/// below Full access.
+fn sensitive_bank(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive("Default", "chase.com", true, cx)
+    });
+}
+
 /// Checks `answer` is a refusal, at once, of the act `what` for `why`, which nothing asked about
 /// and Claude Code's session shows as `at`.
 fn refused(
@@ -4293,11 +4301,15 @@ fn a_download_at_look_only_is_refused_and_leaves_no_file(cx: &mut TestAppContext
     assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
     assert_eq!(shown(&agents, cx), None);
 }
-/// A bank's site is refused below Full access, at Look only too, each time and logged, and opens
-/// once the user gives Full access.
+/// A site marked sensitive is refused below Full access, at Look only too, each time and logged,
+/// and opens once the user gives Full access.
 #[gpui::test]
-fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
+fn a_sensitive_site_opens_only_at_full_access(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
+    let profile = browser.space_profile(0);
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive(&profile, "chase.com", true, cx)
+    });
     let open = |cx: &mut TestAppContext| {
         call(
             &agents,
@@ -4312,7 +4324,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -4321,7 +4333,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         (
             "open_tab".into(),
             "chase.com".into(),
-            "Using a bank site isn't part of Work on pages.".into()
+            "Using a sensitive site isn't part of Work on pages.".into()
         )
     );
     give(&agents, Tier::Look, cx);
@@ -4330,7 +4342,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -8134,6 +8146,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         let opening = call(
             &agents,
             &agent,
@@ -8936,6 +8949,7 @@ mod tasks {
             Some(shop_tree()),
             cx,
         );
+        sensitive_bank(&agents, cx);
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
         traced(
@@ -10843,6 +10857,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         // A refusal left unsettled, which the stop settles.
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(
@@ -12258,6 +12273,7 @@ mod sessions {
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        sensitive_bank(&agents, cx);
         let opening = call_on(
             &agents,
             2,
@@ -14916,6 +14932,7 @@ mod permission_stopped;
 mod rewall;
 #[cfg(unix)]
 mod searches;
+mod sensitive;
 mod sign_ins;
 #[cfg(unix)]
 mod strands;
