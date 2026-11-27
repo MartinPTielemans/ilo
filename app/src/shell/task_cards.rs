@@ -913,7 +913,7 @@ impl Shell {
     pub(super) fn run_chip(&mut self, agent: SharedString, chip: Chip, cx: &mut Context<Self>) {
         match chip {
             Chip::Retry => self.browser.task(agent, TaskAction::Retry, cx),
-            Chip::Assistant(cli, Offer::Get) => {
+            Chip::Assistant(cli, Offer::Get | Offer::Update) => {
                 log!("browser: assistant install page {} via sidebar", cli.id());
                 self.browser.open_page(cli.install_page(), cx);
             }

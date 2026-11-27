@@ -271,6 +271,9 @@ pub trait Browser {
     );
     /// The URL the address bar goes to for `text`: the page it names, else a search for it.
     fn url_for(&self, text: &str) -> Option<String>;
+    /// The URL of a search for `words` with the default search engine of `space`'s profile, even
+    /// when they name a page, or None if it has none.
+    fn search_url(&self, space: u64, words: &str) -> Option<String>;
     /// The agent hands the tab to the user, who holds it from agents until they hand it back
     /// (bc_agent_hand_off). Whether it did.
     fn hand_off(&self, agent: &str, tab: u64) -> bool;
@@ -504,6 +507,11 @@ struct Act {
     call: u64,
     /// What the activity log names it, as `tools::describe` knows it.
     action: &'static str,
+    /// Whether it's the open or navigate a search makes, whose entries are the search's, with
+    /// neither its words nor the engine's site (Z46).
+    searched: bool,
+    /// The strand of its thread's that made it, task-N-K, as its entries name it; else empty.
+    strand: String,
     /// The tab, or 0 for open_tab, which makes it.
     tab: u64,
     /// Where open_tab and navigate go.
@@ -711,6 +719,8 @@ struct Acting {
     wait: Option<WaitText>,
     /// Its call's entry in the log, which says so if its answer carries a site's notes, or 0.
     entry: u64,
+    /// Whether it's a search's, whose entries are the search's (Z46).
+    searched: bool,
 }
 
 /// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
@@ -776,6 +786,9 @@ pub struct Activity {
     pub tier: SharedString,
     /// The site whose notes its answer carried (#4122), by its note's name, or empty.
     pub notes: SharedString,
+    /// The strand of its thread's that did it, task-N-K, or empty: `agent` is then its thread's,
+    /// whose tabs and access a strand's calls are under.
+    pub strand: SharedString,
 }
 
 static NEXT_ENTRY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -814,11 +827,17 @@ pub fn task_answers(cli: runner::Cli) -> String {
 }
 
 /// Whether `agent` is a ⌘T task's own id, task-N, which earlier builds kept answers under and no
-/// task keeps for good.
+/// task keeps for good, or one of its strands', task-N-K.
 fn is_task_id(agent: &str) -> bool {
-    agent
-        .strip_prefix("task-")
-        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+    let number = |number: &str| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+    agent.strip_prefix("task-").is_some_and(number) || strand_parent(agent).is_some()
+}
+
+/// The thread a strand's id, task-N-K, is of, task-N, or None for any other id.
+pub fn strand_parent(agent: &str) -> Option<&str> {
+    let number = |number: &str| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+    let (thread, strand) = agent.strip_prefix("task-")?.split_once('-')?;
+    (number(thread) && number(strand)).then(|| &agent[.."task-".len() + thread.len()])
 }
 
 /// The connection a call of `agent`'s on the server's `connection` goes by, as its session's card,
@@ -922,6 +941,12 @@ pub struct Agents {
     cleared: HashMap<u64, Cleared>,
     /// What each agent did last, as the log says it.
     doing: HashMap<String, SharedString>,
+    /// Whether the entry about to be logged is a search's (Z46): set by `search` for the act it
+    /// makes, which keeps it, and by that act again just before each entry it logs, which takes it.
+    searching: bool,
+    /// The strand whose call is under way, task-N-K, as the entries it logs name it beside its
+    /// thread: set while its call runs, and by its act around each entry it logs later.
+    strand_calling: Option<String>,
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
     /// The pages whose picture a kept card can't keep for what was put in them (kept/unkept.rs).
@@ -1142,6 +1167,8 @@ impl Agents {
             fenced: Vec::new(),
             cleared: HashMap::new(),
             doing: HashMap::new(),
+            searching: false,
+            strand_calling: None,
             pins: HashMap::new(),
             held: HashMap::new(),
             unkept: Default::default(),
@@ -2093,8 +2120,41 @@ impl Agents {
         if !tools::has(&call.agent, &call.tool) {
             let none = format!("There's no tool {}.", call.tool);
             _ = call.reply.send(ToolResult::error(none));
+            // A strand that calls one of its thread's own stops the thread, as it isn't allowed.
+            if let Some(thread) = strand_parent(&call.agent).map(str::to_string) {
+                self.strand_not_allowed(&thread, &call.tool, cx);
+            }
             return;
         }
+        // A strand's call is its thread's, in its tabs and at its access, once its label is read,
+        // and each entry it leaves names the strand beside its thread.
+        if let Some(thread) = strand_parent(&call.agent).map(str::to_string) {
+            self.strand_calls(&thread, &call.agent, &call, cx);
+            let strand = std::mem::replace(&mut call.agent, thread.clone());
+            self.as_strand(&strand, |agents| agents.called(call, says, cx));
+            return self.watch_strands(&thread, cx);
+        }
+        // A step of its thread's ends the thread's wait (`task::Agents::no_answer`), which its
+        // strands still unheard keep.
+        let agent = call.agent.clone();
+        self.called(call, says, cx);
+        self.watch_strands(&agent, cx)
+    }
+
+    /// Runs `then` with the entries it logs named as `strand`'s, task-N-K, where it isn't empty;
+    /// those of a strand's call already under way stay its.
+    fn as_strand<T>(&mut self, strand: &str, then: impl FnOnce(&mut Self) -> T) -> T {
+        let was = self.strand_calling.clone();
+        if !strand.is_empty() {
+            self.strand_calling = Some(strand.to_string());
+        }
+        let done = then(self);
+        self.strand_calling = was;
+        done
+    }
+
+    /// `call`, once it's known to be the agent's to make and in its thread's name if a strand's.
+    fn called(&mut self, call: Call, says: String, cx: &mut Context<Self>) {
         // A task the user stopped keeps its connection for their next message, so its calls still
         // come: one that waited its turn in the server behind a slow page, or one its assistant
         // made as it was interrupted. Each is answered as stopped, and nothing of it is run,
@@ -2204,6 +2264,12 @@ impl Agents {
 
     /// Runs the call, past the fence.
     fn dispatch(&mut self, call: Call, cx: &mut Context<Self>) {
+        if call.tool == tools::SEARCHED {
+            return self.search(call, cx);
+        }
+        if call.tool == tools::STRAND {
+            return self.strand(call, cx);
+        }
         let Call {
             id,
             agent,
@@ -2331,6 +2397,8 @@ impl Agents {
                     connection,
                     call: id,
                     action: "open_tab",
+                    searched: std::mem::take(&mut self.searching),
+                    strand: self.strand_calling.clone().unwrap_or_default(),
                     tab: 0,
                     what: format!("open {host}"),
                     asks: String::new(),
@@ -2722,6 +2790,8 @@ impl Agents {
                     connection,
                     call: id,
                     action: "request",
+                    searched: false,
+                    strand: self.strand_calling.clone().unwrap_or_default(),
                     tab,
                     url: String::new(),
                     page: PageAction::Snapshot,
@@ -2774,9 +2844,16 @@ impl Agents {
             (Some(server::Side::Outside), Some(client)) => {
                 self.is_connected(client) && self.other_apps()
             }
-            (Some(server::Side::Inside), _) => {
-                self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
-            }
+            // A strand calls only while it runs, and its thread is under way.
+            (Some(server::Side::Inside), _) => match strand_parent(agent) {
+                Some(thread) => {
+                    self.threads()
+                        && (self.task(thread)).is_some_and(|task| task.helpers.runs(agent))
+                }
+                None => {
+                    self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
+                }
+            },
             _ => false,
         }
     }
@@ -3144,6 +3221,7 @@ impl Agents {
             opened_tabs: vec![],
             wait: None,
             entry: 0,
+            searched: false,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -3700,6 +3778,8 @@ impl Agents {
             connection,
             call,
             action: "snapshot",
+            searched: std::mem::take(&mut self.searching),
+            strand: self.strand_calling.clone().unwrap_or_default(),
             tab,
             url: String::new(),
             page: PageAction::Snapshot,
@@ -3943,6 +4023,53 @@ impl Agents {
             }
             None => page::opening_risk(site),
         }
+    }
+
+    /// A thread's search: an open of its words' results with the user's search engine for its
+    /// Space's profile, or a navigate to them in the tab it names, as those calls go. The entries
+    /// they log are the search's, with neither its words nor the engine's site (Z46), whenever
+    /// they're logged: at once, refused, or once the user answers what it asked.
+    fn search(&mut self, mut call: Call, cx: &mut Context<Self>) {
+        let words = (call.arguments.get("words").and_then(Value::as_str))
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        if words.is_empty() {
+            _ = call
+                .reply
+                .send(ToolResult::error("words are what to search for."));
+            return;
+        }
+        // Its first call may be this one, and the Space's profile picks the engine.
+        let space = self.space(&call.agent, cx);
+        let Some(url) = self.browser.search_url(space, &words) else {
+            _ = call.reply.send(ToolResult::error(
+                "There's no search engine to search with.",
+            ));
+            return;
+        };
+        // A tab that isn't one is its error, as navigate answers it, and opens nothing.
+        let named = match tools::tab_argument(&call.arguments) {
+            Ok(tab) => tab.is_some(),
+            Err(not_a_tab) => {
+                _ = call.reply.send(ToolResult::error(not_a_tab));
+                return;
+            }
+        };
+        if let Some(arguments) = call.arguments.as_object_mut() {
+            arguments.remove("words");
+            arguments.insert("url".into(), url.into());
+        }
+        call.tool = match named {
+            true => "navigate",
+            false => "open_tab",
+        }
+        .into();
+        // The act it makes is the search's, for each entry it logs, now or once the user answers
+        // what it asked. One refused before it's made is the search's entry.
+        self.searching = true;
+        self.dispatch(call, cx);
+        self.searching = false;
     }
 
     /// The `url` argument as the address bar takes it, or None once the call has its error.
@@ -4329,6 +4456,11 @@ impl Agents {
 
     /// Answers the action with why it's refused, which the log has.
     fn refuse(&mut self, act: Act, site: &str, refused: Refused, cx: &mut Context<Self>) {
+        let strand = act.strand.clone();
+        self.as_strand(&strand, |agents| agents.refuse_as(act, site, refused, cx))
+    }
+
+    fn refuse_as(&mut self, act: Act, site: &str, refused: Refused, cx: &mut Context<Self>) {
         let Refused { why, kind, told } = refused;
         let why = why.as_str();
         if act.download != 0 {
@@ -4340,6 +4472,7 @@ impl Agents {
         }
         // A call's requests the user said no to are each listed, as each sent one is.
         let by = (act.connection, act.page());
+        self.searching = act.searched;
         match act.requests.as_slice() {
             [] => self.note_page(&act.agent, by, act.action, site, why),
             requests => {
@@ -4357,7 +4490,12 @@ impl Agents {
     }
 
     /// Does the action: the core checks it and logs it, and answers with the page.
-    fn run(&mut self, mut act: Act, cx: &mut Context<Self>) {
+    fn run(&mut self, act: Act, cx: &mut Context<Self>) {
+        let strand = act.strand.clone();
+        self.as_strand(&strand, |agents| agents.run_as(act, cx))
+    }
+
+    fn run_as(&mut self, mut act: Act, cx: &mut Context<Self>) {
         // The user let the tab stay on the fenced site it came to: its call goes as it came.
         let open = match std::mem::replace(&mut act.fenced, Fenced::No) {
             Fenced::Came(entry, call) => {
@@ -4381,6 +4519,7 @@ impl Agents {
             connection,
             call,
             action,
+            searched,
             mut tab,
             url,
             page,
@@ -4415,6 +4554,7 @@ impl Agents {
             // An agent's first call may be this one, and the core opens a tab only in its Space.
             self.space(&agent, cx);
             tab = self.browser.open_tab(&agent, &url, cx);
+            self.searching = searched;
             if tab == 0 {
                 self.note(&agent, connection, action, &site, "The tab couldn't open.");
                 cx.notify();
@@ -4433,6 +4573,7 @@ impl Agents {
             self.browser.set_muted(tab, true);
             note = format!("Opened tab {tab}.");
         } else {
+            self.searching = searched;
             if !self.act(&agent, connection, tab, action, &reply, cx) {
                 return;
             }
@@ -4470,6 +4611,7 @@ impl Agents {
             opened_tabs: vec![],
             wait,
             entry,
+            searched,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -4538,6 +4680,8 @@ impl Agents {
             // A page's download comes from no call of the agent's.
             call: 0,
             action: "download",
+            searched: false,
+            strand: String::new(),
             // The question is about the file, wherever its tab is.
             tab: 0,
             what: format!("download {name} from {host}"),
@@ -4756,6 +4900,7 @@ impl Agents {
             opened_tabs,
             wait,
             entry,
+            searched,
             ..
         }) = self.acting.remove(&request)
         else {
@@ -4884,6 +5029,7 @@ impl Agents {
                             opened_tabs,
                             wait: Some(wait),
                             entry,
+                            searched,
                         };
                         let after = LOOK_EVERY.min(until.saturating_duration_since(now));
                         return self.look_again(acting, after, cx);
@@ -4938,7 +5084,17 @@ impl Agents {
                     "navigate"
                 };
                 let reply = acting.reply.clone();
-                if !agents.may_look_again(&agent, connection, tab, action, &reply, cx) {
+                // A search's refusal is the search's, as its entry is.
+                agents.searching = acting.searched;
+                // And a strand's, as its entry is.
+                let entry = acting.entry;
+                let strand = (agents.log.iter())
+                    .find(|each| each.id == entry)
+                    .map_or_else(String::new, |each| each.strand.to_string());
+                let looks = agents.as_strand(&strand, |agents| {
+                    agents.may_look_again(&agent, connection, tab, action, &reply, cx)
+                });
+                if !looks {
                     agents.acting.remove(&request);
                     return;
                 }
@@ -5583,15 +5739,6 @@ impl Agents {
         let mut tabs = self.tabs_seen(space, cx);
         // A call that names no tab never falls on a page of a task the user stopped.
         tabs.retain(|tab| !self.withheld(agent, tab.id));
-        // A task with helpers has several callers on its one connection, so the tab used last
-        // may be another's: a call names its tab unless the task has only one (#4102).
-        if (self.task(agent)).is_some_and(|task| task.helpers.on) {
-            return match &tabs[..] {
-                [only] => Ok(only.id),
-                [] => Err(Refused::of(tools::Kind::NotFound, NO_TAB)),
-                _ => Err(Refused::new(helpers::NAME_YOUR_TAB)),
-            };
-        }
         let last = self.current.get(&(agent.into(), connection)).copied();
         match (
             last.filter(|last| tabs.iter().any(|tab| tab.id == *last)),
@@ -5667,6 +5814,12 @@ impl Agents {
         refused: &str,
         (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
+        // A search's entry is the search's, with neither its words nor the engine's site (Z46).
+        let searched = std::mem::take(&mut self.searching);
+        let (action, site, target) = match searched {
+            true => (tools::SEARCHED, "", ""),
+            false => (action, site, target),
+        };
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
         match refused.is_empty() {
@@ -5680,6 +5833,29 @@ impl Agents {
             };
             self.doing.insert(agent.into(), doing.into());
         }
+        let strand = self.strand_calling.clone().unwrap_or_default();
+        // A search done is its thread's, or strand's, one entry, which counts them, never their
+        // words (Z46): only a refused one has an entry of its own, for its reason.
+        if searched && refused.is_empty() && self.stepping.is_none() {
+            let counted = (self.log.iter_mut().rev()).find(|each| {
+                each.agent == agent
+                    && each.action == tools::SEARCHED
+                    && each.refused.is_empty()
+                    && each.strand == strand
+            });
+            if let Some(counted) = counted {
+                let count = counted.target.parse::<usize>().unwrap_or(1) + 1;
+                counted.target = count.to_string().into();
+                // Its id is this call's now, as a new entry's would be, for what its answer marks.
+                counted.id = entry_id();
+                self.logged = counted.id;
+                return;
+            }
+        }
+        let target = match searched && refused.is_empty() {
+            true => "1",
+            false => target,
+        };
         let entry = Activity {
             at: SystemTime::now(),
             agent: SharedString::from(agent.to_string()),
@@ -5696,6 +5872,7 @@ impl Agents {
             said: SharedString::from(said.to_string()),
             tier: self.entry_tier(agent, connection, tab).label().into(),
             notes: SharedString::default(),
+            strand: strand.into(),
         };
         self.logged = entry.id;
         if self.stepping == Some((agent.into(), connection)) {
@@ -5770,7 +5947,10 @@ impl Agents {
         let threads = self.threads();
         let tasks = (self.tasks.tasks.iter())
             .filter(|task| threads && task.session.is_none())
-            .map(|task| (task.token().to_string(), task.agent.clone()));
+            .flat_map(|task| {
+                let own = (task.token().to_string(), task.agent.clone());
+                std::iter::once(own).chain(task.helpers.tokens())
+            });
         *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
 
@@ -6082,6 +6262,8 @@ fn act_of(
         connection,
         call,
         action: "close_tab",
+        searched: false,
+        strand: String::new(),
         tab,
         url: String::new(),
         page: PageAction::Snapshot,

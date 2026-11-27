@@ -1598,6 +1598,25 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The line of a run ilo ended over its tools says AP17 as written, and has nothing to press or
+/// to say under it.
+#[test]
+fn a_run_ended_over_its_tools_says_ap17() {
+    let kind = IloKind::NotOurTools;
+    let said = format!("stopped Claude Code: it started with tools {PRODUCT} doesn't allow");
+    assert_eq!(
+        super::words::head(&kind, "Claude Code"),
+        (said.clone(), None)
+    );
+    assert_eq!(super::words::stored(&kind, "Claude Code"), said);
+    let line = IloLine {
+        key: 1,
+        kind,
+        settled: true,
+    };
+    assert!(crate::agents::task::ilo::buttons(&line).is_empty());
+}
+
 /// The line of a task the user stopped says the pages it held then by their count alone, and with
 /// none, no count (Z17). It names nothing, so no page's or site's words stand in it, and it has
 /// nothing to press.
@@ -2003,6 +2022,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tab: 1,
             limit: HelpersLimit::Kind,
         },
+        IloKind::NotOurTools,
         // A kept log's line, as it stored one of the above.
         IloKind::Kept {
             words: super::words::stored(&IloKind::EndedLeft, "Claude").into(),
@@ -2035,6 +2055,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::NoProfile
             | IloKind::NoSpace
             | IloKind::Helpers { .. }
+            | IloKind::NotOurTools
             | IloKind::Kept { .. } => {}
         }
         let (own, _) = head(kind, "Claude");

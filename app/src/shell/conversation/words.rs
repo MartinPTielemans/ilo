@@ -115,6 +115,11 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             },
             None,
         ),
+        // Its run ended before its first answer (AP17), in the helpers' lines' form.
+        IloKind::NotOurTools => (
+            format!("stopped {agent}: it started with tools {PRODUCT} doesn't allow"),
+            None,
+        ),
         // A wall ilo couldn't put up (#4101). Each names what the user gave, and `tail` ends it.
         IloKind::StartedWithout {
             left: LeftOut::Folder(name) | LeftOut::File(name),
@@ -328,7 +333,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::YouStopped { .. } => None,
-        IloKind::Helpers { .. } => None,
+        IloKind::Helpers { .. } | IloKind::NotOurTools => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }
