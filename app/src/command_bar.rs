@@ -4032,7 +4032,6 @@ impl CommandBar {
 
     /// A click on the switch: what ⇥ does, between the search and the composer.
     fn switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // check.sh reads this line.
         log!("browser: command bar switch clicked");
         if !self.leave_ask(window, cx) && self.may_ask(cx) {
             self.enter_ask(window, cx);
