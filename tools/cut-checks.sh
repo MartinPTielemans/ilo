@@ -10,8 +10,8 @@
 #        cut-checks.sh times <run id>
 # A commit names the branch whose head it is. The runs are check-mac.yml's runs input: none for the
 # default ones. --watch follows the check run to its end, then prints its times, as `times` does
-# for any run: from its dispatch to its last job's end, and each job's wait and length. --dry finds
-# the engine and says what it would dispatch, and dispatches nothing.
+# for any run: its wait for its first Mac runner, its time from there to its end, and each job's
+# wait and length. --dry finds the engine and says what it would dispatch, and dispatches nothing.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 repo=$(cat "$root/app/branding/repository")
@@ -24,24 +24,29 @@ fail() {
   exit 1
 }
 
-# Each job of run $1 with its wait for a runner and its length, and the run's whole time.
+# Each job of run $1 with its wait for a runner and its length, and the run's time split in two:
+# queued, from its dispatch to its first Mac job's start, and checking, from there to its last
+# job's end. A look build's gate takes whichever runner is free first by these.
 times() {
   gh api "repos/$repo/actions/runs/$1" --jq '"\(.created_at) \(.status) \(.conclusion // "")"' |
     { read -r made status conclusion
       echo "run $1: $status ${conclusion:-}, made $made"
       gh api --paginate "repos/$repo/actions/runs/$1/jobs?per_page=100" --jq '.jobs[] |
-        "\(.name)\t\(.conclusion // .status)\t\(.created_at)\t\(.started_at // "")\t\(.completed_at // "")"' |
+        "\(.name)\t\(.conclusion // .status)\t\(.created_at)\t\(.started_at // "")\t\(.completed_at // "")\t\(.labels | join(" "))"' |
         python3 -I -c '
 import sys, datetime
 p = lambda s: datetime.datetime.fromisoformat(s.replace("Z", "+00:00")) if s and not s.startswith("0001") else None
-made = p(sys.argv[1]); last = None
-m = lambda d: "%d:%02d" % divmod(int(d.total_seconds()) // 60, 60) if d else "-"
+made = p(sys.argv[1]); last = None; first = None
+m = lambda d: "%d:%02d" % divmod(int(d.total_seconds()) // 60, 60) if d is not None else "-"
 for line in sys.stdin:
-    name, result, created, started, done = line.rstrip("\n").split("\t")
+    name, result, created, started, done, labels = line.rstrip("\n").split("\t")
     created, started, done = p(created), p(started), p(done)
     if done and started and (not last or done > last): last = done
+    if started and "macos" in labels and (not first or started < first): first = started
     print("  %-28s %-10s waited %6s  ran %6s" % (name, result, m(started and started - created), m(done and started and done - started)))
-print("  from dispatch to the end of its last job: %s (h:mm)" % m(last and last - made))
+print("  queued, from dispatch to the first Mac job: %s (h:mm)" % m(first and first - made))
+print("  checking, from there to the end of its last job: %s" % m(first and last and last - first))
+print("  from dispatch to the end of its last job: %s" % m(last and last - made))
 ' "$made"
     }
 }
