@@ -3401,8 +3401,15 @@ site-gap = 3.0
 picture-empty-glyph = 16.0
 # The agent's text, at body, and the gap under each block.
 text-line = 21.0
-# The words the user and the assistant wrote, at this size on `text-line`.
+# The words the user and the assistant wrote, at this size on `text-line`, in the full ink at
+# `words`: the user's on their plate and the assistant's prose and answers. All else in the log is
+# the one grey of `trace-title` and `trace-note`: trace heads, steps, summaries, and the time and
+# copy row under an answer, so both sides' words lead (#4463).
 text = 14.0
+words = 1.0
+# A turn of the user's has this much more air above it than the log's blocks have between them,
+# so the back-and-forth reads at a glance (#4463).
+turn-gap = 16.0
 block-gap = 14.0
 # Its Markdown: paragraphs this far apart and a list's items closer, each item's marker in a column
 # of its own so its lines wrap under its text, and a list in a list in by that column. Bold is
@@ -3415,7 +3422,7 @@ code-fill = 0.08
 link-line = 1.0
 link-underline = 0.35
 # Under an answer, `answer-foot-top` down: a row `answer-foot` high, its parts `answer-foot-gap`
-# apart: the copy glyph, then the time it finished, both in text-3 (spec-thread-stage.md).
+# apart: the copy glyph, then the time it finished, both in the log's grey, `trace-note`.
 answer-foot-top = 10.0
 answer-foot = 20.0
 answer-foot-gap = 8.0
@@ -3424,13 +3431,14 @@ answer-time = 12.0
 answer-time-line = 16.0
 text-3 = 0xf2f2f36b
 light-text-3 = 0x16161880
-# The user's message: its plate's padding, its share of the column at most.
+# The user's message: its plate's padding, and its share of the column at most, right-aligned and
+# as wide as its words, as T3 Code's are (#4463). On dark its plate is a group's ([group] `fill`,
+# #4401), a step lighter than the page; on light it's this.
 bubble-top = 10.0
 bubble-bottom = 10.0
 bubble-x = 14.0
-bubble-most = 380.0
+bubble-share = 0.8
 radius = 14.0
-bubble-fill = 0x1616184d
 light-bubble-fill = 0x16161811
 # The page chip in the first message, over its text: its words on the text's column, the plate
 # hanging out by its padding less 2.
@@ -3638,10 +3646,9 @@ composer-round = 28.0
 composer-round-space = 0.0
 composer-arrow = 13.0
 composer-square = 9.0
-# The user's message, reduced: `bubble-most` wide at most, its words wrapping inside it, which
-# leaves the body's column room at its left; `bubble-y` and `bubble-x` round them at
-# `bubble-text`/`bubble-line`.
-bubble-most = 232.0
+# The user's message, reduced: `bubble-share` of the panel's column wide at most, its words
+# wrapping inside it; `bubble-y` and `bubble-x` round them at `bubble-text`/`bubble-line`.
+bubble-share = 0.8
 bubble-y = 8.0
 bubble-x = 12.0
 bubble-text = 13.0

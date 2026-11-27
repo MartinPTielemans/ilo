@@ -5874,3 +5874,55 @@ fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut Te
         "an ended thread draws the sign"
     );
 }
+
+/// The user's message is as wide as its words, up to 0.8 of the column, at the column's right, in
+/// a wide window's 832 pt column and in a narrow one's (#4463).
+#[gpui::test]
+fn the_users_message_takes_its_share_of_the_column(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::{BUBBLE_SHARE, COLUMN};
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.asked = "A smart-casual winter outfit for dinner in Lisbon: a coat that isn't too heavy, \
+        trousers that aren't jeans, shoes I can walk in on cobbles, and a knit to go under the coat \
+        on a cold evening by the river."
+        .into();
+    talk.lines.push(Line::You("Menswear".into()));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let drawn = |wide: f32, cx: &mut VisualTestContext| {
+        cx.simulate_resize(gpui::size(px(wide), px(900.)));
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| view.plates_drawn.borrow().clone())
+    };
+    let asked = gpui::ElementId::from("conversation-asked");
+    let short: gpui::ElementId = ("conversation-you", 1usize).into();
+    let mut columns = Vec::new();
+    for wide in [2400., 640.] {
+        let plates = drawn(wide, cx);
+        let (row, plate) = plates[&asked];
+        columns.push(f32::from(row.size.width));
+        assert!(
+            (f32::from(plate.size.width) - BUBBLE_SHARE * f32::from(row.size.width)).abs() < 1.,
+            "at {wide}: {plate:?} in {row:?}"
+        );
+        assert_eq!(
+            plate.right(),
+            row.right(),
+            "at {wide}: not at the column's right"
+        );
+        let (row, plate) = plates[&short];
+        assert!(
+            f32::from(plate.size.width) < 0.25 * f32::from(row.size.width),
+            "at {wide}: a short message's plate is wider than its words: {plate:?}"
+        );
+        assert_eq!(plate.right(), row.right());
+    }
+    assert_eq!(columns[0], COLUMN, "the wide window's column");
+    assert!(
+        columns[1] < COLUMN,
+        "the narrow window's column: {columns:?}"
+    );
+}

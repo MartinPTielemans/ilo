@@ -64,12 +64,12 @@ use crate::tokens::shell::conversation::sign::{
 };
 use crate::tokens::shell::conversation::{
     ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
-    BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
-    CHIPS_TOP, CODE_FILL, COLUMN, COMPOSER_ARROW, COMPOSER_FIELD, COMPOSER_FIELD_X, COMPOSER_LINE,
-    COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
-    COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
-    CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK, CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH,
-    FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON, FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP,
+    BUBBLE_BOTTOM, BUBBLE_SHARE, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW, CHIPS_TOP, CODE_FILL,
+    COLUMN, COMPOSER_ARROW, COMPOSER_FIELD, COMPOSER_FIELD_X, COMPOSER_LINE, COMPOSER_RADIUS,
+    COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP, COMPOSER_ROW_UNDER,
+    COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT, CONNECTOR_ABOVE,
+    CONNECTOR_HEIGHT, CONNECTOR_INK, CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH, FOLD_DONE_GAP,
+    FOLD_GAP, FOLD_HEAD, FOLD_ICON, FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP,
     LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP,
     META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL,
     PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP,
@@ -78,7 +78,8 @@ use crate::tokens::shell::conversation::{
     SHIMMER_PERIOD, SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE,
     TITLE_LINE, TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
     TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
-    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE, TURN_GAP,
+    WORDS,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RAIL, RING_TURN};
 use crate::tokens::shell::task::{
@@ -102,7 +103,7 @@ pub(crate) mod words;
 
 /// The assistant's said words, in the answer and between a stretch's steps alike: the text's ink.
 fn said_ink(palette: &super::Palette) -> Hsla {
-    palette.text(TITLE)
+    palette.text(WORDS)
 }
 
 /// The page's plate, which the shown thread's card in the sidebar takes, a shape of its own
@@ -332,6 +333,9 @@ pub struct TalkView {
     spoken: Option<(usize, SharedString)>,
     /// Its task finished, so the answer is told as the conversation comes with it.
     answer_due: bool,
+    /// Where each of the user's messages was drawn last, by its id: its row, the column's width,
+    /// and its plate in it, for a test.
+    plates_drawn: Rc<RefCell<HashMap<ElementId, (Bounds<Pixels>, Bounds<Pixels>)>>>,
 }
 
 /// What opens in a conversation: a trace, a line of one, or a turn's same step on several tabs,
@@ -547,6 +551,7 @@ impl Shell {
                     a11y: false,
                     spoken: None,
                     answer_due: false,
+                    plates_drawn: Rc::default(),
                 })
             }
         };
@@ -2289,6 +2294,7 @@ impl TalkView {
         text: SharedString,
         page: Option<(SharedString, Option<Arc<Image>>)>,
         landing: bool,
+        turn: bool,
         look: &Look,
     ) -> gpui::AnyElement {
         let palette = look.palette;
@@ -2319,27 +2325,53 @@ impl TalkView {
                     .child(div().min_w_0().truncate().child(title)),
             )
         });
+        let (row_drawn, plate_drawn) = (self.plates_drawn.clone(), self.plates_drawn.clone());
+        let (row_id, plate_id) = (id.clone(), id.clone());
         div()
+            .relative()
             .flex()
             .justify_end()
+            .when(turn, |row| row.mt(px(TURN_GAP)))
             .mb(px(BLOCK_GAP))
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        (row_drawn.borrow_mut().entry(row_id).or_default()).0 = bounds
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 div()
                     .id(id)
+                    .relative()
                     .when(look.a11y, |plate| {
                         plate.role(Role::Label).aria_label(text.clone())
                     })
                     .min_w_0()
-                    .max_w(px(bubble.most))
+                    .max_w(gpui::relative(bubble.share))
                     .pt(px(bubble.top))
                     .pb(px(bubble.bottom))
                     .px(px(bubble.x))
                     .rounded(px(RADIUS))
                     .bg(bubble_fill(&palette))
+                    .text_color(palette.text(WORDS))
                     .text_size(px(bubble.text))
                     .line_height(px(bubble.line))
                     .children(chip)
                     .child(text)
+                    .child(
+                        canvas(
+                            move |bounds, _, _| {
+                                (plate_drawn.borrow_mut().entry(plate_id).or_default()).1 = bounds
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .when(landing, |plate| {
                         let landed = self.landed.clone();
                         plate.relative().opacity(0.).child(
@@ -2749,6 +2781,7 @@ impl TalkView {
                 shown.asked.clone(),
                 page,
                 false,
+                false,
                 look,
             ));
         }
@@ -2794,7 +2827,7 @@ impl TalkView {
             let line = match line {
                 Line::You(text) => {
                     let id = ("conversation-you", index).into();
-                    self.you(id, text.clone(), None, landing == Some(index), look)
+                    self.you(id, text.clone(), None, landing == Some(index), true, look)
                 }
                 Line::Said(text) => div()
                     .id(("conversation-said", index))
@@ -2872,7 +2905,7 @@ impl TalkView {
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
         let (_, time) = finished.iter().find(|(at, _)| *at == index)?;
-        let quiet = answer_text_3(&look.palette);
+        let quiet = look.palette.gray(TRACE_NOTE);
         let copy = div()
             .id(("conversation-copy", index))
             .when(look.a11y, |copy| {
@@ -3769,7 +3802,8 @@ fn answer_text_3(palette: &super::Palette) -> Hsla {
 /// wraps inside the narrower column.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Bubble {
-    most: f32,
+    /// Its share of the column, at most.
+    share: f32,
     top: f32,
     bottom: f32,
     x: f32,
@@ -3781,7 +3815,7 @@ impl Bubble {
     fn of(standing: bool) -> Self {
         match standing {
             true => Bubble {
-                most: panel::BUBBLE_MOST,
+                share: panel::BUBBLE_SHARE,
                 top: panel::BUBBLE_Y,
                 bottom: panel::BUBBLE_Y,
                 x: panel::BUBBLE_X,
@@ -3789,7 +3823,7 @@ impl Bubble {
                 line: panel::BUBBLE_LINE,
             },
             false => Bubble {
-                most: BUBBLE_MOST,
+                share: BUBBLE_SHARE,
                 top: BUBBLE_TOP,
                 bottom: BUBBLE_BOTTOM,
                 x: BUBBLE_X,
@@ -3801,11 +3835,10 @@ impl Bubble {
 }
 
 fn bubble_fill(palette: &super::Palette) -> Hsla {
-    rgba(match palette.tone {
-        Tone::Dark => BUBBLE_FILL,
-        Tone::Light => LIGHT_BUBBLE_FILL,
-    })
-    .into()
+    match palette.tone {
+        Tone::Dark => palette.plate(crate::tokens::group::FILL),
+        Tone::Light => rgba(LIGHT_BUBBLE_FILL).into(),
+    }
 }
 
 /// `from` mixed `done` of the way to `to`, channel by channel.
