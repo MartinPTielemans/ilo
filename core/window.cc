@@ -2946,6 +2946,59 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
   return space.id;
 }
 
+std::optional<closed_rule::Closed> Window::NextClosed() const {
+  // What the user closed in the profile of the Space shown, newest first: the archive's tabs, so it
+  // outlasts a relaunch, and the windows that closed while another stayed (#4408).
+  const Space* shown = Space::FromId(space_);
+  if (!shown) {
+    return std::nullopt;
+  }
+  std::vector<closed_rule::Closed> tabs;
+  for (const ArchivedTab& row : Archived()) {
+    tabs.push_back(
+        {.id = row.id, .at = row.archived, .profile = row.profile, .by_user = row.reopens});
+  }
+  // Windows only for an app that opens them, or one would stand in front of the tabs.
+  std::vector<closed_rule::Closed> windows;
+  if (Host().window_reopen) {
+    for (const ClosedWindow& window : ClosedWindows()) {
+      windows.push_back({.id = window.id,
+                         .window = true,
+                         .at = window.closed,
+                         .profile = window.profile,
+                         .by_user = true});
+    }
+  }
+  const std::vector<closed_rule::Closed> list = closed_rule::Merged(tabs, windows);
+  const std::optional<size_t> next = closed_rule::Next(list, shown->profile());
+  if (!next) {
+    return std::nullopt;
+  }
+  return list[*next];
+}
+
+bc_closed_next Window::ClosedNext() const {
+  // As ReopenClosedTab decides, so the words say what ⇧⌘T will do.
+  if (off_the_record_) {
+    auto own = PrivateClosed().find(space_);
+    return own == PrivateClosed().end() || own->second.empty() ? BC_CLOSED_NEXT_NONE
+                                                               : BC_CLOSED_NEXT_TAB;
+  }
+  const std::optional<closed_rule::Closed> next = NextClosed();
+  if (!next) {
+    return BC_CLOSED_NEXT_NONE;
+  }
+  if (next->window) {
+    return own_space_ ? BC_CLOSED_NEXT_NONE : BC_CLOSED_NEXT_WINDOW;
+  }
+  const ArchivedTab& row = *std::ranges::find(Archived(), next->id, &ArchivedTab::id);
+  const bool held = row.tab && std::ranges::contains(ClosedTabs(), row.tab, &ClosedTab::id);
+  if (row.little && held && UserSettings().little_windows) {
+    return BC_CLOSED_NEXT_TAB;
+  }
+  return own_space_ ? BC_CLOSED_NEXT_NONE : BC_CLOSED_NEXT_TAB;
+}
+
 bc_id Window::ReopenClosedTab() {
   // A private window brings back only its own, which it keeps while it's open.
   if (off_the_record_) {
@@ -2961,41 +3014,17 @@ bc_id Window::ReopenClosedTab() {
     }
     return tab;
   }
-  // What the user closed in the profile of the Space shown, newest first: the archive's tabs, so it
-  // outlasts a relaunch, and the windows that closed while another stayed (#4408).
-  const Space* shown = Space::FromId(space_);
-  if (!shown) {
-    return 0;
-  }
-  std::vector<closed_rule::Closed> tabs;
-  for (const ArchivedTab& row : Archived()) {
-    tabs.push_back(
-        {.id = row.id, .at = row.archived, .profile = row.profile, .by_user = row.reopens});
-  }
-  // Windows only for an app that opens them, or one would stand in front of the tabs.
-  std::vector<closed_rule::Closed> windows;
-  for (const ClosedWindow& window : ClosedWindows()) {
-    if (Host().window_reopen) {
-      windows.push_back({.id = window.id,
-                         .window = true,
-                         .at = window.closed,
-                         .profile = window.profile,
-                         .by_user = true});
-    }
-  }
-  const std::vector<closed_rule::Closed> list = closed_rule::Merged(tabs, windows);
-  const std::optional<size_t> next = closed_rule::Next(list, shown->profile());
+  const std::optional<closed_rule::Closed> next = NextClosed();
   if (!next) {
     return 0;
   }
   // A window comes back as a new one, which the app opens (bc_window_open_closed). Posted, as a
   // Little ilo window's below.
-  if (list[*next].window) {
+  if (next->window) {
     if (own_space_) {
       return 0;
     }
-    const ClosedWindow& window =
-        *std::ranges::find(ClosedWindows(), list[*next].id, &ClosedWindow::id);
+    const ClosedWindow& window = *std::ranges::find(ClosedWindows(), next->id, &ClosedWindow::id);
     const bc_rect frame{static_cast<double>(window.bounds.x()),
                         static_cast<double>(window.bounds.y()),
                         static_cast<double>(window.bounds.width()),
@@ -3012,7 +3041,7 @@ bc_id Window::ReopenClosedTab() {
     return 0;
   }
   // A copy: reopening it changes the archive.
-  const ArchivedTab row = *std::ranges::find(Archived(), list[*next].id, &ArchivedTab::id);
+  const ArchivedTab row = *std::ranges::find(Archived(), next->id, &ArchivedTab::id);
   const bool held = row.tab && std::ranges::contains(ClosedTabs(), row.tab, &ClosedTab::id);
   // A Little ilo window's comes back in a new one, which the app opens, as Arc's ⇧⌘T reopens it in
   // Little Arc. Posted, so the app hears of it once its own call has returned. With Little ilo off

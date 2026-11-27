@@ -1951,6 +1951,11 @@ bc_id bc_window_reopen_closed_tab(bc_id window_id) {
   return window ? window->ReopenClosedTab() : 0;
 }
 
+bc_closed_next bc_window_closed_next(bc_id window_id) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window ? window->ClosedNext() : BC_CLOSED_NEXT_NONE;
+}
+
 bc_id bc_window_open_closed(bc_id closed, bc_rect bounds, void* ui_view) {
   const auto& all = browser_core::ClosedWindows();
   if (std::ranges::find(all, closed, &browser_core::ClosedWindow::id) == all.end()) {

@@ -520,6 +520,13 @@ typedef struct bc_cast_device {
 } bc_cast_device;
 
 
+// What ⇧⌘T would bring back (bc_window_closed_next).
+typedef enum bc_closed_next {
+  BC_CLOSED_NEXT_NONE = 0,
+  BC_CLOSED_NEXT_TAB = 1,
+  BC_CLOSED_NEXT_WINDOW = 2,
+} bc_closed_next;
+
 // Why the core didn't do an agent's call, for agent code to decide on: the words that come with it
 // are for the agent and the user to read, and may change (#3702). Only what agent code decides or
 // sorts on has a value; a call done, or failed otherwise, is BC_AGENT_FAILURE_NONE.
@@ -3048,6 +3055,11 @@ BC_EXPORT bool bc_window_restore_sidebar(bc_id window, double time);
 // Returns the tab, or 0 if none is closed. The user's: agents get none, as it walks the user's
 // closed tabs, which an agent's pages never join (#1408).
 BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
+
+// What bc_window_reopen_closed_tab in |window| would bring back now, which the menu item and the
+// command bar's row for it are named by: a tab, a window, or nothing, when the item is greyed out
+// (#4408). Asked as the menu or the bar opens: the core tells no change of it. The user's alone.
+BC_EXPORT bc_closed_next bc_window_closed_next(bc_id window);
 
 // Opens the closed window |closed| (window_reopen) at |bounds|, as bc_window_open does, in front
 // and key. It shows the Space it showed, else the first, with the tab it showed there unless

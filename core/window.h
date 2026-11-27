@@ -15,6 +15,7 @@
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "browser_core/closed_rule.h"
 #include "browser_core/overlay_lend.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
@@ -344,6 +345,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // tabs, else at the top of the Space the window shows. Shows it, and its Space. Returns its id, or
   // 0 if there's none.
   bc_id ReopenClosedTab();
+  // What ReopenClosedTab would bring back: a tab, a window, or nothing. See bc_window_closed_next.
+  bc_closed_next ClosedNext() const;
   // As ReopenClosedTab, for the closed tab that had the id |id| rather than the one closed last,
   // and shown only if |show|: otherwise the tab shown stays. Returns the new tab's id, or 0 if it
   // isn't among the closed tabs any more.
@@ -473,6 +476,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& new_bounds) override;
 
  private:
+  // The newest the user closed in the profile of the Space shown, for a window not private:
+  // the archive's tabs and, for an app that opens them, the closed windows.
+  std::optional<closed_rule::Closed> NextClosed() const;
   class ClientView;
   struct Held {
     raw_ptr<BrowserWindowInterface> browser;
