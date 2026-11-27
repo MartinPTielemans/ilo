@@ -1786,24 +1786,14 @@ fn a_line_of_what_a_task_went_without_says_what_ilo_did_and_why(_: &mut TestAppC
         said.extend(tail(kind, "Claude"));
         (said, quoted)
     };
-    let without = |left| IloKind::StartedWithout { left };
     let cases = [
         (
-            without(LeftOut::Folder("Trip".into())),
-            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
-             that folder",
+            IloKind::StartedWithout {
+                folder: "Trip".into(),
+            },
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't give Claude that \
+             folder",
             "\u{201c}Trip\u{201d}",
-        ),
-        (
-            without(LeftOut::File("seats.pdf".into())),
-            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't limit Claude \
-             to that file",
-            "\u{201c}seats.pdf\u{201d}",
-        ),
-        (
-            without(LeftOut::Files(3)),
-            "{p} started this thread without your 3 files: {p} couldn't limit Claude to them",
-            "",
         ),
         (
             IloKind::EndedLeft,
@@ -1902,10 +1892,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::YouStopped { pages: 0 },
         IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
-            left: LeftOut::Folder("Trip".into()),
-        },
-        IloKind::StartedWithout {
-            left: LeftOut::Files(3),
+            folder: "Trip".into(),
         },
         IloKind::EndedLeft,
         IloKind::Revoked {

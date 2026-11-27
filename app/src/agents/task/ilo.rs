@@ -87,8 +87,9 @@ pub enum IloKind {
     /// ilo ended the task's run before its first answer, as its assistant started with a tool
     /// that isn't ilo's own (AP17). It's what happened, so it needs nothing of the user.
     NotOurTools,
-    /// The task started without the folder the user picked, which ilo doesn't give (X6).
-    StartedWithout { left: LeftOut },
+    /// The task started without the folder the user picked, which ilo couldn't give it: it no
+    /// longer resolved to itself, or it's one ilo never gives (X6).
+    StartedWithout { folder: SharedString },
     /// ilo later ended what the assistant had left running.
     EndedLeft,
     /// The user revoked the task's folder; it goes on without it (J2).

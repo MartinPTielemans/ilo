@@ -694,12 +694,10 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 working(10, "Clicking “Place order”"),
             ]
         }
-        // A task started without what the user gave it (#4101), each line where it comes:
-        // without the folder and the file, a change of level, and what a run before had left
-        // running, which ilo ended.
+        // A task started without the folder the user gave it (#4101), each line where it comes:
+        // without the folder, a change of level, and what a run before had left running, which
+        // ilo ended.
         "files-wall" => {
-            use browser::agents::task::ilo::LeftOut;
-            let folder = || gpui::SharedString::from("Lisbon trip");
             let said = |key, kind| ilo(key, kind, true);
             talk.about = format!("{PRODUCT} · Stopped").into();
             talk.stoppable = false;
@@ -708,13 +706,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 said(
                     100,
                     IloKind::StartedWithout {
-                        left: LeftOut::Folder(folder()),
-                    },
-                ),
-                said(
-                    101,
-                    IloKind::StartedWithout {
-                        left: LeftOut::File("boarding passes.pdf".into()),
+                        folder: "Lisbon trip".into(),
                     },
                 ),
                 done(0, before),

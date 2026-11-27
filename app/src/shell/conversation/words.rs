@@ -119,16 +119,9 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             None,
         ),
         // What the user gave that the task didn't get (#4101). Each names it, and `tail` ends it.
-        IloKind::StartedWithout {
-            left: LeftOut::Folder(name) | LeftOut::File(name),
-        } => ("started this thread without".into(), Some(name.to_string())),
-        IloKind::StartedWithout {
-            left: LeftOut::Files(files),
-        } => (
-            format!(
-                "started this thread without your {files} files: {PRODUCT} couldn't limit {agent} to them"
-            ),
-            None,
+        IloKind::StartedWithout { folder } => (
+            "started this thread without".into(),
+            Some(folder.to_string()),
         ),
         IloKind::EndedLeft => (format!("ended what {agent} had left running"), None),
         // The user is the subject, as of a change of level.
@@ -190,10 +183,7 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
 pub fn stored(kind: &IloKind, agent: &str) -> String {
     let (own, name) = head(kind, agent);
     let unnamed = match kind {
-        IloKind::StartedWithout {
-            left: LeftOut::File(_),
-        }
-        | IloKind::NotCopied {
+        IloKind::NotCopied {
             left: LeftOut::File(_),
         } => Some("a file"),
         IloKind::StartedWithout { .. }
@@ -222,12 +212,9 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
 /// What a line says after its name, to its sentence's end, if anything.
 pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
     match kind {
-        IloKind::StartedWithout {
-            left: LeftOut::Folder(_),
-        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that folder")),
-        IloKind::StartedWithout {
-            left: LeftOut::File(_),
-        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that file")),
+        IloKind::StartedWithout { .. } => {
+            Some(format!(": {PRODUCT} couldn't give {agent} that folder"))
+        }
         IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),

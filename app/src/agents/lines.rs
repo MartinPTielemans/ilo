@@ -262,8 +262,8 @@ impl Agents {
                     Some(left) => IloKind::NotCopied { left },
                     None => continue,
                 },
-                Happened::NotGiven { files } => match left_out(&task.names, files).next() {
-                    Some(left) => IloKind::StartedWithout { left },
+                Happened::NotGiven { files } => match shown(&task.names, files).folder {
+                    Some(folder) => IloKind::StartedWithout { folder },
                     None => continue,
                 },
                 Happened::EndedLeft => IloKind::EndedLeft,
