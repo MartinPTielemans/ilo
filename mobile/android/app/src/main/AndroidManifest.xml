@@ -32,9 +32,9 @@
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="ilo"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Ilo"
-        android:usesCleartextTraffic="true">
+        android:theme="@style/Theme.Ilo">
         <activity
             android:name=".IloActivity"
             android:exported="true"
