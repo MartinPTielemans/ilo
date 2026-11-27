@@ -213,36 +213,45 @@ fn a_resize_shows_it_again(cx: &mut TestAppContext) {
     );
 }
 
-/// Its tooltip and description name the thread that came to need the user first, by the title its
-/// line in the sidebar draws, whichever came after and whatever order the cards are in.
+/// It carries the mark and nothing else (#4091): no thread's title, site or count, so what it
+/// draws is the same whichever thread waits, however many do and whatever they're called.
 #[gpui::test]
-fn it_names_the_thread_that_waited_first(cx: &mut TestAppContext) {
+fn it_says_nothing_of_the_thread(cx: &mut TestAppContext) {
     let (shell, _, cx) = window(cx);
-    let titled = |n: u64, dot: Dot, title: &str| crate::agents::task::Card {
+    let titled = |n: u64, title: &str| crate::agents::task::Card {
         title: title.to_string().into(),
-        ..card(n, dot)
+        ..card(n, Dot::Waiting)
     };
-    let set = |cards, cx: &mut VisualTestContext| {
+    let look = |cards, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| shell.set_task_cards(cards, cx));
         cx.run_until_parked();
-        shell.read_with(cx, |shell, _| shell.edge_knot_said())
+        away(&shell, cx);
+        assert!(shown(&shell, cx));
+        shell.read_with(cx, |shell, _| shell.edge_knot_look())
     };
-    assert_eq!(set(vec![titled(1, Dot::Working, "Ferry")], cx), None);
-    let ferry = titled(1, Dot::Waiting, "Book the 08:40 ferry");
-    assert_eq!(
-        set(vec![ferry.clone()], cx).as_deref(),
-        Some("Book the 08:40 ferry")
-    );
-    let flight = titled(2, Dot::Waiting, "Find a flight");
-    assert_eq!(
-        set(vec![flight.clone(), ferry.clone()], cx).as_deref(),
-        Some("Book the 08:40 ferry"),
-        "the one that came after, newer and so first in the list, took its name"
-    );
-    let ferry_done = titled(1, Dot::Done, "Book the 08:40 ferry");
-    assert_eq!(
-        set(vec![flight, ferry_done], cx).as_deref(),
-        Some("Find a flight")
+    let one = look(vec![titled(1, "Book the 08:40 ferry")], cx);
+    assert_eq!(look(vec![titled(1, "Find a flight")], cx), one, "a title");
+    let two = vec![
+        titled(2, "Find a flight"),
+        titled(1, "Book the 08:40 ferry"),
+    ];
+    assert_eq!(look(two, cx), one, "a second thread");
+}
+
+/// With the switch for the window's edge off it still shows, and a press on it still brings the
+/// sidebar out: the switch is for the pointer at the edge, not for the tab.
+#[gpui::test]
+fn with_the_edge_switch_off_it_still_shows_and_brings_the_sidebar_out(cx: &mut TestAppContext) {
+    let (shell, _, cx) = window(cx);
+    cx.update(|_, cx| cx.set_global(super::SidebarEdge(false)));
+    waiting(&shell, Dot::Waiting, cx);
+    assert!(shown(&shell, cx), "it didn't show with the edge switch off");
+    cx.executor().advance_clock(PRESS_GUARD);
+    shell.update(cx, |shell, cx| shell.edge_knot_pressed(cx));
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.revealed),
+        "a press on it with the edge switch off didn't bring the sidebar out"
     );
 }
 

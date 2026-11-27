@@ -2,15 +2,15 @@
 //! only while a thread needs the user, that brings the sidebar out when clicked
 //! (window-and-threads.md › Sidebar hidden). GPUI can't draw over the page's native view, so it's a
 //! window of its own, the browser window's child, as the reveal's panel is. It's drawn from the
-//! threads' own state alone and draws nothing more than that one needs the user: no words, no
-//! count. Its tooltip and description say only what the thread's line in the sidebar already
-//! shows. Nothing logs whether it shows.
+//! threads' own state alone and carries nothing more than that one needs the user: no title, no
+//! site, no count, and no tooltip, so a look-alike a page draws learns nothing. Nothing logs
+//! whether it shows.
 
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, MouseButton, MouseDownEvent, Rgba, SharedString,
-    Window, div, point, prelude::*, px, rgba, size,
+    AnyElement, BoxShadow, Context, MouseButton, MouseDownEvent, Rgba, Window, div, point,
+    prelude::*, px, rgba,
 };
 
 use super::Shell;
@@ -23,7 +23,6 @@ use crate::tokens::palette::INK_HOVER_MIX;
 use crate::tokens::shell::edge_knot::{
     HEIGHT, MARGIN, MARK, MARK_NUDGE, RADIUS, SHADOW, SHADOW_BLUR, SHADOW_Y, TOP, WIDTH,
 };
-use crate::tooltip::{Anchor, Tip};
 
 /// What a screen reader calls it (words table, XK1).
 pub const EDGE_KNOT_NAME: &str = "A thread needs you";
@@ -34,31 +33,13 @@ pub const EDGE_KNOT_NAME: &str = "A thread needs you";
 pub const PRESS_GUARD: Duration = Duration::from_millis(500);
 
 impl Shell {
-    /// Notes which threads of this window's Spaces need the user, in the order they came to, after
-    /// the threads' cards change. A thread that waits is in every Space's list
-    /// (`task_cards::lists_in`), so any Space's counts.
+    /// Notes whether a thread of this window's Spaces needs the user, after the threads' cards
+    /// change. A thread that waits is in every Space's list (`task_cards::lists_in`), so any
+    /// Space's counts.
     pub(super) fn note_waiting(&mut self) {
         let homes: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
-        let waits: Vec<SharedString> = (self.task_cards.iter())
-            .filter(|card| card.dot == Dot::Waiting && homes.contains(&card.home))
-            .map(|card| card.agent.clone())
-            .collect();
-        self.waiting_order.retain(|agent| waits.contains(agent));
-        for agent in waits {
-            if !self.waiting_order.contains(&agent) {
-                self.waiting_order.push(agent);
-            }
-        }
-    }
-
-    /// What the knot's tooltip says and is described as after its name: the title of the thread
-    /// that came to need the user first, as its line in the sidebar draws it, never more of its
-    /// words. The second line that line grows while it waits joins it, after " · ", once that line
-    /// is in (the words table's N1, the one-line thread's).
-    pub fn edge_knot_said(&self) -> Option<SharedString> {
-        let first = self.waiting_order.first()?;
-        let card = (self.task_cards.iter()).find(|card| &card.agent == first)?;
-        Some(card.title.clone())
+        self.thread_waits = (self.task_cards.iter())
+            .any(|card| card.dot == Dot::Waiting && homes.contains(&card.home));
     }
 
     /// Where the knot goes, its top down the window's content, or None while it doesn't show: with
@@ -72,7 +53,7 @@ impl Shell {
             && !self.reveal_shown()
             && !self.page_fullscreen
             && !self.private
-            && !self.waiting_order.is_empty();
+            && self.thread_waits;
         shows.then_some(TOP)
     }
 
@@ -115,8 +96,8 @@ impl Shell {
     }
 
     /// What the knot's drawing reads, so its window draws again only as that changes.
-    pub fn edge_knot_look(&self) -> (bool, bool, crate::palette::Palette, Option<SharedString>) {
-        (self.right, self.a11y, self.palette, self.edge_knot_said())
+    pub fn edge_knot_look(&self) -> (bool, bool, crate::palette::Palette) {
+        (self.right, self.a11y, self.palette)
     }
 
     /// What the knot's window shows: the tab, flush with the window's edge, its other corners
@@ -144,7 +125,6 @@ impl Shell {
             spread_radius: px(0.),
             inset: false,
         };
-        let said = self.edge_knot_said();
         // The knot moves as the conversation's does while its thread waits, on the loading dots'
         // clock, only where it can be seen to and motion isn't reduced: still, it asks for no frame.
         let now = self.clock.now();
@@ -155,27 +135,9 @@ impl Shell {
             let shell = cx.entity();
             cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
         }
-        // Where the tab is in the browser window's content, for the tooltip beside it.
-        let x = match self.right {
-            true => f32::from(self.viewport.width) - WIDTH,
-            false => 0.,
-        };
-        let frame = Bounds::new(point(px(x), px(TOP)), size(px(WIDTH), px(HEIGHT)));
         let tab = div()
             .id("edge-knot")
-            .when(self.a11y, |tab| {
-                (tab.button_named(EDGE_KNOT_NAME))
-                    .when_some(said.clone(), |tab, said| tab.aria_description(said))
-            })
-            .when_some(said, |tab, said| {
-                tab.on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
-                    let tip = hovered.then(|| {
-                        let anchor = Anchor::beside(frame, shell.viewport, shell.right);
-                        (Tip::named(said.clone()), anchor)
-                    });
-                    shell.hover_tip(tip, cx);
-                }))
-            })
+            .when(self.a11y, |tab| tab.button_named(EDGE_KNOT_NAME))
             .absolute()
             .top(px(MARGIN))
             .w(px(WIDTH))
@@ -217,7 +179,6 @@ impl Shell {
         if now.duration_since(since) < PRESS_GUARD {
             return;
         }
-        crate::tooltip::dismiss(cx);
         self.set_revealed(true, cx);
     }
 }

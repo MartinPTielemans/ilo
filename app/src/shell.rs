@@ -1912,9 +1912,8 @@ pub struct Shell {
     /// When the edge knot last came, while it shows: it takes no press for a moment after
     /// (edge_knot.rs).
     edge_knot_since: Option<Instant>,
-    /// The threads that need the user, of this window's Spaces, in the order they came to: the
-    /// edge knot names the first (edge_knot.rs).
-    waiting_order: Vec<SharedString>,
+    /// Whether a thread of this window's Spaces needs the user, for the edge knot (edge_knot.rs).
+    thread_waits: bool,
     /// The top of the edge knot's window while it shows, and the content's width and the
     /// sidebar's side it was placed for (edge_knot.rs).
     edge_knot_at: Option<(f32, f32, bool)>,
@@ -2406,7 +2405,7 @@ impl Shell {
             question_settling: RefCell::default(),
             task_cards: Vec::new(),
             edge_knot_since: None,
-            waiting_order: Vec::new(),
+            thread_waits: false,
             edge_knot_at: None,
             edge_knot_sign: knot::Timed::default(),
             edge_knot_moving: false,
