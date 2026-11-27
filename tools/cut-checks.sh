@@ -122,15 +122,25 @@ while [ -z "$engine" ]; do
     echo "cut-checks: no engine has ${sha:0:12}'s core, so this Mac publishes its build of it."
     "$root/tools/mac-engine-publish.sh"
   else
-    building=$(gh run list -R "$repo" -w engine-mac.yml -L 30 --json databaseId,headSha,status \
-      --jq ".[] | select(.headSha == \"$sha\" and .status != \"completed\") | .databaseId" | head -1)
+    # An Engine on macOS run building the cut, or a commit before it with its core.
+    building=
+    while read -r id head; do
+      [ "$head" = "$sha" ] || {
+        git -C "$root" -c gc.auto=0 fetch -q "https://github.com/$repo.git" "$head" 2>/dev/null &&
+          git -C "$root" merge-base --is-ancestor "$head" "$sha" &&
+          (cd "$root" && tools/core-same.sh "$head" "$sha" core engine/series engine/patches ':(exclude)*.md') 2>/dev/null
+      } || continue
+      building=$id
+      break
+    done < <(gh run list -R "$repo" -w engine-mac.yml -L 30 --json databaseId,headSha,status \
+      --jq '.[] | select(.status != "completed") | "\(.databaseId) \(.headSha)"')
     [ -n "$building" ] ||
       fail "no engine-mac release has ${sha:0:12}'s core, and no Engine on macOS run is building it. Publish one with tools/mac-engine-publish.sh on the Mac with the checkout on it, or dispatch engine-mac.yml on $branch."
     [ -n "$wait" ] || {
-      echo "cut-checks: Engine on macOS run $building is building ${sha:0:12}'s engine. Start again with --wait to dispatch the checks once it's published." >&2
+      echo "cut-checks: Engine on macOS run $building is building the engine for ${sha:0:12}. Start again with --wait to dispatch the checks once it's published." >&2
       exit 2
     }
-    echo "cut-checks: waiting for Engine on macOS run $building, which builds ${sha:0:12}'s engine."
+    echo "cut-checks: waiting for Engine on macOS run $building, which builds the engine for ${sha:0:12}."
     gh run watch "$building" -R "$repo" --interval 60 --exit-status > /dev/null ||
       fail "Engine on macOS run $building failed, so ${sha:0:12} has no engine to check on."
   fi
