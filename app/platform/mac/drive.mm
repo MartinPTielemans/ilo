@@ -1381,7 +1381,8 @@ void Layout(NSWindow* window) {
     NSRect frame = [button convertRect:button.bounds toView:nil];
     [line appendFormat:@" %.1f,%.1f", NSMidX(frame), NSHeight(window.frame) - NSMidY(frame)];
   }
-  // The zoom button's far edge, which the header's sidebar button keeps 3 past (#4354).
+  // The zoom button's far edge, which the header's sidebar button keeps 3 past (#4354). From the
+  // window's left edge: for the left layout only, where the host reads it the same way.
   NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
   if (!zoom.hidden) {
     [line appendFormat:@"\nbrowser: layout zoom end %.1f",
