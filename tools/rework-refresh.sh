@@ -135,6 +135,17 @@ git -C "$work/tree" checkout -q --detach "$commit"
 between "the build"
 (cd "$work/tree/app" && CARGO_BUILD_JOBS=4 nice -n 10 ./build.sh rework)
 between "the install"
-"$work/tree/tools/install.sh" --rework "$to"
+# Signing with an identity whose key macOS hasn't let codesign use puts a prompt on the owner's
+# screen: a throwaway binary is signed first, with an alarm (the Mac has no timeout), so a prompt
+# or a hang stops the morning before the copy is touched.
+identity=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning |
+  sed -n 's/^ *1) [0-9A-F]* "\(.*\)"$/\1/p')}
+if [ -n "$identity" ] && [ "$identity" != - ]; then
+  cp /usr/bin/true "$work/sign-probe"
+  perl -e 'alarm 60; exec @ARGV' codesign --force -s "$identity" --timestamp=none "$work/sign-probe" ||
+    { echo "rework-refresh: signing with $identity asked, hung or failed; nothing was installed." >&2; exit 1; }
+  rm -f "$work/sign-probe"
+fi
+SIGN_IDENTITY=$identity "$work/tree/tools/install.sh" --rework "$to"
 echo "$commit" >"$work/installed"
 say "installed $commit as $to/$name.app"
