@@ -178,9 +178,22 @@ NSHTTPCookie* WebKitCookie(const net::CanonicalCookie& cookie) {
   return [NSHTTPCookie cookieWithProperties:properties];
 }
 
-// |cookie| as Chromium's store takes it, or null for one it wouldn't.
+// When the store made |cookie|, which CFNetwork keeps as an absolute time under "Created", or null
+// where it has none.
+base::Time CreatedAt(NSHTTPCookie* cookie) {
+  id created = cookie.properties[@"Created"];
+  return [created isKindOfClass:[NSNumber class]]
+             ? base::Time::FromCFAbsoluteTime([created doubleValue])
+             : base::Time();
+}
+
+// |cookie| as Chromium's store takes it, or null for one it wouldn't. Made when the system's store
+// made it, so a copy can tell which store's is newer (system_engine_cookies.h); one with no such
+// time counts as made now, the newest.
 std::unique_ptr<net::CanonicalCookie> ChromiumCookie(NSHTTPCookie* cookie) {
   const base::Time now = base::Time::Now();
+  const base::Time created = CreatedAt(cookie);
+  const base::Time made = created.is_null() || created > now ? now : created;
   const base::Time expiry =
       cookie.expiresDate ? base::Time::FromNSDate(cookie.expiresDate) : base::Time();
   if (!expiry.is_null() && expiry <= now) {
@@ -200,7 +213,7 @@ std::unique_ptr<net::CanonicalCookie> ChromiumCookie(NSHTTPCookie* cookie) {
   }
   return net::CanonicalCookie::CreateSanitizedCookie(
       url, base::SysNSStringToUTF8(cookie.name), base::SysNSStringToUTF8(cookie.value),
-      host_only ? std::string() : domain, base::SysNSStringToUTF8(cookie.path), now, expiry, now,
+      host_only ? std::string() : domain, base::SysNSStringToUTF8(cookie.path), made, expiry, now,
       cookie.secure, cookie.HTTPOnly, same_site, net::COOKIE_PRIORITY_DEFAULT,
       /*partition_key=*/std::nullopt, /*status=*/nullptr);
 }
@@ -1518,20 +1531,23 @@ void SystemPage::GetCookies(const SystemStore& store,
   [data.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie*>* all) {
     std::vector<net::CanonicalCookie> of_site;
     size_t matched = 0;
+    size_t dated = 0;
     for (NSHTTPCookie* cookie in all) {
       std::string domain = base::SysNSStringToUTF8(cookie.domain);
       if (!HostOfSite(domain.starts_with('.') ? domain.substr(1) : domain, of)) {
         continue;
       }
       ++matched;
+      dated += !CreatedAt(cookie).is_null();
       if (std::unique_ptr<net::CanonicalCookie> made = ChromiumCookie(cookie)) {
         of_site.push_back(std::move(*made));
       }
     }
     // Counts only: never a name or a value. With the copy back's own line, it says which step
-    // dropped a cookie.
-    fprintf(stderr, "browser: system store has %lu cookies, %zu of %s, %zu Chromium takes\n",
-            static_cast<unsigned long>(all.count), matched, of.c_str(), of_site.size());
+    // dropped a cookie, and the dated count whether the store said when it made each.
+    fprintf(stderr,
+            "browser: system store has %lu cookies, %zu of %s, %zu Chromium takes, %zu dated\n",
+            static_cast<unsigned long>(all.count), matched, of.c_str(), of_site.size(), dated);
     std::move(then).Run(std::move(of_site));
   }];
 }

@@ -31,6 +31,9 @@ struct Tab {
   bool stands_in = false;
   // At an http or https page in Chromium's engine, the only pages an agent may act in.
   bool web_page = false;
+  // At an http or https page in the system's engine, which no agent's Space shows: the give moves
+  // it to Chromium's at that page first, with the user's session there (bc_tab_give_to_agent).
+  bool system_page = false;
   // Its page is using the camera or the microphone. Neither refuses it: a tab in a call is one
   // the user hands over as they hand any other.
   bool camera = false;
