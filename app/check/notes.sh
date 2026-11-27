@@ -23,9 +23,14 @@ python3 -I - src/agents/notes > "$out/notes-landmarks.tsv" 2> "$out/notes-unprov
 import glob, os, re, sys
 names = {}
 source = open(os.path.join(os.path.dirname(sys.argv[1]), "notes.rs"), encoding="utf-8").read()
-for name, file in re.findall(r'note!\("([^"]+)", "([^"]+)"', source):
+# rustfmt wraps a long entry over lines, its name and file each on one of its own.
+for name, file in re.findall(r'note!\(\s*"([^"]+)",\s*"([^"]+)"', source):
     names[file] = name
-for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.txt"))):
+paths = sorted(glob.glob(os.path.join(sys.argv[1], "*.txt")))
+unnamed = [os.path.basename(path)[:-4] for path in paths if os.path.basename(path)[:-4] not in names]
+if unnamed or len(names) != len(paths):
+    sys.exit(f"notes.rs names {len(names)} notes, the folder has {len(paths)}; no name read for: {', '.join(unnamed) or 'none'}")
+for path in paths:
     file = os.path.basename(path)[:-4]
     record = open(path, encoding="utf-8").read().split("\n---\n", 1)[0]
     landmarks = [line[len("landmark: "):] for line in record.splitlines() if line.startswith("landmark: ")]
