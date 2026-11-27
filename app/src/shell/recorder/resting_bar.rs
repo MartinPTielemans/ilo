@@ -3,7 +3,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{App, SharedString};
+use gpui::App;
 
 use crate::command_bar::{self, TaskAgent, TaskAgents};
 use crate::elevation::Level;

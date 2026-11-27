@@ -288,7 +288,7 @@ impl Host for Recorder {
         files: Picked,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, effort, files, cx);
+        self.run_task(agent, asked, tier, model, effort, files, cx);
         self.record("at rest".into());
     }
 
