@@ -47,6 +47,24 @@ fn sentence_case(title: &str) -> String {
 /// What an item of a menu does once chosen.
 pub(super) type MenuAction = Box<dyn FnOnce(&mut Shell, &mut Context<Shell>)>;
 
+/// A maker's mark: its own asset, drawn unaltered in its own ink, in a box that holds whatever
+/// clear space the asset keeps round it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MakerMark {
+    pub path: &'static str,
+    pub size: f32,
+    /// Its ink, 0xRRGGBBAA, in the light look and the dark.
+    pub light: u32,
+    pub dark: u32,
+}
+
+impl MakerMark {
+    /// Its ink in the light look or the dark.
+    pub fn ink(self, light: bool) -> gpui::Rgba {
+        gpui::rgba(if light { self.light } else { self.dark })
+    }
+}
+
 /// An item in a menu the host shows. A line between items has no title.
 #[derive(Clone)]
 pub struct MenuEntry {
@@ -93,6 +111,11 @@ pub struct MenuEntry {
     pub icon: Option<&'static str>,
     /// The letter in the icon's place, for a Space with no glyph of its own.
     pub mark: Option<SharedString>,
+    /// Its maker's mark in the icon's place, as a model's row has.
+    pub maker_mark: Option<MakerMark>,
+    /// What a screen reader says for it in place of its title, where the title leans on something
+    /// only seen, as a model's row says its maker, whose mark isn't read.
+    pub spoken: Option<SharedString>,
     /// One of a run of rows that scrolls once it's longer than [menu] `scroll-rows`, as the Space
     /// button's menu's Spaces do.
     pub scrolls: bool,
@@ -136,6 +159,8 @@ impl MenuEntry {
             stays: None,
             icon: None,
             mark: None,
+            maker_mark: None,
+            spoken: None,
             scrolls: false,
         }
     }

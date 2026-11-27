@@ -1152,16 +1152,19 @@ impl TalkView {
         };
         let menu = menu.0.clone();
         let agent = self.agent.to_string();
-        let Some((ids, items)) =
-            crate::agents::global(cx).and_then(|agents| agents.read(cx).thread_model_menu(&agent))
-        else {
+        let Some(agents) = crate::agents::global(cx) else {
             return;
         };
+        let Some((ids, items)) = agents.read(cx).thread_model_menu(&agent) else {
+            return;
+        };
+        agents.update(cx, |agents, cx| agents.model_menu_opened(cx));
         let view = cx.entity().downgrade();
         let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
-            let action = (closed.chosen())
-                .and_then(|item| ids.get(item))
-                .map(|(id, _)| TaskAction::PickModel(id.clone()));
+            let action = (closed.chosen()).and_then(|item| match ids.get(item) {
+                Some(Some(id)) => Some(TaskAction::PickModel(id.clone())),
+                _ => None,
+            });
             let closed = |view: &mut Self, cx: &mut Context<Self>| {
                 view.menu_open = None;
                 cx.notify();
@@ -1826,6 +1829,7 @@ impl TalkView {
     fn inks(&self, look: &Look) -> choices::Inks {
         let palette = look.palette;
         choices::Inks {
+            light: palette.tone == Tone::Light,
             text: palette.text(TITLE),
             dim: palette.gray(SECONDARY),
             plate: palette.plate(BAR_CHIP),
@@ -3164,12 +3168,7 @@ impl TalkView {
                     at: self.model_drawn.clone(),
                     click,
                 };
-                // The panel speaks a default by its own word, as it draws it; a named model whole.
-                let said = match form.row.model_word && word == crate::command_bar::DEFAULT_ROW {
-                    true => word.clone(),
-                    false => said,
-                };
-                (Some(mark), said, word, trigger)
+                (mark, said, word, trigger)
             });
         // Where the model's own word gives way, never under its first word's width.
         let model_least = match (&model, form.row.model_word) {

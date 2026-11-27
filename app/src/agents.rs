@@ -31,6 +31,7 @@ pub mod notes;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
+pub mod provider;
 pub mod ready;
 pub mod request;
 pub mod runner;

@@ -26,7 +26,7 @@ use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
 use super::tier::{self, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
-use crate::shell::MenuEntry;
+use crate::shell::{MakerMark, MenuEntry};
 
 pub mod ilo;
 mod log_of;
@@ -174,12 +174,11 @@ pub struct Conversation {
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
-    /// The model it runs on, as the composer's model trigger reads it, with its assistant's mark:
-    /// its CLI's name and the model's, or its default's row; then the model's own word as the model
-    /// menu's row says it (D3's `Default` for its default), which the panel beside a page draws
-    /// alone; and whether its program takes another for the
-    /// next message, so the trigger opens its menu. None for an outside agent's session.
-    pub model: Option<(&'static str, SharedString, SharedString, bool)>,
+    /// The model it runs on, as the composer's model trigger reads it, after its maker's mark:
+    /// the model's own name, its default's while it runs on that (Z54); then the same as the panel
+    /// beside a page draws it; and whether its program takes another for the next message, so the
+    /// trigger opens its menu. None for an outside agent's session.
+    pub model: Option<(Option<MakerMark>, SharedString, SharedString, bool)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -1453,18 +1452,18 @@ impl Agents {
             folder: (task.ended.is_none() && task.files.folder.is_some())
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
+            // The model's own name, its version with it (Z54).
             model: task.cli.map(|cli| {
-                let (words, word): (SharedString, SharedString) = match task.model.is_empty() {
-                    true => (
-                        model_default(cli).into(),
-                        crate::command_bar::DEFAULT_ROW.into(),
-                    ),
-                    false => (
-                        format!("{} \u{b7} {}", cli.name(), task.model).into(),
-                        task.model.clone(),
-                    ),
+                let word: SharedString = match task.model.is_empty() {
+                    true => model_name(cli.caps(), &self.task_listing(cli), "").into(),
+                    false => task.model.clone(),
                 };
-                (cli.glyph(), words, word, cli.switches_model())
+                (
+                    Some(cli.caps().mark),
+                    word.clone(),
+                    word,
+                    cli.switches_model(),
+                )
             }),
         })
     }
@@ -1749,6 +1748,15 @@ impl Agents {
         self.look_for_task_agents(cx);
     }
 
+    /// A model menu opens: it draws at once from the lists last kept, and a look runs behind it if
+    /// none is, so the next one opens with them fresh. That and a sign-in are what refresh them,
+    /// with no timer (#4394).
+    pub fn model_menu_opened(&mut self, cx: &mut Context<Self>) {
+        if !self.tasks.looking {
+            self.look_for_task_agents(cx);
+        }
+    }
+
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
         self.tasks
@@ -1891,16 +1899,22 @@ impl Agents {
         }
     }
 
-    /// `cli`'s Model menu, as its ids and items: its own default first, saying which model it is
-    /// where the CLI says, then its models, as the CLI last listed them, so the menu never waits
-    /// on the CLI.
-    pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
-        model_menu(
-            self.task_model(cli),
-            &model_default(cli),
-            self.task_default_model(cli),
-            self.task_models(cli),
-        )
+    /// What `cli` last listed: its models, which its default is and those it keeps out of its
+    /// picker, or ilo's names for them from a CLI too old to list them, with no default.
+    pub fn task_listing(&self, cli: Cli) -> super::ready::Models {
+        match self.cli_models(cli) {
+            Some(models) => models.clone(),
+            None => super::ready::Models {
+                listed: self.task_models(cli),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// `cli`'s Model menu, as what each row picks and its items (`model_rows`), as the CLI last
+    /// listed them, so the menu never waits on the CLI.
+    pub fn task_model_menu(&self, cli: Cli) -> (Vec<ModelRow>, Vec<MenuEntry>) {
+        model_rows(self.task_model(cli), cli.caps(), &self.task_listing(cli), 0)
     }
 
     /// Which model `cli`'s own default is, by name, where it said when last looked for.
@@ -1923,20 +1937,11 @@ impl Agents {
     /// A going thread's model menu, where its program takes another model for its next message:
     /// its assistant's own group alone, from the list Settings' Model row is built from, the
     /// model it runs on checked. None where it can't change.
-    pub fn thread_model_menu(
-        &self,
-        agent: &str,
-    ) -> Option<(Vec<(String, String)>, Vec<MenuEntry>)> {
+    pub fn thread_model_menu(&self, agent: &str) -> Option<(Vec<ModelRow>, Vec<MenuEntry>)> {
         let task = self.task(agent)?;
         let cli = task.cli.filter(|cli| cli.switches_model())?;
         let chosen = (task.model_id.clone()).unwrap_or_else(|| self.task_model(cli).to_string());
-        let first = model_default(cli);
-        Some(model_menu(
-            &chosen,
-            &first,
-            self.task_default_model(cli),
-            self.task_models(cli),
-        ))
+        Some(model_rows(&chosen, cli.caps(), &self.task_listing(cli), 0))
     }
 
     /// The user's pick in a going thread's model menu: only a model of the list it was built
@@ -1947,20 +1952,16 @@ impl Agents {
         else {
             return;
         };
-        let models = self.task_models(cli);
+        let listing = self.task_listing(cli);
         let (name, run_on) = match id.is_empty() {
             // Its own default, which a turn names by the model it is, where the program said.
-            true => {
-                let default = self.task_default_model(cli);
-                let run_on = (models.iter())
-                    .find(|(_, name)| Some(name.as_str()) == default)
-                    .map(|(id, _)| id.clone());
-                (String::new(), run_on)
+            true => (String::new(), listing.default_id.clone()),
+            false => {
+                match (listing.listed.iter().chain(&listing.more)).find(|(each, _)| each == id) {
+                    Some((id, name)) => (name.clone(), Some(id.clone())),
+                    None => return,
+                }
             }
-            false => match models.iter().find(|(each, _)| each == id) {
-                Some((id, name)) => (name.clone(), Some(id.clone())),
-                None => return,
-            },
         };
         let Some(task) = self.task_mut(agent) else {
             return;
@@ -1994,14 +1995,23 @@ impl Agents {
     /// The model `cli` runs tasks with, by name, such as Haiku, or None for its own default.
     pub fn task_model_name(&self, cli: Cli) -> Option<SharedString> {
         let chosen = self.task_model(cli);
-        let (_, name) = (self.task_models(cli).into_iter()).find(|(id, _)| id == chosen)?;
-        Some(name.into())
+        let listing = self.task_listing(cli);
+        let (_, name) =
+            (listing.listed.iter().chain(&listing.more)).find(|(id, _)| id == chosen)?;
+        Some(name.clone().into())
+    }
+
+    /// What Settings' Model pop-up and the trigger say for `cli`'s model: its name with its version,
+    /// the default's while it's picked (Z54).
+    pub fn task_model_words(&self, cli: Cli) -> SharedString {
+        model_name(cli.caps(), &self.task_listing(cli), self.task_model(cli)).into()
     }
 
     /// Sets the model `cli` runs tasks with, only one its Model menu lists, so nothing else, typed
     /// or from a page, an agent or a file, is ever passed to the CLI as one.
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
-        let listed = self.task_models(cli).iter().any(|(id, _)| id == model);
+        let listing = self.task_listing(cli);
+        let listed = (listing.listed.iter().chain(&listing.more)).any(|(id, _)| id == model);
         if !model.is_empty() && !listed {
             return;
         }
@@ -5786,6 +5796,91 @@ const MODEL_DEFAULT: &str = "{assistant}'s default";
 /// `cli`'s Model's first choice, as its pop-up and menu say it.
 pub fn model_default(cli: Cli) -> String {
     MODEL_DEFAULT.replace("{assistant}", cli.assistant())
+}
+
+/// The model menu's last row of a maker's models, holding those its assistant lists but keeps out
+/// of its own picker (Z54c), and how a screen reader says it.
+pub const MORE_MODELS: &str = "More Models";
+const MORE_MODELS_SPOKEN: &str = "More {maker} models";
+
+/// What a menu row of the model menu picks: a model by id, empty for its assistant's own default,
+/// or nothing, as More Models, which only opens its own.
+pub type ModelRow = Option<String>;
+
+/// A provider's models as the model menu's rows (Z54), from `start` in its menu: each by its name
+/// with its version, after its maker's mark and spoken with its maker's name, all from `caps`, with
+/// `chosen` checked.
+/// There's no Default row (Z54b): with nothing chosen, the model the assistant defaults to is
+/// checked, and its row picks nothing, so a thread goes on following the assistant's own default.
+/// Then the models it keeps out of its picker, under More Models.
+pub fn model_rows(
+    chosen: &str,
+    caps: &super::provider::Caps,
+    models: &super::ready::Models,
+    start: usize,
+) -> (Vec<ModelRow>, Vec<MenuEntry>) {
+    let default = models.default_id.as_deref();
+    let checked = match chosen.is_empty() {
+        true => default,
+        false => Some(chosen),
+    };
+    let row = |id: &str, name: &str, parent: Option<usize>| {
+        let on = checked == Some(id);
+        let entry = MenuEntry {
+            checked: on,
+            over: on && parent.is_none(),
+            parent,
+            maker_mark: Some(caps.mark),
+            spoken: Some(format!("{} {name}", caps.maker).into()),
+            ..MenuEntry::named(name.to_string(), true)
+        };
+        let id = match Some(id) == default {
+            true => String::new(),
+            false => id.to_string(),
+        };
+        (Some(id), entry)
+    };
+    // An assistant that lists no model yet has its own default alone, by the assistant's name.
+    if models.listed.is_empty() && models.more.is_empty() {
+        let entry = MenuEntry {
+            checked: chosen.is_empty(),
+            over: chosen.is_empty(),
+            maker_mark: Some(caps.mark),
+            spoken: Some(format!("{} {}", caps.maker, caps.assistant).into()),
+            ..MenuEntry::named(caps.assistant, true)
+        };
+        return (vec![Some(String::new())], vec![entry]);
+    }
+    let (mut ids, mut items): (Vec<ModelRow>, Vec<MenuEntry>) = (models.listed.iter())
+        .map(|(id, name)| row(id, name, None))
+        .unzip();
+    if !models.more.is_empty() {
+        let more = start + items.len();
+        ids.push(None);
+        items.push(MenuEntry {
+            spoken: Some(MORE_MODELS_SPOKEN.replace("{maker}", caps.maker).into()),
+            ..MenuEntry::named(MORE_MODELS, true)
+        });
+        for (id, name) in &models.more {
+            let (id, entry) = row(id, name, Some(more));
+            ids.push(id);
+            items.push(entry);
+        }
+    }
+    (ids, items)
+}
+
+/// What a thread's model trigger says for the model `id` of `caps`, empty for its own default: the
+/// model's own name, with its version (Z54), never `{assistant}'s default`. The assistant's name
+/// stands in only while it hasn't said which model its default is.
+pub fn model_name(caps: &super::provider::Caps, models: &super::ready::Models, id: &str) -> String {
+    let id = match id.is_empty() {
+        true => models.default_id.as_deref().unwrap_or_default(),
+        false => id,
+    };
+    (models.listed.iter().chain(&models.more))
+        .find(|(each, _)| each == id)
+        .map_or_else(|| caps.assistant.to_string(), |(_, name)| name.clone())
 }
 
 /// A CLI's Model menu, as its ids and items, with `chosen` checked: its own default first, as
