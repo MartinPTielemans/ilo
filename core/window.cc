@@ -866,6 +866,15 @@ void Window::OnPageClicked(bc_id tab) {
   for (auto& [id, window] : Windows()) {
     if (window->selected_ != tab && std::ranges::contains(window->panes_, tab)) {
       window->Select(tab);
+      // The press gave its page the keyboard, but a window it made key gave it since to the pane
+      // shown before, as FocusPage does on activation, and Select leaves an agent's tab unfocused.
+      // The page pressed keeps it, an agent's too, as the press takes that tab over (#3243), or its
+      // keys go to the pane before, which ignores them while its dialog is up.
+      content::WebContents* pressed = Tab::FromId(tab);
+      if (pressed && window->widget_ && window->widget_->IsActive() &&
+          platform::KeyboardForPage(window->widget_.get())) {
+        Tab::FocusPage(pressed);
+      }
     }
   }
 }
