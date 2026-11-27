@@ -292,6 +292,8 @@
 @end
 
 @implementation BrowserCoreTileView
+@synthesize takesWheel = _takesWheel;
+
 - (BOOL)isFlipped {
   return YES;
 }
