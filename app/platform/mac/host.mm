@@ -5693,10 +5693,7 @@ void host_open_elsewhere(const char* url) {
   if (![page.scheme isEqualToString:@"http"] && ![page.scheme isEqualToString:@"https"]) {
     return;
   }
-  // check.sh reads this line. A driven run opens nothing, so checks never launch Safari.
-  if (Checked()) {
-    fprintf(stderr, "browser: open in safari %s\n", url);
-  }
+  // A driven run opens nothing, so checks never launch Safari.
   if (getenv("BROWSER_DRIVE")) {
     return;
   }
