@@ -453,7 +453,6 @@ use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::LOADING_SIZE;
-use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
 use crate::tokens::shell::STATUS_LOADING;
 // A loading dot's breath, out and back, eased in and out (ours, #321).

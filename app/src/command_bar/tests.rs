@@ -495,13 +495,6 @@ impl Bar {
             .unwrap()
     }
 
-    /// The mode chip's fill and its label.
-    fn site_chip(&mut self) -> (Hsla, Hsla) {
-        self.window
-            .read_with(&self.cx.cx, |bar, cx| bar.site_chip(&palette::current(cx)))
-            .unwrap()
-    }
-
     /// What each row says at its end about where its result is, and the glyph on its tile.
     fn ends(&mut self) -> Vec<(String, Option<&'static str>)> {
         self.window
@@ -1432,57 +1425,6 @@ fn leaving_a_site_search_puts_back_what_was_there_before(cx: &mut TestAppContext
     // ↩ then does what it does on the bar ⌘L opened: loads the page again.
     bar.keys("enter");
     assert_eq!(bar.calls(), ["hide", "reload 1"]);
-}
-
-/// A site search a new profile has is in its site's colour, which reads on the bar with its label
-/// in both tones; one whose site has none, as GitHub's, or one the user added, keeps the Space's
-/// accent (#1397).
-#[gpui::test]
-fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
-    for tone in [palette::Tone::Dark, palette::Tone::Light] {
-        let palette = palette::Palette::of(None, tone);
-        for (site, color) in SITE_COLORS {
-            let (fill, label) = palette.site_accent(gpui::rgb(color));
-            let (on_bar, on_fill) = (
-                palette::contrast(fill, palette.overlay),
-                palette::contrast(label, fill),
-            );
-            assert!(
-                on_bar >= palette::GLYPH && on_fill >= palette::TEXT,
-                "{site} {tone:?}"
-            );
-        }
-    }
-
-    let mut bar = Bar::new(cx);
-    let space = bar.site_chip();
-    let youtube = Suggestion {
-        site: "YouTube".into(),
-        ..hinting("youtube.com")
-    };
-    bar.type_text("yout");
-    bar.suggest("yout", vec![youtube]);
-    assert_eq!(bar.site_chip(), space);
-    bar.keys("tab");
-    let palette = bar
-        .window
-        .read_with(&bar.cx.cx, |_, cx| palette::current(cx))
-        .unwrap();
-    let (fill, label) = palette.site_accent(gpui::rgb(site_colors::YOUTUBE));
-    assert_eq!(bar.site_chip(), (fill.into(), label.into()));
-    assert_ne!(bar.site_chip(), space);
-
-    let mut bar = Bar::new(cx);
-    bar.type_text("gith");
-    bar.suggest(
-        "gith",
-        vec![Suggestion {
-            site: "GitHub".into(),
-            ..hinting("github.com")
-        }],
-    );
-    bar.keys("tab");
-    assert_eq!(bar.site_chip(), space);
 }
 
 /// The bar draws none of the Space's colour (P3): its chosen row, its caret, its selection and
