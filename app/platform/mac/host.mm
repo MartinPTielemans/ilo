@@ -20,6 +20,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../host.h"
@@ -286,6 +287,14 @@ struct Browser {
   // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
   // too (host_set_sidebar_right).
   bool sidebar_right = false;
+  // The edge knot's window and view (host_add_edge_knot), the room round its tab for its shadow,
+  // where its tab is in the window from its top left, and while it shows, the monitor that lets
+  // the mouse through the window but on the tab.
+  NSWindow* edge_knot;
+  NSView* edge_knot_view;
+  double edge_knot_margin = 0;
+  NSRect edge_knot_tab;
+  id edge_knot_monitor;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -427,6 +436,9 @@ struct Overlay {
   double fade_out = 0;
   // From the driver's makekey: its window is made key at its next hide, as its fade out starts.
   bool key_at_hide = false;
+  // Shown over a browser window under first run's card, or held behind it, and waiting there
+  // unseen until that window takes the card's place (RevealUnseenOverlays).
+  bool unseen = false;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -676,24 +688,45 @@ NSRect Unconstrained(id, SEL, NSRect frame, NSScreen*) {
   return frame;
 }
 
-BOOL Never(id, SEL) {
-  return NO;
+// NeverKey's mark on a window, which GPUI's panel class asks as AppKit offers it the keyboard.
+char kNeverKey;
+// GPUI's own answer, which a panel without the mark gets.
+BOOL (*g_panel_can_become_key)(id, SEL);
+
+BOOL PanelCanBecomeKey(id window, SEL key) {
+  return !objc_getAssociatedObject(window, &kNeverKey) && g_panel_can_become_key(window, key);
 }
 
 // An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
 // key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
-// field the menu just opened (#1664).
+// field the menu just opened (#1664). The window is marked, and the class asks the mark: swapping a
+// window's class under the observers AppKit keeps on it aborted the app as a browser window's edge
+// knot was freed.
 void NeverKey(NSWindow* window) {
-  static Class never_key;
-  if (!never_key) {
-    Class panel = object_getClass(window);
-    SEL key = @selector(canBecomeKeyWindow);
-    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
-    class_addMethod(never_key, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(never_key);
+  static Class panel = NSClassFromString(@"GPUIPanel");
+  // -class, as KVO answers it with the window's own class, not the subclass it observes it by.
+  if (!panel || ![[window class] isSubclassOfClass:panel]) {
+    static bool told;
+    if (!told) {
+      told = true;
+      fprintf(stderr, "browser: an overlay of class %s isn't GPUI's panel, so it can take keys\n",
+              ClassName(window));
+    }
+    return;
   }
-  object_setClass(window, never_key);
+  static bool replaced = [] {
+    SEL key = @selector(canBecomeKeyWindow);
+    IMP own = class_replaceMethod(panel, key, (IMP)PanelCanBecomeKey,
+                                  method_getTypeEncoding(class_getInstanceMethod(panel, key)));
+    // GPUI defines it on the class; were it inherited, the superclass's is the one it had.
+    if (!own) {
+      own = class_getMethodImplementation(class_getSuperclass(panel), key);
+    }
+    g_panel_can_become_key = reinterpret_cast<BOOL (*)(id, SEL)>(own);
+    return true;
+  }();
+  (void)replaced;
+  objc_setAssociatedObject(window, &kNeverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // Another app that asks which of ours is in front takes the first window at the normal level, in
@@ -1463,8 +1496,8 @@ void WatchHeldEscape() {
 namespace {
 
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
-// isn't the active one, and with Reduce Transparency or Increase Contrast.
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill with Reduce
+// Transparency or Increase Contrast, whichever window is active.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
@@ -1473,42 +1506,13 @@ void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
-// From the first browser window, every browser window's material follows the app: active while
-// the app is the active one, AppKit's inactive fill once another app is in front. Following the
-// window's own key state instead gives a window the inactive fill behind its own command bar, a
-// menu or Settings, each a window that takes the keyboard from it.
-void WatchAppActiveForMaterial() {
-  static bool watching = false;
-  if (watching) {
-    return;
-  }
-  watching = true;
-  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
-    for (auto& browser : g_browsers) {
-      browser->material.state = state;
-    }
-  };
-  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  [center addObserverForName:NSApplicationDidBecomeActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateActive);
-                  }];
-  [center addObserverForName:NSApplicationDidResignActiveNotification
-                      object:nil
-                       queue:nil
-                  usingBlock:^(NSNotification*) {
-                    follow(NSVisualEffectStateInactive);
-                  }];
-}
-
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
-  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
+  // Active even with another app in front, so the glass and the Space's colour stay; AppKit still
+  // gives its opaque fill with Reduce Transparency or Increase Contrast.
+  material.state = NSVisualEffectStateActive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
@@ -2154,13 +2158,89 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
 // Whether the window first run held is on, in the place of first run's (host_close_first_run).
 static bool g_took_first_runs_place;
 
-// The browser window a grow put under first run's, unseen until the card gives way to it
-// (host_set_first_run_reveal), until it comes to the front.
+// The browser window a grow put under first run's, unseen until it takes the card's place and
+// comes to the front.
 static __weak NSWindow* g_under_first_run;
+
+// From host_grow_first_run: how long the content of the window that takes first run's place takes
+// to come in, which the overlays waiting over it take too.
+static double g_first_run_reveal = 0;
 
 // Its opacity while unseen: not none, as a window with none counts as hidden, and then GPUI
 // doesn't draw it nor Chromium its pages; and too little to see over any desktop.
 constexpr CGFloat kUnseen = 0.01;
+
+// What hears Chromium change the opacity of the window under first run's.
+static id g_under_watch;
+
+// Makes |window|, or none, the one under first run's, unseen. Chromium keeps a window it shows
+// clear until its compositor's first frame, then gives it back the opacity it had as the core
+// showed it, whole, which put it over the card for the rest of the grow (NativeWidgetNSWindowBridge
+// in Chromium 157). On that same call it posts the occlusion change, heard here at once, so the
+// window is unseen again before that frame is on screen.
+static void SetUnderFirstRun(NSWindow* window) {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (g_under_watch) {
+    [center removeObserver:g_under_watch];
+    g_under_watch = nil;
+  }
+  g_under_first_run = window;
+  if (!window) {
+    return;
+  }
+  g_under_watch = [center addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                                      object:window
+                                       queue:nil
+                                  usingBlock:^(NSNotification* notification) {
+                                    NSWindow* under = notification.object;
+                                    if (under == g_under_first_run &&
+                                        under.alphaValue != kUnseen) {
+                                      under.alphaValue = kUnseen;
+                                    }
+                                  }];
+}
+
+// check.sh reads these lines as |overlay| comes on screen over |window|. The shadow's window holds
+// the overlay's shape cut out of it, so off by any amount it shows what's under the overlay past
+// its edge (#2075).
+static void SayOverlayShown(const Overlay& overlay, NSWindow* window) {
+  const NSRect content = [window contentRectForFrameRect:window.frame];
+  const NSRect frame = overlay.window.frame;
+  fprintf(stderr, "browser: %s at %g %g %g %g\n", overlay.name, NSMinX(frame) - NSMinX(content),
+          NSMaxY(content) - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
+  const NSRect shadow = overlay.shadow.frame;
+  const NSRect around = NSInsetRect(frame, -overlay.reach(), -overlay.reach());
+  fprintf(stderr, "browser: %s shadow off by %g %g %g %g\n", overlay.name,
+          NSMinX(shadow) - NSMinX(around), NSMaxY(around) - NSMaxY(shadow),
+          NSWidth(shadow) - NSWidth(around), NSHeight(shadow) - NSHeight(around));
+  fprintf(stderr, "browser: %s shown\n", overlay.name);
+}
+
+// The overlays waiting unseen over |window|, which has just taken first run's place, come in as
+// its content does, and the one shown takes the keyboard and the keys typed since it opened.
+static void RevealUnseenOverlays(NSWindow* window) {
+  for (Overlay& overlay : g_overlays) {
+    if (!std::exchange(overlay.unseen, false) || !overlay.shown || !overlay.over ||
+        overlay.over->window != window) {
+      continue;
+    }
+    NSWindow* shown = overlay.window;
+    NSWindow* shadow = overlay.shadow;
+    shown.ignoresMouseEvents = NO;
+    [NSAnimationContext
+        runAnimationGroup:^(NSAnimationContext* context) {
+          context.duration = g_first_run_reveal;
+          context.timingFunction =
+              [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+          shown.animator.alphaValue = 1;
+          shadow.animator.alphaValue = 1;
+        }
+        completionHandler:nil];
+    [shown makeKeyAndOrderFront:nil];
+    ReleaseKeys(shown);
+    SayOverlayShown(overlay, window);
+  }
+}
 
 // Shows the window of |ui_view| in front with the keyboard, or right behind |above|, neither key
 // nor activating the app, and there all but transparent where |unseen|.
@@ -2173,10 +2253,11 @@ static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
   NSWindow* window = view.window;
   // Shown already under first run's, drawn there through the grow: whole, and in front.
   if (window && window == g_under_first_run && !above) {
-    g_under_first_run = nil;
+    SetUnderFirstRun(nil);
     window.alphaValue = 1;
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+    RevealUnseenOverlays(window);
     return;
   }
   browser->window = window;
@@ -2238,6 +2319,7 @@ static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
     [g_launch_window orderOut:nil];
     g_launch_window = nil;
     [NSApp activateIgnoringOtherApps:YES];
+    RevealUnseenOverlays(window);
   }
 
   // A click outside the command bar closes it first, so the click lands the way it would with
@@ -2328,7 +2410,10 @@ static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
                                             }
                                             for (int index = 0;
                                                  index < int(std::size(g_overlays)); index++) {
-                                              if (event.window != g_overlays[index].window) {
+                                              // Not one waiting unseen under first run's card
+                                              // for its window: the press is on the card.
+                                              if (event.window != g_overlays[index].window &&
+                                                  !g_overlays[index].unseen) {
                                                 host_dismiss_overlay(index);
                                               }
                                             }
@@ -3004,6 +3089,12 @@ void host_forget_window(void* ui_view) {
   browser->offer_view = nil;
   browser->reveal = nil;
   browser->reveal_view = nil;
+  if (browser->edge_knot_monitor) {
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+  }
+  browser->edge_knot = nil;
+  browser->edge_knot_view = nil;
 }
 
 void host_set_overlay_elevation(int index,
@@ -3393,31 +3484,33 @@ void host_show_overlay(int index,
     if (overlay->window.parentWindow && overlay->window.parentWindow != window) {
       [overlay->window.parentWindow removeChildWindow:overlay->window];
     }
-    overlay->window.ignoresMouseEvents = NO;
+    // Over a browser window under first run's card, or held behind it, as the bar first run's end
+    // opens at its press: drawn and placed there, but unseen, neither key nor taking clicks, and
+    // the keys typed meanwhile held for it, until that window takes the card's place.
+    const bool unseen = browser->held || window == g_under_first_run;
+    overlay->unseen = unseen;
+    overlay->window.ignoresMouseEvents = unseen;
+    if (unseen) {
+      overlay->shadow.alphaValue = 0;
+    }
     // Shown again while it faded from a fold.
     [NSAnimationContext
         runAnimationGroup:^(NSAnimationContext* context) {
           context.duration = 0;
-          overlay->window.animator.alphaValue = 1;
+          overlay->window.animator.alphaValue = unseen ? kUnseen : 1;
         }
         completionHandler:nil];
     AddOver(window, overlay->window);
+    if (unseen) {
+      fprintf(stderr, "browser: %s waits under first run\n", overlay->name);
+      return;
+    }
     if (overlay->grows) {
       GrowOverlay(*overlay);
     }
     [overlay->window makeKeyAndOrderFront:nil];
     ReleaseKeys(overlay->window);
-    // check.sh reads these lines. The shadow's window holds the overlay's shape cut out of it, so
-    // off by any amount it shows what's under the overlay past its edge (#2075).
-    fprintf(stderr, "browser: %s at %g %g %g %g\n", overlay->name,
-            NSMinX(frame) - NSMinX(content), NSMaxY(content) - NSMaxY(frame), NSWidth(frame),
-            NSHeight(frame));
-    const NSRect shadow = overlay->shadow.frame;
-    const NSRect around = NSInsetRect(overlay->window.frame, -overlay->reach(), -overlay->reach());
-    fprintf(stderr, "browser: %s shadow off by %g %g %g %g\n", overlay->name,
-            NSMinX(shadow) - NSMinX(around), NSMaxY(around) - NSMaxY(shadow),
-            NSWidth(shadow) - NSWidth(around), NSHeight(shadow) - NSHeight(around));
-    fprintf(stderr, "browser: %s shown\n", overlay->name);
+    SayOverlayShown(*overlay, window);
   });
 }
 
@@ -6158,6 +6251,83 @@ void host_hide_reveal(void* ui_view) {
   });
 }
 
+// Lets the mouse through |browser|'s edge knot window but on its tab, with the pointer at |screen|.
+static void PlaceEdgeKnotClicks(Browser* browser, NSPoint screen) {
+  NSPoint at = [browser->edge_knot convertPointFromScreen:screen];
+  at.y = NSHeight(browser->edge_knot.frame) - at.y;
+  browser->edge_knot.ignoresMouseEvents = !NSPointInRect(at, browser->edge_knot_tab);
+}
+
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  browser->edge_knot_view = (__bridge NSView*)edge_knot_view;
+  browser->edge_knot = browser->edge_knot_view.window;
+  browser->edge_knot_margin = margin;
+  MakeOverlay(browser->edge_knot);
+  // The UI draws the tab and its shadow, in the margin round it, as the mini bar's.
+  browser->edge_knot.styleMask = NSWindowStyleMaskBorderless;
+  browser->edge_knot.hasShadow = NO;
+  browser->edge_knot.ignoresMouseEvents = YES;
+  // A click on it brings the sidebar out, and the keyboard stays where it was.
+  NeverKey(browser->edge_knot);
+}
+
+void host_show_edge_knot(void* ui_view, double top, double width, double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot || !browser->window) {
+      return;
+    }
+    const double margin = browser->edge_knot_margin;
+    NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
+    const double window_width = width + margin;
+    const CGFloat x = browser->sidebar_right ? NSMaxX(content) - window_width : NSMinX(content);
+    [browser->edge_knot setFrame:NSMakeRect(x, NSMaxY(content) - top - height - margin,
+                                            window_width, height + 2 * margin)
+                         display:NO];
+    browser->edge_knot_tab =
+        NSMakeRect(browser->sidebar_right ? margin : 0, margin, width, height);
+    if (browser->edge_knot_monitor) {
+      PlaceEdgeKnotClicks(browser, Pointer());
+      return;
+    }
+    // As the reveal does, it goes on screen once it has drawn what it shows now.
+    [browser->edge_knot_view.layer setNeedsDisplay];
+    [browser->edge_knot_view.layer displayIfNeeded];
+    AddOver(browser->window, browser->edge_knot);
+    // The page's view takes the pointer's moves while it's over the page, so the knot's window
+    // doesn't hear them. Only while it shows, and only as the pointer moves.
+    browser->edge_knot_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                              handler:^NSEvent*(NSEvent* event) {
+                                                NSPoint at = event.locationInWindow;
+                                                if (event.window) {
+                                                  at = [event.window convertPointToScreen:at];
+                                                }
+                                                PlaceEdgeKnotClicks(browser, at);
+                                                return event;
+                                              }];
+    PlaceEdgeKnotClicks(browser, Pointer());
+  });
+}
+
+void host_hide_edge_knot(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!browser || !browser->edge_knot_monitor) {
+      return;
+    }
+    [NSEvent removeMonitor:browser->edge_knot_monitor];
+    browser->edge_knot_monitor = nil;
+    browser->edge_knot.ignoresMouseEvents = YES;
+    [browser->window removeChildWindow:browser->edge_knot];
+    [browser->edge_knot orderOut:nil];
+  });
+}
+
 void host_focus(void* view) {
   NSView* ns_view = (__bridge NSView*)view;
   [ns_view.window makeFirstResponder:ns_view];
@@ -6358,7 +6528,7 @@ static bool StageManagerOn() {
       boolForKey:@"GloballyEnabled"];
 }
 
-bool host_grow_first_run(void) {
+bool host_grow_first_run(double reveal) {
   if (!g_first_run.visible || g_first_run_card.width <= 0 || StageManagerOn()) {
     return false;
   }
@@ -6407,21 +6577,10 @@ bool host_grow_first_run(void) {
     // at the exit's end, as before, it took frames from the card's motion or left the grown card
     // blank until it came.
     ShowWindow((__bridge void*)held_view, first_run, true);
-    g_under_first_run = held;
+    SetUnderFirstRun(held);
   });
+  g_first_run_reveal = reveal;
   return true;
-}
-
-void host_set_first_run_reveal(double window, double glass) {
-  if (!g_first_run || !g_under_first_run) {
-    return;
-  }
-  g_under_first_run.alphaValue = MAX(window, kUnseen);
-  for (NSView* view in g_first_run.contentView.subviews) {
-    if ([view isKindOfClass:NSVisualEffectView.class]) {
-      view.alphaValue = glass;
-    }
-  }
 }
 
 void host_show_first_run(void) {
@@ -6456,7 +6615,7 @@ void host_close_first_run(void) {
   }
   // A window still under it, as on a quit mid-exit, isn't left unseen.
   g_under_first_run.alphaValue = 1;
-  g_under_first_run = nil;
+  SetUnderFirstRun(nil);
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;

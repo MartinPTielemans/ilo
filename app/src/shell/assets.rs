@@ -37,6 +37,24 @@ fn bars_svg(angle: f32) -> String {
     )
 }
 
+/// The makers' marks before their own models in the model menu (#4394), each its maker's
+/// published file, byte for byte. They're their makers' trademarks, not ilo's, used only to name
+/// each maker's own models (NOTICE).
+pub const MAKERS: &[(&str, &[u8])] = &[
+    // OpenAI's Blossom, OAI_OpenAI-Blossom_Black.svg from https://cdn.openai.com/brand/openai-logos.zip
+    // on https://openai.com/brand/ (read 11-27); its White file is the same shape.
+    (
+        "makers/openai-blossom.svg",
+        include_bytes!("../../assets/makers/openai-blossom.svg"),
+    ),
+    // Claude's Spark, "Claude Spark - Clay.svg" from Anthropic's press kit,
+    // https://www.anthropic.com/press-kit (read 11-27).
+    (
+        "makers/claude-spark.svg",
+        include_bytes!("../../assets/makers/claude-spark.svg"),
+    ),
+];
+
 const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/activity.svg",
@@ -942,6 +960,7 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)
+            .chain(MAKERS)
             .find(|(name, _)| *name == path)
             .map(|&(_, icon)| Cow::Borrowed(icon)))
     }
@@ -950,6 +969,7 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)
+            .chain(MAKERS)
             .filter(|(name, _)| name.starts_with(path))
             .map(|&(name, _)| name.into())
             .collect())
@@ -1050,11 +1070,9 @@ mod tests {
             ] {
                 assert!(svg.contains(want), "{name}: needs {want}");
             }
-            // The Library's books have one solid, as its Spaces' cards do, at the one stroke.
-            let fills = if name == "library.svg" { 2 } else { 1 };
             assert_eq!(
                 svg.matches("fill=").count(),
-                fills,
+                1,
                 "{name}: an outline has no fill"
             );
             checked += 1;

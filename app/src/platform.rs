@@ -258,6 +258,9 @@ unsafe extern "C" {
     );
     pub fn host_show_reveal(ui_view: *mut c_void, width: f64);
     pub fn host_hide_reveal(ui_view: *mut c_void);
+    pub fn host_add_edge_knot(ui_view: *mut c_void, edge_knot_view: *mut c_void, margin: f64);
+    pub fn host_show_edge_knot(ui_view: *mut c_void, top: f64, width: f64, height: f64);
+    pub fn host_hide_edge_knot(ui_view: *mut c_void);
     pub fn host_detent();
     pub fn host_app_active() -> bool;
     pub fn host_needs_you_badge(count: c_int);
@@ -338,9 +341,7 @@ unsafe extern "C" {
     pub fn host_add_first_run(first_run_view: *mut c_void);
     pub fn host_set_first_run_frame(width: f64, height: f64, radius: f64);
     #[cfg(target_os = "macos")]
-    pub fn host_grow_first_run() -> bool;
-    #[cfg(target_os = "macos")]
-    pub fn host_set_first_run_reveal(window: f64, glass: f64);
+    pub fn host_grow_first_run(reveal: f64) -> bool;
     pub fn host_show_first_run();
     pub fn host_close_first_run();
     pub fn host_close_other_window() -> bool;

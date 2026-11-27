@@ -86,7 +86,14 @@ pub(crate) fn task_pages(at: usize) -> Vec<(u64, &'static str, &'static str)> {
 /// =open is the working task's, with four pages, the other two closed.
 pub(crate) fn group_state() -> Option<String> {
     let state = states::var("PREVIEW_TASKS").ok()?;
-    let one = ["done", "needs-you", "stopped", "interrupted", "two"];
+    let one = [
+        "done",
+        "needs-you",
+        "stopped",
+        "interrupted",
+        "not-installed",
+        "two",
+    ];
     one.contains(&state.as_str()).then_some(state)
 }
 
@@ -379,6 +386,19 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             ));
             cards.truncate(1);
         }
+        // Its assistant's program missing, the card's fix is its row's Install and Sign In (#4100).
+        Some("not-installed") => {
+            cards[0].status = "Claude isn't installed.".into();
+            cards[0].fuller = false;
+            cards[0].lead = 0;
+            cards[0].dot = Dot::Ended;
+            cards[0].word = Word::Interrupted;
+            cards[0].fix = Some((
+                browser::agents::runner::Cli::Claude,
+                browser::agents::sign_in::Offer::Install,
+            ));
+            cards.truncate(1);
+        }
         Some("stopped") => cards = vec![cards.swap_remove(1)],
         Some("done") => cards = vec![cards.swap_remove(2)],
         Some("two") => drop(cards.remove(1)),
@@ -485,20 +505,34 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
+    // PREVIEW_TASK_PAGES=<n> keeps its first n pages: 0 shows it with no rail (#4396).
+    if let Some(count) = states::var("PREVIEW_TASK_PAGES")
+        .ok()
+        .and_then(|n| n.parse().ok())
+    {
+        talk.tabs.truncate(count);
+    }
     talk
 }
 
-/// A thread's model as its composer's row says it, the app's way: its CLI's mark and name with
-/// the model's, or its default's row, opening the model's menu where the CLI takes another.
-fn model(cli: Cli, name: Option<&str>) -> (&'static str, SharedString, SharedString, bool) {
-    let (said, word) = match name {
-        Some(name) => (format!("{} \u{b7} {name}", cli.name()), name.to_string()),
-        None => {
-            let default = browser::agents::task::model_default(cli);
-            (default, browser::command_bar::DEFAULT_ROW.to_string())
-        }
-    };
-    (cli.glyph(), said.into(), word.into(), cli.switches_model())
+/// A thread's model as its trigger has it: mark, words, own word and whether it opens a menu.
+type Model = (
+    Option<browser::shell::MakerMark>,
+    SharedString,
+    SharedString,
+    bool,
+);
+
+/// A thread's model as its composer's row says it, the app's way (Z54): the model's own name,
+/// its default's (as the recorded answers name them) where none is picked, after its provider's
+/// mark, opening the model's menu where the CLI takes another.
+fn model(cli: Cli, name: Option<&str>) -> Model {
+    let caps = cli.caps();
+    let word = SharedString::from(name.map_or_else(
+        || browser::agents::task::model_name(caps, &crate::recorded_models(caps.id), ""),
+        String::from,
+    ));
+    (Some(caps.mark), word.clone(), word, cli.switches_model())
 }
 
 /// The view of a task that isn't at work says what its group's header does: its title, where it

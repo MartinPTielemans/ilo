@@ -16,7 +16,7 @@ use crate::{
     dialog::{Field, Question},
     menu::{Highlight, Look, Swatch},
     palette::Tone,
-    space_icon::{SpaceIcon, has_icon},
+    space_icon::{SpaceIcon, has_glyph, has_icon},
     theme::Theme,
 };
 
@@ -46,6 +46,24 @@ fn sentence_case(title: &str) -> String {
 
 /// What an item of a menu does once chosen.
 pub(super) type MenuAction = Box<dyn FnOnce(&mut Shell, &mut Context<Shell>)>;
+
+/// A maker's mark: its own asset, drawn unaltered in its own ink, in a box that holds whatever
+/// clear space the asset keeps round it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MakerMark {
+    pub path: &'static str,
+    pub size: f32,
+    /// Its ink, 0xRRGGBBAA, in the light look and the dark.
+    pub light: u32,
+    pub dark: u32,
+}
+
+impl MakerMark {
+    /// Its ink in the light look or the dark.
+    pub fn ink(self, light: bool) -> gpui::Rgba {
+        gpui::rgba(if light { self.light } else { self.dark })
+    }
+}
 
 /// An item in a menu the host shows. A line between items has no title.
 #[derive(Clone)]
@@ -91,6 +109,16 @@ pub struct MenuEntry {
     pub stays: Option<crate::menu::Stays>,
     /// The icon before its title, as the add menu's rows have.
     pub icon: Option<&'static str>,
+    /// The letter in the icon's place, for a Space with no glyph of its own.
+    pub mark: Option<SharedString>,
+    /// Its maker's mark in the icon's place, as a model's row has.
+    pub maker_mark: Option<MakerMark>,
+    /// What a screen reader says for it in place of its title, where the title leans on something
+    /// only seen, as a model's row says its maker, whose mark isn't read.
+    pub spoken: Option<SharedString>,
+    /// One of a run of rows that scrolls once it's longer than [menu] `scroll-rows`, as the Space
+    /// button's menu's Spaces do.
+    pub scrolls: bool,
 }
 
 impl MenuEntry {
@@ -130,6 +158,10 @@ impl MenuEntry {
             out: false,
             stays: None,
             icon: None,
+            mark: None,
+            maker_mark: None,
+            spoken: None,
+            scrolls: false,
         }
     }
 
@@ -428,7 +460,7 @@ impl Shell {
     /// false there.
     fn space_items(&self, space: u64, new_folder: bool, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
         let entry = self.spaces.iter().find(|each| each.id == space);
-        let icon = entry.is_some_and(|each| has_icon(&each.icon));
+        let icon = entry.is_some_and(|each| has_glyph(&each.icon));
         let theme = entry.is_some_and(|each| each.color.is_some() || each.theme.is_some());
         let mut items = space_menu_head(space, icon, theme);
         // A lone unnamed Space's name row hides and comes back here (Arc 1.171), its item saying
@@ -569,7 +601,7 @@ impl Shell {
         // The name row, the menu control and the + say so after this if the menu is their own.
         self.name_menu = false;
         self.app_menu = false;
-        self.plus_menu = false;
+        self.space_switcher_up = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -581,7 +613,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         shell.app_menu = false;
-                        shell.plus_menu = false;
+                        shell.space_switcher_up = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -1811,11 +1843,71 @@ impl Shell {
         }
     }
 
-    /// The + button's menu, by Arc's menus' names for what it makes (ours: Arc's + menu isn't
-    /// recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have one.
-    /// The + keeps its plate while it's up.
-    pub(super) fn plus_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let mut items = vec![
+    /// The Space button's menu (#4400). It hangs from the button, right edges together, above
+    /// it.
+    pub(super) fn space_switcher(&mut self, window: &gpui::Window, cx: &mut Context<Self>) {
+        let Some(frame) = (self.button_frames.borrow())
+            .get(super::footer::SPACE_BUTTON)
+            .copied()
+        else {
+            return;
+        };
+        let items = self.space_switcher_items(cx);
+        let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
+        let width = crate::menu::root_width(&entries, window);
+        let foot = frame.top() - gpui::px(crate::menu::FROM_CONTROL);
+        let at = gpui::point(
+            frame.right() - gpui::px(width),
+            foot - gpui::px(crate::menu::height(&entries)),
+        );
+        self.show_space_switcher(items, at, cx);
+    }
+
+    /// Shows the Space button's `items` with the menu's top left at `at`. The button keeps its
+    /// plate while they're up.
+    pub(super) fn show_space_switcher(
+        &mut self,
+        items: Vec<(MenuEntry, MenuAction)>,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_menu(items, at, None, cx);
+        self.space_switcher_up = self.menu_open;
+        cx.notify();
+    }
+
+    /// The Space button's menu: every Space, the one shown checked, with its mark and its ⌃
+    /// number; after a line what the + made, by Arc's menus' names for it (ours: Arc's + menu
+    /// isn't recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have
+    /// one; and after another line, what it adds from the desktop.
+    pub(super) fn space_switcher_items(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Vec<(MenuEntry, MenuAction)> {
+        let keys = user_keys(cx);
+        let mut items: Vec<(MenuEntry, MenuAction)> = Vec::new();
+        let spaces = (self.spaces.iter()).filter(|space| space.agent.is_empty());
+        for (index, space) in spaces.enumerate() {
+            let id = space.id;
+            let mut entry = MenuEntry::named(space.name.clone(), true).checked(id == self.space);
+            entry.scrolls = true;
+            match SpaceIcon::parse(&space.icon).glyph_path() {
+                Some(path) => entry.icon = Some(path),
+                None => entry.mark = Some(crate::space_icon::letter(&space.name).into()),
+            }
+            if index < 9 {
+                entry = entry.shortcut(Command::SelectSpace(index), keys);
+            }
+            let show: MenuAction = Box::new(move |shell, cx| {
+                // check.sh reads this line, as it read the dots' (#4400).
+                log!("browser: command select-space via footer");
+                shell.show_space(id, cx)
+            });
+            items.push((entry, show));
+        }
+        let line = || -> (MenuEntry, MenuAction) { (MenuEntry::line(), Box::new(|_, _| {})) };
+        items.push(line());
+        let mut made = vec![
             ("New Space…", Command::NewSpace),
             ("New Folder…", Command::NewFolder),
             ("New Split View", Command::AddSplit),
@@ -1823,7 +1915,7 @@ impl Shell {
         ];
         // Off in Settings › Features, it has no item.
         if self.new_note {
-            items.push(("New Note", Command::NewNote));
+            made.push(("New Note", Command::NewNote));
         }
         self.read_boosts_of(self.field_tab(), cx);
         if let Some(title) = self.boost_entry(self.field_tab()) {
@@ -1831,47 +1923,30 @@ impl Shell {
                 "Edit Boost…" => Command::EditBoost,
                 _ => Command::NewBoost,
             };
-            items.push((title, command));
+            made.push((title, command));
         }
         let split = self.selected != 0 && self.panes(self.selected).len() < MAX_PANES;
-        let enabled = |command| command != Command::AddSplit || split;
-        let mut entries: Vec<MenuEntry> = items
-            .iter()
-            .map(|&(title, command)| MenuEntry::new(title, enabled(command)))
-            .collect();
-        // From the desktop, after a line: the Mac's panel picks files and folders together, the
-        // others' one or the other (ours, as Arc adds both from its +).
-        let disk: &[(&str, bool, bool)] = match files::PANEL_PICKS_BOTH {
+        for (title, command) in made {
+            let enabled = command != Command::AddSplit || split;
+            let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "footer", cx));
+            items.push((MenuEntry::new(title, enabled), action));
+        }
+        // From the desktop: the Mac's panel picks files and folders together, the others' one or
+        // the other (ours, as Arc adds both from its +).
+        let disk: &[(&'static str, bool, bool)] = match files::PANEL_PICKS_BOTH {
             true => &[("Add File or Folder…", true, true)],
             false => &[("Add Files…", true, false), ("Add Folder…", false, true)],
         };
-        if !self.one_space() {
-            entries.push(MenuEntry::line());
-            entries.extend(disk.iter().map(|&(title, ..)| MenuEntry::new(title, true)));
+        items.push(line());
+        for &(title, files, folders) in disk {
+            let action: MenuAction = Box::new(move |shell, cx| {
+                // check.sh waits for this line.
+                log!("browser: footer {title}");
+                shell.add_from_disk(files, folders, cx);
+            });
+            items.push((MenuEntry::new(title, true), action));
         }
-        self.context_menu(
-            entries,
-            position,
-            Box::new(move |chosen, shell, cx| {
-                // The + lets its plate go.
-                cx.notify();
-                let Some(at) = chosen else {
-                    return;
-                };
-                if let Some(&(_, command)) = items.get(at) {
-                    return shell.run(command, "footer", cx);
-                }
-                // After the line.
-                if let Some(&(title, files, folders)) = disk.get(at - items.len() - 1) {
-                    // check.sh waits for this line.
-                    log!("browser: footer {title}");
-                    shell.add_from_disk(files, folders, cx);
-                }
-            }),
-            cx,
-        );
-        self.plus_menu = self.menu_open;
-        cx.notify();
+        items
     }
 
     /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's
@@ -1967,13 +2042,10 @@ fn space_menu_head(space: u64, has_icon: bool, has_theme: bool) -> Vec<(MenuEntr
     items
 }
 
-/// A Space's item in the menu bar: its name, after its emoji if it has one. GPUI's menu items
-/// have no image, so a glyph isn't shown.
-pub(super) fn space_menu_label(icon: &str, name: &str) -> SharedString {
-    match SpaceIcon::parse(icon) {
-        SpaceIcon::Emoji(emoji) => format!("{emoji} {name}").into(),
-        SpaceIcon::Dot | SpaceIcon::Glyph(_) => name.to_string().into(),
-    }
+/// A Space's item in the menu bar: its name alone. GPUI's menu items have no image, so a glyph
+/// isn't shown, and an emoji a Space keeps from before is no mark of it (#4400).
+pub(super) fn space_menu_label(_icon: &str, name: &str) -> SharedString {
+    name.to_string().into()
 }
 
 /// Mute, dimmed while the tab is silent, as Arc's; a muted one unmutes.
@@ -2195,11 +2267,11 @@ mod tests {
         assert_eq!(titles[2..], ["Edit Theme Color…", "Remove Theme Color"]);
     }
 
-    /// The menu bar lists a Space by its name, after its emoji if it has one.
+    /// The menu bar lists a Space by its name alone, an emoji it keeps from before too.
     #[test]
-    fn the_menu_bar_names_a_space_after_its_emoji() {
+    fn the_menu_bar_names_a_space_by_its_name_alone() {
         assert_eq!(space_menu_label("", "Work"), "Work");
-        assert_eq!(space_menu_label("🙂", "Work"), "🙂 Work");
+        assert_eq!(space_menu_label("🙂", "Work"), "Work");
         assert_eq!(space_menu_label("glyph:star", "Work"), "Work");
     }
 

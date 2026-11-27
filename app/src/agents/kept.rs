@@ -44,6 +44,11 @@ const INDEX: &str = "index.json";
 const KEEP_NOTHING: &str = "--no-session-persistence";
 /// How long the assistant gets to remove one conversation before it counts as not removed.
 const REMOVING: Duration = Duration::from_secs(30);
+/// How many of the assistant's runs remove conversations at once. A launch can have hundreds to
+/// remove, each a run of its own, and one at a time took over a minute for 990 (#4446); a few at
+/// once, each at a low priority, take a fraction of that without taking the machine from the
+/// browser.
+pub const AT_ONCE: usize = 4;
 
 /// A kept conversation's id: a UUID ilo makes, which the assistant files the conversation under.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -578,7 +583,7 @@ pub fn remove(program: &Path, path: Option<&str>, root: &Path, id: &Id) -> bool 
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    let Ok(mut child) = command.spawn() else {
+    let Ok(mut child) = crate::child::spawn_low(&mut command) else {
         return false;
     };
     // The standard library waits with no limit, so this looks again until it ends or its time is
@@ -602,6 +607,40 @@ pub fn remove(program: &Path, path: Option<&str>, root: &Path, id: &Id) -> bool 
         return false;
     }
     std::fs::remove_dir_all(&folder).is_ok() || !folder.exists()
+}
+
+/// Runs `remove` on each of `all`, no more than `at_once` at a time, on threads of the removal's
+/// own, and gives each back with whether it was removed, in the order they ended. It waits for
+/// every one, so it's never run on the UI's thread.
+pub fn remove_each<T: Send>(
+    all: Vec<T>,
+    at_once: usize,
+    remove: impl Fn(&T) -> bool + Sync,
+) -> Vec<(T, bool)> {
+    let threads = at_once.clamp(1, all.len().max(1));
+    let next = std::sync::Mutex::new(all.into_iter());
+    let ended = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            // The next is taken with the lock held for that alone, never across a removal.
+            let work = || loop {
+                let Some(each) = next.lock().unwrap().next() else {
+                    break;
+                };
+                let removed = remove(&each);
+                ended.lock().unwrap().push((each, removed));
+            };
+            // A thread that can't be made leaves its share to those that were.
+            _ = (std::thread::Builder::new().name("kept removal".into())).spawn_scoped(scope, work);
+        }
+    });
+    // None was made: this thread does them all.
+    let mut ended = ended.into_inner().unwrap();
+    for each in next.into_inner().unwrap() {
+        let removed = remove(&each);
+        ended.push((each, removed));
+    }
+    ended
 }
 
 #[cfg(test)]

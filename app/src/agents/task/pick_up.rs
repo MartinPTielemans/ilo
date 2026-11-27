@@ -863,14 +863,14 @@ impl Agents {
         self.tasks.kept.write(&root);
         cx.notify();
         let folder = root.clone();
+        // A few of the assistant's runs at once, as a launch may leave hundreds (#4446).
         let removed = cx.background_spawn(async move {
-            (removing.into_iter())
-                .map(|(id, program, path)| {
-                    let removed = program.is_some_and(|program| {
-                        kept::remove(&program, path.as_deref(), &folder, &id)
-                    });
-                    (id, removed)
-                })
+            let removed = kept::remove_each(removing, kept::AT_ONCE, |(id, program, path)| {
+                (program.as_ref())
+                    .is_some_and(|program| kept::remove(program, path.as_deref(), &folder, id))
+            });
+            (removed.into_iter())
+                .map(|((id, ..), removed)| (id, removed))
                 .collect::<Vec<_>>()
         });
         cx.spawn(async move |agents, cx| {

@@ -90,9 +90,6 @@ pub(crate) struct Recorder {
     pub(super) grows_first_run: Cell<bool>,
     /// How many times it was asked whether it grows first run's window.
     pub(super) asked_to_grow: Cell<u32>,
-    /// What each frame of a grown exit said of the browser window and the card's glass, kept
-    /// apart so what the host was told reads as before.
-    pub(super) revealed: RefCell<Vec<(f32, f32)>>,
     /// What first run's end does where the Mac's host draws the browser window before showing it,
     /// for a test to draw the shell's window as the host would.
     pub(super) first_run_end: RefCell<Option<FirstRunEnd>>,
@@ -336,8 +333,9 @@ pub(crate) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
-    /// The Shell that set_threads and show_share_sheet read, as the core's do: turning agents off
-    /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
+    /// The Shell that set_threads, show_share_sheet and start_broom read, as the core's do:
+    /// turning agents off ends their ask, which reads every Shell, the share sheet finds its tab's
+    /// window, and a sort reads the Space its window shows.
     reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
 
@@ -800,7 +798,8 @@ impl Browser for Recorder {
         self.broom.get()
     }
 
-    fn start_broom(&self, _: &mut App) {
+    fn start_broom(&self, cx: &mut App) {
+        self.read_shell(cx);
         self.record("start broom".into())
     }
 
@@ -1691,6 +1690,14 @@ impl Browser for Recorder {
 
     fn hide_reveal(&self, _: &mut App) {}
 
+    fn show_edge_knot(&self, top: f32, width: f32, height: f32, _: &mut App) {
+        self.record(format!("edge knot at {top} {width} {height}"));
+    }
+
+    fn hide_edge_knot(&self, _: &mut App) {
+        self.record("edge knot hidden".into());
+    }
+
     fn option_reveals_sidebar(&self) -> bool {
         !self.option_off.get()
     }
@@ -1981,6 +1988,7 @@ impl Browser for Recorder {
         tab: u64,
         place: crate::site_controls::Place,
         _: Size<Pixels>,
+        _: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<crate::site_controls::Extension>,
         profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
@@ -2173,10 +2181,6 @@ impl Browser for Recorder {
         // Counted, not recorded, so what the host was told reads as before.
         self.asked_to_grow.set(self.asked_to_grow.get() + 1);
         self.grows_first_run.get()
-    }
-
-    fn reveal_first_run(&self, window: f32, glass: f32) {
-        self.revealed.borrow_mut().push((window, glass));
     }
 
     // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.

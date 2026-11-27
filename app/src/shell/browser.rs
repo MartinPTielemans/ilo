@@ -706,6 +706,13 @@ pub trait Browser {
     /// Keeps the docked sidebar's width for the next launch.
     fn set_sidebar_width(&self, width: f32, cx: &mut App);
     fn hide_reveal(&self, cx: &mut App);
+    /// Shows the edge knot's window over the page, as `Shell::render_edge_knot` draws it now: the
+    /// tab at the window's edge on the sidebar's side, `top` points down the content, `width`
+    /// across and `height` tall, its window `MARGIN` bigger on every other side for its shadow,
+    /// where clicks go through to the page. Never with the keyboard; shown already, it moves
+    /// there. None where the browser has no child windows.
+    fn show_edge_knot(&self, _top: f32, _width: f32, _height: f32, _cx: &mut App) {}
+    fn hide_edge_knot(&self, _cx: &mut App) {}
     /// Whether ⌥ pressed alone brings the hidden sidebar out, as the user chose.
     fn option_reveals_sidebar(&self) -> bool;
     /// A detent on the trackpad, as a swipe's nearest Space changes.
@@ -987,13 +994,15 @@ pub trait Browser {
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
-    /// profile and the others while there's more than one.
+    /// hanging from `place` in a window of `window`'s size, headed by the tab's `favicon`, listing
+    /// `extensions`, with the tab's profile and the others while there's more than one.
+    #[allow(clippy::too_many_arguments)]
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
+        favicon: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<crate::site_controls::Extension>,
         profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
@@ -1131,11 +1140,10 @@ pub trait Browser {
     /// sets the frame on the main queue's next turn, as the ask comes inside the press. On a yes
     /// the UI draws the card growing in the window as it is on each frame (first-run v9 §10),
     /// shaped by `shape_first_run`; on a no nothing changes and the exit is the cross-fade.
-    /// On a yes the host also puts the browser window under first run's then, unseen.
+    /// On a yes the host also puts the browser window under first run's then, unseen, and an
+    /// overlay shown over it there waits under the card, unseen, coming in with the window's
+    /// content once the window takes the card's place.
     fn grows_first_run(&self) -> bool;
-    /// How far the browser window under a grown first run's window has come in, its opacity,
-    /// and the card's glass's, both 0 to 1, said on each frame of a grown exit.
-    fn reveal_first_run(&self, _window: f32, _glass: f32) {}
     /// First run's window opens on screen at once, for a host with no call that shows it.
     fn shows_first_run_at_open(&self) -> bool {
         false

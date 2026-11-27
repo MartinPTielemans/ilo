@@ -34,7 +34,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_APPEARANCE", values: "light, dark", shows: "the window as if the system's appearance were that" },
     State { name: "PREVIEW_APPEARANCE_PICKER", values: "automatic, light, dark", shows: "Settings › Appearance with that choice" },
     State { name: "PREVIEW_ARRANGEMENT", values: "nofit, changed", shows: "what Site Controls says of the Boost's arrangement" },
-    State { name: "PREVIEW_ASSISTANTS", values: "start, signed-in, models", shows: "Settings › Agents' Your assistant, and Notifications with models" },
+    State { name: "PREVIEW_ASSISTANTS", values: "start, signed-in, models, install, installed", shows: "Settings › Agents' Your assistant, and Notifications with models; Claude Code's install from its row" },
     State { name: "PREVIEW_BAR", values: "tabs, sites, commands, library, places", shows: "the command bar over the window, with those rows" },
     State { name: "PREVIEW_BOOST", values: "on, off", shows: "Site Controls' site with a Boost, which shows its row" },
     State { name: "PREVIEW_BOOST_CARD", values: "list, nofit, changed", shows: "the Boost card of the tab shown" },
@@ -47,12 +47,13 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_DEVELOPER_MODE", values: "1", shows: "the tab shown, the third tab and a favorite in Developer Mode" },
     State { name: "PREVIEW_DIALOG", values: "1", shows: "the app's dialog over the window the first time it asks" },
     State { name: "PREVIEW_DRM", values: "1, default", shows: "a page asking for video ilo can't play, and its note" },
+    State { name: "PREVIEW_EDGE_KNOT", values: "1", shows: "the sidebar hidden and the edge knot at its edge (with PREVIEW_TASKS=needs-you)" },
     State { name: "PREVIEW_EMPTY", values: "1, reading, private, new", shows: "no page, as a fresh ⌘N window, the second Space, a private window or a new user's Space" },
     State { name: "PREVIEW_FAVORITE", values: "<index>", shows: "that favorite selected" },
     State { name: "PREVIEW_FOCUS_SIDEBAR", values: "1", shows: "the sidebar with the keyboard, its ring on the tab shown's row" },
     State { name: "PREVIEW_FOOT_BAR", values: "arrange, point, long", shows: "the foot bar over the page's bottom centre" },
     State { name: "PREVIEW_HOVER", values: "<x>,<y>", shows: "the pointer resting there, and the tooltip it brings" },
-    State { name: "PREVIEW_ICON_PICKER", values: "<emoji, or empty>", shows: "the icon picker for a Space with that icon" },
+    State { name: "PREVIEW_ICON_PICKER", values: "<glyph:name, emoji, or empty>", shows: "the icon picker for a Space with that glyph or none, or a tab with that emoji" },
     State { name: "PREVIEW_LIBRARY", values: "1, downloads, spaces, boards, …", shows: "the Library at that section" },
     State { name: "PREVIEW_LIBRARY_ROW", values: "<n>", shows: "the Library's list with its nth row rung" },
     State { name: "PREVIEW_LIVE_FOLDER", values: "open, closed, signed-out, failed, states", shows: "a Live Folder of made-up pull requests, or that answer" },
@@ -90,7 +91,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_TASK", values: "working, refused, off-limits, yours, tab-back, signed-in, raised, notes, helpers, helper, helpers-limit, helpers-ended, not-our-tools, ended, …", shows: "the working task's conversation beside its page, in that state" },
     State { name: "PREVIEW_TASK_RING", values: "none, header, back, page, take-over, stop", shows: "the working task's page watched, that stop rung" },
     State { name: "PREVIEW_TASK_STEP", values: "long", shows: "a step line too long for a narrow strip" },
-    State { name: "PREVIEW_TASKS", values: "1, open, done, needs-you, stopped, interrupted, two", shows: "tasks' cards in Today: three, the working one's conversation, or one state's" },
+    State { name: "PREVIEW_TASKS", values: "1, open, done, needs-you, stopped, interrupted, not-installed, two", shows: "tasks' cards in Today: three, the working one's conversation, or one state's" },
     State { name: "PREVIEW_THEME", values: "#RRGGBB, or a theme as the core keeps it", shows: "the first Space with that theme" },
     State { name: "PREVIEW_THEME_PICKER", values: "1", shows: "the theme picker for the first Space" },
     State { name: "PREVIEW_TRANSLATE", values: "<language>", shows: "the made-up pages in that language, offering a translation" },
@@ -229,7 +230,8 @@ mod tests {
     }
 
     /// The working task has a model to show, as a thread the user started does, so its composer's
-    /// row of choices carries it beside the level: its CLI's mark and its name, as the app says it.
+    /// row of choices carries it beside the level: its provider's mark and the model's own name,
+    /// as the app says it (Z54), never the assistant's default.
     #[test]
     fn the_working_task_has_a_model_for_its_row() {
         use browser::agents::runner::Cli;
@@ -237,7 +239,7 @@ mod tests {
         let Some((mark, said, _, _)) = talk.model else {
             panic!("the preview's thread has no model, so its row shows the level alone");
         };
-        assert_eq!(mark, Cli::Claude.glyph());
-        assert!(said.starts_with(Cli::Claude.name()), "{said}");
+        assert_eq!(mark, Some(Cli::Claude.caps().mark));
+        assert!(!said.is_empty() && !said.contains("default"), "{said}");
     }
 }

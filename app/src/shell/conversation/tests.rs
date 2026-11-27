@@ -638,6 +638,221 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
     );
 }
 
+/// The column is the reference's 832 at most (#4396), and beside the rail never under 520: the
+/// rail goes where the column at its least, its insets and the 300-wide rail at its edge don't
+/// all fit.
+#[test]
+fn the_rail_goes_where_the_column_at_its_least_wouldnt_fit() {
+    use crate::tokens::shell::conversation::{COLUMN, COLUMN_LEAST};
+    use crate::tokens::shell::task::{RAIL_BREAKPOINT, RAIL_EDGE, RAIL_WIDTH};
+    assert_eq!((COLUMN, COLUMN_LEAST, RAIL_WIDTH), (832., 520., 300.));
+    assert_eq!(
+        RAIL_BREAKPOINT,
+        COLUMN_LEAST + 2. * INSET + RAIL_WIDTH + RAIL_EDGE
+    );
+}
+
+/// The thread's area as drawn at `area` points across, with its pages or none: where its column
+/// and its reply field are, and the rail's tiles.
+fn stage_at(
+    area: f32,
+    pages: bool,
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::Bounds<gpui::Pixels>,
+    Vec<(u64, gpui::Bounds<gpui::Pixels>)>,
+) {
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = match pages {
+        true => vec![(30, "tickets.example".into()), (31, "seats.example".into())],
+        false => Vec::new(),
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    stage_drawn(area, &shell, &view, cx)
+}
+
+/// As `stage_at`, its window resized so the area is `area` across.
+fn stage_drawn(
+    area: f32,
+    shell: &Entity<Shell>,
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::Bounds<gpui::Pixels>,
+    Vec<(u64, gpui::Bounds<gpui::Pixels>)>,
+) {
+    use gpui::size;
+    let drawn = |wide: f32, cx: &mut VisualTestContext| {
+        cx.simulate_resize(size(px(wide), px(900.)));
+        // The first frame learns the area's width; the second lays the rail out by it.
+        for _ in 0..2 {
+            redraw(shell, view, cx);
+        }
+        view.read_with(cx, |view, _| view.drawn_at.get())
+            .expect("no area")
+    };
+    // The window is the area and the sidebar beside it.
+    let beside = 2000. - f32::from(drawn(2000., cx).size.width);
+    let at = drawn(area + beside, cx);
+    assert_eq!(at.size.width, px(area), "the area");
+    let column = (view.read_with(cx, |view, _| view.composer_drawn.get())).expect("no column");
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    (at, column, tiles)
+}
+
+/// At a narrow, a middle and a wide area, with the rail shut and open, the column is the room
+/// left of the rail less its insets, at most 832, in that room's middle; beside the rail it's never
+/// under 520, and the rail is 300 wide at its edge. Narrower than the rail allows, the pages fall
+/// to a row under the header and the column has the area.
+#[gpui::test]
+fn the_column_keeps_its_width_in_the_middle_of_the_room_left_of_the_rail(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::{COLUMN, COLUMN_LEAST};
+    use crate::tokens::shell::task::{RAIL_BREAKPOINT, RAIL_EDGE, RAIL_WIDTH};
+    // The owner's 1800-wide window less the sidebar, a middle one, the narrowest with the rail
+    // beside and one just under it, and a narrow one.
+    for area in [1572., 1100., RAIL_BREAKPOINT, RAIL_BREAKPOINT - 1., 700.] {
+        for pages in [false, true] {
+            let (at, column, tiles) = stage_at(area, pages, cx);
+            let beside = pages && area >= RAIL_BREAKPOINT;
+            let room = area - if beside { RAIL_WIDTH + RAIL_EDGE } else { 0. };
+            let wide = f32::from(column.size.width);
+            let case = format!("area {area}, pages {pages}: column {column:?}");
+            assert_eq!(wide, COLUMN.min(room - 2. * INSET), "{case}");
+            assert!(wide <= COLUMN, "{case}");
+            if beside {
+                assert!(wide >= COLUMN_LEAST, "{case}");
+            }
+            let middle = f32::from(column.left()) + wide / 2.;
+            let room_middle = f32::from(at.left()) + room / 2.;
+            assert!((middle - room_middle).abs() < 0.5, "{case}");
+            match (pages, beside) {
+                (false, _) => assert!(tiles.is_empty(), "{case}: {tiles:?}"),
+                (true, true) => {
+                    for (_, tile) in &tiles {
+                        assert_eq!(tile.size.width, px(RAIL_WIDTH), "{case}: {tiles:?}");
+                        assert_eq!(at.right() - tile.right(), px(RAIL_EDGE), "{case}");
+                    }
+                }
+                // Across, under the header, over the column.
+                (true, false) => assert!(
+                    tiles.iter().all(|(_, tile)| tile.bottom() < column.top()),
+                    "{case}: {tiles:?}"
+                ),
+            }
+        }
+    }
+}
+
+/// A resize moves the column and the rail at once, with no slide: only the thread's pages coming
+/// and going do (full screen is a resize of its own).
+#[gpui::test]
+fn a_resize_moves_the_column_with_no_slide(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    talk.tabs = vec![(30, "tickets.example".into())];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for area in [1572., RAIL_BREAKPOINT - 100., 1100., 1572.] {
+        stage_drawn(area, &shell, &view, cx);
+        let slide = view.read_with(cx, |view, _| view.rail_slide.get());
+        assert!(slide.is_none(), "a slide at {area}");
+    }
+}
+
+/// The thread's first page brings the rail in from the right as the column slides from the
+/// area's middle to the room left of it, on the sidebar's ease-out cubic over `rail` (Proposed);
+/// its last page closing takes it out again. Under Reduce Motion each is at once where it goes.
+#[gpui::test]
+fn the_column_slides_over_as_the_rail_comes_and_goes(cx: &mut TestAppContext) {
+    use super::rail_slid;
+    use crate::tokens::shell::task::motion::RAIL;
+    use crate::tokens::shell::task::{RAIL_EDGE, RAIL_WIDTH};
+    use std::time::{Duration, Instant};
+    let now = Instant::now();
+    let at =
+        |opening, part: f32| rail_slid(opening, now - Duration::from_secs_f32(RAIL * part), now);
+    assert_eq!(at(true, 0.), Some(0.));
+    let (quarter, half) = (at(true, 0.25).unwrap(), at(true, 0.5).unwrap());
+    assert!(
+        0. < quarter && quarter < half && half < 1.,
+        "{quarter} {half}"
+    );
+    // Out of a cubic: most of the way by halfway.
+    assert_eq!(half, 1. - 0.5f32.powi(3));
+    assert_eq!(at(false, 0.5), Some(0.5f32.powi(3)));
+    assert_eq!(at(true, 1.), None);
+
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    talk.tabs = Vec::new();
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let (area, shut, _) = stage_drawn(1572., &shell, &view, cx);
+    let middle =
+        |column: gpui::Bounds<gpui::Pixels>| f32::from(column.left() + column.right()) / 2.;
+    let column = |cx: &mut VisualTestContext| {
+        redraw(&shell, &view, cx);
+        (view.read_with(cx, |view, _| view.composer_drawn.get())).expect("no column")
+    };
+    let pages = |tabs: Vec<(u64, gpui::SharedString)>, cx: &mut VisualTestContext| {
+        let mut talk = conversation(1);
+        talk.tabs = tabs;
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    };
+    pages(vec![(30, "tickets.example".into())], cx);
+    let came = column(cx);
+    assert!(
+        matches!(
+            view.read_with(cx, |view, _| view.rail_slide.get()),
+            Some((true, _))
+        ),
+        "the first page brought no slide"
+    );
+    // On its way, then where it goes once `rail` has gone by.
+    let room = f32::from(area.size.width) - RAIL_WIDTH - RAIL_EDGE;
+    let left_of_rail = f32::from(area.left()) + room / 2.;
+    assert!(
+        middle(came) <= middle(shut) && middle(came) >= left_of_rail,
+        "{came:?}"
+    );
+    let ago = Instant::now() - Duration::from_secs_f32(RAIL);
+    view.update(cx, |view, _| view.rail_slide.set(Some((true, ago))));
+    let there = column(cx);
+    assert_eq!(there.size.width, shut.size.width, "the column narrowed");
+    assert!((middle(there) - left_of_rail).abs() < 0.5, "{there:?}");
+    assert!(
+        view.read_with(cx, |view, _| view.rail_slide.get())
+            .is_none()
+    );
+
+    // The last page closing takes it out.
+    pages(Vec::new(), cx);
+    column(cx);
+    assert!(
+        matches!(
+            view.read_with(cx, |view, _| view.rail_slide.get()),
+            Some((false, _))
+        ),
+        "the last page took no slide"
+    );
+    // Under Reduce Motion, at once.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    pages(vec![(30, "tickets.example".into())], cx);
+    let at_once = column(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.rail_slide.get())
+            .is_none()
+    );
+    assert!((middle(at_once) - left_of_rail).abs() < 0.5, "{at_once:?}");
+}
+
 /// While its task works every page says Working, where each reads `page_mark`: the rail's tile and
 /// the card's helper lines. A page that has
 /// finished loading, or that the task isn't in, is still Working: Done comes only with the task.
@@ -2779,7 +2994,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         let talk = Conversation {
             model: Some((
-                "icons/terminal.svg",
+                Some(crate::agents::runner::Cli::Claude.caps().mark),
                 "Claude Code \u{b7} Opus".into(),
                 "Opus".into(),
                 false,
@@ -3853,7 +4068,8 @@ fn what_came_of_a_step_sits_at_the_columns_right() {
 }
 
 /// The assistant's words said between steps are in the text's ink, as the answer's are, and read
-/// on the stage in either look: never the quiet ink a thought and a step's past are in.
+/// on the window's ground the column sits on (#4396) in either look: never the quiet ink a
+/// thought and a step's past are in.
 #[test]
 fn said_words_between_steps_are_in_the_texts_ink() {
     use crate::palette::{Palette, Tone, contrast, over};
@@ -3865,7 +4081,7 @@ fn said_words_between_steps_are_in_the_texts_ink() {
         assert_ne!(ink, palette.gray(quiet), "{tone:?}");
         let ground = gpui::Rgba {
             a: 1.,
-            ..super::stage_fill(&palette)
+            ..palette.underlay
         };
         let ink = gpui::Rgba::from(ink);
         let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
@@ -4970,7 +5186,7 @@ fn the_panels_composer_row_fits_the_panel_with_its_plus(_: &mut TestAppContext) 
                     stoppable,
                     tier,
                     model: Some((
-                        "icons/terminal.svg",
+                        Some(crate::agents::runner::Cli::Claude.caps().mark),
                         said.clone().into(),
                         word.clone().into(),
                         true,
@@ -5067,7 +5283,7 @@ fn the_panels_model_trigger_draws_the_models_own_word(cx: &mut TestAppContext) {
     use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL_X;
     let talk = Conversation {
         model: Some((
-            "icons/terminal.svg",
+            Some(crate::agents::runner::Cli::Claude.caps().mark),
             "Claude \u{b7} Sonnet".into(),
             "Sonnet".into(),
             false,
@@ -5129,6 +5345,7 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
                 .child(choices::row(choices::Row {
                     form: super::Composer::of(true).row,
                     inks: choices::Inks {
+                        light: false,
                         text: ink,
                         dim: ink,
                         plate: ink,

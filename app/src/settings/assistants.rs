@@ -2,7 +2,7 @@
 //! assistant's ⋯ menu and the ask before Sign Out; and Notifications' Notify.
 
 use super::*;
-use browser::agents::task::{MODEL, model_default};
+use browser::agents::task::MODEL;
 use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
 
 impl Settings {
@@ -81,10 +81,32 @@ impl Settings {
             (row, ROW_X)
         });
         let assistants: Vec<_> = assistants.collect();
-        let assistants = (assistants.into_iter().zip(models))
-            .flat_map(|(row, model)| std::iter::once(row).chain(model));
+        // AS6: under the row of a program ilo installed, while it's there, the way to remove it.
+        let installed: Vec<Option<(gpui::Div, f32)>> = (Cli::ALL.iter())
+            .map(|&cli| {
+                let shown = !alone || self.looked_up.contains(&cli);
+                (shown && agents.read(cx).installed_here(cli)).then(|| self.installed(cli))
+            })
+            .collect();
+        let assistants = (assistants.into_iter().zip(installed).zip(models)).flat_map(
+            |((row, installed), model)| std::iter::once(row).chain(installed).chain(model),
+        );
         // Another app is Apps that connect's, two groups down, so it's not here as well.
         group_lined(look, assistants)
+    }
+
+    /// The AS6 line under `cli`'s row, set in as its Model is: How to Uninstall opens its maker's
+    /// page in a new tab.
+    fn installed(&self, cli: Cli) -> (gpui::Div, f32) {
+        let uninstall = move |_: &mut Window, cx: &mut App| {
+            if let Some(page) = cli.uninstall_page() {
+                log!("browser: assistant uninstall page {}", cli.id());
+                open_notice(page, cx)
+            }
+        };
+        let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let row = installed_row(&self.look, cli, self.a11y, Rc::new(uninstall));
+        (row.pl(px(x)), x)
     }
 
     /// `cli`'s Model, under its row and set in from it as a feature's own settings are, with the
@@ -95,10 +117,7 @@ impl Settings {
         cli: Cli,
         cx: &mut Context<Self>,
     ) -> (gpui::Div, f32) {
-        let label: SharedString = match agents.read(cx).task_model_name(cli) {
-            Some(model) => model,
-            None => model_default(cli).into(),
-        };
+        let label = agents.read(cx).task_model_words(cli);
         let agents = agents.clone();
         let popup = self.popup(
             Popup::Model(cli),
@@ -117,8 +136,8 @@ impl Settings {
         (line_row(&self.look, MODEL, None, controls).pl(px(x)), x)
     }
 
-    /// `cli`'s Model pop-up: its own default first, saying which model it is where the CLI says,
-    /// then the models it lists. A model is set only from that list.
+    /// `cli`'s Model pop-up: the models it lists, its default checked while nothing else is picked
+    /// (`model_rows`). A model is set only from that list.
     fn choose_model(
         &mut self,
         agents: &Entity<Agents>,
@@ -127,16 +146,17 @@ impl Settings {
         cx: &mut Context<Self>,
     ) {
         let (models, items) = agents.read(cx).task_model_menu(cli);
+        agents.update(cx, |agents, cx| agents.model_menu_opened(cx));
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some((id, _)) = picked.and_then(|at| models.get(at)) {
+            if let Some(id) = picked.and_then(|at| models.get(at).cloned().flatten()) {
                 // check.sh waits for this line.
                 log!(
                     "browser: task model {} {}",
                     cli.id(),
-                    if id.is_empty() { "default" } else { id }
+                    if id.is_empty() { "default" } else { &id }
                 );
-                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+                agents.update(cx, |agents, cx| agents.set_task_model(cli, &id, cx));
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });

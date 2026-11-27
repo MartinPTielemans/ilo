@@ -1629,7 +1629,7 @@ impl Shell {
             // What the browser says now, as the broom's click reads it.
             Command::SortIntoFolders => {
                 if self.browser.broom().is_some_and(super::Broom::sorts) {
-                    self.browser.start_broom(cx);
+                    self.start_broom(cx);
                 }
                 return;
             }
@@ -3541,7 +3541,10 @@ mod tests {
             assert!(matches!(renaming.naming, Naming::Tab(900)));
             let field = renaming.name.read(cx);
             assert_eq!((field.text(), field.selection()), ("Board", 0..5));
-            shell.plus_menu(point(px(100.), px(700.)), cx);
+            {
+                let items = shell.space_switcher_items(cx);
+                shell.show_space_switcher(items, point(px(100.), px(700.)), cx)
+            };
         });
         let titles: Vec<String> = host
             .menus
@@ -3583,7 +3586,10 @@ mod tests {
         shell.update(cx, |shell, cx| {
             shell.set_selected(10, cx);
             shell.set_new_note(false, cx);
-            shell.plus_menu(point(px(100.), px(700.)), cx);
+            {
+                let items = shell.space_switcher_items(cx);
+                shell.show_space_switcher(items, point(px(100.), px(700.)), cx)
+            };
         });
         let titles: Vec<String> = host
             .menus

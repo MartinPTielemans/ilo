@@ -502,14 +502,10 @@ impl Shell {
         };
         let extensions = self.site_controls_extensions();
         let profiles = self.site_controls_profiles();
-        self.browser.site_controls(
-            self.field_tab(),
-            place,
-            self.viewport,
-            extensions,
-            profiles,
-            cx,
-        );
+        let tab = self.field_tab();
+        let favicon = self.tabs.get(&tab).and_then(|tab| tab.favicon.clone());
+        self.browser
+            .site_controls(tab, place, self.viewport, favicon, extensions, profiles, cx);
     }
 
     /// The tab's profile and the user's others, for the Site Controls' chip, while there's more

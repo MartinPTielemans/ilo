@@ -214,7 +214,7 @@ fn a_page_that_moved_on_tells_the_thread_as_hand_back_does(cx: &mut TestAppConte
         steps[steps.len() - 2..],
         [
             "Handed you tickets.example",
-            "Went on when tickets.example moved past your step"
+            "Took tickets.example back when the page moved on"
         ]
     );
     let logged = (run.agents).read_with(cx, |agents, _| {

@@ -39,8 +39,9 @@ use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
-    App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, Pixels, Point, Render,
+    SharedString, Size, TitlebarOptions, TouchPhase, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -1435,6 +1436,7 @@ impl Browser for Fake {
         tab: u64,
         place: site_controls::Place,
         window: Size<Pixels>,
+        favicon: Option<Arc<gpui::Image>>,
         extensions: Vec<site_controls::Extension>,
         profiles: Option<site_controls::Profiles>,
         cx: &mut App,
@@ -1446,7 +1448,7 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
-            site_controls::show(tab, place, window, extensions, profiles, cx);
+            site_controls::show(tab, place, window, favicon, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
     }
@@ -2789,8 +2791,12 @@ fn main() {
             // signing out, with the same rows as Settings draws (#4100).
             // =models shows one signed in, its Model chosen, and one not, then Notifications.
             if let Ok(state) = states::var("PREVIEW_ASSISTANTS") {
+                // =install shows Claude Code's install from its row, missing, installing and
+                // failed; =installed, installed by ilo with its way out, signed out and in.
                 let shown = match state.as_str() {
                     "models" => Pictures::Models,
+                    "install" => Pictures::Install { installed: false },
+                    "installed" => Pictures::Install { installed: true },
                     _ => Pictures::Assistants {
                         signed_in: state == "signed-in",
                     },
@@ -3239,6 +3245,19 @@ fn main() {
                             };
                             shell.set_agent_status(vec![status], cx);
                         }
+                        // A task whose assistant is missing ended out of sight, so its card keeps
+                        // its fix until its conversation shows, as one ending while the user is
+                        // elsewhere does.
+                        if group_state().as_deref() == Some("not-installed") {
+                            let working = (cards.iter().cloned())
+                                .map(|mut card| {
+                                    card.dot = Dot::Working;
+                                    card.word = Word::Working;
+                                    card
+                                })
+                                .collect();
+                            shell.set_task_cards(working, cx);
+                        }
                         shell.set_task_cards(cards, cx);
                         // After the first frame, which sets the palette the reply field takes, as
                         // a click on the header comes after it.
@@ -3399,7 +3418,8 @@ fn main() {
                 };
                 dialog::ask_account(account::pairing_question(&pairing), Box::new(|_, _| {}), cx);
             }
-            // PREVIEW_ICON_PICKER=<emoji, or empty> shows the icon picker for a Space with that icon.
+            // PREVIEW_ICON_PICKER=<glyph:name, emoji, or empty> shows the icon picker for a Space
+            // with that glyph or none, and for a tab with an emoji, as a Space's offers no emoji.
             if let Ok(icon) = states::var("PREVIEW_ICON_PICKER") {
                 let left = x as f32 + 40.;
                 let top = y as f32 + 120.;
@@ -3417,7 +3437,10 @@ fn main() {
                 .is_some()
                 {
                     let picked: icon_picker::Picked = Rc::new(|_, _| {});
-                    let subject = icon_picker::Subject::Space(1);
+                    let subject = match browser::space_icon::SpaceIcon::parse(&icon) {
+                        browser::space_icon::SpaceIcon::Emoji(_) => icon_picker::Subject::Tab(1),
+                        _ => icon_picker::Subject::Space(1),
+                    };
                     icon_picker::show(0, subject, icon.into(), point(0., 0.), picked, cx);
                 }
             }
@@ -3513,6 +3536,13 @@ fn main() {
                 && let Some(shell) = shell_window
             {
                 preview_foot_bar(&kind, shell, bounds, cx);
+            }
+            // PREVIEW_EDGE_KNOT=1 hides the sidebar and, once it's in and the shell shows the edge
+            // knot, opens the knot's window where the host puts it. With PREVIEW_TASKS=needs-you.
+            if let Some(shell) =
+                shell_window.filter(|_| states::var_os("PREVIEW_EDGE_KNOT").is_some())
+            {
+                preview_edge_knot(shell, bounds, cx);
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
@@ -3853,13 +3883,14 @@ fn preview_page_menu(
     .detach();
 }
 
-/// A CLI's Model menu as Settings › Agents opens it with Default chosen, its models as the CLI's
-/// recorded answer lists them, in the light or dark Settings.
-fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+/// A CLI's Model menu as Settings › Agents opens it with its default checked, its models as the
+/// CLI's recorded answer lists them, in the light or dark Settings.
+/// The models the provider `id` lists in the answers recorded from its program, Claude's for any
+/// other id.
+fn recorded_models(id: &str) -> browser::agents::ready::Models {
     use browser::agents::ready::{claude_listed, codex_listed};
-    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
     let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
-    let models = match cli {
+    match id {
         "codex" => Some(codex_listed(&answer(include_str!(
             "agents/runner/answers/codex-0.167.1-model-list.json"
         )))),
@@ -3867,11 +3898,15 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             "agents/runner/answers/claude-2.1.322-initialize.json"
         ))),
     }
-    .unwrap_or_default();
-    let first = (browser::agents::runner::Cli::from_id(cli))
-        .map_or_else(String::new, browser::agents::task::model_default);
-    let (_, items) =
-        browser::agents::task::model_menu(chosen, &first, models.default.as_deref(), models.listed);
+    .unwrap_or_default()
+}
+
+fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
+    let models = recorded_models(cli);
+    let caps =
+        browser::agents::provider::caps(cli).unwrap_or(&browser::agents::provider::PROVIDERS[0]);
+    let (_, items) = browser::agents::task::model_rows(chosen, caps, &models, 0);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;
@@ -4082,6 +4117,66 @@ fn ring_library_row(
             ring_library_row(shell, rows, frames - 1, window);
         }
     });
+}
+
+/// The edge knot's window, which the app's host shows over the page.
+struct PreviewEdgeKnot(Entity<Shell>);
+
+impl Render for PreviewEdgeKnot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.0
+            .update(cx, |shell, cx| shell.render_edge_knot(window, cx))
+    }
+}
+
+/// Hides the sidebar of the preview's window at `bounds`, then opens the edge knot's window where
+/// the host would put it, once the shell shows it.
+fn preview_edge_knot(window: gpui::WindowHandle<Shell>, bounds: Bounds<Pixels>, cx: &mut App) {
+    use browser::tokens::shell::edge_knot::{HEIGHT, MARGIN, TOP, WIDTH};
+    let Ok(shell) = window.update(cx, |_, _, cx| cx.entity()) else {
+        return;
+    };
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ToggleSidebar, "preview", cx)
+    });
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(1000))
+            .await;
+        cx.update(|cx| {
+            let (shown, right) = shell.read_with(cx, |shell, _| {
+                (shell.edge_knot_shown(), shell.edge_knot_look().0)
+            });
+            if !shown {
+                log!("preview: edge knot not shown");
+                return;
+            }
+            let x = match right {
+                true => f32::from(bounds.size.width) - WIDTH - MARGIN,
+                false => 0.,
+            };
+            let at = Bounds::new(
+                bounds.origin + point(px(x), px(TOP - MARGIN)),
+                size(px(WIDTH + MARGIN), px(HEIGHT + 2. * MARGIN)),
+            );
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(at)),
+                titlebar: None,
+                kind: WindowKind::PopUp,
+                focus: false,
+                window_background: WindowBackgroundAppearance::Transparent,
+                ..Default::default()
+            };
+            let shell = shell.clone();
+            if cx
+                .open_window(options, |_, cx| cx.new(|_| PreviewEdgeKnot(shell)))
+                .is_ok()
+            {
+                log!("preview: edge knot shown");
+            }
+        });
+    })
+    .detach();
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.

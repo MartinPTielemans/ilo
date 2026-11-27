@@ -1579,6 +1579,16 @@ impl Browser for Engine {
         unsafe { platform::host_hide_reveal(self.ui_view) };
     }
 
+    fn show_edge_knot(&self, top: f32, width: f32, height: f32, _: &mut App) {
+        unsafe {
+            platform::host_show_edge_knot(self.ui_view, top.into(), width.into(), height.into())
+        };
+    }
+
+    fn hide_edge_knot(&self, _: &mut App) {
+        unsafe { platform::host_hide_edge_knot(self.ui_view) };
+    }
+
     fn option_reveals_sidebar(&self) -> bool {
         unsafe { bc::bc_option_reveals_sidebar() }
     }
@@ -1995,12 +2005,13 @@ impl Browser for Engine {
         tab: u64,
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
+        favicon: Option<std::sync::Arc<gpui::Image>>,
         extensions: Vec<site_controls::Extension>,
         profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
+            move |cx| site_controls::show(tab, place, window, favicon, extensions, profiles, cx),
             cx,
         );
     }
@@ -2383,21 +2394,14 @@ impl Browser for Engine {
     fn grows_first_run(&self) -> bool {
         #[cfg(target_os = "macos")]
         {
-            unsafe { platform::host_grow_first_run() }
+            // The bar's overlay comes in with the window's content.
+            let reveal = crate::tokens::shell::onboarding::exit::REVEAL;
+            unsafe { platform::host_grow_first_run(reveal.into()) }
         }
         #[cfg(not(target_os = "macos"))]
         {
             false
         }
-    }
-
-    fn reveal_first_run(&self, window: f32, glass: f32) {
-        #[cfg(target_os = "macos")]
-        unsafe {
-            platform::host_set_first_run_reveal(window.into(), glass.into())
-        };
-        #[cfg(not(target_os = "macos"))]
-        let _ = (window, glass);
     }
 
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
