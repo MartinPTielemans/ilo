@@ -1172,7 +1172,7 @@ fn a_walled_start_carries_no_name_outside_the_list() {
         params: Vec::new(),
     };
     let names = kept(Cli::Claude);
-    let wall = Arc::new(Wall::inside(None, &rules, &names).unwrap());
+    let wall = Arc::new(Wall::inside(&rules, &names).unwrap());
     let start = Launch {
         wall: Some(wall.clone()),
         ..launch(Cli::Claude)

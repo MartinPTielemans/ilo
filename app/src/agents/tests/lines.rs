@@ -2,8 +2,8 @@
 //! own state and read here as its conversation has them: a refusal with its count, a step handed
 //! to the user, a tab asked back and a change of access, with their buttons doing what they say.
 
+use super::boxed::sent;
 use super::kept::Run;
-use super::rewall::sent;
 use super::searches::titles;
 use super::*;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};

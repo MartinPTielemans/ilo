@@ -174,7 +174,7 @@ pub fn look(cli: Cli) -> Found {
         program.display()
     );
     let models = match (cli, ready) {
-        (Cli::Claude, Ready::SignedIn) => claude_models(&program, path.as_deref()),
+        (Cli::Claude, Ready::SignedIn) => boxed_models(&program, path.as_deref()),
         (Cli::Codex, _) => models,
         _ => None,
     };
@@ -235,12 +235,60 @@ const CLAUDE_ASK: [&str; 13] = [
     "--no-session-persistence",
 ];
 
+/// The models Claude lists, asked where Claude Code runs (wall.rs `runs`): in a box of the ask's
+/// own, in a folder of its own that goes with it, or outside one where there's no sandbox. Where
+/// it doesn't run, none.
+fn boxed_models(program: &Path, path: Option<&str>) -> Option<Models> {
+    use super::wall::{self, Runs};
+    match wall::runs(Cli::Claude, wall::available()) {
+        Runs::Unboxed => claude_models(program, path, None),
+        Runs::Not => None,
+        Runs::Boxed => {
+            static ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let at = ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let name = format!("ilo-models-{}-{at}", std::process::id());
+            let folder = std::env::temp_dir().join(name);
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder.create(&folder).ok()?;
+            let models = (wall::without_tools(Cli::Claude, program, &folder).ok())
+                .and_then(|wall| claude_models(program, path, Some((&wall, &folder))));
+            _ = std::fs::remove_dir_all(&folder);
+            models
+        }
+    }
+}
+
 /// The models Claude lists for the signed-in account, which change with their plan and Claude's
 /// version: the answer to its stream-json initialize, which starts no turn and sends nothing to a
 /// model (checked on 2.1.322). Its input closes after that one request, so a Claude too old to
-/// answer ends at once; it's left after LIST_WAIT either way.
-fn claude_models(program: &Path, path: Option<&str>) -> Option<Models> {
-    let mut command = command(program);
+/// answer ends at once; it's left after LIST_WAIT either way. In `boxed`, a box and the folder it
+/// was made for, if given, whose system's word that it's inside comes before the request.
+fn claude_models(
+    program: &Path,
+    path: Option<&str>,
+    boxed: Option<(&super::wall::Wall, &Path)>,
+) -> Option<Models> {
+    let wall = boxed.map(|(wall, _)| wall);
+    let mut command = match boxed {
+        Some((wall, folder)) => {
+            let mut command = wall.command(program);
+            command.current_dir(folder);
+            command
+        }
+        None => command(program),
+    };
+    if let Some(wall) = wall {
+        if let Some(tmp) = wall.tmp() {
+            command.env(super::runner::CLAUDE_TMP, tmp);
+        }
+        if let Some(port) = wall.port() {
+            let proxy = format!("http://127.0.0.1:{port}");
+            command.envs(super::runner::PROXY.map(|name| (name, proxy.as_str())));
+        }
+        command.envs(super::runner::CLAUDE_WALLED.map(|name| (name, "1")));
+    }
     command
         .args(CLAUDE_ASK)
         .stdin(Stdio::piped())
@@ -249,7 +297,19 @@ fn claude_models(program: &Path, path: Option<&str>) -> Option<Models> {
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    let mut child = command.spawn().ok()?;
+    let (mut child, rising) = match wall {
+        Some(wall) => wall.start(&mut command).ok()?,
+        None => (command.spawn().ok()?, None),
+    };
+    if let Some(rising) = rising {
+        let id = child.id();
+        let inside = |()| wall.map_or(Ok(()), |wall| wall.control(id));
+        if rising.risen().and_then(inside).is_err() {
+            _ = child.kill();
+            _ = child.wait();
+            return None;
+        }
+    }
     let mut stdin = child.stdin.take().expect("piped");
     let lines = lines_of(child.stdout.take().expect("piped"));
     let ask = serde_json::json!({

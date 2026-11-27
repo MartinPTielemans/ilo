@@ -1,9 +1,10 @@
-//! A walled task's rules (#4101), in the order the system reads them: Codex's base (base.sb),
-//! which refuses what nothing after it allows; the system's own reads (system.rs); the task's own
-//! folders and files; the assistant's program, ilo's bridge and the sign-in; the folders above
-//! each of those, for their names alone; the writes; the network; and last the mark. A folder's or
-//! a file's path is only ever a parameter, never in the text, so the text holds no name of the
-//! user's.
+//! A boxed run's rules (#4101), in the order the system reads them: Codex's base (base.sb),
+//! which refuses what nothing after it allows; the system's own reads (system.rs); the run's own
+//! folder and files; the assistant's program, ilo's bridge and the sign-in; the folders above
+//! each of those, for their names alone; the writes; the network; and last the mark. They are the
+//! same at every level and hold nothing of the user's: no folder they picked and no file they
+//! attached, which reach the model through ilo's own tools alone. A path is only ever a
+//! parameter, never in the text, so the text holds no name of the user's.
 //!
 //! In the system's rules a later line wins over an earlier one, so each deny below comes after the
 //! allows it narrows.
@@ -13,9 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::launch::{PARAMETERS_MAX, Rules};
 use super::leftovers::{Mark, PREFIX};
-use crate::agents::files::{self, Op, Place};
 use crate::agents::runner::Cli;
-use crate::agents::tier::Tier;
 
 pub mod developer;
 pub mod system;
@@ -25,9 +24,12 @@ pub const CLI_HOME: &str = "CLI_HOME";
 /// Claude Code's `~/.claude.json`, beside its home and not in it.
 pub const CLAUDE_CONFIG: &str = "CLAUDE_CONFIG";
 pub const MARK: &str = "MARK";
-/// The folder the user granted, and ilo's copies of the files they attached.
-pub const FOLDER: &str = "FOLDER";
-pub const ATTACHED: &str = "ATTACHED";
+/// Where Claude Code files the conversations it keeps, `projects` in its home, and the one folder
+/// in it of a kept run's, named for the run's folder (kept.rs): the one place in its home a run
+/// writes but its sign-in.
+pub const PROJECTS: &str = "PROJECTS";
+pub const PROJECT: &str = "PROJECT";
+pub(super) const PROJECTS_NAME: &str = "projects";
 /// The task's own of ilo's: its folder, its MCP config and the instructions beside it (ilo_reads).
 pub const TASK_DIR: &str = "TASK_DIR";
 pub const CONFIG: &str = "CONFIG";
@@ -241,14 +243,15 @@ pub(super) fn resolved(path: &std::path::Path) -> io::Result<PathBuf> {
 
 /// What the system does for an assistant that verifies its own service's certificates, from
 /// Codex's seatbelt_network_policy.sbpl at the commit base.sb names, none of its network allows:
-/// the platform's own sockets and the lookups for trust and the network's configuration.
+/// the platform's own sockets and the lookups for trust and the network's configuration. Not its
+/// DNS configuration: the box reaches no resolver, as the program reaches its hosts by the
+/// listener's address alone, so no name is looked up from inside and none leaves as a lookup.
 const TRUST: &str = "\
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
 (allow mach-lookup (global-name \"com.apple.bsd.dirhelper\") \
 (global-name \"com.apple.system.opendirectoryd.membership\") \
 (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.networkd\") \
 (global-name \"com.apple.ocspd\") (global-name \"com.apple.trustd.agent\") \
-(global-name \"com.apple.SystemConfiguration.DNSConfiguration\") \
 (global-name \"com.apple.SystemConfiguration.configd\"))
 ";
 
@@ -266,45 +269,12 @@ fn hardening() -> String {
     )
 }
 
-/// What the system is asked for each operation of the table (files.rs). A move is a new name and
-/// the old one gone; replacing a file is the same over the other's name.
-fn seatbelt(op: Op) -> &'static [&'static str] {
-    match op {
-        Op::Read | Op::Search => &["file-read*", "file-test-existence"],
-        Op::Make => &["file-write-create", "file-write-data"],
-        Op::Change => &[
-            "file-write-data",
-            "file-write-mode",
-            "file-write-times",
-            "file-write-xattr",
-        ],
-        Op::Delete => &["file-write-unlink"],
-        Op::Move | Op::Replace => &["file-write-create", "file-write-unlink"],
-    }
-}
-
-/// Everything `level` may do in `place`, each operation once, in the table's order.
-fn place_ops(level: Tier, place: Place) -> Vec<&'static str> {
-    let mut ops = Vec::new();
-    for op in Op::ALL {
-        if files::allows(level, place, op) {
-            for each in seatbelt(op) {
-                if !ops.contains(each) {
-                    ops.push(*each);
-                }
-            }
-        }
-    }
-    ops
-}
-
-/// What a walled task's text depends on: never a path, so it holds no name of the user's.
+/// What a boxed run's text depends on: never a path, so it holds no name of the user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     pub cli: Cli,
-    pub level: Tier,
-    pub folder: bool,
-    pub attached: bool,
+    /// Whether the run keeps its conversation, in its own folder under the home's `projects`.
+    pub project: bool,
     /// Whether the program's folder is named whole, or the program alone.
     pub program_folder: bool,
     /// The task's listener's port.
@@ -315,7 +285,7 @@ pub struct Shape {
     pub developer: bool,
 }
 
-/// The whole text of a walled task's rules.
+/// The whole text of a boxed run's rules.
 pub fn text(shape: &Shape) -> String {
     let mut text = String::from(BASE);
     text.push_str(&system::text());
@@ -325,15 +295,6 @@ pub fn text(shape: &Shape) -> String {
             "(allow file-read* file-test-existence file-map-executable \
              (subpath (param \"{DEVELOPER}\")))\n"
         ));
-    }
-    for (key, given, place) in [
-        (FOLDER, shape.folder, Place::Folder),
-        (ATTACHED, shape.attached, Place::Attached),
-    ] {
-        if given {
-            let ops = place_ops(shape.level, place).join(" ");
-            text.push_str(&format!("(allow {ops} (subpath (param \"{key}\")))\n"));
-        }
     }
     text.push_str(&format!(
         "(allow file-read* file-test-existence (subpath (param \"{TASK_DIR}\")))\n\
@@ -357,8 +318,11 @@ pub fn text(shape: &Shape) -> String {
             "(allow file-read-metadata file-test-existence (literal (param \"{up}\")))\n"
         ));
     }
-    // After every other write allow, so its denies win over a folder that holds the home.
+    // After every other write allow, so its denies win over any of them under the home.
     text.push_str(&home(shape.cli));
+    if shape.project {
+        text.push_str(&project());
+    }
     text.push_str(&format!(
         "(deny network*)\n\
          (allow network-outbound (remote ip \"localhost:{}\"))\n\
@@ -373,6 +337,20 @@ pub fn text(shape: &Shape) -> String {
     text.push_str(PROCESSES);
     text.push_str(&mark());
     text
+}
+
+/// What a kept run's Claude Code reads and writes of its home's `projects`, after the home's
+/// denies, which refuse `projects` whole: its own folder there, plain files and folders alone, so
+/// no link or pipe there leads the user's own later start somewhere else; and `projects` itself
+/// made as a folder where it isn't yet, and nothing else of it.
+fn project() -> String {
+    format!(
+        "(allow file-read* file-test-existence file-write* (subpath (param \"{PROJECT}\")))\n\
+         (deny file-write-create (require-all (subpath (param \"{PROJECT}\")) \
+         (require-not (vnode-type REGULAR-FILE)) (require-not (vnode-type DIRECTORY))))\n\
+         (allow file-write-create (require-all (literal (param \"{PROJECTS}\")) \
+         (vnode-type DIRECTORY)))\n"
+    )
 }
 
 /// A walled command reads by pid only itself and what its own start made, which is in its wall:
@@ -406,10 +384,8 @@ pub enum Program<'a> {
     File(&'a Path),
 }
 
-/// The paths a walled task's rules name, as put_up has them.
+/// The paths a boxed run's rules name, as put_up has them.
 pub struct Paths<'a> {
-    pub folder: Option<&'a Path>,
-    pub attached: Option<&'a Path>,
     pub task_dir: &'a Path,
     pub config: &'a Path,
     pub tmp: &'a Path,
@@ -419,6 +395,9 @@ pub struct Paths<'a> {
     pub cli_home: &'a Path,
     /// Claude Code's `~/.claude.json`, which Codex has none of.
     pub claude_config: Option<&'a Path>,
+    /// A kept run's own folder under the home's `projects`, resolved, which the rules name with
+    /// `projects`.
+    pub project: Option<&'a Path>,
     /// An app's Developer folder, as developer.rs takes it.
     pub developer: Option<&'a Path>,
 }
@@ -426,15 +405,9 @@ pub struct Paths<'a> {
 /// Why rules weren't made for paths this deep, a sentence that names none of them.
 pub const TOO_DEEP: &str = "the task's folders are too deep for the launcher's parameters";
 
-/// The rules for a walled task: its text and every parameter it names, each resolved.
-pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io::Result<Rules> {
+/// The rules for a boxed run: its text and every parameter it names, each resolved.
+pub fn rules(cli: Cli, port: u16, paths: &Paths, mark: &Mark) -> io::Result<Rules> {
     let mut named = Vec::new();
-    if let Some(folder) = paths.folder {
-        named.push((FOLDER, folder.to_path_buf()));
-    }
-    if let Some(attached) = paths.attached {
-        named.push((ATTACHED, attached.to_path_buf()));
-    }
     named.extend([
         (TASK_DIR, paths.task_dir.to_path_buf()),
         (CONFIG, paths.config.to_path_buf()),
@@ -452,6 +425,16 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
         named.push((CLAUDE_CONFIG, config.to_path_buf()));
     }
     let mut params = params(named, mark)?;
+    // Neither may be there before the run's first start, which the program makes: `projects` is
+    // resolved by its home, and the run's own folder, not there either, by `projects`.
+    if let Some(project) = paths.project {
+        let (Some(projects), Some(name)) = (project.parent(), project.file_name()) else {
+            return Err(io::Error::other("a kept run's folder has no name"));
+        };
+        let projects = resolved(projects)?;
+        let project = resolved(project).unwrap_or_else(|_| projects.join(name));
+        params.extend([(PROJECTS, projects), (PROJECT, project)]);
+    }
     let ups = ancestors(
         (params.iter())
             .filter(|(key, _)| *key != MARK)
@@ -483,9 +466,7 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
     };
     let shape = Shape {
         cli,
-        level,
-        folder: paths.folder.is_some(),
-        attached: paths.attached.is_some(),
+        project: paths.project.is_some(),
         program_folder: matches!(paths.program, Program::Folder(_)),
         port,
         ancestors: ups.len(),

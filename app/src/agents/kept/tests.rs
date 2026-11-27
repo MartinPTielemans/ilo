@@ -76,12 +76,18 @@ fn launch() -> Launch {
 fn the_table_has_a_row_for_each_assistant() {
     assert_eq!(keeps(Cli::Claude), Keeps::Always);
     assert_eq!(keeps(Cli::Codex), Keeps::Never);
-    assert!(matches!(decide(Cli::Claude, false), Keep::New(_)));
-    // Codex keeps nothing, and a task with files keeps nothing, whose assistant it is.
-    assert_eq!(decide(Cli::Codex, false), Keep::Nothing);
-    for cli in [Cli::Claude, Cli::Codex] {
-        assert_eq!(decide(cli, true), Keep::Nothing);
-    }
+    assert!(matches!(decide(Cli::Claude), Keep::New(_)));
+    assert_eq!(decide(Cli::Codex), Keep::Nothing);
+}
+
+#[test]
+fn a_kept_run_s_folder_of_conversations_is_named_as_claude_code_names_it() {
+    let name = project_name(Path::new("/Users/a b/Kept tasks/1f.é🙂")).unwrap();
+    assert_eq!(name, "-Users-a-b-Kept-tasks-1f----");
+    // A path whose name it would shorten keeps nothing.
+    let deep = format!("/{}", "a".repeat(PROJECT_NAME_MAX));
+    assert_eq!(project_name(Path::new(&deep)), None);
+    assert!(project_name(Path::new(&deep[..PROJECT_NAME_MAX])).is_some());
 }
 
 #[test]
