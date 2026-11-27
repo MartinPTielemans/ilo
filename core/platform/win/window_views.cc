@@ -1663,6 +1663,10 @@ bool CanTile() {
 
 void ShowTile(content::WebContents*, void*, const gfx::Rect&, double) {}
 
+std::string DescribeTile(content::WebContents*) {
+  return {};
+}
+
 void EndTile(content::WebContents*, bool) {}
 
 void ParkTile(content::WebContents*) {}

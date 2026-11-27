@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "base/containers/span.h"
@@ -134,6 +135,11 @@ void ShowTile(content::WebContents* contents,
               void* view,
               const gfx::Rect& frame,
               double corner_radius);
+
+// What a check reads of |contents|' tile, to see its page drawn at the tile's own size and its
+// window's scale (#4441): "page WxH dsf D in tile WxH at (X,Y) window scale S", in points from the
+// view's top-left. Empty if the page is in no tile.
+std::string DescribeTile(content::WebContents* contents);
 
 // Takes |contents|' page out of the tile ShowTile put it in, or out of the park, and lets it take
 // input again. Where |leaves_window|, as the page goes or a card in another window takes it, out of

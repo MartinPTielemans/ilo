@@ -10,6 +10,7 @@
 
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/page_edge_strips.h"
@@ -759,6 +760,24 @@ void ShowTile(content::WebContents* contents,
   if (placed) {
     UpdateOcclusion(holder.window);
   }
+}
+
+std::string DescribeTile(content::WebContents* contents) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  BrowserCoreTileView* tile = page_view ? TileOf(page_view) : nil;
+  content::RenderWidgetHostView* widget = contents->GetRenderWidgetHostView();
+  if (!tile || !widget || !tile.superview) {
+    return {};
+  }
+  NSRect at = tile.frame;
+  if (!tile.superview.isFlipped) {
+    at.origin.y = NSHeight(tile.superview.bounds) - NSMaxY(at);
+  }
+  const NSSize page = page_view.frame.size;
+  return base::StringPrintf("page %gx%g dsf %g in tile %gx%g at (%g,%g) window scale %g",
+                            page.width, page.height, widget->GetDeviceScaleFactor(),
+                            NSWidth(at), NSHeight(at), NSMinX(at), NSMinY(at),
+                            tile.window ? tile.window.backingScaleFactor : 0.0);
 }
 
 void EndTile(content::WebContents* contents, bool leaves_window) {

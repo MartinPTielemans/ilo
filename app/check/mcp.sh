@@ -27,7 +27,9 @@
 # is refused rather than answered as done.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
 # activity log, and is refused a tab of the user's. A page it opens is the user's page area from
-# its start, so watching it lays nothing out again (#4355).
+# its start, so watching it lays nothing out again (#4355). On the Mac, the page in the tile watched
+# draws at the tile's size and the window's scale, as its tab then shows it, and the trackpad over
+# it scrolls it without taking it over or moving the keyboard (#4441).
 # Every answer is 12,000 characters at most: an article's, a 120-row table's, a JSON response's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
@@ -1430,6 +1432,113 @@ addEventListener("load", () => say("made", 0));
   to_pages "tab $sized_tab"
   closed=$(call close_tab "{\"tab\":$sized_tab}")
   case "$closed" in "Closed tab $sized_tab."*) ;; *) fail "close_tab on sized.html answered: $closed" ;; esac
+  # A page in its tile is as sharp as in a tab and scrolls under the pointer before any click
+  # (#4441), on the Mac, the one system with tiles. The core's line says what size and scale the
+  # tile's page draws at against the tile's, which must be the same. The trackpad over the tile
+  # scrolls its page, and the keyboard, the key window and the watch stay where they were. Then a
+  # click takes the page over, and the tab it is shows what the tile showed. Each miss is said, and
+  # the run fails at the end with all of them.
+  if [ "$(uname)" = Darwin ]; then
+    {
+      printf '%s' '<!doctype html><title>Tile page</title><style>body{font:15px/1.4 -apple-system,sans-serif;margin:24px}</style>
+<script>addEventListener("scroll", () => fetch("/tile?y=" + Math.round(scrollY)));</script><h1>Tile page</h1>'
+      for row in $(seq 80); do
+        printf '<p>Row %s. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua, quis nostrud exercitation.</p>' "$row"
+      done
+    } > "$out/site/tile.html"
+    opened=$(call open_tab "{\"url\":\"localhost:$port/tile.html\"}")
+    tile_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    [ -n "$tile_tab" ] || fail "open_tab tile.html answered: $opened"
+    watch "$tile_tab"
+    misses=
+    miss() { misses="${misses:+$misses; }$1"; }
+    said="^browser: tile $tile_tab page [0-9.]*x[0-9.]* dsf [0-9.]* in tile [0-9.]*x[0-9.]* at ([0-9.-]*,[0-9.-]*) window scale [0-9.]*\$"
+    await "$said" || fail "the core said nothing of tab $tile_tab's tile: $(grep "^browser: tile $tile_tab " "$log" | tail -2 | tr '\n' ' ')"
+    # The last, from the watch at rest, which a frame after its line places.
+    send state
+    read -r page_w page_h dsf tile_w tile_h tile_x tile_y backing <<TILE
+$(grep "$said" "$log" | tail -1 | sed 's/.* page \([0-9.]*\)x\([0-9.]*\) dsf \([0-9.]*\) in tile \([0-9.]*\)x\([0-9.]*\) at (\([0-9.-]*\),\([0-9.-]*\)) window scale \([0-9.]*\)$/\1 \2 \3 \4 \5 \6 \7 \8/')
+TILE
+    [ "$page_w" = "$tile_w" ] ||
+      miss "the tile's page is laid out ${page_w} points wide in a tile ${tile_w} wide, so it's scaled"
+    [ "$dsf" = "$backing" ] ||
+      miss "the tile's page draws at scale $dsf in a window at $backing"
+    # The trackpad over the tile, as the user's two fingers.
+    send state
+    tile_key=$key tile_focus=$focus
+    send order
+    tile_order=$(grep '^browser: order ' "$log" | tail -1)
+    wheel_step=$step
+    send scroll $((${tile_x%.*} + ${tile_w%.*} / 2)) $((${tile_y%.*} + ${tile_h%.*} / 2)) 400 4
+    scrolled=0
+    for _ in $(seq 30); do
+      grep -q "localhost:$port/tile?y=[1-9]" "$out/site.log" && { scrolled=1; break; }
+      sleep 0.1
+    done
+    [ "$scrolled" = 1 ] || miss "the trackpad over the tile didn't scroll its page"
+    send state
+    [ "$key" = "$tile_key" ] && [ "$focus" = "$tile_focus" ] ||
+      miss "the trackpad over the tile moved the keyboard from $tile_key, $tile_focus to $key, $focus"
+    send order
+    [ "$(grep '^browser: order ' "$log" | tail -1)" = "$tile_order" ] ||
+      miss "the trackpad over the tile changed the windows: $(grep '^browser: order ' "$log" | tail -1)"
+    sed -n "/^browser: drive $wheel_step: /,\$p" "$log" | grep -q -E \
+      "^browser: task page $tile_tab (back|out of its tile)\$|^browser: agent mcp-client taken over in $tile_tab\$" &&
+      miss "the trackpad over the tile took it over or left the watch"
+    # What the tile shows, then what the tab shows, once the page draws where the scroll left it.
+    ../tools/window-screenshot.sh "$pid" "$out/tile-in-tile.png" || fail "no window to capture"
+    taken=$(grep -c "^browser: agent mcp-client taken over in $tile_tab\$" "$log" || true)
+    send click $((${tile_x%.*} + ${tile_w%.*} / 2)) $((${tile_y%.*} + ${tile_h%.*} / 2))
+    await_more "^browser: agent mcp-client taken over in $tile_tab\$" "$taken" ||
+      fail "a click on the tile didn't take tab $tile_tab over"
+    await "^browser: task page $tile_tab out of its tile\$" || fail "tab $tile_tab's page stayed in its tile once taken over"
+    send state
+    ../tools/window-screenshot.sh "$pid" "$out/tile-as-tab.png" || fail "no window to capture"
+    # The tile's place, inside its corners, in both: the share of its pixels that differ by more
+    # than a blur's edge would in any channel.
+    for shot in tile-in-tile tile-as-tab; do
+      sips -s format bmp "$out/$shot.png" --out "$out/$shot.bmp" > /dev/null || fail "sips couldn't read $shot.png"
+    done
+    python3 -I - "$out/tile-in-tile.bmp" "$out/tile-as-tab.bmp" "$tile_x" "$tile_y" "$tile_w" "$tile_h" "$backing" \
+      > "$out/tile-differ.txt" << 'PY' || fail "the tile's captures couldn't be compared"
+import struct, sys
+def read(path):
+    data = open(path, "rb").read()
+    offset, = struct.unpack_from("<I", data, 10)
+    width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+    stride = (bits * width + 31) // 32 * 4
+    def at(x, y):
+        row = y if height < 0 else abs(height) - 1 - y
+        i = offset + row * stride + x * bits // 8
+        return data[i:i + 3]
+    return width, abs(height), at
+(wa, ha, a), (wb, hb, b) = read(sys.argv[1]), read(sys.argv[2])
+x, y, w, h, scale = (float(v) for v in sys.argv[3:8])
+inset = 12
+left, top = int((x + inset) * scale), int((y + inset) * scale)
+right = min(int((x + w - inset) * scale), wa, wb)
+bottom = min(int((y + h - inset) * scale), ha, hb)
+count = differs = 0
+for py in range(top, bottom):
+    for px in range(left, right):
+        count += 1
+        if max(abs(p - q) for p, q in zip(a(px, py), b(px, py))) > 32:
+            differs += 1
+print("%d %d" % (differs, count))
+PY
+    read -r differs count < "$out/tile-differ.txt"
+    [ "$count" -gt 0 ] || fail "the tile's place was outside the captures: at $tile_x,$tile_y, ${tile_w}x$tile_h"
+    [ $((differs * 1000)) -le "$count" ] ||
+      miss "the tile showed its page otherwise than its tab: $differs of $count pixels differ ($out/tile-in-tile.png, $out/tile-as-tab.png)"
+    handed=$(grep -c "^browser: agent mcp-client handed back $tile_tab\$" "$log" || true)
+    send key return cmd
+    await_more "^browser: agent mcp-client handed back $tile_tab\$" "$handed" ||
+      fail "⌘↩ didn't hand back tab $tile_tab"
+    to_pages "tab $tile_tab"
+    closed=$(call close_tab "{\"tab\":$tile_tab}")
+    case "$closed" in "Closed tab $tile_tab."*) ;; *) fail "close_tab on tile.html answered: $closed" ;; esac
+    [ -z "$misses" ] || fail "a page in its tile (#4441): $misses"
+  fi
   watch "$agent_tab"
 fi
 # The split views' pages close, so the conversation's grid has the pages the steps after it count on.
