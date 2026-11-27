@@ -1,0 +1,46 @@
+Lets the app name the alert helper, which posts a site's alert-style notifications, as it names
+itself. macOS 14 names that helper by its file when it asks whether the app may notify, so it asked
+for "Chromium Helper (Aperitif Alerts)" (#4475); macOS 15 and later read its Info.plist. The app's
+build renames the Aperitif alert helper to its own CFBundleName and " Alerts", and sets
+BrowserCoreAlertHelperNamed in the app's Info.plist, where this finds the helper. Without that key
+the helper keeps Chrome's name, so an engine and an app built apart still find it.
+
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -488,7 +488,10 @@
+ #include "services/webnn/public/mojom/features.mojom-features.h"
+ #endif
+ #elif BUILDFLAG(IS_MAC)
++#include <CoreFoundation/CoreFoundation.h>
++
+ #include "base/apple/foundation_util.h"
++#include "base/strings/sys_string_conversions.h"
+ #include "chrome/browser/browser_process_platform_part_mac.h"
+ #include "chrome/browser/enterprise/platform_auth/platform_auth_proxying_url_loader_factory.h"
+ #include "chrome/common/chrome_version.h"
+@@ -9032,6 +9035,25 @@
+             : chrome::kMacHelperSuffixAlerts;
+     std::string child_base_name =
+         base::StrCat({chrome::kHelperProcessExecutableName, child_suffix});
++    // browser_core: macOS 14 names the alert helper by its file when it asks
++    // whether the app may notify, so the app's build names the helper as the
++    // app names itself, CFBundleName and " Alerts", and says so in its
++    // Info.plist (BrowserCoreAlertHelperNamed). Any other build keeps Chrome's.
++    CFBundleRef app = CFBundleGetMainBundle();
++    CFBooleanRef named =
++        app ? base::apple::CFCast<CFBooleanRef>(
++                  CFBundleGetValueForInfoDictionaryKey(
++                      app, CFSTR("BrowserCoreAlertHelperNamed")))
++            : nullptr;
++    CFStringRef app_name =
++        app ? base::apple::CFCast<CFStringRef>(
++                  CFBundleGetValueForInfoDictionaryKey(app, kCFBundleNameKey))
++            : nullptr;
++    if (base::FeatureList::IsEnabled(features::kAperitifHelpers) && named &&
++        CFBooleanGetValue(named) && app_name && CFStringGetLength(app_name)) {
++      child_base_name =
++          base::StrCat({base::SysCFStringRefToUTF8(app_name), " Alerts"});
++    }
+     // Parallel to SetUpBundleOverrides(), helper executables reside in the
+     // "Helpers" directory within the versioned framework bundle as
+     // `<child_base_name>.app/Contents/MacOS/<child_base_name>`.
