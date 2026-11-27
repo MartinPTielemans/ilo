@@ -329,8 +329,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].status =
             format!("{PRODUCT} stopped {name}: it started with tools {PRODUCT} doesn't allow.")
                 .into();
-        cards[0].fuller = false;
-        cards[0].lead = 0;
         cards[0].dot = Dot::Ended;
         cards[0].word = Word::Interrupted;
     }

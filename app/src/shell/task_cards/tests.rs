@@ -581,7 +581,6 @@ fn every_thread_at_work_is_one_line_however_many_work(cx: &mut TestAppContext) {
     let working = |n: u64, title: &str| Card {
         title: title.into(),
         status: "Step 3 · Opening tap.pt".into(),
-        visited: vec![1010],
         ..paged(n, Dot::Working, &[1010, 1011])
     };
     let (shell, _, cx) = shell_with(cx, vec![working(1, long)]);
