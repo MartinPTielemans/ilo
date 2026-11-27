@@ -880,7 +880,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.
         "notes" => {
-            let github = &browser::agents::notes::NOTES[0];
+            let github = browser::agents::notes::note_for("https://github.com/").unwrap();
             let opened = TraceStep {
                 key: 10,
                 glyph: "icons/globe.svg",

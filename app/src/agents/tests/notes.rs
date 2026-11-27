@@ -2,12 +2,12 @@
 //! the agent a page there. Only the app's own note is one, whatever a page writes.
 
 use super::*;
-use crate::agents::notes::{self, NOTES};
+use crate::agents::notes;
 use crate::agents::task::{Line, TraceStep};
 
 /// GitHub's note, and the line its frame starts with, as an agent reads it.
 fn github() -> &'static notes::Note {
-    &NOTES[0]
+    notes::note_for("https://github.com/").unwrap()
 }
 
 fn frame() -> String {
