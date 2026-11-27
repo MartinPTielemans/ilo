@@ -1,0 +1,13 @@
+source: https://help.x.com/en/using-x/how-to-post
+source: https://help.x.com/en/using-x/advanced-postdeck-features
+checked: 2026-11-27
+holds: search filters, shortcuts
+---
+Go straight there
+Search takes from:NAME, to:NAME, since:2026-01-31 and until:2026-02-28, min_faves:10, min_replies:100, filter:media and filter:replies, quotes for a phrase, OR for either and a minus to leave a word out.
+
+Keys beat clicks
+? lists every key and / puts the cursor in search. n writes a new post. On a post, l likes it, r replies, t reposts and Enter opens it. g then h goes home, g then n to the notifications, g then p to the profile, g then m to the messages and g then s to the settings.
+
+Know before you start
+l and t act at once, where others see it, so press them only when the user asked.

@@ -1,0 +1,10 @@
+source: https://support.google.com/docs/answer/139706
+checked: 2026-11-27
+holds: where things are
+---
+Go straight there
+Responses at the top of a form shows its answers: Summary for them all, once there is one, and Individual for one person's, with Previous and Next. Link to Sheets at the top right puts them in a spreadsheet, and More, then Download responses (.csv), gives a file.
+
+Know before you start
+A downloaded file isn't sorted by time.
+With more than 10,000 responses, the views by question and by person may be missing.

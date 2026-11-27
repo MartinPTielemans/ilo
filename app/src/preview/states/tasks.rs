@@ -341,6 +341,18 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
     }
+    // The bench's thread whose run ilo ended over its tools (AP17): interrupted, its card saying
+    // why as its line does.
+    if states::var("PREVIEW_TASK").is_ok_and(|state| state == "not-our-tools") {
+        let name = cards[0].name.clone();
+        cards[0].status =
+            format!("{PRODUCT} stopped {name}: it started with tools {PRODUCT} doesn't allow.")
+                .into();
+        cards[0].fuller = false;
+        cards[0].lead = 0;
+        cards[0].dot = Dot::Ended;
+        cards[0].word = Word::Interrupted;
+    }
     // One group's state (`group_state`): the task it's of, alone, or with the one beside it.
     match group_state().as_deref() {
         Some("needs-you") => {
@@ -776,6 +788,14 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             }
             lines
         }
+        // ilo ended the thread's run before its first answer, as it started with a tool that
+        // isn't the browser's (AP17): no step and no answer, only ilo's line.
+        "not-our-tools" => {
+            talk.about = format!("{PRODUCT} · {}", Word::Interrupted.after_name()).into();
+            talk.stoppable = false;
+            talk.on = None;
+            vec![line(100, IloKind::NotOurTools)]
+        }
         // A task a run of the browser before left (#4105), brought back from the Archive: all
         // there is of it is its title and how it ended, so where its messages would begin it says
         // where they are, over its reply field; or, with its profile deleted or left with no
@@ -860,7 +880,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.
         "notes" => {
-            let github = &browser::agents::notes::NOTES[0];
+            let github = browser::agents::notes::note_for("https://github.com/").unwrap();
             let opened = TraceStep {
                 key: 10,
                 glyph: "icons/globe.svg",

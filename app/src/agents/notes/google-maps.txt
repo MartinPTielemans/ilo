@@ -1,0 +1,14 @@
+source: https://developers.google.com/maps/documentation/urls/get-started
+source: https://support.google.com/maps/answer/6396990
+landmark: https://www.google.com/maps/search/?api=1&query=Copenhagen | Copenhagen
+checked: 2026-11-27
+holds: addresses, shortcuts
+---
+Go straight there
+/maps/search/?api=1&query=WORDS searches for a place or an address.
+/maps/dir/?api=1&origin=A&destination=B shows the way, and travelmode= takes driving, walking, bicycling, two-wheeler or transit.
+/maps/@?api=1&map_action=map&center=LAT%2CLNG&zoom=12 shows the map there.
+Write a comma as %2C and a space as +. Keep ?api=1 in each, or Maps ignores the rest.
+
+Keys beat clicks
+Ctrl+/ lists the keys. With the map focused, the arrows move it, a square at a time with Shift, and + and - zoom.

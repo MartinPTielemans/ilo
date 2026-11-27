@@ -331,7 +331,7 @@ pub struct Settings {
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
     requests_all: HashSet<u64>,
-    /// The site notes opened to read, by host (#4122).
+    /// The site notes opened to read, by name (#4122).
     notes_opened: HashSet<&'static str>,
 }
 
@@ -4314,11 +4314,11 @@ impl Settings {
         let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
         let rows: Vec<gpui::Div> = (notes::NOTES.iter())
             .map(|note| {
-                let host = note.host;
-                let opened = self.notes_opened.contains(host);
+                let name = note.name;
+                let opened = self.notes_opened.contains(name);
                 let toggle = cx.listener(move |settings, _, _, cx| {
-                    if !settings.notes_opened.remove(host) {
-                        settings.notes_opened.insert(host);
+                    if !settings.notes_opened.remove(name) {
+                        settings.notes_opened.insert(name);
                     }
                     cx.notify();
                 });

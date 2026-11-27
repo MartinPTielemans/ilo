@@ -1,0 +1,11 @@
+source: https://help.clickup.com/hc/en-us/articles/6309030550167-Use-keyboard-shortcuts
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+⌘+K on a Mac, Ctrl+K elsewhere, searches everything. Shift+? lists the keys. s searches too, t makes a task and r a reminder.
+In the editor, / lists commands, and @ mentions a person, @@ a task and @@@ a doc.
+
+Know before you start
+ClickUp's single keys are off until the user turns them on in their settings. If one does nothing, use ⌘+K or click instead, and leave the setting as it is.
+Keys work only with the cursor outside a text field.
