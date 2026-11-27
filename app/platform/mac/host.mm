@@ -710,24 +710,32 @@ NSRect Unconstrained(id, SEL, NSRect frame, NSScreen*) {
   return frame;
 }
 
-BOOL Never(id, SEL) {
-  return NO;
+char kNeverKey;
+BOOL (*g_panel_can_become_key)(id, SEL);
+
+BOOL PanelCanBecomeKey(id panel, SEL key) {
+  return !objc_getAssociatedObject(panel, &kNeverKey) && g_panel_can_become_key(panel, key);
 }
 
 // An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
 // key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
-// field the menu just opened (#1664).
+// field the menu just opened (#1664). The panel keeps its class: one swapped under AppKit's
+// key-value observing loses its observers, and closing its window then threw (#4467).
 void NeverKey(NSWindow* window) {
-  static Class never_key;
-  if (!never_key) {
-    Class panel = object_getClass(window);
-    SEL key = @selector(canBecomeKeyWindow);
-    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
-    class_addMethod(never_key, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(never_key);
+  static Class panel = NSClassFromString(@"GPUIPanel");
+  if (![window isKindOfClass:panel]) {
+    return;
   }
-  object_setClass(window, never_key);
+  if (!g_panel_can_become_key) {
+    SEL key = @selector(canBecomeKeyWindow);
+    Method method = class_getInstanceMethod(panel, key);
+    g_panel_can_become_key = (BOOL (*)(id, SEL))method_getImplementation(method);
+    // GPUI's panel inherits NSPanel's unless it has its own, which this then stands in for.
+    if (!class_addMethod(panel, key, (IMP)PanelCanBecomeKey, method_getTypeEncoding(method))) {
+      method_setImplementation(method, (IMP)PanelCanBecomeKey);
+    }
+  }
+  objc_setAssociatedObject(window, &kNeverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // Another app that asks which of ours is in front takes the first window at the normal level, in
