@@ -5249,7 +5249,13 @@ impl Shell {
         let cards = frames.iter().enumerate().map(|(index, &bounds)| {
             // Under a page of a colour of its own the card is that colour, so the page keeps
             // its tab's line's colour while its view has nothing drawn.
-            let fill = own.filter(|_| index == 0).unwrap_or(self.palette.page);
+            // With no page shown, the card is the empty window's own page, the composer's, on
+            // the own page's plane (#4089).
+            let ground = match self.selected {
+                0 => self.palette.own_page,
+                _ => self.palette.page,
+            };
+            let fill = own.filter(|_| index == 0).unwrap_or(ground);
             card(bounds, fill).when(focused == Some(index), |card| {
                 card.shadow(vec![glow.clone()])
             })
@@ -5985,6 +5991,8 @@ fn packed(color: Hsla) -> u32 {
 
 /// A card at `bounds` in the window with corners of `radius`, of `fill`.
 fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
+    #[cfg(test)]
+    CARD_FILLS.with_borrow_mut(|cards| cards.push((bounds, fill)));
     div()
         .absolute()
         .left(bounds.left())
@@ -6025,6 +6033,10 @@ thread_local! {
     /// What `card_outline` was asked for since a test last took it: each page's box, its corner,
     /// its side with no line and the line's colour, for a test of the page area's outline.
     static PAGE_OUTLINES: std::cell::RefCell<Vec<(Bounds<Pixels>, f32, Option<bool>, Hsla)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// What `card` was asked for since a test last took it: each card's box and fill, for a test
+    /// of the plane a page sits on.
+    static CARD_FILLS: std::cell::RefCell<Vec<(Bounds<Pixels>, Rgba)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 

@@ -2667,3 +2667,27 @@ fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
         );
     }
 }
+
+/// A thread's own page sits on a plane of its own, never the sidebar's tone (the owner, 27 Nov,
+/// #4089): darker than the window's glass in Dark and lighter in Light, by a step the eye tells,
+/// at a Space's start on the Transparency bar over a grey window behind. Over a black window Dark's
+/// glass is as dark as the plane, and over a white one Light's as light, which only the real app's
+/// captures judge.
+#[test]
+fn the_own_page_plane_is_never_the_sidebars_tone() {
+    use crate::tokens::shell::{LIGHT_OWN_PAGE, OWN_PAGE};
+    for (tone, token) in [(Tone::Dark, OWN_PAGE), (Tone::Light, LIGHT_OWN_PAGE)] {
+        let palette = Palette::at(None, tone, START);
+        assert_eq!(palette.own_page, rgba(token), "{tone:?}");
+        let plane = palette.own_page;
+        let [_, sidebar, _] = palette.window_over_greys(0., 0., 0.);
+        let page = over(sidebar, plane, plane.a);
+        let step = contrast(page, sidebar);
+        let darker = luminance(page) < luminance(sidebar);
+        assert_eq!(darker, tone == Tone::Dark, "{tone:?}");
+        assert!(step >= OWN_PAGE_STEP, "{tone:?}: {step:.3}");
+    }
+}
+
+/// The least the own page's plane stands off the sidebar's glass.
+const OWN_PAGE_STEP: f32 = 1.05;

@@ -1231,6 +1231,22 @@ impl Shell {
                 .rounded(px(self.card_radius()))
                 .overflow_hidden()
                 .child(area.view.clone());
+            // The conversation sits on the own page's plane, in the card's frame and with its
+            // line where it faces the window, as a web page's card does: never the sidebar's tone
+            // (#4089). The plane stays while the conversation fades under a page, so the window's
+            // glass never shows between them.
+            let meets_sidebar = self.card_left() == self.width();
+            let open = match standing {
+                true => (meets_sidebar && !self.right).then_some(false),
+                false => meets_sidebar.then_some(self.right),
+            };
+            let ink = self.page_outline_ink();
+            let outline = (self.card_left() > 0.)
+                .then(|| super::card_outline(at, self.card_radius(), open, ink));
+            layer =
+                layer
+                    .children(outline)
+                    .child(card(at, self.card_radius(), self.palette.own_page));
             layer = layer.child(
                 div()
                     .id("task-conversation")

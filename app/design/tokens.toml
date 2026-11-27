@@ -1957,6 +1957,12 @@ private-shade = 0.35
 # window shows through them (#4089): near-black at 0.4 on a dark window, white at 0.5 on a light one.
 card = 0x0606_0966
 light-card = 0xffff_ff80
+# The plane a thread's own page sits on, its conversation and composer and the empty window's: the
+# darker plane under the sidebar's lighter glass in Dark, the lighter one over it in Light, so the
+# two never share a tone (the owner, 27 Nov, #4089). In the card's frame and inset, with its line.
+# Dark is the Paper file's #1D1D21 at 66%; Light is white at the same strength (#4276, Proposed).
+own-page = 0x1d1d_21a8
+light-own-page = 0xffff_ffa8
 # What a page shows until its first frame: black while websites are told the appearance is dark,
 # white while it's light (Arc 1.171, measured by an outside reverse-engineering, #1404), the
 # colour a page in that appearance most likely draws.

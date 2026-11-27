@@ -1208,3 +1208,53 @@ fn a_working_threads_ring_turns_at_rest_and_nothing_else_asks_for_a_frame(cx: &m
         "a working thread's ring doesn't turn"
     );
 }
+
+/// The empty window's own page, the composer's, sits on the own page's plane in the card's frame
+/// and inset with a web page's line, in either look, while a tab shown has the web page's card
+/// (#4089).
+#[gpui::test]
+fn the_empty_window_sits_on_the_own_page_plane(cx: &mut TestAppContext) {
+    use crate::palette::Tone;
+    use crate::shell::{CARD_FILLS, PAGE_OUTLINES};
+    for tone in [Tone::Dark, Tone::Light] {
+        let (shell, cx, _) = window_with_no_tab(cx);
+        shell.update(cx, |shell, cx| {
+            shell.force_tone(Some(tone));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        PAGE_OUTLINES.take();
+        CARD_FILLS.take();
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let (card, radius, ink, plane, page) = shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.palette.tone, tone);
+            let (card, _) = shell.page_frame(shell.viewport);
+            (
+                card,
+                shell.card_radius(),
+                shell.page_outline_ink(),
+                shell.palette.own_page,
+                shell.palette.page,
+            )
+        });
+        assert!(
+            CARD_FILLS.take().contains(&(card, plane)),
+            "{tone:?}: the empty window isn't on the plane"
+        );
+        assert_eq!(
+            PAGE_OUTLINES.take(),
+            [(card, radius, Some(false), ink)],
+            "{tone:?}: the empty window hasn't a page's line"
+        );
+
+        shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+        cx.run_until_parked();
+        CARD_FILLS.take();
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let fills = CARD_FILLS.take();
+        assert!(fills.contains(&(card, page)), "{tone:?}: {fills:?}");
+        assert!(!fills.iter().any(|&(_, fill)| fill == plane), "{tone:?}");
+    }
+}

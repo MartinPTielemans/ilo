@@ -2203,42 +2203,97 @@ fn the_panel_stands_on_another_page_at_once(cx: &mut TestAppContext) {
     assert_eq!(laid, watched(split(card).0), "it isn't in the page's part");
 }
 
-/// A thread's column is no card (#4396): with no page shown the area draws no card's line. Standing
-/// on one of its pages, the page is the one card, its line round all four sides, the side beside
-/// the column too, as the column is the window's.
+/// A thread's own page sits on the own page's plane in the card's frame and inset, its line where
+/// it faces the window as a web page's card has, in either look (#4089): the conversation alone
+/// in the card, its line open at the docked sidebar; standing on one of its pages, the
+/// conversation's panel on the plane, its line open at the sidebar, and the page the one card
+/// with its line all round. With the sidebar hidden the plane is the window, with no line, as a
+/// page is.
 #[gpui::test]
-fn standing_on_a_threads_page_it_is_the_one_card_with_its_line_all_round(cx: &mut TestAppContext) {
-    use crate::shell::PAGE_OUTLINES;
-    let (shell, _, cx) = shell_with_task(cx);
-    still(cx);
-    let view = conversation(cx);
-    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
-    PAGE_OUTLINES.take();
-    draw(&shell, cx);
-    assert_eq!(
-        PAGE_OUTLINES.take(),
-        [],
-        "the conversation has a card's line"
-    );
+fn a_threads_own_page_sits_on_its_plane_in_the_cards_frame(cx: &mut TestAppContext) {
+    use crate::palette::Tone;
+    use crate::shell::{CARD_FILLS, PAGE_OUTLINES};
+    for tone in [Tone::Dark, Tone::Light] {
+        let (shell, _, cx) = shell_with_task(cx);
+        still(cx);
+        shell.update(cx, |shell, _| shell.force_tone(Some(tone)));
+        let view = conversation(cx);
+        shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+        draw(&shell, cx);
+        let looks = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                assert_eq!(shell.palette.tone, tone);
+                let (card, _) = shell.page_frame(shell.viewport);
+                let (radius, ink) = (shell.card_radius(), shell.page_outline_ink());
+                (
+                    card,
+                    radius,
+                    ink,
+                    shell.palette.own_page,
+                    shell.palette.page,
+                )
+            })
+        };
+        PAGE_OUTLINES.take();
+        CARD_FILLS.take();
+        draw(&shell, cx);
+        let (card, radius, ink, plane, page) = looks(cx);
+        assert_ne!(plane, page, "{tone:?}: the plane is a web page's card");
+        assert!(
+            CARD_FILLS.take().contains(&(card, plane)),
+            "{tone:?}: the conversation isn't on the plane in the card's frame"
+        );
+        assert_eq!(
+            PAGE_OUTLINES.take(),
+            [(card, radius, Some(false), ink)],
+            "{tone:?}: the conversation hasn't the card's line"
+        );
 
-    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| {
-        shell.watch_task_page(30, thumb, None, false, cx)
-    }));
-    core_shows_task(&shell, cx, 30);
-    draw(&shell, cx);
-    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
-    PAGE_OUTLINES.take();
-    draw(&shell, cx);
-    let (card, _) = frames(&shell, cx);
-    let (radius, ink) = shell.read_with(cx, |shell, _| {
-        (shell.card_radius(), shell.page_outline_ink())
-    });
-    assert_eq!(
-        PAGE_OUTLINES.take(),
-        [(watched(split(card).0), radius, None, ink)],
-        "the page isn't the one card with its line all round"
-    );
+        shell.update(cx, |shell, _| shell.sidebar_hidden = true);
+        PAGE_OUTLINES.take();
+        CARD_FILLS.take();
+        draw(&shell, cx);
+        let (card, ..) = looks(cx);
+        assert_eq!(
+            card,
+            Bounds::new(
+                point(px(0.), px(0.)),
+                shell.read_with(cx, |s, _| s.viewport)
+            ),
+            "{tone:?}: the card isn't the window"
+        );
+        assert!(
+            CARD_FILLS.take().contains(&(card, plane)),
+            "{tone:?}: the conversation isn't on the plane with the sidebar hidden"
+        );
+        assert_eq!(PAGE_OUTLINES.take(), [], "{tone:?}: a line with no rim");
+        shell.update(cx, |shell, _| shell.sidebar_hidden = false);
+
+        let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+        assert!(shell.update(cx, |shell, cx| {
+            shell.watch_task_page(30, thumb, None, false, cx)
+        }));
+        core_shows_task(&shell, cx, 30);
+        draw(&shell, cx);
+        assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+        PAGE_OUTLINES.take();
+        CARD_FILLS.take();
+        draw(&shell, cx);
+        let (card, ..) = looks(cx);
+        let (watched_page, panel) = split(card);
+        assert!(
+            CARD_FILLS.take().contains(&(panel, plane)),
+            "{tone:?}: the panel beside the page isn't on the plane"
+        );
+        assert_eq!(
+            PAGE_OUTLINES.take(),
+            [
+                (panel, radius, Some(false), ink),
+                (watched(watched_page), radius, None, ink)
+            ],
+            "{tone:?}: the panel and the page haven't their lines"
+        );
+    }
 }
 
 /// A web link in a thread's answer, clicked while the user watches one of the thread's pages or

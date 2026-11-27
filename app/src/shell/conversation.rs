@@ -107,8 +107,7 @@ fn said_ink(palette: &super::Palette) -> Hsla {
 
 /// The page's plate, which the shown thread's card in the sidebar takes, a shape of its own
 /// (task_cards.rs), until the lifted pane takes its place (#4398). The conversation itself draws
-/// no plate: its column is the chrome the user steers from, on the window's glass as the sidebar
-/// is, and the page is the one card (the owner, 27 Nov, #4396).
+/// no plate: the page area lays it on the own page's plane, in the card's frame (#4089).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }

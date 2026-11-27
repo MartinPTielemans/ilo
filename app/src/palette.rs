@@ -52,6 +52,7 @@ use crate::tokens::selected::plate::LIGHT as LIGHT_STATE_SELECTED;
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
 use crate::tokens::shell::{DROP, LIGHT_UNPAINTED, UNPAINTED};
+use crate::tokens::shell::{LIGHT_OWN_PAGE, OWN_PAGE};
 use crate::tokens::site_controls::{
     TILE_BOTTOM as SITE_CONTROLS_TILE_BOTTOM, TILE_TOP as SITE_CONTROLS_TILE_TOP,
     TINT as SITE_CONTROLS_TINT,
@@ -250,6 +251,15 @@ impl Tone {
         rgba(match self {
             Tone::Dark => PAGE_CARD,
             Tone::Light => LIGHT_PAGE_CARD,
+        })
+    }
+
+    /// The plane a thread's own page sits on: darker than the window's glass in Dark, lighter in
+    /// Light.
+    fn own_page(self) -> Rgba {
+        rgba(match self {
+            Tone::Dark => OWN_PAGE,
+            Tone::Light => LIGHT_OWN_PAGE,
         })
     }
 
@@ -641,6 +651,9 @@ pub struct Palette {
     pub float_shades: [f32; 3],
     /// The card the pages lie in, over the window.
     pub page: Rgba,
+    /// The plane a thread's own page, its conversation and composer, and the empty window sit on,
+    /// in the card's frame: a tone of its own, never the sidebar's glass (#4089).
+    pub own_page: Rgba,
     /// The icon and theme pickers' card, over what's behind it: the floating fill where the card's
     /// text reads on it over the window, and otherwise the least step toward its colour, opaque,
     /// at which it does.
@@ -793,6 +806,7 @@ impl Palette {
             overlay_glyph_floor: 0.,
             float_shades: [0.; 3],
             page: tone.page(),
+            own_page: tone.own_page(),
             card: Float::Picker.card(),
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
@@ -1070,6 +1084,7 @@ impl Palette {
                 self.float_shades[fill].max(other.float_shades[fill])
             }),
             page: mix(self.page, other.page),
+            own_page: mix(self.own_page, other.own_page),
             card: near.card,
             swatch: near.swatch,
             ground_shades: std::array::from_fn(|ground| {
