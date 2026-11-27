@@ -1481,9 +1481,18 @@ bool ChooseTracked(NSString* title) {
   return true;
 }
 
-// The text fields' and buttons' views in |view|, in the order AppKit lays them out.
+// The text fields' and buttons' views in |view| shown, in the order AppKit lays them out. A
+// button's title is its text, so what's in it isn't another: on macOS 14 an alert named each of
+// its buttons twice (#4471).
 void ModalTexts(NSView* view, NSMutableArray<NSView*>* texts) {
-  if ([view isKindOfClass:NSTextField.class] || [view isKindOfClass:NSButton.class]) {
+  if (view.hidden) {
+    return;
+  }
+  if ([view isKindOfClass:NSButton.class]) {
+    [texts addObject:view];
+    return;
+  }
+  if ([view isKindOfClass:NSTextField.class]) {
     [texts addObject:view];
   }
   for (NSView* subview in view.subviews) {
