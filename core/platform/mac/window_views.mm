@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/page_edge_strips.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
 #include "content/public/browser/page_tile_mac.h"
@@ -79,6 +80,8 @@
 @property(nonatomic) NSUInteger holds;
 // What the panes are drawn at, about the centre of their frames (ScalePages); 0 is 1.
 @property(nonatomic) double pageScale;
+// Whether the window is a Little ilo one, which has no edge strips (SetLittle).
+@property(nonatomic) BOOL little;
 - (void)layOutPage;
 - (void)scalePages;
 - (void)letLeavingGo;
@@ -94,14 +97,29 @@
 @synthesize awaited = _awaited;
 @synthesize holds = _holds;
 @synthesize pageScale = _pageScale;
+@synthesize little = _little;
 
 - (BOOL)isFlipped {
   return YES;
 }
 
 // Through the pages a switch is leaving, as if they had gone: they only stand in for the pages it
-// shows until those draw.
+// shows until those draw. The strip along the sidebar's side is the UI's, over a page that reaches
+// it too, in full screen as well (page_edge_strips.h). The app lays each browser window's title bar
+// out on its sidebar's side, right to left for one on the right and left to right otherwise, under
+// an Arabic or Hebrew system too (host.mm's PlaceTitlebarSide), which the core reads as the
+// sidebar's side; a Little ilo window has no strip, as macOS resizes the window itself.
 - (NSView*)hitTest:(NSPoint)point {
+  NSPoint local = [self convertPoint:point fromView:self.superview];
+  const browser_core::EdgeSides sides = browser_core::SidebarEdge(
+      self.little,
+      self.window.windowTitlebarLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft);
+  if (self.uiView && [self mouse:local inRect:self.bounds] &&
+      browser_core::InPageEdgeStrip(local.x, NSWidth(self.bounds), browser_core::kPageEdgeStrip,
+                                    sides)) {
+    NSView* ui = [self.uiView hitTest:local];
+    return ui ? ui : self.uiView;
+  }
   NSView* hit = [super hitTest:point];
   if (!hit || self.leaving.count == 0) {
     return hit;
@@ -113,7 +131,6 @@
   if (!leaving) {
     return hit;
   }
-  NSPoint local = [self convertPoint:point fromView:self.superview];
   for (NSView* subview in [self.subviews reverseObjectEnumerator]) {
     if (![self.leaving containsObject:subview]) {
       if (NSView* under = [subview hitTest:local]) {
@@ -382,6 +399,10 @@ void AddWindowViews(views::Widget* widget, void* ui_view) {
   // Without this, the content view's hit test and accessibility would skip the page and the UI
   // (engine/patches/ours/chromium-core-embedded-view.patch).
   content.embeddedView = view;
+}
+
+void SetLittle(views::Widget* widget, bool little) {
+  WindowView(widget).little = little;
 }
 
 void ShowPages(views::Widget* widget,
