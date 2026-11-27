@@ -693,12 +693,15 @@ spaces_wide=$(($(token shell.library column-width) + $(token shell.library space
   $(token shell.library plus-gap) + $(token shell.library plus-size) +
   $(token shell.library plus-after)))
 page_least=$((${content%x*} - $(token shell.library spaces-page)))
+# What the cards and the + take, before the section leaves the page its room.
+cards_full=$spaces_wide
 [ $spaces_wide -gt $page_least ] && spaces_wide=$page_least
 # The cards' lefts, past the Library's column of sections and the gap before the first, and their
 # width: the steps below point at the cards from these.
 card_w=$(token shell.library card-width)
 card1=$(($(token shell.library column-width) + $(token shell.library spaces-left)))
-card2=$((card1 + card_w + $(token shell.library card-gap)))
+card_gap=$(token shell.library card-gap)
+card2=$((card1 + card_w + card_gap))
 expect "^browser: library spaces 2 wide $spaces_wide\$" \
   "the Library's Spaces section isn't $spaces_wide wide with two Spaces in a $content window"
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"
@@ -813,12 +816,12 @@ handle_x=${handle_point% *}
 handle_y=${handle_point#* }
 send move $handle_point
 send press $handle_point
-send dragto 420 $handle_y
+send dragto $((handle_x - 6)) $handle_y
 expect "^browser: drag space $second\$" "the second card's handle didn't drag the card"
-send dragto 180 $handle_y
+send dragto $((card1 + 40)) $handle_y
 ../tools/window-screenshot.sh "$pid" "$out/library-space-drag.png" || fail "no window to capture"
 record library-space-drag 3
-send release 180 $handle_y
+send release $((card1 + 40)) $handle_y
 expect "^browser: dropped space $second after 0\$" "the second card let go over the first didn't move its Space"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 recorded
@@ -832,22 +835,24 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the cards back in th
 # one before that is the drop's (#2026, #4059, #4067).
 expect_after '^browser: spaces settled$' "the cards didn't settle after ⌘Z put the Spaces back" \
   "^browser: spaces $first $second\$"
-send move $((handle_x - 264)) $handle_y
-send drag $((handle_x - 264)) $handle_y 600 $handle_y
+send move $((handle_x - card_w - card_gap)) $handle_y
+send drag $((handle_x - card_w - card_gap)) $handle_y $((card2 + card_w * 3 / 4)) $handle_y
 expect "^browser: dropped space $first after $second\$" "the first card's handle flicked past the second card didn't move its Space"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
 send key z cmd
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back after the flick"
-# In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
+# In a window 700 wide the two cards and the + don't fit: the section leaves the page its room,
 # and its cards scroll across under two fingers, give past their last and spring back to it once
-# let go, 100 along, the Library staying open (Arc 1.171, #1401).
+# let go, as far along as they're wider than the section, the Library staying open (Arc 1.171,
+# #1401).
+narrow_room=$((cards_full - 700 + $(token shell.library spaces-page)))
 if [ -n "$fingers" ]; then
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
   send swipe 500 $((${content#*x} / 2)) -20 0 10
   expect '^browser: swipe cards$' "two fingers over the cards that don't fit didn't scroll them"
-  expect '^browser: library cards at 100$' "the cards let go past their last didn't spring back to it"
+  expect "^browser: library cards at $narrow_room\$" "the cards let go past their last didn't spring back to it, $narrow_room along"
   recorded
   none_since '^browser: library hidden$' || fail "two fingers over the cards closed the Library"
   ../tools/window-screenshot.sh "$pid" "$out/library-cards.png" || fail "no window to capture"
