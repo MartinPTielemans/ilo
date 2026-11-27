@@ -81,13 +81,40 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off. For a file \
      field, call upload: the user chooses the file in the page and hands the tab back.\n\n\
-     Never pay, and never place an order, book or send a message unless the user asked you to. \
-     When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
+     Never pay, place an order, book, send a message, file, sign or accept terms unless the user \
+     asked you to: being asked to fill something in isn't being asked to send it. When the work \
+     ends on a page only the user may finish, such as a checkout, or at a step you weren't asked \
+     to take, stop there and give finish its tab.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
      short line, such as “Gulbenkian, Sat 10:00–21:00”. Give finish tabs only when the user must \
      act there themselves: pay, sign, submit, or take over a session. Otherwise give none. Keep \
      what you say to the user short and plain."
 );
+/// What a task below Full access is told of paying, ordering and the other steps that bind the
+/// user, as `TASK_INSTRUCTIONS` says it.
+pub const BINDING: &str = "Never pay, place an order, book, send a message, file, sign or accept \
+     terms unless the user asked you to: being asked to fill something in isn't being asked to send \
+     it. When the work ends on a page only the user may finish, such as a checkout, or at a step you \
+     weren't asked to take, stop there and give finish its tab.";
+
+/// What a task at Full access is told instead (#4358): it may finish an order or a payment it was
+/// asked for, only as the user said it; the same steps it wasn't asked to take still stop it.
+pub const BINDING_AT_FULL: &str = "Never pay, place an order, book, send a message, file, sign or \
+     accept terms unless the user asked you to: being asked to fill something in isn't being asked \
+     to send it. At a step you weren't asked to take, stop there and give finish its tab. This task \
+     has Full access, so you may pay or place an order the user asked for, but only when it matches \
+     what they said: the item, its size or options, and the total with shipping within any limit \
+     they gave. When it doesn't, don't place it: call ask with the difference.";
+
+/// What a task's CLI is told at `tier`: `TASK_INSTRUCTIONS`, with Full access's own words for the
+/// steps that bind the user there.
+pub fn task_instructions(tier: super::tier::Tier) -> String {
+    match tier {
+        super::tier::Tier::Full => TASK_INSTRUCTIONS.replace(BINDING, BINDING_AT_FULL),
+        _ => TASK_INSTRUCTIONS.to_string(),
+    }
+}
+
 /// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
 /// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
 /// the rest.
@@ -1353,6 +1380,34 @@ mod note_tests {
             "an outside app's agent is offered no note"
         );
         assert!(!INSTRUCTIONS.contains("`note`") && TASK_INSTRUCTIONS.contains("`note`"));
+    }
+
+    /// A task is told the same below Full access; at Full access it may finish an order it was
+    /// asked for, only as the user said it, and asks otherwise. At every level it's told never to
+    /// file, sign or accept terms it wasn't asked to, nor to take filling in for sending.
+    #[test]
+    fn what_a_task_is_told_of_orders_differs_by_level() {
+        use crate::agents::tier::Tier;
+        assert!(
+            TASK_INSTRUCTIONS.contains(BINDING),
+            "the instructions lost BINDING"
+        );
+        assert_eq!(task_instructions(Tier::Look), TASK_INSTRUCTIONS);
+        assert_eq!(task_instructions(Tier::Work), TASK_INSTRUCTIONS);
+        let full = task_instructions(Tier::Full);
+        assert_ne!(full, TASK_INSTRUCTIONS);
+        assert!(full.contains(BINDING_AT_FULL) && !full.contains(BINDING));
+        assert!(
+            !full.contains("such as a checkout"),
+            "Full access stops at a checkout"
+        );
+        assert!(full.contains("call ask with the difference"));
+        let never = "Never pay, place an order, book, send a message, file, sign or accept terms \
+                     unless the user asked you to: being asked to fill something in isn't being \
+                     asked to send it.";
+        for tier in Tier::ALL {
+            assert!(task_instructions(tier).contains(never), "{tier:?}");
+        }
     }
 
     #[test]

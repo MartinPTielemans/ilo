@@ -2356,10 +2356,10 @@ impl Agents {
             instructions: match task.helpers.on {
                 true => format!(
                     "{}\n\n{}",
-                    tools::TASK_INSTRUCTIONS,
+                    tools::task_instructions(task.tier),
                     helpers::instructions()
                 ),
-                false => tools::TASK_INSTRUCTIONS.into(),
+                false => tools::task_instructions(task.tier),
             },
             tools: tools::names(agent),
             helpers: task.helpers.on,

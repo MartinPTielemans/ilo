@@ -271,7 +271,7 @@ pub fn told(why: Why, tier: Tier, what: &str, site: &str) -> String {
 /// The turn ilo sends a task it runs itself once the user changes its tier from `from` to `to`:
 /// fixed words, with nothing of a page's or the agent's in them.
 pub fn changed_turn(from: Tier, to: Tier) -> String {
-    match to as usize > from as usize {
+    let told = match to as usize > from as usize {
         true => format!(
             "The user changed this task's access to {}. You may go on.",
             to.label()
@@ -280,6 +280,12 @@ pub fn changed_turn(from: Tier, to: Tier) -> String {
             "The user changed this task's access to {}. What it doesn't allow will be refused.",
             to.label()
         ),
+    };
+    // Into or out of Full access, what it's told of orders changes with it (#4358).
+    match (from == Tier::Full, to == Tier::Full) {
+        (false, true) => format!("{told}\n\n{}", super::tools::BINDING_AT_FULL),
+        (true, false) => format!("{told}\n\n{}", super::tools::BINDING),
+        _ => told,
     }
 }
 
@@ -489,8 +495,17 @@ mod tests {
     fn the_turn_after_a_change_is_ilos_own_words() {
         assert_eq!(
             changed_turn(Tier::Work, Tier::Full),
-            "The user changed this task's access to Full access. You may go on."
+            format!(
+                "The user changed this task's access to Full access. You may go on.\n\n{}",
+                crate::agents::tools::BINDING_AT_FULL
+            )
         );
-        assert!(changed_turn(Tier::Full, Tier::Look).contains("will be refused"));
+        let lowered = changed_turn(Tier::Full, Tier::Look);
+        assert!(lowered.contains("will be refused"));
+        assert!(lowered.ends_with(crate::agents::tools::BINDING));
+        assert_eq!(
+            changed_turn(Tier::Look, Tier::Work),
+            "The user changed this task's access to Work on pages. You may go on."
+        );
     }
 }
