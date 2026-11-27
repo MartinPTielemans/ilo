@@ -9,7 +9,9 @@
 # every run, so the selection fails safe. The runs whose subject is the engine alone (@engine-only)
 # run only on a full build. Each changed path and what it selected goes to stderr.
 # The runs are those check.sh does unnamed at <head>, as its runs_of reads them, so an old cut's
-# selection is from its own runs.
+# selection is from its own runs. A look build of a dev/rework commit ends with
+# tools/look-build-mark.sh <commit> <run-id>..., which marks the commit for the rework copy's refresh
+# once every run the selection started is green on it.
 set -euo pipefail
 [ $# = 2 ] || { echo "usage: $0 <base> <head>" >&2; exit 2; }
 base=$1 head=$2
