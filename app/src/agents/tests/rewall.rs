@@ -1072,13 +1072,11 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
 mod copying {
     use super::*;
 
-    /// A folder the test makes, as the panel would give it: beside the build, as ilo may give that on
-    /// every system the tests run on, where the system's temporary folder is one ilo never gives on
-    /// the Mac.
+    /// A folder the test makes, as the panel would give it, where the floor gives one on every
+    /// checkout (`files::test_folders`).
     fn real_folder(name: &str) -> PathBuf {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target/ilo-test-folders")
-            .join(format!("{name}-{}", std::process::id()));
+        let dir =
+            (crate::agents::files::test_folders()).join(format!("{name}-{}", std::process::id()));
         _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.canonicalize().unwrap()

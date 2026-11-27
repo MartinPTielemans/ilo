@@ -1063,8 +1063,9 @@ mod tests {
                 }
             }
         }
-        // The composer's plus, and this file's tests.
+        // The one road a pick is granted by (files::grant: the composer's plus and Settings ›
+        // Agents › Folders), and this file's tests.
         makers.sort();
-        assert_eq!(makers, ["command_bar.rs", "wall.rs"]);
+        assert_eq!(makers, ["files.rs", "wall.rs"]);
     }
 }

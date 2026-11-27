@@ -424,10 +424,7 @@ fn heading(title: SharedString) -> MenuEntry {
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
 fn granted(picked: &std::path::Path) -> Option<Granted> {
-    let never = Never::here(None);
-    let root = task_files::resolved(picked);
-    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
-    Granted::picked(root).ok()
+    task_files::grant(picked, &Never::here(None))
 }
 
 /// A pick on the composer's model menu.

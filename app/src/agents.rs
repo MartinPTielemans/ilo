@@ -21,6 +21,7 @@ mod codex;
 pub mod command;
 pub mod fence;
 pub mod files;
+pub mod folders;
 mod held;
 pub use held::HeldPage;
 mod helpers;
@@ -919,6 +920,10 @@ pub struct Agents {
     notes_off: bool,
     /// When a task's notification is posted, from Settings › Agents › Notifications.
     notify: crate::needs_you::Notify,
+    /// Settings › Agents › Sound, the app's own: off until the user turns it on.
+    sound: bool,
+    /// Settings › Agents › Folders (folders.rs).
+    folders: folders::Folders,
     /// The log's last entry, by its id.
     logged: u64,
     /// The uploads waiting on the core's description of their file field, by request.
@@ -1163,6 +1168,8 @@ impl Agents {
             noted: notes::Given::default(),
             notes_off: false,
             notify: Default::default(),
+            sound: false,
+            folders: folders::Folders::default(),
             logged: 0,
             downloading: HashMap::new(),
             grants: HashMap::new(),
@@ -1296,6 +1303,9 @@ impl Agents {
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
+        self.sound = tasks.get("sound").and_then(Value::as_bool) == Some(true);
+        let never = files::Never::here(Some(self.tasks_dir()));
+        self.folders = folders::Folders::read(saved.get("folders"), &never);
         // Settings saved before the two switches had one for every agent, and under it one for
         // the command bar's tasks. Once, the inside switch is on only where both were, and other
         // apps' agents only where agents were and they weren't turned off, so nothing comes on
@@ -1399,6 +1409,20 @@ impl Agents {
         self.notify = notify;
         self.save();
         cx.notify();
+    }
+
+    /// Settings › Agents › Sound.
+    pub fn sound(&self) -> bool {
+        self.sound
+    }
+
+    /// Settings › Agents › Sound.
+    pub fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on != self.sound {
+            self.sound = on;
+            self.save();
+            cx.notify();
+        }
     }
 
     /// Settings › Agents' Site notes. Off, no answer carries a site's notes from then on.
@@ -6045,6 +6069,7 @@ impl Agents {
             "last": last,
             "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
+            "sound": self.sound,
             "installed": (self.tasks.sign_ins.installed.iter())
                 .map(|cli| cli.id())
                 .collect::<Vec<_>>(),
@@ -6059,6 +6084,7 @@ impl Agents {
             "tasks": tasks,
             "scripts": self.scripts,
             "notes": !self.notes_off,
+            "folders": self.folders.saved(),
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
