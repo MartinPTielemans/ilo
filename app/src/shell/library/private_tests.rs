@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{Entity, TestAppContext, TouchPhase, VisualTestContext};
 
 use super::{Captured, Download, DownloadState};
 use crate::shell::{Command, Section, Shell, recorder::Recorder};
@@ -130,4 +130,65 @@ fn clear_clears_the_windows_own_session(cx: &mut TestAppContext) {
             .clear_downloads(shell.private_profile(), cx)
     });
     assert_eq!(host.take(), ["clear downloads Some(1)"]);
+}
+
+/// Fingers going right over a private window's sidebar bring out its Library, as the glyph does,
+/// on its own session's downloads (the owner's call, 27 Nov).
+#[gpui::test]
+fn fingers_bring_out_a_private_windows_library(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(true, cx);
+    shell.update_in(cx, |shell, window, cx| {
+        shell.preview_fingers(0., TouchPhase::Started, window, cx);
+        for _ in 0..30 {
+            shell.preview_fingers(20., TouchPhase::Moved, window, cx);
+        }
+        shell.preview_fingers(0., TouchPhase::Ended, window, cx);
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert!(
+            shell.library_open,
+            "fingers brought out no Library in a private window"
+        );
+        assert_eq!(shell.section, Section::Downloads);
+    });
+    host.take();
+}
+
+/// A private window's Library lists none of the main profile's things: not its downloads, and
+/// not its history, which it never asks for and never takes when another window's answer comes.
+#[gpui::test]
+fn a_private_library_lists_none_of_the_main_profiles(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(true, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::ViewLibrary, "test", cx));
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::ViewArchive, "test", cx);
+        let page = super::Visited {
+            url: "https://example.org/main".into(),
+            title: "The main profile's page".into(),
+            visited: 1.,
+        };
+        shell.history_listed(1, 1, vec![page], false, cx);
+    });
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.library_open);
+        assert!(!shell.downloads.iter().any(|download| !download.private));
+        let pages = shell
+            .library
+            .as_ref()
+            .map_or(0, |library| library.history.pages.len());
+        assert_eq!(
+            pages, 0,
+            "the main profile's history reached a private window's Library"
+        );
+        assert_ne!(shell.section, Section::Archive);
+    });
+    let asked = host.take();
+    assert!(
+        !asked.iter().any(|each| each.starts_with("list history ")),
+        "a private window's Library asked for history: {asked:?}"
+    );
 }

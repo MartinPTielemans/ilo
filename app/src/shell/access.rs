@@ -21,6 +21,13 @@ pub(super) trait Accessible: StatefulInteractiveElement + Sized {
         self.role(Role::Button).aria_label(name)
     }
 
+    /// Says it opens a menu, as a pop-up button does.
+    fn opens_menu(self) -> Self {
+        self.a11y_synthetic_children(|builder| {
+            (builder.parent_node()).set_has_popup(gpui::accesskit::HasPopup::Menu)
+        })
+    }
+
     /// Lists the press and, with `menu`, the menu its mouse-down listeners answer, which GPUI
     /// lists only for a click listener. GPUI answers them with a click or a right-click at its
     /// middle.
@@ -423,8 +430,8 @@ mod tests {
         );
     }
 
-    /// The header's buttons say what they do, and back says it can't while there's no page to
-    /// go back to.
+    /// The header's and the foot's buttons say what they do, and back says it can't while there's
+    /// no page to go back to.
     #[gpui::test]
     fn the_header_and_footer_buttons_are_named(cx: &mut TestAppContext) {
         let (_, cx, _) = shell(cx, 2);
@@ -434,8 +441,21 @@ mod tests {
         assert!(back.is_disabled());
         let (_, sidebar) = tree.named(Role::Button, "Hide Sidebar");
         assert!(!sidebar.is_disabled() && sidebar.supports_action(Action::Click));
-        let (_, plus) = tree.named(Role::Button, "New Space, Folder or Note");
-        assert!(plus.supports_action(Action::Click));
+        // The Space button says the Space shown, and that it opens a menu (words SP1).
+        let named = match cfg!(target_os = "linux") {
+            true => "Space: Home",
+            false => "Space",
+        };
+        let button = (tree.0.nodes.iter()).find(|(_, node)| {
+            node.role() == Role::Button
+                && node.label() == Some(named)
+                && node.has_popup() == Some(gpui::accesskit::HasPopup::Menu)
+        });
+        let (_, button) = button.expect("no Space button named for its Space that opens a menu");
+        if !cfg!(target_os = "linux") {
+            assert_eq!(button.value(), Some("Home"));
+        }
+        assert!(button.supports_action(Action::Click));
         tree.named(Role::Button, "View Library");
         tree.named(Role::Button, "New Tab");
         tree.named(Role::Button, "Clear Today");

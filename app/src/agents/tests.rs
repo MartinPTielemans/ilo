@@ -11755,6 +11755,45 @@ mod tasks {
         );
         std::fs::remove_dir_all(folder).unwrap();
     }
+
+    /// The composer's effort is kept with its level and model, per profile, so the next composer
+    /// and a relaunch open with it (#4415); a start on Codex, which takes none, keeps the one
+    /// picked last for Claude.
+    #[gpui::test]
+    fn the_composer_keeps_its_last_effort_per_profile(cx: &mut TestAppContext) {
+        let folder =
+            std::env::temp_dir().join(format!("ilo-composer-effort-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        browser.profiles.borrow_mut().push((2, "Profile 2"));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        agents.update(cx, |agents, _| {
+            agents.set_new_thread_effort(1, Some("low"));
+            agents.remember_start(1, Cli::Claude, Tier::Look, None, Some("max"));
+            agents.remember_start(2, Cli::Claude, Tier::Look, None, Some("medium"));
+            agents.remember_start(1, Cli::Codex, Tier::Look, None, None);
+        });
+        let efforts = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (
+                    agents.composer_last(1).effort,
+                    agents.composer_last(2).effort,
+                )
+            })
+        };
+        assert_eq!(efforts(&agents, cx), (Some("max"), Some("medium")));
+        let again = super::agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        again.update(cx, |agents, cx| agents.load(&saved, cx));
+        assert_eq!(efforts(&again, cx), (Some("max"), Some("medium")));
+        // Back to the program's own, picked in the composer, is kept as the pick it is.
+        agents.update(cx, |agents, _| {
+            agents.remember_start(1, Cli::Claude, Tier::Look, None, None);
+        });
+        assert_eq!(efforts(&agents, cx), (None, Some("medium")));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 }
 
 /// Scripts are off at first: every Apple Event, reads too, is refused and logged as refused under
