@@ -1749,8 +1749,14 @@ else
   material=
   off=
   opaque=
-  # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
-  for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
+  # Each pass: its appearance, then each backdrop's grey, Dia's material over it, and the sidebar
+  # macOS 14 composes there. 14's AppKit draws the light material 2 levels darker than 26's, a
+  # level past Dia's 3 over black, so 14's bar is the sidebar it composes in a check VM: 14.8.7 at
+  # ce7501f74 on 2026-11-27, dark 15 / 19 / 26 / 62, the same as 26.6.2's, and light 211 / 213 /
+  # 217 / 233, where 26.6.2 reads 213 / 215 / 218 / 235 (#4472).
+  macos=$(sw_vers -productVersion | cut -d. -f1)
+  for pass in "dark 0:24:15 20:32:19 60:45:26 255:104:62" \
+    "light 0:137:211 20:146:213 60:165:217 255:243:233"; do
     tone=${pass%% *}
     if [ "$tone" = light ]; then
       light_shots=", $out/light.png, $out/light-menu.png, $out/appearance-dark.png"
@@ -1766,7 +1772,9 @@ else
       send move $page_point
     fi
     for pair in ${pass#* }; do
-      level=${pair%:*}
+      level=${pair%%:*}
+      sonoma=${pair##*:}
+      pair=${pair%:*}
       send backdrop "$level"
       expect "^browser: backdrop $level drawn" "the backdrop in grey $level didn't draw"
       # The window's frame and its screen's size, in points from the screen's top left.
@@ -1783,7 +1791,9 @@ else
       # Dia's composite there, 450 pt down: in dark 0.94 of its material under black 0.4, then 0.06
       # of the gradient; in light 0.91 of it under white 0.8, then 0.09. The material alone is ours
       # under our tint, black 0.25 or white 0.8, to tune the tint by.
-      line=$(echo "${pair#*:} $place $sidebar $backdrop" | awk -v level="$level" -v tone="$tone" '{
+      bar=
+      [ "$macos" = 14 ] && bar=$sonoma
+      line=$(echo "${pair#*:} $place $sidebar $backdrop" | awk -v level="$level" -v tone="$tone" -v bar="$bar" '{
         ours = ($8 + $9 + $10) / 3
         seen = ($11 + $12 + $13) / 3
         if (tone == "dark") {
@@ -1797,6 +1807,7 @@ else
         }
         printf "%.0f (Dia %.0f), the material alone %.0f (Dia %d), the backdrop read as %.0f",
           ours, dia, alone, $1, seen
+        if (bar != "") { printf ", macOS 14 %d", bar; dia = bar }
         if (ours - dia > 3 || dia - ours > 3) printf ", off"
         if (seen - level > 2 || level - seen > 2) printf ", capture off"
       }')
@@ -1829,7 +1840,7 @@ else
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
     echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
   else
-    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+    [ -z "$off" ] || fail "the sidebar isn't Dia's composite$([ "$macos" = 14 ] && echo ", as macOS 14 composes it,") within 3 levels over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
 fi
