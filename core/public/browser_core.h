@@ -752,9 +752,10 @@ typedef struct bc_page_menu_item {
 // Where the browser's account is, in sync_changed. The account is one ilo server's, the browser's
 // and not a profile's: it syncs the Spaces, and the bookmarks, passwords and open tabs of the
 // profile the core started with. Other profiles keep theirs on the device.
-// Signed out: bc_sync_sign_in starts.
+// Signed out: bc_sync_sign_in_email, bc_sync_sign_in_google or bc_sync_sign_in_passkey starts.
 #define BC_SYNC_SIGNED_OUT 0
-// The sign-in window is open, or the core is getting the account's tokens with what it returned.
+// The core asks the server to mail a code, or waits for the code (bc_sync_state.code_sent_to), or
+// the sign-in sheet is open, or the core is getting the account's tokens.
 #define BC_SYNC_SIGNING_IN 1
 // Signed in to an account whose data no device has a secret for yet, so this is its first device:
 // bc_sync_recovery_words makes the secret and turns sync on.
@@ -784,6 +785,24 @@ typedef struct bc_page_menu_item {
 // The server couldn't be reached, or refused, as when the account asked for too many pairings in
 // an hour. The step can be tried again.
 #define BC_SYNC_PROBLEM_SERVER 5
+// The code typed isn't the one mailed. The code step stays for another try.
+#define BC_SYNC_PROBLEM_WRONG_CODE 6
+// The mailed code expired or was used. The code step stays, for bc_sync_send_code_again while
+// can_send_again, or the sign-in ended, back to BC_SYNC_SIGNED_OUT, once it lasted 15 minutes.
+#define BC_SYNC_PROBLEM_CODE_EXPIRED 7
+// The mailed code took 5 wrong tries and takes no more. The code step stays, for
+// bc_sync_send_code_again while can_send_again.
+#define BC_SYNC_PROBLEM_TOO_MANY_TRIES 8
+// What bc_sync_sign_in_email was given isn't an email address. Back to BC_SYNC_SIGNED_OUT.
+#define BC_SYNC_PROBLEM_NOT_AN_ADDRESS 9
+// The address's domain takes no mail, so a code would bounce: likely a typo. Back to
+// BC_SYNC_SIGNED_OUT.
+#define BC_SYNC_PROBLEM_NO_MAIL 10
+// The server has mailed as many codes as it will for now: to the address, to sign-ins from this
+// network, or in its day. Nothing was mailed.
+#define BC_SYNC_PROBLEM_CODE_LIMIT 11
+// The server couldn't send the mail. Nothing was mailed, and it can be tried again.
+#define BC_SYNC_PROBLEM_MAIL_FAILED 12
 
 // The browser's account, as Settings shows it. Strings are UTF-8.
 typedef struct bc_sync_state {
@@ -816,6 +835,13 @@ typedef struct bc_sync_state {
   // While signed in, the last bc_sync_remove_google failed: it didn't reach the server, or the
   // server refused it. Until the next bc_sync_read_google or bc_sync_remove_google.
   bool google_remove_failed;
+  // With BC_SYNC_SIGNING_IN, the address the server mailed a code to, as bc_sync_sign_in_email was
+  // given it, while the core waits for the code (bc_sync_enter_code), else "".
+  const char* code_sent_to;
+  // While code_sent_to is set, the server will mail the sign-in its one new code
+  // (bc_sync_send_code_again), 30 seconds after the last, which the app counts from when
+  // code_sent_to was set or the new code was asked for.
+  bool can_send_again;
 } bc_sync_state;
 
 // What bc_sync_choose turns on or off.
@@ -4573,14 +4599,45 @@ BC_EXPORT void bc_window_toggle_full_screen(bc_id window);
 // server's discovery says whether it signs in with Google (bc_sync_state.google).
 BC_EXPORT bool bc_sync_set_server(const char* server);
 
-// Opens the server's sign-in page in a small window of the core's over the front window: the page
-// alone, the host of the page it shows in its title, in a session of its own that keeps nothing in
-// the user's profiles and offers to save no password. Once the user has signed in, the core catches
-// where the page sends it, closes the window and gets the account's tokens; the user closing the
-// window cancels. Only while signed out.
+// Opens the server's sign-in page in the core's sign-in sheet, attached to the front window over
+// what the app draws there: the page alone, the host of the page it shows in its title, in a
+// session of its own that keeps nothing in the user's profiles and offers to save no password. On
+// the Mac it's a sheet of the window; on Linux and Windows a window of its own over it, which
+// blocks it while open. Once the user has signed in, the core catches where the page sends it,
+// closes the sheet and gets the account's tokens; Escape in the sheet, or the user closing it,
+// cancels. Only while signed out.
 // Then sync_changed, BC_SYNC_SIGNING_IN, then BC_SYNC_FIRST_DEVICE or BC_SYNC_NEEDS_SECRET, or
 // BC_SYNC_SIGNED_OUT again, with BC_SYNC_PROBLEM_SERVER if it failed.
 BC_EXPORT void bc_sync_sign_in(void);
+
+// Signs in with the address |email|, as the user typed it in the app. The core reads the server's
+// discovery, which is the user's own act. Where the server takes the address and the code from the
+// app (ilo-server's /native/sign-in), it mails |email| a code: sync_changed, BC_SYNC_SIGNING_IN, then
+// code_sent_to once it's mailed, for bc_sync_enter_code. Every address gets the same answer, so
+// this never says whether one has an account. Otherwise, as with an older ilo-server or another
+// OpenID provider, it's bc_sync_sign_in with |email| filled in on the server's page. Only while
+// signed out.
+// Refused: BC_SYNC_SIGNED_OUT again with BC_SYNC_PROBLEM_NOT_AN_ADDRESS, NO_MAIL, CODE_LIMIT,
+// MAIL_FAILED or SERVER.
+BC_EXPORT void bc_sync_sign_in_email(const char* email);
+
+// The code the user typed for code_sent_to: six digits, spaces left out. It goes to the server and
+// nowhere else: the core logs nothing of it and overwrites its own copies once the request has
+// it, and the caller overwrites its own once this returns. Agents have no call that reaches it.
+// Then sync_changed: signed in, on as bc_sync_sign_in goes, or still waiting with
+// BC_SYNC_PROBLEM_WRONG_CODE, CODE_EXPIRED, TOO_MANY_TRIES or SERVER. A code that isn't six digits
+// is WRONG_CODE without asking the server.
+BC_EXPORT void bc_sync_enter_code(const char* code);
+
+// Asks the server to mail code_sent_to the sign-in's one new code, while can_send_again. Then
+// sync_changed, can_send_again false once it's mailed, or with BC_SYNC_PROBLEM_CODE_LIMIT,
+// MAIL_FAILED or SERVER.
+BC_EXPORT void bc_sync_send_code_again(void);
+
+// Opens the server's passkey step alone in the sign-in sheet, as bc_sync_sign_in opens its page:
+// the passkey's site is the server's, so the system's passkey dialog runs there. Then as
+// bc_sync_sign_in.
+BC_EXPORT void bc_sync_sign_in_passkey(void);
 
 // As bc_sync_sign_in, with the server's page going straight on to Google's, while
 // bc_sync_state.google: Google's own page, in the same window and session, takes the Google
@@ -4588,9 +4645,9 @@ BC_EXPORT void bc_sync_sign_in(void);
 // Google's host while its page is shown. Without Google it's bc_sync_sign_in.
 BC_EXPORT void bc_sync_sign_in_google(void);
 
-// Stops what the account waits for: the sign-in window closes, back to BC_SYNC_SIGNED_OUT, or the
-// pairing request is taken back from the other devices, back to BC_SYNC_NEEDS_SECRET. Then
-// sync_changed.
+// Stops what the account waits for: the code step ends or the sign-in sheet closes, back to
+// BC_SYNC_SIGNED_OUT, or the pairing request is taken back from the other devices, back to
+// BC_SYNC_NEEDS_SECRET. Then sync_changed.
 BC_EXPORT void bc_sync_cancel(void);
 
 // Signs this device out: the server forgets it, and the core its tokens and the secret. What synced

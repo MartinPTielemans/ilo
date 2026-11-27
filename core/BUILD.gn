@@ -220,14 +220,17 @@ source_set("sync_trouble") {
   public_deps = [ "//components/sync" ]
 }
 
-# Where the sign-in window goes and what a server's discovery says it offers, apart so
-# browser_core_unittests tests them alone.
+# Where the sign-in window goes, what a server's discovery says it offers, and the app's own sign-in
+# road's requests and refusals, apart so browser_core_unittests tests them alone.
 source_set("sync_sign_in") {
   sources = [
     "sync_sign_in.cc",
     "sync_sign_in.h",
   ]
-  deps = [ "//net" ]
+  deps = [
+    "//net",
+    "//third_party/boringssl",
+  ]
   public_deps = [
     "//base",
     "//url",

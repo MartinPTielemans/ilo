@@ -3549,6 +3549,22 @@ void bc_sync_sign_in_google(void) {
   browser_core::sync::SignIn(true);
 }
 
+void bc_sync_sign_in_email(const char* email) {
+  browser_core::sync::SignInEmail(email ? email : "");
+}
+
+void bc_sync_enter_code(const char* code) {
+  browser_core::sync::EnterCode(code ? code : "");
+}
+
+void bc_sync_send_code_again(void) {
+  browser_core::sync::SendCodeAgain();
+}
+
+void bc_sync_sign_in_passkey(void) {
+  browser_core::sync::SignInPasskey();
+}
+
 void bc_sync_cancel(void) {
   browser_core::sync::Cancel();
 }

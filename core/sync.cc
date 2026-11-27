@@ -112,8 +112,13 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/events/event_constants.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -233,6 +238,7 @@ scoped_refptr<base::SequencedTaskRunner> FileRunner() {
 // the page, such as its passkey dialog, show over it as over a tab's page; without a host Chrome
 // shows none, and the page's request waits with nothing on screen (#1295).
 class SignInWindow : public views::WidgetObserver,
+                     public ui::AcceleratorTarget,
                      public content::WebContentsObserver,
                      public web_modal::WebContentsModalDialogManagerDelegate,
                      public web_modal::WebContentsModalDialogHost {
@@ -258,22 +264,35 @@ class SignInWindow : public views::WidgetObserver,
     delegate_->SetInitiallyFocusedView(web_view_);
     delegate_->SetContentsView(std::move(web_view));
 
-    // Over the front window, as the app's dialogs are.
-    constexpr gfx::Size kSize(440, 640);
+    // Attached to the front window, over the app's first-run card or Settings there: a sheet on
+    // the Mac, and on Linux and Windows a window of its own over it. Either way it's modal to the
+    // window, so nothing under it is pressed while it's open.
+    constexpr gfx::Size kSize(480, 640);
     gfx::Rect bounds(kSize);
+    views::Widget* front = nullptr;
     std::vector<Window*> windows = Window::All();
     if (!windows.empty() && windows.front()->widget()) {
-      bounds = windows.front()->widget()->GetWindowBoundsInScreen();
+      front = windows.front()->widget();
+      bounds = front->GetWindowBoundsInScreen();
       bounds.ClampToCenteredSize(kSize);
+      delegate_->SetModalType(ui::mojom::ModalType::kWindow);
     }
     widget_ = std::make_unique<views::Widget>();
     views::Widget::InitParams params(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
                                      views::Widget::InitParams::TYPE_WINDOW);
     params.delegate = delegate_.get();
     params.bounds = bounds;
+    if (front) {
+      params.parent = front->GetNativeView();
+    }
     params.name = "BrowserCoreSyncSignIn";
     widget_->Init(std::move(params));
     widget_observation_.Observe(widget_.get());
+    // A sheet has no close button, so Escape the page doesn't keep cancels, as a sheet's does.
+    if (views::FocusManager* focus = widget_->GetFocusManager()) {
+      focus->RegisterAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
+                                 ui::AcceleratorManager::kNormalPriority, this);
+    }
     content::WebContents* contents = web_view_->GetWebContents();
     Observe(contents);
     web_modal::WebContentsModalDialogManager::CreateForWebContents(contents);
@@ -288,6 +307,9 @@ class SignInWindow : public views::WidgetObserver,
       observer.OnHostDestroying();
     }
     Observe(nullptr);
+    if (widget_ && widget_->GetFocusManager()) {
+      widget_->GetFocusManager()->UnregisterAccelerators(this);
+    }
     widget_observation_.Reset();
     web_view_ = nullptr;
     widget_.reset();
@@ -356,8 +378,20 @@ class SignInWindow : public views::WidgetObserver,
                << web_contents()->GetLastCommittedURL().path();
   }
 
+  // ui::AcceleratorTarget:
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override {
+    if (widget_) {
+      widget_->Close();
+    }
+    return true;
+  }
+  bool CanHandleAccelerators() const override { return widget_ != nullptr; }
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override {
+    if (widget->GetFocusManager()) {
+      widget->GetFocusManager()->UnregisterAccelerators(this);
+    }
     Observe(nullptr);
     widget_observation_.Reset();
     Closed();
@@ -652,35 +686,60 @@ class Account : public syncer::SyncServiceObserver,
     return true;
   }
 
-  void SignIn(bool google) {
+  // Whether a sign-in may start now: only while signed out and none is under way, whose sheet is
+  // brought forward instead.
+  bool CanStartSignIn() {
     if (!loaded_ || SignedIn() || signing_in_) {
       if (sign_in_window_) {
         sign_in_window_->Activate();
       }
+      return false;
+    }
+    return true;
+  }
+
+  void SignIn(sync_sign_in::Road road) {
+    if (!CanStartSignIn()) {
       return;
     }
     problem_ = BC_SYNC_PROBLEM_NONE;
-    const GURL server = Server();
-    if (!server.is_valid()) {
-      problem_ = BC_SYNC_PROBLEM_SERVER;
-      Notify();
-      return;
+    // The build's own server is asked nothing before the user signs in, so this is when it's
+    // read, for the next time the account offers Google; its own page offers it meanwhile.
+    if (!server_.is_valid() && Server().is_valid()) {
+      ReadDiscovery();
     }
+    OpenSignInWindow(road, std::string());
+    Notify();
+  }
+
+  // A new PKCE verifier for a sign-in, and the challenge that commits to it.
+  std::string NewChallenge() {
+    sync_sign_in::Wipe(verifier_);
     std::array<uint8_t, 32> verifier_bytes;
     crypto::RandBytes(verifier_bytes);
     verifier_ = Base64Url(verifier_bytes);
+    return Base64Url(crypto::hash::Sha256(base::as_byte_span(verifier_)));
+  }
+
+  // Opens the sign-in sheet on |road|, with |login_hint| filled in on the page if it isn't empty:
+  // signing_in_, or problem_ if it couldn't.
+  void OpenSignInWindow(sync_sign_in::Road road, const std::string& login_hint) {
+    const GURL server = Server();
+    if (!server.is_valid()) {
+      signing_in_ = false;
+      problem_ = BC_SYNC_PROBLEM_SERVER;
+      return;
+    }
+    const std::string challenge = NewChallenge();
     std::array<uint8_t, 16> state_bytes;
     crypto::RandBytes(state_bytes);
     state_ = Base64Url(state_bytes);
     redirect_ = server.Resolve("/signed-in");
-    // The build's own server is asked nothing before the user signs in, so this is when it's
-    // read, for the next time the account offers Google; its own page offers it meanwhile.
-    if (!server_.is_valid()) {
-      ReadDiscovery();
+    if (road == sync_sign_in::Road::kGoogle && !Google()) {
+      road = sync_sign_in::Road::kPage;
     }
-    const GURL authorize = sync_sign_in::AuthorizeUrl(
-        server, redirect_, state_, Base64Url(crypto::hash::Sha256(base::as_byte_span(verifier_))),
-        google && Google());
+    const GURL authorize =
+        sync_sign_in::AuthorizeUrl(server, redirect_, state_, challenge, road, login_hint);
     signing_in_ = true;
     sign_in_window_ = std::make_unique<SignInWindow>(
         authorize, redirect_,
@@ -690,13 +749,181 @@ class Account : public syncer::SyncServiceObserver,
       signing_in_ = false;
       problem_ = BC_SYNC_PROBLEM_SERVER;
     }
+  }
+
+  // The app's own road: the server's discovery picks it, as the user asks, which is their own act.
+  void SignInEmail(const std::string& email) {
+    if (!CanStartSignIn()) {
+      return;
+    }
+    problem_ = BC_SYNC_PROBLEM_NONE;
+    const GURL server = Server();
+    if (!server.is_valid()) {
+      problem_ = BC_SYNC_PROBLEM_SERVER;
+      Notify();
+      return;
+    }
+    signing_in_ = true;
     Notify();
+    Fetch("GET", server.Resolve("/.well-known/openid-configuration"), std::string(), std::string(),
+          base::BindOnce(&Account::EmailRoad, weak_factory_.GetWeakPtr(), generation_, server,
+                         email));
+  }
+
+  void EmailRoad(int generation,
+                 GURL asked,
+                 std::string email,
+                 int status,
+                 std::optional<base::DictValue> json) {
+    if (generation != generation_ || !signing_in_) {
+      return;
+    }
+    if (status != 200 || !json) {
+      signing_in_ = false;
+      problem_ = BC_SYNC_PROBLEM_SERVER;
+      Notify();
+      return;
+    }
+    google_ = sync_sign_in::OffersGoogle(*json) ? asked : GURL();
+    Save();
+    if (!sync_sign_in::SignsInNatively(*json)) {
+      // An older ilo-server, or another OpenID provider: its own page, with the address in.
+      OpenSignInWindow(sync_sign_in::Road::kPage, email);
+      Notify();
+      return;
+    }
+    const std::string challenge = NewChallenge();
+    Fetch("POST", asked.Resolve("/native/sign-in"), std::string(),
+          sync_sign_in::StartBody(challenge, email),
+          base::BindOnce(&Account::CodeMailed, weak_factory_.GetWeakPtr(), generation_, email),
+          "application/json");
+  }
+
+  static std::string ErrorOf(const std::optional<base::DictValue>& json) {
+    const std::string* error = json ? json->FindString("error") : nullptr;
+    return error ? *error : std::string();
+  }
+
+  void CodeMailed(int generation,
+                  std::string email,
+                  int status,
+                  std::optional<base::DictValue> json) {
+    if (generation != generation_ || !signing_in_) {
+      return;
+    }
+    const std::string* sign_in = status == 200 && json ? json->FindString("sign_in") : nullptr;
+    if (!sign_in) {
+      signing_in_ = false;
+      sync_sign_in::Wipe(verifier_);
+      problem_ = sync_sign_in::Problem(ErrorOf(json));
+      Notify();
+      return;
+    }
+    sign_in_id_ = *sign_in;
+    code_sent_to_ = email;
+    can_send_again_ = json->FindBool("can_resend").value_or(false);
+    Notify();
+  }
+
+  // |typed| is the user's code, which goes to the server and nowhere else: every copy here is
+  // overwritten once the request has its own, and nothing of it is logged.
+  void EnterCode(std::string typed) {
+    if (!signing_in_ || code_sent_to_.empty() || entering_code_) {
+      sync_sign_in::Wipe(typed);
+      return;
+    }
+    std::optional<std::string> code = sync_sign_in::CleanCode(typed);
+    sync_sign_in::Wipe(typed);
+    if (!code) {
+      problem_ = BC_SYNC_PROBLEM_WRONG_CODE;
+      Notify();
+      return;
+    }
+    problem_ = BC_SYNC_PROBLEM_NONE;
+    entering_code_ = true;
+    std::string body = sync_sign_in::CodeBody(sign_in_id_, *code, verifier_, device_name_);
+    sync_sign_in::Wipe(*code);
+    Fetch("POST", Server().Resolve("/native/sign-in/code"), std::string(), body,
+          base::BindOnce(&Account::CodeAnswered, weak_factory_.GetWeakPtr(), generation_),
+          "application/json");
+    // The loader keeps its own copy to send.
+    sync_sign_in::Wipe(body);
+    Notify();
+  }
+
+  void CodeAnswered(int generation, int status, std::optional<base::DictValue> json) {
+    if (generation != generation_ || !signing_in_) {
+      return;
+    }
+    entering_code_ = false;
+    if (status == 200 && json) {
+      EndCodeStep();
+      SignedInTokens(generation, status, std::move(json));
+      return;
+    }
+    const std::string error = ErrorOf(json);
+    problem_ = sync_sign_in::Problem(error);
+    if (std::optional<bool> can = json ? json->FindBool("can_resend") : std::nullopt) {
+      can_send_again_ = *can;
+    }
+    // A server that didn't answer, or failed, keeps the code step for another try.
+    if (status != 0 && status < 500 && sync_sign_in::EndsSignIn(error)) {
+      EndCodeStep();
+      signing_in_ = false;
+    }
+    Notify();
+  }
+
+  void SendCodeAgain() {
+    if (!signing_in_ || code_sent_to_.empty() || !can_send_again_ || resending_) {
+      return;
+    }
+    resending_ = true;
+    problem_ = BC_SYNC_PROBLEM_NONE;
+    Notify();
+    Fetch("POST", Server().Resolve("/native/sign-in/resend"), std::string(),
+          sync_sign_in::ResendBody(sign_in_id_),
+          base::BindOnce(&Account::CodeResent, weak_factory_.GetWeakPtr(), generation_),
+          "application/json");
+  }
+
+  void CodeResent(int generation, int status, std::optional<base::DictValue> json) {
+    if (generation != generation_ || !signing_in_) {
+      return;
+    }
+    resending_ = false;
+    if (status == 200 && json) {
+      can_send_again_ = json->FindBool("can_resend").value_or(false);
+      Notify();
+      return;
+    }
+    const std::string error = ErrorOf(json);
+    problem_ = sync_sign_in::Problem(error);
+    if (error == "no_more_codes") {
+      can_send_again_ = false;
+    }
+    if (status != 0 && status < 500 && sync_sign_in::EndsSignIn(error)) {
+      EndCodeStep();
+      signing_in_ = false;
+    }
+    Notify();
+  }
+
+  // Leaves the code step: what named the sign-in to the server, and its verifier, go.
+  void EndCodeStep() {
+    sign_in_id_.clear();
+    code_sent_to_.clear();
+    can_send_again_ = false;
+    entering_code_ = false;
+    resending_ = false;
   }
 
   void Cancel() {
     problem_ = BC_SYNC_PROBLEM_NONE;
     if (signing_in_ && !SignedIn()) {
       CloseSignInWindow();
+      EndCodeStep();
+      sync_sign_in::Wipe(verifier_);
       signing_in_ = false;
       ++generation_;
     }
@@ -715,6 +942,7 @@ class Account : public syncer::SyncServiceObserver,
             "token=" + base::EscapeUrlEncodedData(refresh_, true), base::DoNothing());
     }
     CloseSignInWindow();
+    EndCodeStep();
     signing_in_ = false;
     Forget(BC_SYNC_PROBLEM_NONE);
   }
@@ -1055,7 +1283,7 @@ class Account : public syncer::SyncServiceObserver,
     const std::string email = SignedIn() ? email_ : std::string();
     const std::string google_email = SignedIn() ? google_email_ : std::string();
     const bool google_remove_failed = SignedIn() && google_remove_failed_;
-    const std::array<std::string, 4> now = {trimmed, email, code, google_email};
+    const std::array<std::string, 5> now = {trimmed, email, code, google_email, code_sent_to_};
     const int status = Status();
     const bool on = status == BC_SYNC_ON;
     const std::array<bool, 2> chosen = {on && Chosen(syncer::UserSelectableType::kPreferences),
@@ -1066,7 +1294,7 @@ class Account : public syncer::SyncServiceObserver,
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
         now == notified_strings_ && chosen == notified_chosen_ && google == notified_google_ &&
         google_remove_failed == notified_google_remove_failed_ &&
-        SameActivity(activity, notified_activity_)) {
+        can_send_again_ == notified_can_send_again_ && SameActivity(activity, notified_activity_)) {
       return;
     }
     notified_ = true;
@@ -1077,6 +1305,7 @@ class Account : public syncer::SyncServiceObserver,
     notified_chosen_ = chosen;
     notified_google_ = google;
     notified_google_remove_failed_ = google_remove_failed;
+    notified_can_send_again_ = can_send_again_;
     if (!Host().sync_changed) {
       return;
     }
@@ -1090,7 +1319,9 @@ class Account : public syncer::SyncServiceObserver,
                            .extensions = chosen[1],
                            .google = google,
                            .google_email = google_email.c_str(),
-                           .google_remove_failed = google_remove_failed};
+                           .google_remove_failed = google_remove_failed,
+                           .code_sent_to = code_sent_to_.c_str(),
+                           .can_send_again = can_send_again_};
     Host().sync_changed(Host().context, &state);
   }
 
@@ -1393,6 +1624,7 @@ class Account : public syncer::SyncServiceObserver,
       return;
     }
     signing_in_ = false;
+    sync_sign_in::Wipe(verifier_);
     if (status != 200 || !json || !TakeTokens(*json)) {
       refresh_.clear();
       access_.clear();
@@ -2153,6 +2385,13 @@ class Account : public syncer::SyncServiceObserver,
   std::string verifier_;
   std::string state_;
   GURL redirect_;
+  // The app's own road (bc_sync_sign_in_email): the server's name for the sign-in, the address the
+  // code went to, and whether a new one can be asked for. Empty outside its code step.
+  std::string sign_in_id_;
+  std::string code_sent_to_;
+  bool can_send_again_ = false;
+  bool entering_code_ = false;
+  bool resending_ = false;
 
   bool refreshing_ = false;
   std::vector<base::OnceCallback<void(bool)>> refresh_waiters_;
@@ -2182,10 +2421,11 @@ class Account : public syncer::SyncServiceObserver,
   bool notified_ = false;
   int notified_status_ = 0;
   int notified_problem_ = 0;
-  std::array<std::string, 4> notified_strings_;
+  std::array<std::string, 5> notified_strings_;
   std::array<bool, 2> notified_chosen_ = {};
   bool notified_google_ = false;
   bool notified_google_remove_failed_ = false;
+  bool notified_can_send_again_ = false;
   bc_sync_activity notified_activity_ = {};
   // The cycles' troubles, the changes the server refused in the cycle under way, and the commit
   // request whose response is yet to come.
@@ -2273,7 +2513,23 @@ bool SetServer(const std::string& server) {
 }
 
 void SignIn(bool google) {
-  Account::Get().SignIn(google);
+  Account::Get().SignIn(google ? sync_sign_in::Road::kGoogle : sync_sign_in::Road::kPage);
+}
+
+void SignInEmail(const std::string& email) {
+  Account::Get().SignInEmail(email);
+}
+
+void EnterCode(std::string code) {
+  Account::Get().EnterCode(std::move(code));
+}
+
+void SendCodeAgain() {
+  Account::Get().SendCodeAgain();
+}
+
+void SignInPasskey() {
+  Account::Get().SignIn(sync_sign_in::Road::kPasskey);
 }
 
 void Cancel() {

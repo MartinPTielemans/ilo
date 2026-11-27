@@ -37,6 +37,11 @@ void WindowActivated();
 bool SetServer(const std::string& server);
 // bc_sync_sign_in, or bc_sync_sign_in_google with |google|.
 void SignIn(bool google);
+void SignInEmail(const std::string& email);
+// Takes the code by value, and overwrites it once it's sent.
+void EnterCode(std::string code);
+void SendCodeAgain();
+void SignInPasskey();
 void Cancel();
 void SignOut();
 std::string RecoveryWords();
