@@ -938,6 +938,8 @@ impl From<Tier> for Start {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArchivedTask {
     pub agent: SharedString,
+    /// The Space it was asked in, whose profile's empty window lists it.
+    pub home: u64,
     pub title: SharedString,
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
@@ -1183,6 +1185,26 @@ impl Agents {
 
     /// The tasks in the Archive, the last to leave the foot first, as `dismissed` keeps them.
     pub fn archived_tasks(&self, cx: &App) -> Vec<ArchivedTask> {
+        // A task a run before left has no Space; its home is its profile's Space of the user's,
+        // as its kept card's is, asked of the core once a profile.
+        let mut homes: Vec<(&str, u64)> = Vec::new();
+        let mut home = |task: &Task| {
+            if task.home != 0 {
+                return task.home;
+            }
+            let Some(profile) = (self.tasks.kept.of(&task.agent))
+                .map(|kept| kept.profile.as_str())
+                .filter(|profile| !profile.is_empty())
+            else {
+                return 0;
+            };
+            if let Some((_, home)) = homes.iter().find(|(each, _)| *each == profile) {
+                return *home;
+            }
+            let home = self.browser.profile_space(profile);
+            homes.push((profile, home));
+            home
+        };
         (self.tasks.dismissed.iter().rev())
             .filter_map(|agent| self.task(agent))
             .filter(|task| task.dismissed && !task.deleted)
@@ -1198,6 +1220,7 @@ impl Agents {
                 };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
+                    home: home(task),
                     title: task.title.clone(),
                     asked: task.asked.clone(),
                     dot,

@@ -298,6 +298,7 @@ impl Fake {
                 archived,
                 // Every fourth, so the archive's filter shows (Little ilo).
                 little: id % 4 == 0,
+                space: 0,
             })
             .collect();
         self.later(cx, move |shell, cx| shell.set_archive(archive, cx));

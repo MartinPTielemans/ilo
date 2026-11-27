@@ -3598,53 +3598,6 @@ fn a_task_without_a_folder_has_no_folder_chip(cx: &mut TestAppContext) {
     assert!(drawn.is_none(), "a folder chip for a task that holds none");
 }
 
-/// A conversation that closes leaves its card in Latest tasks the picture its page's tile ended
-/// on, from memory, and lets the rest go; the card has none while the rail holds it, and none
-/// once it pictures another page, or is gone.
-#[gpui::test]
-fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut TestAppContext) {
-    let card = Card {
-        last_tab: Some(30),
-        pages: vec![30],
-        ..card()
-    };
-    let (shell, _, cx) = shown_with(card.clone(), cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(1)), cx)
-    });
-    let plate = |shell: &Entity<Shell>, card: &Card, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
-    };
-    assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
-    let request = picture_request(&shell, 30, cx);
-    let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
-    shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
-    assert_eq!(
-        plate(&shell, &card, cx),
-        None,
-        "the rail holds it, not the card"
-    );
-
-    shell.update(cx, |shell, cx| shell.close_task(cx));
-    assert_eq!(
-        plate(&shell, &card, cx),
-        Some((2., 2.)),
-        "the card has no picture"
-    );
-
-    // The task goes on to another page: its card no longer pictures this one.
-    let on = Card {
-        last_tab: Some(31),
-        pages: vec![30, 31],
-        ..card.clone()
-    };
-    shell.update(cx, |shell, cx| shell.set_task_cards(vec![on.clone()], cx));
-    assert_eq!(plate(&shell, &card, cx), None);
-    assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
-    let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
-    assert_eq!(held, 0, "a picture no card shows is still held");
-}
-
 /// While a stretch works, the page the assistant is on stands open with its steps and a page it
 /// left is one line; a click on the left page brings its steps back and leaves the other as it
 /// was. Going to a page has no line of its own under it.
@@ -4832,28 +4785,6 @@ fn the_panels_speaker_is_there_while_the_page_plays_or_is_muted(cx: &mut TestApp
     };
     shell.update(cx, |shell, cx| shell.set_page(30, muted, cx));
     assert!(speaker(cx).is_some(), "a muted page has no speaker");
-}
-
-/// After a quit, a kept card's plate in Latest tasks shows the picture its card read back; a card
-/// with none has no plate.
-#[gpui::test]
-fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
-    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
-    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
-    let plate = crate::agents::kept::cards::Plate {
-        image,
-        size: (3, 2),
-    };
-    let kept = Card {
-        kept_picture: Some(plate),
-        ..card()
-    };
-    let (shell, _, cx) = shown_with(kept.clone(), cx);
-    let size = |card: &Card, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
-    };
-    assert_eq!(size(&kept, cx), Some((3., 2.)));
-    assert_eq!(size(&card(), cx), None, "a plate with no picture");
 }
 
 /// A kept card's picture that came back goes to the pass that frees pictures from the window's

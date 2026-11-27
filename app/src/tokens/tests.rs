@@ -237,10 +237,6 @@ fn a_corner_inside_another_is_concentric() {
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
     assert_eq!(
-        shell::composer::CARD_RADIUS,
-        shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
-    );
-    assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET
     );
