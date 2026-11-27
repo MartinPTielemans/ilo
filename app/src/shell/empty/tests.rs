@@ -243,6 +243,23 @@ fn the_welcome_opens_a_new_tab(cx: &mut TestAppContext) {
     assert_eq!(host.command_bars.take(), [None]);
 }
 
+/// First run's hint on the welcome lies under ⌘T's bar's field, so it's drawn only while the bar is
+/// over the card: put up a frame before the bar, it stood alone beside the welcome's mark.
+#[gpui::test]
+fn the_welcomes_hint_shows_only_under_the_bar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_welcome(cx);
+        shell.show_hint(cx);
+    });
+    let drawn = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.welcome_hint(0., 600., cx).is_some())
+    };
+    assert!(!drawn(cx), "drawn with no bar over the card");
+    shell.update(cx, |shell, cx| shell.set_bar_over_card(true, cx));
+    assert!(drawn(cx), "not drawn under the bar");
+}
+
 /// The welcome is the mark, its one line and the button: nothing stands between the line and the
 /// button, and the bar's mark isn't there with it.
 #[gpui::test]

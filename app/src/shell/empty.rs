@@ -188,8 +188,8 @@ impl Shell {
                 }))
                 .child(sign.opacity(self.card_opacity(cx.background_executor().now())))
                 // Under ⌘T's bar, which first run's end leaves up over the welcome.
-                .children(self.landing_hint(
-                    self.opened_bar_top(f32::from(frame.top())),
+                .children(self.welcome_hint(
+                    f32::from(frame.top()),
                     f32::from(frame.size.width),
                     cx,
                 )),
