@@ -229,6 +229,18 @@ impl Shell {
     }
 }
 
+/// Hand Back's key as a chip after its words, where ⌘↩ hands the page shown back (#4395): Back to
+/// Pinned URL's first key, the user's own if they gave it another. None if no key runs it.
+pub(super) fn hand_back_keys(cx: &App) -> Option<String> {
+    user_keys(cx).label(Command::BackToPinnedUrl)
+}
+
+/// Whether ⌘↩ hands back `tab` now: it's the page of an agent's the window shows, and the user holds
+/// it. A Hand Back for it says its key only then, as elsewhere the key does something else.
+pub(super) fn hands_back(shell: &Shell, tab: Option<u64>) -> bool {
+    matches!(shell.agent_bar(), Some(Bar::Held { tab: held, .. }) if Some(held) == tab)
+}
+
 /// Stop's key as a chip after its words shows it: ⌘. on the Mac, and off it Ctrl+., as a menu
 /// spells it.
 pub(super) fn stop_keys() -> String {

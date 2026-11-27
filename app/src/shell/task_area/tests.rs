@@ -1411,6 +1411,87 @@ fn take_over_and_hand_back_come_before_the_agents_page(cx: &mut TestAppContext) 
     assert!(host.take().is_empty());
 }
 
+/// A card waiting on the user offers Show Page while the page it waits on isn't the one shown; once
+/// the user stands on it holding it, Hand Back with ⌘↩'s key, whose click gives the page back as ⌘↩
+/// does, from the page or the UI alike, and leaves the keyboard where ⌘↩ leaves it. Once the page
+/// is handed back the card offers nothing (#4395).
+#[gpui::test]
+fn a_waiting_cards_hand_back_gives_the_page_back_as_cmd_return_does(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot, Word};
+    use crate::shell::task_cards::CardOffer;
+    let (shell, host, cx) = shell_with_task(cx);
+    let card = Card {
+        kept_picture: None,
+        agent: "task-1".into(),
+        home: 3,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: SharedString::default(),
+        steps: Vec::new(),
+        last_tab: None,
+        line: None,
+        ended_at: None,
+        asks: false,
+        dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
+        pages: vec![30],
+        tier: Default::default(),
+        question: None,
+        open: Vec::new(),
+        page_steps: Vec::new(),
+        retry: false,
+        fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        fuller: false,
+        lead: 0,
+        finding: Default::default(),
+        told: Default::default(),
+    };
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![card], cx));
+    let hold = |held: Vec<(u64, SharedString)>, cx: &mut VisualTestContext| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "".into(),
+            held,
+        };
+        shell.update(cx, |shell, cx| shell.set_agent_status(vec![status], cx));
+    };
+    let offer = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.card_offer(&shell.task_cards[0]))
+    };
+    hold(vec![(30, "Sign in".into())], cx);
+    assert_eq!(offer(cx), Some(CardOffer::ShowPage));
+
+    watching(&shell, &host, cx);
+    hold(vec![(30, "Sign in".into())], cx);
+    assert_eq!(offer(cx), Some(CardOffer::HandBack));
+    assert!(
+        cx.update(|_, cx| super::super::agent_bar::hand_back_keys(cx))
+            .is_some(),
+        "Hand Back has no key to say"
+    );
+    host.take();
+    shell.update(cx, |shell, cx| shell.card_button("task-1".into(), cx));
+    let clicked = host.take();
+    assert_eq!(clicked, ["hand back 30", "focus ui"]);
+    for from in ["page", "ui"] {
+        hold(vec![(30, "Sign in".into())], cx);
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::BackToPinnedUrl, from, cx)
+        });
+        assert_eq!(host.take(), clicked, "⌘↩ from the {from} did otherwise");
+    }
+
+    hold(Vec::new(), cx);
+    assert_eq!(offer(cx), None, "the card offers a page handed back");
+}
+
 /// Under Wayland GPUI gets the key the page had too, after the app answered it, and Hand Back has
 /// given the UI the keyboard by then: that copy of ⌘↩ isn't the UI's Back to Pinned URL as well,
 /// which would leave the agent's Space. A later ⌘↩ in the UI is.

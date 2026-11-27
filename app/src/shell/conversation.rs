@@ -26,7 +26,7 @@ use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
 use super::knot::{self, Knot};
 use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
-    agent_bar::stop_keys,
+    agent_bar::{hand_back_keys, hands_back, stop_keys},
     browser::{Browser, Page},
     menus::{MenuAction, MenuEntry},
     page_ends::StripStop,
@@ -49,6 +49,8 @@ use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::CHIP as BAR_CHIP;
 use crate::tokens::command_bar::CHOICES_MENU_DROP;
+/// A key on a primary's fill, as the foot bar's primary has its key.
+use crate::tokens::foot_bar::PRIMARY_KEY;
 use crate::tokens::mark::INK as MARK_INK;
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, GLYPH as ILO_GLYPH, HELD_BUTTON, HELD_BUTTON_FILL, HELD_BUTTON_HOVER,
@@ -1124,6 +1126,14 @@ impl TalkView {
         });
     }
 
+    /// Hand Back's key, for a Hand Back of `tab`'s, where ⌘↩ hands that tab back (#4395).
+    fn hand_back_key(&self, tab: Option<u64>, cx: &gpui::App) -> Option<String> {
+        let shell = self.shell.upgrade()?;
+        hands_back(shell.read(cx), tab)
+            .then(|| hand_back_keys(cx))
+            .flatten()
+    }
+
     /// The task's page in place beside the conversation, if one is: a step on it offers it back.
     fn beside(&self, cx: &gpui::App) -> Option<u64> {
         let shell = self.shell.upgrade()?;
@@ -1685,6 +1695,7 @@ impl TalkView {
             )
         });
         let said = (row.case.as_ref()).and_then(|case| case.said().cloned());
+        let hand_back_key = self.hand_back_key(Some(on), cx);
         let words = said.clone().map(|said| {
             div()
                 .id("conversation-page-words")
@@ -1703,14 +1714,11 @@ impl TalkView {
                     let drawn = Box::new(move |at| drawn.borrow_mut().push(at));
                     ("conversation-take-over", words::TAKE_OVER.into(), drawn)
                 }
-                RowCase::Yours(_) => {
-                    let drawn = self.hand_back_drawn.clone();
-                    (
-                        "conversation-hand-back",
-                        words::HAND_BACK.into(),
-                        Box::new(move |at| drawn.set(Some(at))),
-                    )
-                }
+                RowCase::Yours(_) => (
+                    "conversation-hand-back",
+                    words::HAND_BACK.into(),
+                    Box::new(hand_back_told(on, self.hand_back_drawn.clone())),
+                ),
                 RowCase::Ended(open) => {
                     let told = open_told(on, shell.read(cx).task_list.strip_open.clone());
                     ("conversation-open", open.clone(), Box::new(told))
@@ -1737,19 +1745,26 @@ impl TalkView {
                         .ok();
                 })),
             };
+            let key = matches!(case, RowCase::Yours(_))
+                .then(|| hand_back_key.clone())
+                .flatten();
             (
                 case.button(),
                 label.clone(),
-                held_button(palette, id, label, false)
-                    .relative()
-                    .child(
-                        canvas(move |bounds, _, _| drawn(bounds), |_, _, _, _| {})
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full(),
-                    )
-                    .on_click(click),
+                with_key(
+                    held_button(palette, id, label, false),
+                    key,
+                    palette.text(CHIP_KEY),
+                )
+                .relative()
+                .child(
+                    canvas(move |bounds, _, _| drawn(bounds), |_, _, _, _| {})
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                )
+                .on_click(click),
             )
         });
         // An outside app's session: Stop in the composer's round button's form, as it has none.
@@ -3395,7 +3410,15 @@ impl TalkView {
         let drawn = self.ilo_drawn.clone();
         let hovered = self.ilo_hovered.clone();
         let id = SharedString::from(format!("ilo-{}-{button:?}", line.key));
-        held_button(look.palette, id, words::button(button), at == 0)
+        let hand_back = (button == IloButton::HandBack)
+            .then(|| self.hand_back_key(tab, cx))
+            .flatten();
+        let key_ink = match at == 0 {
+            true => primary(look.palette).1.opacity(PRIMARY_KEY),
+            false => look.palette.text(CHIP_KEY),
+        };
+        let chip = held_button(look.palette, id, words::button(button), at == 0);
+        with_key(chip, hand_back, key_ink)
             .when(look.a11y, |chip| {
                 chip.role(Role::Button).aria_label(words::button(button))
             })
@@ -3578,6 +3601,19 @@ fn primary(palette: super::Palette) -> (Hsla, Hsla) {
 /// Light (light-values.md, Proposed).
 /// A held step's button: the first on `primary` with `on-primary` words at semibold, the second
 /// on `button` at medium.
+/// `button` with `key` after its words in `ink`, fainter, as a page chip has its key.
+fn with_key(
+    button: gpui::Stateful<gpui::Div>,
+    key: Option<String>,
+    ink: Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    button.when_some(key, |button, key| {
+        button
+            .gap(px(KEY_GAP))
+            .child(div().text_color(ink).child(key))
+    })
+}
+
 fn held_button(
     palette: super::Palette,
     id: impl Into<ElementId>,
@@ -3626,6 +3662,25 @@ fn open_told(tab: u64, at: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl Fn(Bounds<P
         if at.replace(Some(bounds)) != Some(bounds) {
             log!(
                 "browser: page row open {tab} at {:.0} {:.0} {:.0} {:.0}",
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height)
+            );
+        }
+    }
+}
+
+/// Where the page row's Hand Back for `tab` was drawn, kept in `at`, and logged as it moves.
+fn hand_back_told(
+    tab: u64,
+    at: Rc<Cell<Option<Bounds<Pixels>>>>,
+) -> impl Fn(Bounds<Pixels>) + 'static {
+    move |bounds| {
+        if at.replace(Some(bounds)) != Some(bounds) {
+            // check.sh reads this line, to click it.
+            log!(
+                "browser: page row hand back {tab} at {:.0} {:.0} {:.0} {:.0}",
                 f32::from(bounds.origin.x),
                 f32::from(bounds.origin.y),
                 f32::from(bounds.size.width),

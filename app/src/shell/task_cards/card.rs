@@ -9,13 +9,17 @@ use gpui::{
 };
 
 use super::glyph::{self, Mark, MarkInks, State};
-use super::{Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state};
+use super::{
+    CardOffer, Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state,
+};
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::palette::Palette;
+use crate::shell::agent_bar;
 use crate::shell::conversation::{stage_fill, words};
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
+use crate::tokens::foot_bar::PRIMARY_KEY;
 use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
@@ -27,6 +31,7 @@ use crate::tokens::shell::task_card::{
     UNVISITED,
 };
 use crate::tokens::text;
+use crate::tokens::toast::KEY_GAP;
 
 /// A waiting card's second line: the site of the page it waits on and the state's word (words
 /// table, Z5).
@@ -589,10 +594,19 @@ impl Shell {
             Form::Waits if look(card, form, false).button => {
                 let tab = self.waiting_page(card)?;
                 let agent = card.agent.clone();
-                let label: SharedString = words::button(IloButton::ShowPage).into();
-                let button = self.offers_page(card).then(|| {
+                let offer = self.card_offer(card);
+                let (id, label): (_, SharedString) = match offer {
+                    Some(CardOffer::HandBack) => ("task-hand-back", words::HAND_BACK.into()),
+                    _ => ("task-show-page", words::button(IloButton::ShowPage).into()),
+                };
+                // Hand Back says its key, which gives the page back as the button does.
+                let key = (offer == Some(CardOffer::HandBack))
+                    .then(|| agent_bar::hand_back_keys(cx))
+                    .flatten();
+                let key_ink = self.on_primary().opacity(PRIMARY_KEY);
+                let button = offer.map(|_| {
                     let button = div()
-                        .id(("task-show-page", n))
+                        .id((id, n))
                         .flex_none()
                         .h(px(BUTTON_HEIGHT))
                         .px(px(BUTTON_X))
@@ -606,6 +620,11 @@ impl Shell {
                         .text_color(self.on_primary());
                     self.strip_stop(button, StripStop::Chip(n), label.clone(), BUTTON_RADIUS)
                         .child(label)
+                        .when_some(key, |button, key| {
+                            button
+                                .gap(px(KEY_GAP))
+                                .child(div().text_color(key_ink).child(key))
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |shell, _, _, cx| {
                             cx.stop_propagation();

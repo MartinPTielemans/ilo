@@ -149,6 +149,13 @@ pub(super) struct PageMark {
     pub outline: bool,
 }
 
+/// A waiting card's button (`card_offer`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CardOffer {
+    ShowPage,
+    HandBack,
+}
+
 /// What a task's page is to it now, in the words every place that names the page says: its tile's
 /// head line, and the waiting card's page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -855,7 +862,7 @@ impl Shell {
                 .unwrap_or_default();
             stops.push((StripStop::Header(placed.n), top));
             let button = match placed.form {
-                Form::Waits => self.offers_page(card),
+                Form::Waits => self.card_offer(card).is_some(),
                 Form::Ended => chip(card).is_some(),
                 _ => false,
             };
@@ -903,12 +910,19 @@ impl Shell {
         self.show_task(agent, cx);
     }
 
-    /// The button on `agent`'s card: Show Page on a waiting card, the chip on an ended one.
-    fn card_button(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+    /// The button on `agent`'s card: Show Page or Hand Back on a waiting card, the chip on an
+    /// ended one.
+    pub(super) fn card_button(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
         if card.dot == Dot::Waiting {
+            // The button says Hand Back only on the page shown, so it does what it says wherever
+            // the card's home is.
+            if self.card_offer(card) == Some(CardOffer::HandBack) {
+                log!("browser: command hand-back via task card");
+                return self.agent_bar_primary(cx);
+            }
             // Away from its home Space, the page shows there, as any page of another Space does.
             if card.home != self.space {
                 let home = card.home;
@@ -938,12 +952,17 @@ impl Shell {
             .copied()
     }
 
-    /// Whether a waiting `card`'s Show Page has a page to show: not while the page it waits on is
-    /// the one the page area shows or is on its way to, where the user stands already. The area's
-    /// own page decides, as it does which button the conversation's line draws.
-    pub(super) fn offers_page(&self, card: &Card) -> bool {
+    /// What a waiting `card`'s button does: Show Page while the page it waits on isn't the one the
+    /// page area shows or is on its way to; once the user stands there and holds it, Hand Back,
+    /// which gives it back as ⌘↩ does (O2, #4395). The area's own page decides, as it does which
+    /// button the conversation's line draws.
+    pub(super) fn card_offer(&self, card: &Card) -> Option<CardOffer> {
+        let tab = self.waiting_page(card)?;
         let shown = self.watched_task_page().map(|(_, tab)| tab);
-        (self.waiting_page(card)).is_some_and(|tab| shown != Some(tab))
+        match shown == Some(tab) {
+            false => Some(CardOffer::ShowPage),
+            true => agent_bar::hands_back(self, Some(tab)).then_some(CardOffer::HandBack),
+        }
     }
 
     /// Stands on `tab`, a task's page, as its picture's click in the task's view does, and nothing

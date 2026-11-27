@@ -3682,6 +3682,40 @@ fn the_answers_links_go_only_to_the_threads_pages() {
     );
 }
 
+/// Hand Back says ⌘↩'s key where ⌘↩ hands its page back: on the page shown, while the user holds
+/// it, from a takeover or a step handed to them. Not on another page, nor once it's handed back,
+/// where the key does something else (#4395).
+#[gpui::test]
+fn hand_back_says_its_key_where_the_key_hands_the_page_back(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx);
+    });
+    watch_page(&shell, cx);
+    let hold = |held: Vec<(u64, gpui::SharedString)>, cx: &mut VisualTestContext| {
+        let status = Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "".into(),
+            held,
+        };
+        shell.update(cx, |shell, cx| shell.set_agent_status(vec![status], cx));
+    };
+    let key = |tab: u64, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, cx| view.hand_back_key(Some(tab), cx))
+    };
+    assert_eq!(key(30, cx), None, "a key on a page the user doesn't hold");
+    for why in ["", "Sign in"] {
+        hold(vec![(30, why.into())], cx);
+        assert!(key(30, cx).is_some(), "no key on the page held for {why:?}");
+        assert_eq!(key(31, cx), None, "a key on a page not shown");
+    }
+    hold(Vec::new(), cx);
+    assert_eq!(key(30, cx), None, "a key once the page was handed back");
+}
+
 /// Standing on the page the thread works on, the panel's row over the reply field has the step
 /// under way with Take Over, which takes that page; on a page the user took over it says so with
 /// Hand Back; with the agent on no page of the user's, or nothing under way, there's no row.
