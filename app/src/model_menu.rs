@@ -42,8 +42,7 @@ pub struct TaskAgents {
 /// The mark before the model trigger's words: the maker's of `agent`'s models, as the menu's rows
 /// have it (#4394), none for an agent that isn't one of the assistants.
 pub fn mark(agent: &TaskAgent) -> Option<MakerMark> {
-    let cli = crate::agents::runner::Cli::from_id(&agent.id)?;
-    crate::agents::task::Maker::of(cli).mark()
+    crate::agents::provider::caps(&agent.id).map(|caps| caps.mark)
 }
 
 /// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
@@ -177,18 +176,20 @@ pub const DEFAULT_ROW: &str = "Default";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::task::Maker;
+    use crate::agents::provider::{PROVIDERS, caps};
 
-    /// The model trigger leads with the same mark as the menu's rows: Claude's Spark, OpenAI's
-    /// Blossom, and none for an agent that isn't one of the assistants.
+    /// The model trigger leads with the same mark as the menu's rows, its provider's, and none
+    /// for an agent that isn't one of the providers.
     #[test]
     fn the_triggers_mark_is_its_makers_as_the_menus_rows_have_it() {
         let agent = |id: &str| TaskAgent {
             id: id.to_string().into(),
             ..TaskAgent::default()
         };
-        assert_eq!(mark(&agent("claude")), Maker::Anthropic.mark());
-        assert_eq!(mark(&agent("codex")), Maker::OpenAI.mark());
+        for each in PROVIDERS {
+            assert_eq!(mark(&agent(each.id)), Some(each.mark), "{}", each.id);
+        }
         assert_eq!(mark(&agent("someone-else")), None);
+        assert!(caps("someone-else").is_none());
     }
 }

@@ -3855,11 +3855,12 @@ fn preview_page_menu(
 
 /// A CLI's Model menu as Settings › Agents opens it with its default checked, its models as the
 /// CLI's recorded answer lists them, in the light or dark Settings.
-fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+/// The models the provider `id` lists in the answers recorded from its program, Claude's for any
+/// other id.
+fn recorded_models(id: &str) -> browser::agents::ready::Models {
     use browser::agents::ready::{claude_listed, codex_listed};
-    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
     let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
-    let models = match cli {
+    match id {
         "codex" => Some(codex_listed(&answer(include_str!(
             "agents/runner/answers/codex-0.167.1-model-list.json"
         )))),
@@ -3867,10 +3868,15 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             "agents/runner/answers/claude-2.1.322-initialize.json"
         ))),
     }
-    .unwrap_or_default();
-    let cli =
-        browser::agents::runner::Cli::from_id(cli).unwrap_or(browser::agents::runner::Cli::Claude);
-    let (_, items) = browser::agents::task::model_rows(chosen, cli, &models, 0);
+    .unwrap_or_default()
+}
+
+fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
+    let models = recorded_models(cli);
+    let caps =
+        browser::agents::provider::caps(cli).unwrap_or(&browser::agents::provider::PROVIDERS[0]);
+    let (_, items) = browser::agents::task::model_rows(chosen, caps, &models, 0);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;

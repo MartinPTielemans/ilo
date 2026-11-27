@@ -2872,7 +2872,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         let talk = Conversation {
             model: Some((
-                crate::agents::task::Maker::Anthropic.mark(),
+                Some(crate::agents::runner::Cli::Claude.caps().mark),
                 "Claude Code \u{b7} Opus".into(),
                 "Opus".into(),
                 false,
@@ -5063,7 +5063,7 @@ fn the_panels_composer_row_fits_the_panel_with_its_plus(_: &mut TestAppContext) 
                     stoppable,
                     tier,
                     model: Some((
-                        crate::agents::task::Maker::Anthropic.mark(),
+                        Some(crate::agents::runner::Cli::Claude.caps().mark),
                         said.clone().into(),
                         word.clone().into(),
                         true,
@@ -5160,7 +5160,7 @@ fn the_panels_model_trigger_draws_the_models_own_word(cx: &mut TestAppContext) {
     use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL_X;
     let talk = Conversation {
         model: Some((
-            crate::agents::task::Maker::Anthropic.mark(),
+            Some(crate::agents::runner::Cli::Claude.caps().mark),
             "Claude \u{b7} Sonnet".into(),
             "Sonnet".into(),
             false,

@@ -11505,7 +11505,7 @@ mod tasks {
     #[test]
     fn the_model_menus_rows_are_each_models_own_after_its_makers_mark_with_no_default() {
         use crate::agents::ready::Models;
-        use crate::agents::task::{MORE_MODELS, Maker, model_rows};
+        use crate::agents::task::{MORE_MODELS, model_rows};
         let named = |list: &[(&str, &str)]| -> Vec<(String, String)> {
             (list.iter())
                 .map(|(id, name)| (id.to_string(), name.to_string()))
@@ -11517,7 +11517,7 @@ mod tasks {
             more: named(&[("gpt-5", "GPT-5")]),
             ..Models::default()
         };
-        let (ids, items) = model_rows("", Cli::Codex, &codex, 0);
+        let (ids, items) = model_rows("", Cli::Codex.caps(), &codex, 0);
         assert_eq!(
             crate::menu::described(&items),
             format!("GPT-6-Luna, GPT-6.1-Sol (checked), {MORE_MODELS} › GPT-5")
@@ -11527,7 +11527,7 @@ mod tasks {
             [Some("gpt-6-luna"), Some(""), None, Some("gpt-5")].map(|id| id.map(String::from)),
             "the default's row picks no model, and More Models only opens its own"
         );
-        let blossom = Maker::OpenAI.mark().expect("OpenAI's mark");
+        let blossom = Cli::Codex.caps().mark;
         assert!(blossom.path.ends_with("openai-blossom.svg"));
         for at in [0, 1, 3] {
             assert_eq!(items[at].mark, Some(blossom), "{}", items[at].title);
@@ -11547,7 +11547,7 @@ mod tasks {
             ]
         );
         // A pick of its own is checked, the default's row then not, and nowhere does it say Default.
-        let (_, items) = model_rows("gpt-5", Cli::Codex, &codex, 0);
+        let (_, items) = model_rows("gpt-5", Cli::Codex.caps(), &codex, 0);
         assert_eq!(
             crate::menu::described(&items),
             format!("GPT-6-Luna, GPT-6.1-Sol, {MORE_MODELS} › GPT-5 (checked)")
@@ -11558,12 +11558,12 @@ mod tasks {
             default_id: Some("opus".into()),
             ..Models::default()
         };
-        let (_, items) = model_rows("haiku", Cli::Claude, &claude, 0);
+        let (_, items) = model_rows("haiku", Cli::Claude.caps(), &claude, 0);
         assert_eq!(
             crate::menu::described(&items),
             "Opus 5.5, Haiku 5.5 (checked)"
         );
-        let spark = Maker::Anthropic.mark().expect("Claude's mark");
+        let spark = Cli::Claude.caps().mark;
         assert!(spark.path.ends_with("claude-spark.svg"));
         assert_eq!(
             spark.light, spark.dark,
@@ -11571,7 +11571,7 @@ mod tasks {
         );
         assert!(items.iter().all(|item| item.mark == Some(spark)));
         assert_eq!(items[0].spoken.as_deref(), Some("Anthropic Opus 5.5"));
-        let (ids, items) = model_rows("", Cli::Claude, &Models::default(), 0);
+        let (ids, items) = model_rows("", Cli::Claude.caps(), &Models::default(), 0);
         assert_eq!(crate::menu::described(&items), "Claude Code (checked)");
         assert_eq!(ids, [Some(String::new())]);
         for (cli, models) in [
@@ -11580,7 +11580,7 @@ mod tasks {
             (Cli::Claude, &Models::default()),
         ] {
             for chosen in ["", "gpt-5", "haiku"] {
-                let (_, items) = model_rows(chosen, cli, models, 0);
+                let (_, items) = model_rows(chosen, cli.caps(), models, 0);
                 for item in &items {
                     assert!(
                         item.title != "Default" && !item.title.contains("'s default"),
@@ -11590,6 +11590,76 @@ mod tasks {
                 }
             }
         }
+    }
+
+    /// A provider is its data (#4465): one ilo has never heard of, with its own maker, assistant,
+    /// mark and efforts, shows in the model menu, its trigger's words and the effort list by that
+    /// data alone, with no code that names it.
+    #[test]
+    fn a_third_provider_shows_in_the_model_menu_by_its_own_data_alone() {
+        use crate::agents::provider::Caps;
+        use crate::agents::ready::Models;
+        use crate::agents::task::{MORE_MODELS, model_name, model_rows};
+        use crate::shell::MakerMark;
+        let mark = MakerMark {
+            path: "makers/heron.svg",
+            size: 12.0,
+            light: 0x1122_33ff,
+            dark: 0x4455_66ff,
+        };
+        let heron = Caps {
+            id: "heron",
+            maker: "Heron Labs",
+            assistant: "Heron",
+            mark,
+            efforts: &["brisk", "thorough"],
+        };
+        let named = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            (list.iter())
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect()
+        };
+        let models = Models {
+            listed: named(&[("wade-2", "Wade 2"), ("glide-3", "Glide 3")]),
+            default_id: Some("glide-3".into()),
+            more: named(&[("wade-1", "Wade 1")]),
+            ..Models::default()
+        };
+        let (ids, items) = model_rows("", &heron, &models, 0);
+        assert_eq!(
+            crate::menu::described(&items),
+            format!("Wade 2, Glide 3 (checked), {MORE_MODELS} › Wade 1")
+        );
+        assert_eq!(
+            ids,
+            [Some("wade-2"), Some(""), None, Some("wade-1")].map(|id| id.map(String::from))
+        );
+        for at in [0, 1, 3] {
+            assert_eq!(items[at].mark, Some(mark), "{}", items[at].title);
+        }
+        let spoken: Vec<_> = (items.iter())
+            .map(|item| item.spoken.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            spoken,
+            [
+                "Heron Labs Wade 2",
+                "Heron Labs Glide 3",
+                "More Heron Labs models",
+                "Heron Labs Wade 1"
+            ]
+        );
+        assert_eq!(model_name(&heron, &models, ""), "Glide 3");
+        assert_eq!(model_name(&heron, &models, "wade-1"), "Wade 1");
+        // Listing nothing yet, it's its own assistant, by the name it gives.
+        let (_, items) = model_rows("", &heron, &Models::default(), 0);
+        assert_eq!(crate::menu::described(&items), "Heron (checked)");
+        assert_eq!(items[0].spoken.as_deref(), Some("Heron Labs Heron"));
+        assert_eq!(model_name(&heron, &Models::default(), ""), "Heron");
+        // Its efforts are its own, as the effort menu lists them.
+        let (levels, items) = crate::command_bar::effort_choices(heron.efforts, None);
+        assert_eq!(levels, [None, Some("brisk"), Some("thorough")]);
+        assert_eq!(items.len(), levels.len());
     }
 
     /// The model menu opens at once from the lists last kept, with no look waited on. Its opening

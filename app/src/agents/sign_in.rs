@@ -832,12 +832,9 @@ impl Shown {
 }
 
 impl Cli {
-    /// Its maker's name for it, as its row says it, in text only.
+    /// Its maker's name for it, as its row says it, in text only (provider.rs).
     pub fn assistant(self) -> &'static str {
-        match self {
-            Cli::Claude => "Claude Code",
-            Cli::Codex => "Codex",
-        }
+        self.caps().assistant
     }
 
     /// Its maker's page that says how to install it, which Get opens.

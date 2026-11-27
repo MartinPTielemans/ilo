@@ -497,16 +497,15 @@ type Model = (
 );
 
 /// A thread's model as its composer's row says it, the app's way (Z54): the model's own name,
-/// its default's (as the recorded answers name them) where none is picked, after its maker's mark,
-/// opening the model's menu where the CLI takes another.
+/// its default's (as the recorded answers name them) where none is picked, after its provider's
+/// mark, opening the model's menu where the CLI takes another.
 fn model(cli: Cli, name: Option<&str>) -> Model {
-    let default = match cli {
-        Cli::Claude => "Opus 5.5",
-        Cli::Codex => "GPT-6.1-Sol",
-    };
-    let word = SharedString::from(name.unwrap_or(default).to_string());
-    let mark = browser::agents::task::Maker::of(cli).mark();
-    (mark, word.clone(), word, cli.switches_model())
+    let caps = cli.caps();
+    let word = SharedString::from(name.map_or_else(
+        || browser::agents::task::model_name(caps, &crate::recorded_models(caps.id), ""),
+        String::from,
+    ));
+    (Some(caps.mark), word.clone(), word, cli.switches_model())
 }
 
 /// The view of a task that isn't at work says what its group's header does: its title, where it

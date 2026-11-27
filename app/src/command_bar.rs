@@ -365,10 +365,10 @@ pub struct Opens {
     pub effort: Option<&'static str>,
 }
 
-/// The effort levels the program of the assistant `id` takes, from the one list
-/// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
+/// The effort levels the program of the assistant `id` takes, as its provider says them
+/// (provider.rs); none for an assistant ilo doesn't run, or one that takes none.
 pub fn efforts_of(id: &str) -> &'static [&'static str] {
-    crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
+    crate::agents::provider::caps(id).map_or(&[], |caps| caps.efforts)
 }
 
 /// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
