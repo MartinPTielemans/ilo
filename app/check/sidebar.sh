@@ -23,9 +23,31 @@ else
     last=$(grep '^browser: cursor ' "$log" | tail -1)
     case "$last" in
       "browser: cursor left-right over "*) ;;
-      *) fail "the pointer on the sidebar's edge didn't show the resize arrows ($1): $last" ;;
+      *)
+        send layout
+        fail "the pointer on the sidebar's edge didn't show the resize arrows ($1): $last; views: $(grep '^browser: layout content' "$log" | tail -1 | cut -c1-900)"
+        ;;
     esac
   }
+  # The control: the driver reads a cursor GPUI sets over a field, the command bar's text, which is
+  # an I-beam, so an arrow on the edge is the edge's and not the driver's blindness to cursors.
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send layout
+  bar=$(grep '^browser: layout child ' "$log" | tail -1 | sed 's/^browser: layout child //')
+  [ -n "$bar" ] || fail "the command bar had no window to hover"
+  bar_x=$(echo "$bar" | sed 's/^\([0-9]*\),.*/\1/')
+  bar_y=$(echo "$bar" | sed 's/^[0-9]*,\([0-9]*\) .*/\1/')
+  bar_w=$(echo "$bar" | sed 's/^[^ ]* \([0-9]*\)x.*/\1/')
+  send cursor $((bar_x + bar_w / 2)) $((bar_y + 36)) ibeam
+  expect '^browser: cursor ' "the driver didn't read the cursor over the command bar's field"
+  last=$(grep '^browser: cursor ' "$log" | tail -1)
+  case "$last" in
+    "browser: cursor ibeam over "*) ;;
+    *) fail "the driver can't read a cursor GPUI sets (the command bar's field at $bar): $last" ;;
+  esac
+  send key escape
+  send layout
   edge_cursor "left, the keyboard in the UI" 223
   send click 700 300
   edge_cursor "left, the page has the keyboard" 223
