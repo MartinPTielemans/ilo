@@ -22,6 +22,7 @@ pub mod command;
 pub mod fence;
 pub mod files;
 mod held;
+pub use held::HeldPage;
 mod helpers;
 pub mod kept;
 mod lines;
@@ -3377,6 +3378,16 @@ impl Agents {
         cx.notify();
     }
 
+    /// The core read the held `tab`'s page as it or a frame of it loaded (bc_held_page), which it
+    /// does for a page committed after the hold. A hand-off ends by itself once the page has none
+    /// of the user's steps on it, so the next step of a sign-in keeps it the user's. The agent
+    /// hears what a Hand Back tells it and nothing of the page; the log says the page moved on.
+    pub fn held_page(&mut self, tab: u64, page: HeldPage, cx: &mut Context<Self>) {
+        if !page.users_step() {
+            self.let_go(tab, held::Event::MovedOn, cx);
+        }
+    }
+
     /// Keeps why `agent`'s page `tab` left its Space, in place of any reason before, as the
     /// agent's own acts know why. Past GONE_KEPT, the lowest tab id, the oldest, goes.
     fn went(&mut self, tab: u64, agent: &str, gone: Gone) {
@@ -5904,7 +5915,8 @@ const NOT_HELD: &str = "The user doesn't have that tab from you, so there's noth
 /// The answer to the call that waited on the held `tab`, as `event` ended its wait.
 fn answer_of(tab: u64, event: held::Event) -> ToolResult {
     match event {
-        held::Event::HandBack => ToolResult::text(format!(
+        // A page that moved on tells the agent what Hand Back does, and nothing of the page.
+        held::Event::HandBack | held::Event::MovedOn => ToolResult::text(format!(
             "The user handed tab {tab} back. Take a snapshot to see where it is now."
         )),
         held::Event::Keep => ToolResult::error(format!(
@@ -5939,6 +5951,13 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
 pub fn page_dialog(tab: u64, kind: Option<DialogKind>, message: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, cx| agents.page_dialog(tab, kind, message, cx));
+    }
+}
+
+/// The core read a held tab's page (bc_held_page).
+pub fn held_page(tab: u64, page: HeldPage, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, cx| agents.held_page(tab, page, cx));
     }
 }
 
