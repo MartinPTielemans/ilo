@@ -992,7 +992,6 @@ toggle page hidden "⌘S with the page focused"
 # view; on Linux the strip is also the band that resizes the window.
 if [ "$(uname)" = Darwin ]; then
   send click 1 400
-  send warp
   send state
   in_browser RenderWidgetHostViewCocoa "a press in the strip at the hidden sidebar's edge"
 fi
