@@ -403,7 +403,7 @@ impl Shell {
 }
 
 /// `texture` over the whole window at `opacity`, in tiles at one device pixel to a pixel.
-fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement {
+pub(super) fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement + use<> {
     div().absolute().size_full().opacity(opacity).child(
         canvas(
             |_, _, _| {},

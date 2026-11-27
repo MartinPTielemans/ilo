@@ -619,6 +619,131 @@ fn the_space_steps_name_is_home_when_empty_and_cut_to_the_fields_most(cx: &mut T
     );
 }
 
+/// What the Space step's piece of the sidebar drew in the frame the step last drew.
+fn piece(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> crate::shell::sidebar_piece::Drawn {
+    crate::shell::sidebar_piece::DRAWN.set(None);
+    settle(shell, cx);
+    (crate::shell::sidebar_piece::DRAWN.with_borrow(|drawn| drawn.clone()))
+        .expect("the piece is drawn")
+}
+
+/// Where `x`, `y` on the Space step's editor, as its form sets its parts out, is in the window.
+fn on_editor(x: f32, y: f32, cx: &mut VisualTestContext) -> gpui::Point<gpui::Pixels> {
+    let editor = placed("editor", cx).expect("the editor is drawn");
+    editor.origin + point(px(x), px(y))
+}
+
+/// Your first Space shows a piece of its sidebar right of the editor, in the card's plane, called
+/// what's typed, and each of the editor's controls redraws it in the colours it makes: a palette,
+/// the colour pad, Intensity, Transparency, Grain, and Light and Dark.
+#[gpui::test]
+fn the_space_steps_sidebar_piece_follows_each_control(cx: &mut TestAppContext) {
+    use crate::theme_picker::Bar;
+    use crate::tokens::theme_panel::{SEGMENT_HEIGHT, SEGMENT_WIDTH};
+    use gpui::MouseButton;
+    let (shell, cx, _host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    // The glass the Mac's material makes, which Transparency shows through.
+    shell.update(cx, |shell, _| shell.blurred = true);
+    let form = super::space::FORM;
+    let (editor, plane) = (placed("editor", cx).unwrap(), placed("plane", cx).unwrap());
+    let shown_row = placed("piece-shown", cx).expect("a Today tab is the one shown");
+    let drawn_at = placed("piece", cx).expect("the piece is drawn");
+    assert!(
+        drawn_at.left() >= editor.right(),
+        "{drawn_at:?} is right of {editor:?}"
+    );
+    assert_eq!(drawn_at, plane, "the piece fills the plane");
+    let heading = placed("heading", cx).expect("the heading is drawn");
+    assert_eq!(
+        heading.top(),
+        plane.top() - px(t::PLANE[1]),
+        "the plane leaves the heading at the card's top"
+    );
+    assert!(
+        plane.contains(&shown_row.center()),
+        "its shown row is in it"
+    );
+    let mut before = piece(&shell, cx);
+    assert_eq!(before.name, "Home");
+    type_name("Lisbon", &shell, cx);
+    let drawn = piece(&shell, cx);
+    assert_eq!(drawn.name, "Lisbon", "the name as it's typed");
+    before = drawn;
+
+    cx.simulate_keystrokes("right");
+    let drawn = piece(&shell, cx);
+    assert_ne!(drawn.space_tint, before.space_tint, "a palette: its tint");
+    assert_ne!(drawn.selected, before.selected, "a palette: its shown row");
+    before = drawn;
+
+    let theme = shell.read_with(cx, |shell, cx| {
+        let editor = shell
+            .onboarding
+            .as_ref()
+            .and_then(|o| o.space.as_ref())
+            .unwrap();
+        editor
+            .picker
+            .read(cx)
+            .editing()
+            .and_then(|(_, theme)| theme)
+    });
+    let (hx, hy) = form.handle(&theme.expect("a palette's theme"), 0);
+    let (pad_x, pad_y) = form.pad();
+    let to = (pad_x + form.inner() * 0.15, pad_y + form.pad_height * 0.8);
+    let (from, to) = (on_editor(hx, hy, cx), on_editor(to.0, to.1, cx));
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    let drawn = piece(&shell, cx);
+    assert_ne!(
+        drawn.space_tint, before.space_tint,
+        "the pad, as it's dragged"
+    );
+    assert_ne!(drawn.selected, before.selected, "the pad: its shown row");
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    before = piece(&shell, cx);
+
+    for (bar, value) in [
+        (Bar::Intensity, 0.1),
+        (Bar::Transparency, 0.95),
+        (Bar::Grain, 0.9),
+    ] {
+        let at = on_editor(form.thumb_x(value), form.track_y(bar), cx);
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        let drawn = piece(&shell, cx);
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        let changed = match bar {
+            Bar::Intensity => drawn.space_tint != before.space_tint,
+            Bar::Transparency => drawn.ground != before.ground,
+            Bar::Grain => drawn.grain != before.grain,
+        };
+        assert!(changed, "{}: {before:?} to {drawn:?}", bar.name());
+        before = piece(&shell, cx);
+    }
+
+    // Auto, Light and Dark, each the middle of its segment.
+    let mut grounds = Vec::new();
+    for index in [1, 2, 0] {
+        let (left, top) = form.segment(index);
+        let at = on_editor(left + SEGMENT_WIDTH / 2., top + SEGMENT_HEIGHT / 2., cx);
+        cx.simulate_click(at, Modifiers::none());
+        grounds.push(piece(&shell, cx).ground);
+    }
+    let [light, dark, auto] = grounds[..] else {
+        unreachable!()
+    };
+    assert_ne!(light, dark, "Light and Dark: the glass's tint");
+    let system = shell.read_with(cx, |shell, _| shell.system_tone);
+    let expected = match system {
+        crate::palette::Tone::Light => light,
+        crate::palette::Tone::Dark => dark,
+    };
+    assert_eq!(auto, expected, "Auto: the system's, {system:?}");
+}
+
 /// ↩ that commits an input method's composition (Japanese) in the Space's name is the method's:
 /// it doesn't pass the step, and the name waits for Next.
 #[gpui::test]
@@ -786,7 +911,7 @@ fn a_step_without_its_picture_draws_no_plane(cx: &mut TestAppContext) {
             shell.onboarding.as_mut().unwrap().light = Some(light);
             cx.notify();
         });
-        for to in [Step::Assistant, Step::Space] {
+        for to in [Step::Assistant] {
             on_to(&shell, cx, to);
             assert!(!to.split(), "{to:?}'s picture isn't in");
             assert_eq!(placed("plane", cx), None, "{to:?}, light {light}: no plane");

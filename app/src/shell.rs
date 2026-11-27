@@ -159,6 +159,7 @@ mod side_panel;
 mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
+mod sidebar_piece;
 mod space_form;
 mod space_order;
 mod space_transparency;

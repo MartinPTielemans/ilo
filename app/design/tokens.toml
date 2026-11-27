@@ -2672,6 +2672,19 @@ space-name = 16.0
 space-pad = [10.0, 92.0, 8.0, 8.0]
 space-dots = [15.0, 11.0, 270.0, 70.0]
 space-start = [1.0, 0.7, 0.4, 0.3]
+# The step's picture (#4450), a piece of the Space's sidebar in the plane as if seen through a
+# window: the window's inset from the plane's top left, its top-left corner, and the address
+# field's top in it.
+space-piece = [24.0, 10.0, 10.0]
+# The desktop behind the piece's glass, the Transparency pictures' with soft lights on it so what
+# comes through is seen: each light's x and y in the plane, their size and blur, and their colours.
+space-lights = [120.0, 210.0, 200.0, 60.0, 70.0, 400.0]
+space-light = [80.0, 70.0]
+space-light-colors = [0xffffff, 0xf2c14e, 0x2f8f7a]
+# The made-up sites' letter icons: their corners and letter's size, and their fills, the two
+# favourites', the pinned row's, then Today's three.
+space-icon = [4.0, 10.0]
+space-icons = [0x3f6fd8, 0xd0533b, 0x3a8f5b, 0x2a7fb0, 0xb7762a, 0x7a4bd6]
 # Bring your stuff (v9 §5). The browsers found: their icons' top, size and cell width, the names'
 # size, line and gap under the icon, and how many show before More….
 bring-row = [102.0, 44.0, 72.0]

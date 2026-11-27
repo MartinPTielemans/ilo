@@ -131,13 +131,13 @@ impl Step {
 
     /// The split steps: controls in a column at the left, the picture's plane at the right. Only a
     /// step whose picture is in, so no blank plane is ever shown: v9 splits Assistant and Space,
-    /// and until each one's picture lands its own column is centred as Bring your stuff's is.
+    /// and until Assistant's picture lands its own column is centred as Bring your stuff's is.
     fn split(self) -> bool {
         Self::PICTURED.contains(&self)
     }
 
-    /// The steps whose picture is in; none has landed yet.
-    const PICTURED: &[Step] = &[];
+    /// The steps whose picture is in.
+    const PICTURED: &[Step] = &[Step::Space];
 }
 
 /// The switches' rows on the card. On is the text's ink with a knob of the card's, as Settings'
@@ -1667,9 +1667,21 @@ impl Shell {
                 div()
                     .size_full()
                     .children(step.split().then(|| {
-                        (card::plane(inks).relative()).children(self.place(step, "plane"))
+                        // The plane is placed absolutely, out of the flow, so the heading after it
+                        // keeps its place at the card's top.
+                        card::plane(inks)
+                            .children(
+                                (step == Step::Space)
+                                    .then(|| self.space_picture(cx))
+                                    .flatten(),
+                            )
+                            .children(self.place(step, "plane"))
                     }))
-                    .child(card::heading((title, line), !step.split(), inks, cx))
+                    .child(
+                        card::heading((title, line), !step.split(), inks, cx)
+                            .size_full()
+                            .children(self.place(step, "heading")),
+                    )
                     .child(
                         body.h(px(foot_top - top - t::FOOT_GAP))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
