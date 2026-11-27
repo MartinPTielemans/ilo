@@ -165,7 +165,7 @@ fn cli_command(program: &Path, path: Option<&str>) -> Command {
 
 /// Starts `cli`. In the tests, only a stand-in in the test's own folder: no test may start this
 /// computer's Claude Code or Codex, whose sign-in the computer's own agents run on.
-fn spawn(cli: &mut Command) -> std::io::Result<Child> {
+pub(super) fn spawn(cli: &mut Command) -> std::io::Result<Child> {
     #[cfg(test)]
     {
         let program = Path::new(cli.get_program());
@@ -302,7 +302,7 @@ impl Drop for Claude {
 
 /// Ends the program `pid`, which hasn't been waited for: on Windows with the programs an npm shim
 /// started for it, but not theirs, as the browser the sign-in opened may be one.
-fn end_process(pid: u32) {
+pub(super) fn end_process(pid: u32) {
     #[cfg(unix)]
     unsafe {
         libc::kill(pid as libc::pid_t, libc::SIGTERM);
@@ -617,6 +617,10 @@ fn log_out_over(output: impl Read, input: Box<dyn Write + Send>) -> Result<(), O
 pub enum Row {
     #[default]
     Idle,
+    /// Its program is being installed, its sign-in to start once it's found (install.rs).
+    Installing,
+    /// The install ended without it, for the reason its line gives where one is known.
+    InstallFailed(Option<String>),
     SigningIn,
     SigningOut,
     /// The last sign-in or sign-out ended without, in the CLI's words where `said` kept them.
@@ -631,11 +635,26 @@ struct Running {
     _heard: gpui::Task<()>,
 }
 
+/// An install under way, which the sign-in follows.
+struct Installing {
+    session: Box<dyn Session>,
+    _ended: gpui::Task<()>,
+}
+
 /// The sign-ins under way and what each row says, by CLI.
 #[derive(Default)]
 pub struct SignIns {
     running: HashMap<Cli, Running>,
     rows: HashMap<Cli, Row>,
+    installing: HashMap<Cli, Installing>,
+    /// Installed, waiting on the look that finds the program to sign in with.
+    looking_after_install: HashSet<Cli>,
+    /// The programs ilo installed, as it noted at the time: saved, so Settings › Models says so
+    /// for as long as each is there (AS6).
+    pub(super) installed: HashSet<Cli>,
+    /// The sign-ins whose page opens as a tab here, the browser being the computer's default as
+    /// each started (FR19).
+    in_a_tab: HashSet<Cli>,
 }
 
 impl Agents {
@@ -647,12 +666,20 @@ impl Agents {
 
     /// Starts `cli`'s own sign-in, from its row: Claude Code's opens its page in the default
     /// browser itself, and Codex's in a private window here. One at a time for each.
+    /// Where its program isn't on the computer and its maker's installer is known, the press is
+    /// Install and Sign In: the install, then the sign-in at once.
     pub fn sign_in(&mut self, cli: Cli, cx: &mut Context<Self>) {
         let sign_ins = &self.tasks.sign_ins;
-        if sign_ins.running.contains_key(&cli) {
+        if sign_ins.running.contains_key(&cli)
+            || sign_ins.installing.contains_key(&cli)
+            || sign_ins.looking_after_install.contains(&cli)
+        {
             return;
         }
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
+        if found.ready == super::ready::Ready::NotFound && cli.installs() {
+            return self.install(cli, cx);
+        }
         let (heard, mut hearing) = futures::channel::mpsc::unbounded();
         let row = match self.clients.start_sign_in(cli, &found, heard) {
             Ok(session) => {
@@ -672,6 +699,14 @@ impl Agents {
                     _heard: listen,
                 };
                 self.tasks.sign_ins.running.insert(cli, running);
+                // Claude Code opens its page in the computer's default browser; Codex's opens in
+                // a window of the browser's own either way.
+                let in_a_tab = &mut self.tasks.sign_ins.in_a_tab;
+                if cli == Cli::Claude && self.browser.is_default_browser() {
+                    in_a_tab.insert(cli);
+                } else {
+                    in_a_tab.remove(&cli);
+                }
                 log!("browser: task agent {} sign-in started", cli.id());
                 Row::SigningIn
             }
@@ -684,8 +719,101 @@ impl Agents {
         cx.notify();
     }
 
-    /// Ends `cli`'s sign-in under way, as its row's Cancel does. Its end comes as any other.
+    /// Starts `cli`'s install, the user's press alone, then its sign-in once its program is found.
+    fn install(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        let (ended, mut ending) = futures::channel::mpsc::unbounded();
+        let row = match self.clients.start_install(cli, ended) {
+            Ok(session) => {
+                let listen = cx.spawn(async move |agents, cx| {
+                    if let Some(end) = ending.next().await {
+                        _ = agents.update(cx, |agents, cx| agents.install_ended(cli, end, cx));
+                    }
+                });
+                let installing = Installing {
+                    session,
+                    _ended: listen,
+                };
+                self.tasks.sign_ins.installing.insert(cli, installing);
+                log!("browser: task agent {} install started", cli.id());
+                Row::Installing
+            }
+            Err(_) => {
+                log!("browser: task agent {} install couldn't start", cli.id());
+                Row::InstallFailed(None)
+            }
+        };
+        self.tasks.sign_ins.rows.insert(cli, row);
+        cx.notify();
+    }
+
+    fn install_ended(&mut self, cli: Cli, end: Ended, cx: &mut Context<Self>) {
+        if self.tasks.sign_ins.installing.remove(&cli).is_none() {
+            return;
+        }
+        let (row, ended) = match end {
+            // Looked for again, where its installer put it, then signed in to.
+            Ended::Done => {
+                self.tasks.sign_ins.installed.insert(cli);
+                self.tasks.sign_ins.looking_after_install.insert(cli);
+                self.look_up_assistant(cli, cx);
+                (Row::Installing, "ended")
+            }
+            // As it was before the press.
+            Ended::Cancelled => (Row::Idle, "cancelled"),
+            Ended::Failed(reason) => (Row::InstallFailed(reason), "failed"),
+        };
+        log!("browser: task agent {} install {ended}", cli.id());
+        self.tasks.sign_ins.rows.insert(cli, row);
+        self.save();
+        cx.notify();
+    }
+
+    /// The look after `cli`'s install ended: its sign-in starts with the program it found, unless
+    /// it's signed in already. Not found where its installer said it put it, the install failed.
+    pub(super) fn looked_after_install(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        // A look that began before the install ended can't have found it: the one queued after
+        // it does.
+        let queued = (self.tasks.look_again.iter()).any(|(each, _)| *each == cli);
+        if queued || !self.tasks.sign_ins.looking_after_install.remove(&cli) {
+            return;
+        }
+        use super::ready::Ready;
+        let row = match self.found(cli) {
+            Ready::SignedOut => {
+                self.tasks.sign_ins.rows.insert(cli, Row::Idle);
+                return self.sign_in(cli, cx);
+            }
+            // An older one than the browser runs: the row says it needs an update (AP27).
+            Ready::SignedIn | Ready::NeedsUpdate => Row::Idle,
+            Ready::NotFound | Ready::Unknown => {
+                log!(
+                    "browser: task agent {} not found after its install",
+                    cli.id()
+                );
+                Row::InstallFailed(None)
+            }
+        };
+        self.tasks.sign_ins.rows.insert(cli, row);
+        cx.notify();
+    }
+
+    /// Whether ilo installed `cli`'s program and it's still there, for Settings › Models' line
+    /// (AS6): signing out leaves it (AS7).
+    pub fn installed_here(&self, cli: Cli) -> bool {
+        use super::ready::Ready;
+        self.tasks.sign_ins.installed.contains(&cli)
+            && matches!(
+                self.found(cli),
+                Ready::SignedIn | Ready::SignedOut | Ready::NeedsUpdate
+            )
+    }
+
+    /// Ends `cli`'s install or sign-in under way, as its row's Cancel does. Its end comes as any
+    /// other.
     pub fn cancel_sign_in(&mut self, cli: Cli) {
+        if let Some(installing) = self.tasks.sign_ins.installing.get_mut(&cli) {
+            installing.session.cancel();
+        }
         if let Some(running) = self.tasks.sign_ins.running.get_mut(&cli) {
             running.session.cancel();
         }
@@ -777,14 +905,18 @@ impl Agents {
 pub enum Offer {
     /// Nothing, while it's looked for or signing out.
     Nothing,
-    /// Get Claude Code or Get Codex: its maker's install page.
+    /// Get Codex: its maker's install page, where no install of its own is known yet.
     Get,
+    /// Install and Sign In: its maker's installer, then its sign-in (AS1).
+    Install,
     /// Sign In to Claude Code or Sign In to Codex.
     SignIn,
     /// Cancel, while it signs in.
     Cancel,
     /// Try Again, once a sign-in failed.
     TryAgain,
+    /// Try Again, once an install failed: the install again, then the sign-in (AS4).
+    TryInstall,
     /// How to Update: its maker's page on updating it, for one older than the browser runs
     /// (AP27). The browser never updates it itself.
     Update,
@@ -798,8 +930,9 @@ impl Offer {
         let name = cli.assistant();
         match self {
             Offer::Get => Some(format!("Get {name}")),
+            Offer::Install => Some(INSTALL_AND_SIGN_IN.into()),
             Offer::SignIn => Some(format!("Sign In to {name}")),
-            Offer::TryAgain => Some("Try Again".into()),
+            Offer::TryAgain | Offer::TryInstall => Some("Try Again".into()),
             Offer::Update => Some("How to Update".into()),
             Offer::Cancel => Some("Cancel".into()),
             Offer::Nothing | Offer::SignedIn => None,
@@ -819,6 +952,14 @@ pub struct Shown {
 pub(crate) const CLAUDE_WAITING: &str = "Finish in your browser.";
 /// ChatGPT's line while its sign-in waits, in a window the browser opens (FR19).
 pub(crate) const CHATGPT_WAITING: &str = "Finish in the new window.";
+/// Claude's line while its sign-in waits where the browser is the computer's default, which
+/// opens its page as a new tab (FR19).
+pub(crate) const CLAUDE_WAITING_IN_A_TAB: &str = "Finish in the new tab.";
+
+/// The button of a row whose program isn't on the computer (AS1).
+pub const INSTALL_AND_SIGN_IN: &str = "Install and Sign In";
+/// What Settings › Models' button beside the line of a program ilo installed says (AS6).
+pub const HOW_TO_UNINSTALL: &str = "How to Uninstall";
 
 /// What Claude Code's line says to run where its sign-in needs a terminal.
 pub const CLAUDE_SIGN_IN: &str = "claude auth login";
@@ -840,6 +981,23 @@ impl Cli {
         }
     }
 
+    /// Its maker's name, as the row's line says whose program an install brings (AS2).
+    pub fn maker(self) -> &'static str {
+        match self {
+            Cli::Claude => "Anthropic's",
+            Cli::Codex => "OpenAI's",
+        }
+    }
+
+    /// The quiet line of Settings › Models' row whose program ilo installed (AS6).
+    pub fn installed_line(self) -> String {
+        format!(
+            "{} installed {}. Other apps on this computer can use it too.",
+            crate::product::PRODUCT,
+            self.assistant()
+        )
+    }
+
     /// Its maker's page that says how to install it, which Get opens.
     pub fn install_page(self) -> &'static str {
         match self {
@@ -856,7 +1014,19 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         line: line.to_string(),
         offer,
     };
+    let name = cli.assistant();
     match (row, ready) {
+        (Row::Installing, _) => shown(&format!("Installing {name}"), Offer::Cancel),
+        (Row::InstallFailed(Some(reason)), _) if reason == super::install::OFFLINE => {
+            shown(reason, Offer::TryInstall)
+        }
+        (Row::InstallFailed(Some(reason)), _) => shown(
+            &format!("Couldn't install {name}: {reason}."),
+            Offer::TryInstall,
+        ),
+        (Row::InstallFailed(None), _) => {
+            shown(&format!("Couldn't install {name}."), Offer::TryInstall)
+        }
         (Row::SigningIn, _) => match cli {
             Cli::Claude => shown(CLAUDE_WAITING, Offer::Cancel),
             Cli::Codex => shown(CHATGPT_WAITING, Offer::Cancel),
@@ -876,6 +1046,9 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         ),
         (Row::Failed(None), _) => shown("The sign-in didn't finish", Offer::TryAgain),
         (Row::Idle, Ready::Unknown) => shown("Checking…", Offer::Nothing),
+        (Row::Idle, Ready::NotFound) if cli.installs() => {
+            shown(&format!("Installs {} {name}", cli.maker()), Offer::Install)
+        }
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
         (Row::Idle, Ready::NeedsUpdate) => shown("Needs an update", Offer::Update),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
@@ -891,7 +1064,12 @@ impl Agents {
     pub fn assistant_row(&self, cli: Cli) -> Shown {
         let found = self.tasks.found.get(&cli);
         let plan = found.and_then(|found| found.plan.as_deref());
-        shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
+        let row = self.sign_in_row(cli);
+        let mut shown = shown(cli, self.found(cli), plan, &row);
+        if row == Row::SigningIn && self.tasks.sign_ins.in_a_tab.contains(&cli) {
+            shown.line = CLAUDE_WAITING_IN_A_TAB.into();
+        }
+        shown
     }
 
     /// Settings › Models' assistants: every one the app can run, in its state, whether agents
@@ -914,7 +1092,12 @@ impl Agents {
     pub(super) fn card_offer(&self, cli: Cli) -> Option<Offer> {
         match self.assistant_row(cli).offer {
             Offer::TryAgain => Some(Offer::SignIn),
-            offer @ (Offer::Get | Offer::Update | Offer::SignIn | Offer::Cancel) => Some(offer),
+            Offer::TryInstall => Some(Offer::Install),
+            offer @ (Offer::Get
+            | Offer::Install
+            | Offer::Update
+            | Offer::SignIn
+            | Offer::Cancel) => Some(offer),
             Offer::Nothing | Offer::SignedIn => None,
         }
     }

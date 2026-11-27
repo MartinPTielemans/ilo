@@ -146,6 +146,13 @@ pub trait Clients: Send + Sync {
         found: &super::ready::Found,
         heard: futures::channel::mpsc::UnboundedSender<super::sign_in::Heard>,
     ) -> std::io::Result<Box<dyn super::sign_in::Session>>;
+    /// Starts the install of `cli`'s program by its maker's own installer (install.rs), which tells
+    /// `ended` how it ended. No default, so no test's stand-in can run a maker's installer.
+    fn start_install(
+        &self,
+        cli: super::runner::Cli,
+        ended: futures::channel::mpsc::UnboundedSender<super::sign_in::Ended>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>>;
     /// Signs `cli` out as its own command does, everywhere it's used, or says why it couldn't, in
     /// its words where `sign_in::said` keeps them. Blocks: runs the CLI.
     fn sign_out(
@@ -264,6 +271,14 @@ impl Clients for System {
     ) -> std::io::Result<Box<dyn super::sign_in::Session>> {
         let program = (found.program.as_deref()).ok_or(std::io::ErrorKind::NotFound)?;
         super::sign_in::start(cli, program, found.path.as_deref(), heard)
+    }
+
+    fn start_install(
+        &self,
+        cli: super::runner::Cli,
+        ended: futures::channel::mpsc::UnboundedSender<super::sign_in::Ended>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>> {
+        super::install::start(cli, ended)
     }
 
     fn sign_out(
