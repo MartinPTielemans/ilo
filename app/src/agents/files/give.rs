@@ -85,7 +85,7 @@ pub fn give(
 pub fn forget(into: &Path) {
     match std::fs::remove_dir_all(into) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => {
-            eprintln!(
+            log!(
                 "browser: a thread's uploads weren't removed: {:?}",
                 error.kind()
             );
