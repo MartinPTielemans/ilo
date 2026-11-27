@@ -56,7 +56,7 @@ elif "-p" in args and "--mcp-config" in args:
     # A thread's turn: its first message, then a question to the user through the browser's
     # server, as the config names it, which holds the thread waiting until its input closes.
     with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as file:
-        server = next(iter(json.load(file)["mcpServers"].values()))
+        name, server = next(iter(json.load(file)["mcpServers"].items()))
     sys.stdin.readline()
     bridge = subprocess.Popen([server["command"], *server.get("args", [])],
                               env={**os.environ, **server.get("env", {})},
@@ -70,8 +70,10 @@ elif "-p" in args and "--mcp-config" in args:
         if json.loads(line).get("id") == 1:
             break
     send({"method": "notifications/initialized"})
+    # Its output names the tool as Claude does, by the server: the app ends a run that calls one
+    # by another name.
     say({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ask-1",
-         "name": "ask", "input": {}}]}})
+         "name": "mcp__" + name + "__ask", "input": {}}]}})
     send({"id": 2, "method": "tools/call",
           "params": {"name": "ask", "arguments": {"question": "Which seat?"}}})
     for line in sys.stdin:
