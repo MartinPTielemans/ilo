@@ -235,6 +235,7 @@ unsafe extern "C" {
         centres: *mut f64,
         y: *mut f64,
         diameter: *mut f64,
+        zoom_end: *mut f64,
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_start_window_move(ui_view: *mut c_void);

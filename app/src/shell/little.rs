@@ -30,7 +30,7 @@ use crate::tokens::shell::{
     FAVICON_DRAWN, LITTLE_BAR, LITTLE_CHEVRON, LITTLE_CHEVRON_GLYPH, LITTLE_COPY_GAP, LITTLE_GLYPH,
     LITTLE_OPEN, LITTLE_OPEN_GAP, LITTLE_OPEN_KEY, LITTLE_OPEN_MAX, LITTLE_OPEN_PAD,
     LITTLE_SPACES_BELOW, LITTLE_SPACES_EDGE, LITTLE_SPACES_WIDTH, LITTLE_SPLIT, LITTLE_SPLIT_LINE,
-    NAV_SIZE, NAV_TOP, SIDEBAR_BUTTON_X,
+    NAV_SIZE, NAV_TOP,
 };
 use crate::tokens::text;
 use crate::tooltip::text_width;
@@ -519,8 +519,8 @@ impl Shell {
         };
         let right = first.x - px(NAV_SIZE / 2. + GAP);
         Bounds::new(
-            point(px(SIDEBAR_BUTTON_X), px(NAV_TOP)),
-            size(right - px(SIDEBAR_BUTTON_X), px(NAV_SIZE)),
+            point(px(self.sidebar_button_x()), px(NAV_TOP)),
+            size(right - px(self.sidebar_button_x()), px(NAV_SIZE)),
         )
     }
 

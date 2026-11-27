@@ -233,6 +233,16 @@ resized_once() {
 }
 check_layout "at launch"
 check_buttons "at launch"
+# The header's sidebar button keeps 3 past the zoom button as AppKit places it, whose spacing
+# differs by macOS version (#4354).
+if [ "$(uname)" = Darwin ]; then
+  zoom_end=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout zoom end' |
+    cut -d' ' -f5)
+  at=$(grep '^browser: sidebar button at ' "$log" | tail -1 | cut -d' ' -f5)
+  want=$(awk -v z="$zoom_end" 'BEGIN { printf "%.1f", z + 3 }')
+  [ -n "$zoom_end" ] && [ "$at" = "$want" ] ||
+    fail "at launch: the sidebar button is at ${at:-nowhere}, not 3 past the zoom button's ${zoom_end:-missing} edge"
+fi
 
 # On Windows, moved to a display of another scale, as Windows tells it (WM_DPICHANGED) with its
 # size in pixels kept, the page fills the content area at that scale: its insets, in DIPs, scaled

@@ -102,7 +102,9 @@
 //                                         numbered as order numbers them
 //   layout                                logs the frames of the window's views and child
 //                                         windows, the centres of its close, minimize and
-//                                         zoom buttons, the frame of the page that has the
+//                                         zoom buttons and the zoom button's far edge, as
+//                                         "browser: layout zoom end <x>", the frame of the
+//                                         page that has the
 //                                         keyboard, as "browser: layout keyboard <x>,<y>
 //                                         <w>x<h>" or "none", and whether it's full screen, as
 //                                         "browser: layout full screen <0|1>"
@@ -1378,6 +1380,12 @@ void Layout(NSWindow* window) {
     }
     NSRect frame = [button convertRect:button.bounds toView:nil];
     [line appendFormat:@" %.1f,%.1f", NSMidX(frame), NSHeight(window.frame) - NSMidY(frame)];
+  }
+  // The zoom button's far edge, which the header's sidebar button keeps 3 past (#4354).
+  NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
+  if (!zoom.hidden) {
+    [line appendFormat:@"\nbrowser: layout zoom end %.1f",
+                       NSMaxX([zoom convertRect:zoom.bounds toView:nil])];
   }
   // Child windows, such as the find bar: from the content's top-left corner, and their size.
   NSRect bounds = [window contentRectForFrameRect:window.frame];

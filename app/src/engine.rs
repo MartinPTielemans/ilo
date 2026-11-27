@@ -1483,14 +1483,21 @@ impl Browser for Engine {
 
     #[cfg(target_os = "macos")]
     fn window_button_geometry(&self, _: &mut App) -> Option<browser::shell::WindowButtonGeometry> {
-        let (mut centres, mut y, mut diameter) = ([0f64; 3], 0f64, 0f64);
+        let (mut centres, mut y, mut diameter, mut zoom_end) = ([0f64; 3], 0f64, 0f64, 0f64);
         let read = unsafe {
-            platform::host_window_buttons(self.ui_view, centres.as_mut_ptr(), &mut y, &mut diameter)
+            platform::host_window_buttons(
+                self.ui_view,
+                centres.as_mut_ptr(),
+                &mut y,
+                &mut diameter,
+                &mut zoom_end,
+            )
         };
         read.then(|| browser::shell::WindowButtonGeometry {
             centres: centres.map(|x| x as f32),
             y: y as f32,
             diameter: diameter as f32,
+            zoom_end: zoom_end as f32,
         })
     }
 
