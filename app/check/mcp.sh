@@ -1380,28 +1380,50 @@ if [ "$driven" = 1 ]; then
     fail "the agent's own click in its watched split view took its tab over"
   to_pages "the split view"
   # An agent's page is the user's size from the start, so watching it lays nothing out again
-  # (#4355). The page counts its resizes, and the agent's press, once it's watched, sends its size
-  # and the count in one request, which no resize before it can overtake.
+  # (#4355). The page counts its resizes, and the agent's press sends its size and the count in
+  # one request, which no resize before it can overtake: once before the watch, once in it. A
+  # hidden page fires a resize only at the next frame it draws, which can be well after the resize,
+  # so a press reports at the frame after it, or half a second on if none comes, and each resize
+  # notes when it fired, the page's state then, its scale and its viewport, which a failure quotes.
   printf '%s' '<!doctype html><title>Sized</title><script>
-let resized = 0;
-const say = (what) => fetch("/size?" + what + "=" + innerWidth + "x" + innerHeight + "&resized=" + resized);
-addEventListener("resize", () => resized++);
-addEventListener("load", () => say("made"));
-</script><button onclick="say(&quot;watched&quot;)">Say size</button>' > "$out/site/sized.html"
+let resized = 0, presses = 0;
+const seen = [];
+const note = (what) => seen.push(Math.round(performance.now()) + "ms-" + what + "-" + document.visibilityState +
+  "-dpr" + devicePixelRatio + "-vv" + visualViewport.width + "x" + visualViewport.height);
+const say = (what, drew) => fetch("/size?" + what + "=" + innerWidth + "x" + innerHeight + "&resized=" + resized +
+  "&drew=" + drew + "&seen=" + encodeURIComponent(seen.join("_")));
+const press = () => {
+  const what = presses++ ? "watched" : "before";
+  let said = false;
+  const go = (drew) => { if (!said) { said = true; say(what, drew); } };
+  requestAnimationFrame(() => go(1));
+  setTimeout(() => go(0), 500);
+};
+addEventListener("resize", () => { resized++; note("resize"); });
+addEventListener("visibilitychange", () => note("visibility"));
+addEventListener("load", () => say("made", 0));
+</script><button onclick="press()">Say size</button>' > "$out/site/sized.html"
   opened=$(call open_tab "{\"url\":\"localhost:$port/sized.html\"}")
   sized_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$sized_tab" ] || fail "open_tab sized.html answered: $opened"
   served "localhost:$port/size?made=" "the agent's sized.html never sent its size as it loaded"
-  made=$(sed -n "s|.*localhost:$port/size?made=\([0-9]*x[0-9]*&resized=[0-9]*\).*|\1|p" "$out/site.log" | tail -1)
-  watch "$sized_tab"
-  ref=$(call snapshot "{\"tab\":$sized_tab}" | sed -n 's/.*- button "Say size" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-  [ -n "$ref" ] || fail "the snapshot of the agent's sized.html had no Say size button"
-  clicked=$(call click "{\"tab\":$sized_tab,\"ref\":\"$ref\"}")
-  case "$clicked" in "error: "*) fail "the agent's click on sized.html, watched, answered: $clicked" ;; esac
-  served "localhost:$port/size?watched=" "the agent's click on sized.html, watched, sent no size"
-  watched_size=$(sed -n "s|.*localhost:$port/size?watched=\([0-9]*x[0-9]*&resized=[0-9]*\).*|\1|p" "$out/site.log" | tail -1)
-  [ "$watched_size" = "$made" ] ||
-    fail "the agent's page was laid out again as it was watched: loaded at ${made%%&*} after ${made##*=} resizes, watched at ${watched_size%%&*} after ${watched_size##*=}"
+  sent_size() { sed -n "s|.*localhost:$port/size?$1=\([0-9]*x[0-9]*&resized=[0-9]*\).*|\1|p" "$out/site.log" | tail -1; }
+  sent_resizes() { sed -n "s|.*localhost:$port/size?$1=.*&drew=\([01]\)&seen=\([^ ]*\).*|drew \1, resizes \2|p" "$out/site.log" | tail -1; }
+  made=$(sent_size made)
+  for when in before watched; do
+    [ "$when" = before ] || watch "$sized_tab"
+    ref=$(call snapshot "{\"tab\":$sized_tab}" | sed -n 's/.*- button "Say size" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$ref" ] || fail "the snapshot of the agent's sized.html, $when it was watched, had no Say size button"
+    clicked=$(call click "{\"tab\":$sized_tab,\"ref\":\"$ref\"}")
+    case "$clicked" in "error: "*) fail "the agent's click on sized.html, $when it was watched, answered: $clicked" ;; esac
+    served "localhost:$port/size?$when=" "the agent's click on sized.html, $when it was watched, sent no size"
+  done
+  before=$(sent_size before)
+  watched_size=$(sent_size watched)
+  [ "$before" = "$made" ] ||
+    fail "the agent's page was laid out again before it was watched: loaded at ${made%%&*} after ${made##*=} resizes, at ${before%%&*} after ${before##*=} before the watch ($(sent_resizes before))"
+  [ "$watched_size" = "$before" ] ||
+    fail "the agent's page was laid out again as it was watched: at ${before%%&*} after ${before##*=} resizes before the watch, watched at ${watched_size%%&*} after ${watched_size##*=} ($(sent_resizes watched))"
   to_pages "tab $sized_tab"
   closed=$(call close_tab "{\"tab\":$sized_tab}")
   case "$closed" in "Closed tab $sized_tab."*) ;; *) fail "close_tab on sized.html answered: $closed" ;; esac
